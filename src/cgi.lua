@@ -1028,17 +1028,18 @@ function cgi.handle_request()
         rows = nil
         sql_err = nil
         ref_columns = {}
+        truncated = false
         if sql_text == nil then
             sql_text = "SELECT * FROM sample LIMIT 20;"
         elseif sql_text != "" then
-            column_names, rows, sql_err = view.run_adhoc(db_path, sql_text)
+            column_names, rows, sql_err, truncated = view.run_adhoc(db_path, sql_text)
             from_table = view.guess_from_table(sql_text)
             ref_columns = view.reference_columns(db_path, view.guess_tables(sql_text))
             if from_table != nil and schema.is_registered(db_path, from_table) then
                 ref_columns["id"] = from_table
             end
         end
-        body = html.render_sql(db_path, sql_text, column_names, rows, sql_err, ref_columns, nonce, params.embed == "1", theme)
+        body = html.render_sql(db_path, sql_text, column_names, rows, sql_err, ref_columns, nonce, params.embed == "1", theme, truncated)
         -- ?embed=1 is the home page's own SQL widget iframe (see
         -- render_index) -- it's already inside a page shell, so
         -- nesting a second full <html>/<nav> shell inside a 520px

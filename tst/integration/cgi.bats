@@ -339,6 +339,42 @@ EOF
     [[ "$output" =~ "Dr. Cohen" ]]
 }
 
+@test "/sql adds a default row cap to a query with no LIMIT of its own" {
+    # Found live: an unrestricted query against ~3800 rows of real
+    # document content took 54 real seconds and produced a 5.7MB page
+    # (html.render_sql's own O(n^2) string-concat, fixed separately) --
+    # this is the second half of that fix: a query with no LIMIT at all
+    # shouldn't render thousands of rows in the first place.
+    for i in $(seq 1 5); do
+        "$BIN" entity create person full_name="Extra $i"
+    done
+    # setup() already made 1 person (Dr. Cohen) -- 6 total now, well
+    # under ADHOC_ROW_CAP, so nothing should be truncated yet.
+    run_cgi_admin "/sql" "q=SELECT+id%2C+full_name+FROM+person%3B"
+    [[ "$output" =~ "6 rows" ]]
+    [[ ! "$output" =~ "Showing first" ]]
+}
+
+@test "/sql leaves a query with its own LIMIT untouched, not double-limited" {
+    run_cgi_admin "/sql" "q=SELECT+id+FROM+person+LIMIT+1%3B"
+    [[ "$output" =~ "1 rows" ]]
+    [[ ! "$output" =~ "Showing first" ]]
+}
+
+@test "/sql's default row cap actually kicks in past ADHOC_ROW_CAP (1000) rows" {
+    # Bulk insert (not $BIN entity create per row -- CGI-per-request
+    # bootstrap makes 1000+ of those impractically slow for a test) to
+    # exercise the real cap boundary, not just "a handful of rows".
+    python3 -c "
+import sys
+lines = ['INSERT INTO person (full_name, created_at, updated_at) VALUES (\'Bulk %d\', datetime(), datetime());' % i for i in range(1010)]
+print('\n'.join(lines))
+" | sqlite3 "$TEST_DIR/.store/store.db"
+
+    run_cgi_admin "/sql" "q=SELECT+id+FROM+person%3B"
+    [[ "$output" =~ "Showing first 1000 rows" ]]
+}
+
 @test "/view renders a canned view's rows" {
     cat > views/samples.lua <<'EOF'
 return {

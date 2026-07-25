@@ -470,12 +470,41 @@ end
 -- via error() on invalid SQL rather than returning nil+err, so this is
 -- pcalled to keep converting a typo'd ad-hoc query into this page's own
 -- inline error message instead of a generic 500.
+-- A query with no LIMIT of its own gets one added automatically (task:
+-- found live, a real unrestricted query against ~3800 rows of full
+-- document content took 54 seconds and produced a 5.7MB page --
+-- html.render_sql's own O(n^2) string-concat was the dominant cost,
+-- fixed separately, but even at O(n) an unbounded admin power-query
+-- against a real production table has no reason to ever render
+-- thousands of full rows at once). Same word-boundary convention
+-- is_select_only's own FORBIDDEN_SQL_WORDS check uses, so "LIMIT"
+-- inside a string literal or column alias isn't mistaken for a real
+-- clause keyword -- and isn't mistaken the other way either (a
+-- query that only *mentions* limit without one is still capped).
+-- Fetches one extra row past the cap, not to display it, just to tell
+-- "exactly N rows" apart from "N rows, and more exist" for the UI's
+-- own truncation notice -- a second COUNT(*) query would double the
+-- real cost this exists to avoid.
+ADHOC_ROW_CAP = 1000
+
 function view.run_adhoc(db_path, sql_text)
     if view.is_select_only(sql_text) == false then
         return nil, nil, "refusing to run: not a plain SELECT"
     end
 
-    ok, rows, column_names = pcall(db.query, db_path, sql_text)
+    query_text = sql_text
+    body = string.gsub(sql_text, "%s+$", "")
+    if string.sub(body, -1) == ";" then
+        body = string.sub(body, 1, -2)
+    end
+    has_own_limit = string.find(string.lower(body), "%f[%a]limit%f[%A]") != nil
+    capped = false
+    if has_own_limit == false then
+        query_text = body .. string.format(" LIMIT %d;", ADHOC_ROW_CAP + 1)
+        capped = true
+    end
+
+    ok, rows, column_names = pcall(db.query, db_path, query_text)
     if ok == false then
         return nil, nil, "invalid sql: " .. tostring(rows)
     end
@@ -485,7 +514,16 @@ function view.run_adhoc(db_path, sql_text)
     if column_names == nil then
         column_names = {}
     end
-    return column_names, rows
+    truncated = false
+    if capped == true and #rows > ADHOC_ROW_CAP then
+        truncated = true
+        capped_rows = {}
+        for i = 1, ADHOC_ROW_CAP do
+            table.insert(capped_rows, rows[i])
+        end
+        rows = capped_rows
+    end
+    return column_names, rows, nil, truncated
 end
 
 -- CLI entry point: `fossci view <list|show|approve|revoke> [args]`

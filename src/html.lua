@@ -3251,7 +3251,7 @@ end
 -- the query is a normal, bookmarkable/shareable URL. `column_names`/
 -- `rows` are nil until a query has been run; `err` is set instead if
 -- it failed (not select-only, invalid sql, etc.).
-function html.render_sql(db_path, sql_text, column_names, rows, err, ref_columns, nonce, embed, theme)
+function html.render_sql(db_path, sql_text, column_names, rows, err, ref_columns, nonce, embed, theme, truncated)
     if ref_columns == nil then
         ref_columns = {}
     end
@@ -3294,29 +3294,43 @@ function html.render_sql(db_path, sql_text, column_names, rows, err, ref_columns
     if err != nil then
         result_html = "<div class=\"fossci-sql-error\">Error: " .. html.html_escape(err) .. "</div>"
     elseif rows != nil then
-        header_cells = ""
+        header_parts = {}
         for _, name in ipairs(column_names) do
-            header_cells = header_cells .. "<th>" .. html.html_escape(name) .. "</th>"
+            table.insert(header_parts, "<th>" .. html.html_escape(name) .. "</th>")
         end
-        body_rows = ""
+        header_cells = table.concat(header_parts)
+        -- Real bug found live: repeated ".." string concatenation in
+        -- this loop is O(n^2) in Lua (each ".." copies the whole
+        -- accumulated string so far) -- fine for a handful of rows, but
+        -- a genuinely unbounded query (/sql has no LIMIT/pagination at
+        -- all, unlike /browse's own BROWSE_PAGE_SIZE cap) against a
+        -- real production table confirmed this taking 54 real seconds
+        -- for ~3800 rows of full document content. table.insert +
+        -- table.concat is O(n).
+        body_row_parts = {}
         for _, row in ipairs(rows) do
-            cells = ""
+            cell_parts = {}
             for _, name in ipairs(column_names) do
                 ref_type = ref_columns[name]
                 if ref_type != nil then
-                    cells = cells .. "<td>" .. render_reference_value(db_path, ref_type, row[name]) .. "</td>"
+                    table.insert(cell_parts, "<td>" .. render_reference_value(db_path, ref_type, row[name]) .. "</td>")
                 else
-                    cells = cells .. "<td>" .. display_value(row[name]) .. "</td>"
+                    table.insert(cell_parts, "<td>" .. display_value(row[name]) .. "</td>")
                 end
             end
-            body_rows = body_rows .. "<tr>" .. cells .. "</tr>"
+            table.insert(body_row_parts, "<tr>" .. table.concat(cell_parts) .. "</tr>")
         end
+        body_rows = table.concat(body_row_parts)
         if #rows == 0 then
             result_html = "<p class=\"fossci-empty\">No rows.</p>"
         else
+            count_message = tostring(#rows) .. " rows"
+            if truncated == true then
+                count_message = "Showing first " .. tostring(#rows) .. " rows -- more may exist. Add your own LIMIT to see a different range."
+            end
             result_html = "<div class=\"fossci-table-wrapper\"><table id=\"sql-table\"><thead><tr>" ..
                 header_cells .. "</tr></thead><tbody>" .. body_rows .. "</tbody></table></div>" ..
-                "<p class=\"fossci-sql-count\">" .. tostring(#rows) .. " rows</p>"
+                "<p class=\"fossci-sql-count\">" .. count_message .. "</p>"
         end
     elseif sql_text_or_empty == "" then
         -- Submitted with a genuinely empty box -- distinct from the
