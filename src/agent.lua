@@ -546,11 +546,40 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
         if #results == 0 then
             return "No matching pages found."
         end
+        -- Structural, not just a prompt reminder: multiple pages
+        -- genuinely sharing a title is real and common here (293
+        -- duplicate titles in production, mostly repeated Benchling
+        -- resyncs) -- rather than relying on the model to notice and
+        -- remember not to ask the human for a raw id every time, the
+        -- tool result itself surfaces the distinguishing fields
+        -- (creation date, external_id) and calls out the collision
+        -- explicitly whenever this batch of results actually has one.
+        title_counts = {}
+        for _, r in ipairs(results) do
+            current_count = title_counts[r.title]
+            if current_count == nil then
+                current_count = 0
+            end
+            title_counts[r.title] = current_count + 1
+        end
         lines = {}
         for _, r in ipairs(results) do
-            table.insert(lines, string.format(
-                "#%s %s\n%s", tostring(r.id), r.title, excerpt(r.content, SEARCH_EXCERPT_LENGTH)
-            ))
+            detail_bits = {}
+            if r.created_at != nil and r.created_at != "" then
+                table.insert(detail_bits, "created " .. string.sub(r.created_at, 1, 10))
+            end
+            if r.external_id != nil and r.external_id != "" then
+                table.insert(detail_bits, "external_id=" .. r.external_id)
+            end
+            header = "#" .. tostring(r.id) .. " " .. r.title
+            if #detail_bits > 0 then
+                header = header .. " (" .. table.concat(detail_bits, ", ") .. ")"
+            end
+            if title_counts[r.title] > 1 then
+                header = header .. " [one of " .. tostring(title_counts[r.title]) ..
+                    " pages titled '" .. r.title .. "' -- distinguish by date/external_id/content above, never by asking the user for the id]"
+            end
+            table.insert(lines, header .. "\n" .. excerpt(r.content, SEARCH_EXCERPT_LENGTH))
         end
         return table.concat(lines, "\n\n")
     end
@@ -993,6 +1022,23 @@ a table needs a header row, a separator row (|---|---|), and one data row
 per item named in the request. Before finishing, check your own output has
 all three parts and every item asked for; a header-only table is an
 incomplete answer, not a done one.
+
+If your first attempt at something (a search, a lookup) doesn't find what
+you need, try again a different way (different search terms, a broader or
+narrower query, a different tool) before giving up or asking the user for
+help. You have room for several tool calls in a single turn -- use them
+when the question genuinely calls for it, rather than answering from a
+single attempt that came up empty or ambiguous.
+
+Multiple records can genuinely share the same title (e.g. several
+Benchling-synced pages all named after the same experiment number) --
+when that happens, never ask the user for a raw internal id to
+disambiguate; they don't think in ids and shouldn't have to. Instead use
+what document.search or entity.get already gives you -- content excerpt,
+creation date, an external_id if the row has one -- to either tell the
+candidates apart yourself, or describe them to the user in those terms
+("there are two pages titled X, one from March about Y and one from June
+about Z -- which do you mean?").
 
 Available tools:
 - document.search -- search pages by keyword or topic; returns each matching page's id, title, and a real content excerpt so you can answer from what the page actually says, not just its title. Args: query=<search text>

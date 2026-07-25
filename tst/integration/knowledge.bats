@@ -99,6 +99,23 @@ search_for_bioreactor_extra() {
     [ "${#tool_result}" -lt 1400 ]
 }
 
+@test "document.search flags duplicate titles in its own tool result, with real disambiguating fields (task: structural fix, not a prompt reminder)" {
+    # Real, already-live situation: 293 duplicate titles in production
+    # (mostly repeated Benchling resyncs) -- rather than relying on the
+    # model to remember not to ask the user for a raw id, the tool
+    # result itself surfaces creation date/external_id and flags the
+    # collision explicitly whenever it actually occurs in a result batch.
+    "$BIN" entity create document title="Bioreactor SOP" content="bioreactor careful monitoring version A" external_id="etr_AAA111"
+    "$BIN" entity create document title="Bioreactor SOP" content="bioreactor careful monitoring version B" external_id="etr_BBB222"
+    search_for_bioreactor
+
+    tool_result=$(sqlite3 .store/store.db "SELECT content FROM agent_message WHERE role='tool_result' ORDER BY id DESC LIMIT 1;")
+    [[ "$tool_result" =~ "one of 2 pages titled 'Bioreactor SOP'" ]]
+    [[ "$tool_result" =~ "etr_AAA111" ]]
+    [[ "$tool_result" =~ "etr_BBB222" ]]
+    [[ "$tool_result" =~ "never by asking the user for the id" ]]
+}
+
 @test "document.search excludes chat-session transcripts from results, even when they match the query" {
     # Found live: searching for real domain content ("standard experiment
     # page template") returned old chat transcripts (containing the
