@@ -217,10 +217,14 @@ function document.children(db_path, parent_id)
 end
 
 -- Every active document's id/title/parent_id, for building the full
--- tree view in one query rather than one query per level.
+-- tree view in one query rather than one query per level. created_at/
+-- external_id (task: duplicate-title disambiguation in the parent
+-- picker, html.document_parent_options) ride along here rather than a
+-- second query -- cheap, and every existing caller already ignores
+-- columns it doesn't use.
 function document.all_active(db_path)
     rows = db.query(db_path,
-        "SELECT id, title, parent_id FROM document WHERE archived_at IS NULL OR archived_at = '' ORDER BY title ASC;")
+        "SELECT id, title, parent_id, created_at, external_id FROM document WHERE archived_at IS NULL OR archived_at = '' ORDER BY title ASC;")
     if rows == nil then
         return {}
     end
@@ -904,7 +908,7 @@ function document.search(db_path, query_text, limit, use_semantic)
     -- document.search's relevance ranking against real content.
     rows = db.query(db_path, """
         SELECT d.id, d.title, d.content, d.tier, d.heat, d.retrieval_count, d.last_retrieved_at,
-               d.source_type, d.source_id, d.content_hash, e.vector_json
+               d.source_type, d.source_id, d.content_hash, d.created_at, d.external_id, e.vector_json
         FROM document d
         LEFT JOIN document_embedding e ON e.document_id = d.id
         WHERE (d.archived_at IS NULL OR d.archived_at = '')
@@ -929,6 +933,7 @@ function document.search(db_path, query_text, limit, use_semantic)
                 tier = row.tier, heat = row.heat, retrieval_count = row.retrieval_count,
                 last_retrieved_at = row.last_retrieved_at, source_type = row.source_type,
                 source_id = row.source_id, content_hash = row.content_hash,
+                created_at = row.created_at, external_id = row.external_id,
             })
         end
     end

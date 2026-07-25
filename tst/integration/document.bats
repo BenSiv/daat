@@ -75,6 +75,27 @@ raw_document_preview() {
     [[ "$output" =~ 'Home</a></summary><ul><li><details><summary><a href="document?entity_id=2">Guides</a></summary><ul><li class="fossci-tree-leaf"><a href="document?entity_id=3">Setup' ]]
 }
 
+@test "/document-edit's parent picker disambiguates duplicate titles without ever showing a raw internal id" {
+    # Real, already-live situation: 293 duplicate titles in production
+    # (mostly repeated Benchling resyncs of "Experiment N" pages), some
+    # sharing the same parent AND the same creation second -- external_id
+    # (a real Benchling reference, not our own internal id) is the one
+    # property still guaranteed to differ in that exact case.
+    "$BIN" entity create document title="Experiments"
+    "$BIN" entity create document title="Experiment 286" parent_id=1 external_id="etr_AAA111"
+    "$BIN" entity create document title="Experiment 286" parent_id=1 external_id="etr_BBB222"
+
+    run get_route "/document-edit" ""
+    [[ "$output" =~ "200 OK" ]]
+    [[ "$output" == *"Experiment 286 (under Experiments, "*", etr_AAA111)"* ]]
+    [[ "$output" == *"Experiment 286 (under Experiments, "*", etr_BBB222)"* ]]
+    # the non-duplicated "Experiments" option gets no parenthetical noise
+    [[ "$output" == *">Experiments</option>"* ]]
+    # never a bare, meaningless internal id in the visible label text
+    [[ "$output" != *"Experiment 286 (2)"* ]]
+    [[ "$output" != *"Experiment 286 (3)"* ]]
+}
+
 @test "the /documents tree is collapsed by default at every depth, including the top level" {
     # Was "open" at depth 0 only (the whole top level pre-expanded) --
     # changed to collapsed everywhere per Ben's own explicit ask, after

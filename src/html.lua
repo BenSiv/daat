@@ -3485,7 +3485,31 @@ end
 -- walk to build); choosing one of those is instead caught at save time
 -- by document.would_create_cycle, with a real error message rather than
 -- the option silently not being offered.
+--
+-- Duplicate titles are real and already fairly common (task: found
+-- live, 293 titles with duplicates in production, mostly "Experiment
+-- N" pages resynced from Benchling more than once) -- picking a parent
+-- by title alone is ambiguous whenever that happens, and the person
+-- doing it has no way to tell the options apart. Never shown as a bare
+-- internal id (meaningless to a human, and the whole point of this
+-- fix is *not* making someone handle ids) -- instead, whichever of
+-- {parent folder, creation date, Benchling's own external_id} actually
+-- differs between the duplicates. All three can coincide (two entries
+-- synced in the same batch, same parent, same second) -- external_id
+-- is the one property still guaranteed to differ in that case, since
+-- it names a real, distinct source record.
 function html.document_parent_options(rows, selected_id, exclude_id)
+    title_counts = {}
+    by_id = {}
+    for _, row in ipairs(rows) do
+        current_count = title_counts[row.title]
+        if current_count == nil then
+            current_count = 0
+        end
+        title_counts[row.title] = current_count + 1
+        by_id[tostring(tonumber(row.id))] = row
+    end
+
     options = ""
     for _, row in ipairs(rows) do
         if exclude_id == nil or tonumber(row.id) != tonumber(exclude_id) then
@@ -3493,8 +3517,27 @@ function html.document_parent_options(rows, selected_id, exclude_id)
             if selected_id != nil and tonumber(row.id) == tonumber(selected_id) then
                 selected_attr = " selected"
             end
+            label = html.html_escape(row.title)
+            if title_counts[row.title] > 1 then
+                bits = {}
+                if row.parent_id != nil then
+                    parent_row = by_id[tostring(tonumber(row.parent_id))]
+                    if parent_row != nil then
+                        table.insert(bits, "under " .. parent_row.title)
+                    end
+                end
+                if row.created_at != nil and row.created_at != "" then
+                    table.insert(bits, string.sub(row.created_at, 1, 10))
+                end
+                if row.external_id != nil and row.external_id != "" then
+                    table.insert(bits, row.external_id)
+                end
+                if #bits > 0 then
+                    label = label .. " (" .. html.html_escape(table.concat(bits, ", ")) .. ")"
+                end
+            end
             options = options .. "<option value=\"" .. tostring(row.id) .. "\"" .. selected_attr .. ">" ..
-                html.html_escape(row.title) .. "</option>"
+                label .. "</option>"
         end
     end
     return options
