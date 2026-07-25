@@ -99,6 +99,46 @@ teardown() {
     [[ "$before_sample" == *'type=experiment"'* ]]
 }
 
+@test "/data shows an entity search box" {
+    run_cgi "/data" ""
+    [[ "$output" =~ "fossci-entity-search-input" ]]
+    [[ "$output" =~ "api/entity-search" ]]
+}
+
+@test "/api/entity-search finds a matching row via a schema's display=true field" {
+    run_cgi "/api/entity-search" "query=Cohen"
+    [[ "$output" =~ "200 OK" ]]
+    [[ "$output" =~ '"entity_type":"person"' ]]
+    [[ "$output" =~ '"label":"Dr. Cohen"' ]]
+}
+
+@test "/api/entity-search finds a matching row via a schema's display=true field on a different type" {
+    run_cgi "/api/entity-search" "query=Contamination"
+    [[ "$output" =~ '"entity_type":"experiment"' ]]
+    [[ "$output" =~ '"label":"Contamination trial"' ]]
+}
+
+@test "/api/entity-search skips a type with no name column value and no display=true field" {
+    # sample's own schema (setup()) has no display=true field and never
+    # gets its builtin name column populated -- confirms it's skipped
+    # entirely rather than matched against arbitrary content columns.
+    run_cgi "/api/entity-search" "query=LOT-42"
+    [[ "$output" =~ "200 OK" ]]
+    [[ ! "$output" =~ "LOT-42" ]]
+}
+
+@test "/api/entity-search excludes archived rows" {
+    run_cgi "/api/archive" "type=person&entity_id=1" "POST"
+    run_cgi "/api/entity-search" "query=Cohen"
+    [[ ! "$output" =~ "Dr. Cohen" ]]
+}
+
+@test "/api/entity-search returns an empty list for an empty query, not every row" {
+    run_cgi "/api/entity-search" "query="
+    [[ "$output" =~ "200 OK" ]]
+    [[ ! "$output" =~ '"entity_type"' ]]
+}
+
 @test "/register renders the registration form for a real entity type" {
     run_cgi "/register" "type=sample"
     [ "$status" -eq 0 ]
@@ -125,6 +165,61 @@ teardown() {
 @test "/detail links to /entity-edit for the same type and id" {
     run_cgi "/detail" "type=sample&entity_id=3"
     [[ "$output" =~ 'href="entity-edit?type=sample&entity_id=3"' ]]
+}
+
+write_sample_template() {
+    mkdir -p templates
+    cat > templates/sample_intake.lua <<'EOF'
+return {
+  name = "sample_intake",
+  label = "Sample Intake",
+  description = "Standard intake notes plus a sample registration table.",
+  default_path = "Notebook/Sample Intake",
+  sections = {
+    {type = "heading", text = "Notes"},
+    {type = "registration_table", entity_type = "sample", label = "Sample"},
+  },
+}
+EOF
+}
+
+@test "/template shows a 'Create new page from this template' button linking to /document-edit" {
+    write_sample_template
+    run_cgi "/template" "template_name=sample_intake"
+    [[ "$output" =~ "200 OK" ]]
+    [[ "$output" =~ 'href="document-edit?from_template=sample_intake"' ]]
+}
+
+@test "/templates list links each entry straight to a prefilled new page" {
+    write_sample_template
+    run_cgi "/templates"
+    [[ "$output" =~ 'href="document-edit?from_template=sample_intake"' ]]
+}
+
+@test "/document-edit?from_template prefills title and rendered content for a new (unsaved) page" {
+    write_sample_template
+    run_cgi "/document-edit" "from_template=sample_intake"
+    [[ "$output" =~ "200 OK" ]]
+    [[ "$output" =~ "Notebook/Sample Intake" ]]
+    [[ "$output" =~ "## Notes" ]]
+    [[ "$output" =~ "register?type=sample" ]]
+    # nothing is actually created yet -- still the new-page form, no entity_id
+    [[ "$output" =~ 'name="entity_id" value=""' ]]
+}
+
+@test "/document-edit?from_template is ignored when editing an existing page (never clobbers real content)" {
+    write_sample_template
+    "$BIN" entity create document title="Real page" content="Real, already-written content."
+    # entity ids are a single global sequence, not per-type -- setup()
+    # already created person=1/experiment=2/sample=3, so this doc is #4.
+    run_cgi "/document-edit" "entity_id=4&from_template=sample_intake"
+    [[ "$output" =~ "Real, already-written content." ]]
+    [[ ! "$output" =~ "## Notes" ]]
+}
+
+@test "/document-edit?from_template 404s for an unknown template name" {
+    run_cgi "/document-edit" "from_template=does_not_exist"
+    [[ "$output" =~ "404 Not Found" ]]
 }
 
 @test "/browse lists an entity type's rows" {

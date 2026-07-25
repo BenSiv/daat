@@ -631,6 +631,77 @@ function entity.count_by_field(db_path, entity_type, field_name, value, include_
     return tonumber(rows[1].n)
 end
 
+-- The schema-declared {display = true} field for this type, if any --
+-- same second-priority source html.lua's own_row_label/
+-- entity_display_label use (the builtin "name" column is always the
+-- first source, checked directly by search_across_types below since
+-- it needs both, not either/or). Reimplemented here rather than
+-- shared: html.lua requires entity.lua, so the reverse require would
+-- cycle. nil means this schema declared no display field.
+function display_field_name(db_path, entity_type)
+    for _, field in ipairs(schema.fields(db_path, entity_type)) do
+        if tonumber(field.display) == 1 then
+            return field.name
+        end
+    end
+    return nil
+end
+
+-- Cross-type "find this row" search for /data's own search box (task:
+-- /documents already has a fuzzy title search, /data had nothing --
+-- Ben's own explicit ask). A single client-side index across every
+-- entity type doesn't scale the way /documents' page-title index does
+-- (many types, some already in the hundreds of rows each), so this is
+-- a server-side query instead: one bounded, indexable LIKE per type,
+-- against the builtin "name" column (populated for e.g. Benchling-
+-- imported rows, empty otherwise -- every table has it, but not every
+-- row uses it) OR'd with the schema's own display field if one is
+-- declared. A type with neither ever populated simply matches nothing,
+-- rather than needing an explicit skip step -- same effect, no special
+-- case. per_type_limit bounds each individual query; total_limit
+-- truncates the combined, concatenated result -- both needed since a
+-- broad query could otherwise return per_type_limit rows from every
+-- registered type at once.
+function entity.search_across_types(db_path, query_text, per_type_limit, total_limit)
+    if query_text == nil or query_text == "" then
+        return {}
+    end
+    like_value = db.quote("%" .. tostring(query_text) .. "%")
+    results = {}
+    for _, entity_type_row in ipairs(schema.list(db_path)) do
+        entity_type = entity_type_row.name
+        if entity_type != "document" and db.table_exists(db_path, entity_type) == true then
+            display_field = display_field_name(db_path, entity_type)
+            label_expr = "name"
+            where_expr = "name LIKE " .. like_value
+            if display_field != nil then
+                quoted_field = db.quote_ident(display_field)
+                label_expr = "COALESCE(NULLIF(name, ''), " .. quoted_field .. ")"
+                where_expr = "(name LIKE " .. like_value .. " OR " .. quoted_field .. " LIKE " .. like_value .. ")"
+            end
+            rows = db.query(db_path, string.format(
+                "SELECT id, %s AS label FROM %s WHERE %s AND (archived_at IS NULL) LIMIT %d;",
+                label_expr, entity_type, where_expr, tonumber(per_type_limit)
+            ))
+            if rows != nil then
+                for _, row in ipairs(rows) do
+                    if row.label != nil and tostring(row.label) != "" then
+                        table.insert(results, {entity_type = entity_type, id = row.id, label = tostring(row.label)})
+                    end
+                end
+            end
+        end
+    end
+    if #results > total_limit then
+        truncated = {}
+        for i = 1, total_limit do
+            table.insert(truncated, results[i])
+        end
+        return truncated
+    end
+    return results
+end
+
 -- Drains the after-hook job queue: runs each pending job (oldest first,
 -- up to `limit`), marking it done or failed. A job that errors stays
 -- 'pending' (and gets retried on the next run) until it has failed

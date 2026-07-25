@@ -933,12 +933,34 @@ function cgi.handle_request()
                 return print_response("404 Not Found", "text/html", "<h3>Error: no such page #" .. tostring(entity_id) .. "</h3>")
             end
         end
+
+        -- task: "create new page from template" -- prefills a brand new
+        -- (still unsaved) page's title/content from one of template.lua's
+        -- reusable Entry templates, same rendered content the read-only
+        -- /template page already shows, just landed in the real editor
+        -- instead of a copy-paste-it-yourself textarea. Only applies to a
+        -- genuinely new page (doc == nil) -- ?from_template on an existing
+        -- page's edit URL would silently clobber real content otherwise.
+        prefill = nil
+        if doc == nil and params.from_template != nil and params.from_template != "" then
+            templates_dir = config.templates_dir(root)
+            template_def, template_err = template.load(templates_dir, params.from_template)
+            if template_def == nil then
+                return print_response("404 Not Found", "text/html", "<h3>Error: " .. tostring(template_err) .. "</h3>")
+            end
+            default_path = template_def.default_path
+            if default_path == nil then
+                default_path = template_def.label
+            end
+            prefill = {title = default_path, content = template.render(template_def)}
+        end
+
         parent_id = nil
         if doc != nil then
             parent_id = doc.parent_id
         end
         parent_options_html = html.document_parent_options(document.all_active(db_path), parent_id, entity_id)
-        body = html.render_document_edit(doc, parent_options_html, default_value(cookies.csrf, ""), nil, nonce)
+        body = html.render_document_edit(doc, parent_options_html, default_value(cookies.csrf, ""), nil, nonce, prefill)
         page_context = {page_type = "document_edit", entity_type = "document", entity_id = entity_id, title = "Edit page"}
         return print_response("200 OK", "text/html",
             html.page_shell("Edit page", "documents", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author, page_context))
@@ -1468,6 +1490,16 @@ function cgi.handle_request()
 
     if path_info == "/api/autocomplete" then
         return handle_autocomplete(db_path, params)
+    end
+
+    -- /data's own entity search box (task: /documents already has a
+    -- fuzzy title search, /data had nothing at all -- Ben's own explicit
+    -- ask). Server-side, not a client-side index like documents' own --
+    -- see entity.search_across_types' own header comment for why.
+    if path_info == "/api/entity-search" then
+        query_str = default_value(params.query, "")
+        results = entity.search_across_types(db_path, query_str, 5, 20)
+        return print_response("200 OK", "application/json", json.encode(results))
     end
 
     if path_info == "/api/preview" then

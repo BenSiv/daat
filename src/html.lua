@@ -3022,6 +3022,22 @@ function html.render_index(db_path, entity_types, edges, nonce)
         .fossci-view-toggle button.fossci-view-active { background: var(--fossci-accent, #4f46e5); border-color: var(--fossci-accent, #4f46e5); color: #ffffff; }
         .fossci-hide-empty-toggle { display: flex; align-items: center; gap: 6px; font-size: 0.85rem; color: var(--fossci-muted, #64748b); cursor: pointer; user-select: none; margin-right: 8px; }
         .fossci-hide-empty-toggle input { cursor: pointer; }
+        .fossci-entity-search { position: relative; margin-bottom: 16px; max-width: 420px; }
+        .fossci-entity-search input {
+            width: 100%%; padding: 9px 12px; border: 1px solid var(--fossci-border-2, #cbd5e1);
+            border-radius: var(--fossci-radius-sm, 8px); font-size: 0.9rem; box-sizing: border-box;
+        }
+        .fossci-entity-search-results {
+            display: none; position: absolute; top: 100%%; left: 0; right: 0; margin-top: 6px;
+            background: #ffffff; border: 1px solid var(--fossci-border, #e2e8f0); border-radius: var(--fossci-radius-sm, 8px);
+            max-height: 320px; overflow-y: auto; z-index: 1000;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+        }
+        .fossci-entity-search-results.fossci-entity-search-open { display: block; }
+        .fossci-entity-search-results a { display: flex; justify-content: space-between; gap: 10px; padding: 8px 12px; font-size: 0.88rem; text-decoration: none; color: var(--fossci-text, #334155); }
+        .fossci-entity-search-results a:hover { background: var(--fossci-bg-2, #f1f5f9); }
+        .fossci-entity-search-results a span.fossci-entity-search-type { color: var(--fossci-muted, #64748b); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; }
+        .fossci-entity-search-empty { padding: 10px 12px; color: var(--fossci-muted, #64748b); font-size: 0.88rem; }
         .fossci-index-list { list-style: none !important; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
         .fossci-index-list li { list-style: none !important; background: var(--fossci-bg, #f8fafc); border: 1px solid var(--fossci-border, #e2e8f0); border-radius: var(--fossci-radius-item, 10px); display: flex; align-items: center; transition: var(--fossci-transition, all 0.2s cubic-bezier(0.4, 0, 0.2, 1)); }
         .fossci-index-list li:hover { border-color: var(--fossci-accent, #4f46e5); box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
@@ -3051,13 +3067,59 @@ function html.render_index(db_path, entity_types, edges, nonce)
                 <button type="button" data-view="diagram">Diagram</button>
             </div>
         </div>
+        <div class="fossci-entity-search">
+            <input type="text" id="fossci-entity-search-input" placeholder="Search entities by name..." autocomplete="off">
+            <div class="fossci-entity-search-results" id="fossci-entity-search-results"></div>
+        </div>
         <div id="fossci-view-list">%s</div>
         <div id="fossci-view-diagram" style="display:none;">%s</div>
     </div>
+    <script nonce="%s">
+    (function(){
+        var input = document.getElementById('fossci-entity-search-input');
+        var results = document.getElementById('fossci-entity-search-results');
+        var debounceTimer;
+
+        function escapeHtml(s) {
+            return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+
+        function render(items) {
+            if (items.length === 0) {
+                results.innerHTML = '<div class="fossci-entity-search-empty">No matching entities.</div>';
+            } else {
+                results.innerHTML = items.map(function(item){
+                    return '<a href="detail?type=' + encodeURIComponent(item.entity_type) + '&entity_id=' + item.id + '">' +
+                        escapeHtml(item.label) + '<span class="fossci-entity-search-type">' + escapeHtml(item.entity_type) + '</span></a>';
+                }).join('');
+            }
+            results.classList.add('fossci-entity-search-open');
+        }
+
+        input.addEventListener('input', function(){
+            clearTimeout(debounceTimer);
+            var query = input.value.trim();
+            if (!query) { results.classList.remove('fossci-entity-search-open'); results.innerHTML = ''; return; }
+            debounceTimer = setTimeout(function(){
+                fetch('api/entity-search?query=' + encodeURIComponent(query))
+                    .then(function(res){ return res.json(); })
+                    .then(render);
+            }, 200);
+        });
+        document.addEventListener('click', function(e){
+            if (e.target !== input && !results.contains(e.target)) {
+                results.classList.remove('fossci-entity-search-open');
+            }
+        });
+        input.addEventListener('keydown', function(e){
+            if (e.key === 'Escape') { results.classList.remove('fossci-entity-search-open'); }
+        });
+    })();
+    </script>
 </div>
 %s
 """, fossci_container_css(800), html.relation_diagram_css(), html.popover_css(), #entity_types,
-     list_or_empty, diagram_html, html.diagram_js(nonce))
+     list_or_empty, diagram_html, nonce, html.diagram_js(nonce))
 end
 
 -- Every entry template found (whether it loaded cleanly or not), each
@@ -3081,7 +3143,8 @@ function html.render_templates_list(entries)
             escaped_label = html.html_escape(label)
             escaped_desc = html.html_escape(description)
             items = items .. "<li><a href=\"template?template_name=" .. escaped_name .. "\">" ..
-                escaped_label .. "</a><p>" .. escaped_desc .. "</p></li>"
+                escaped_label .. "</a><p>" .. escaped_desc .. "</p>" ..
+                "<p><a href=\"document-edit?from_template=" .. escaped_name .. "\">+ New page from this&rarr;</a></p></li>"
         end
     end
 
@@ -3142,12 +3205,14 @@ function html.render_template(def, rendered_markdown, nonce)
     escaped_label = html.html_escape(label)
     escaped_desc = html.html_escape(description)
     escaped_body = html.html_escape(rendered_markdown)
+    escaped_name = html.html_escape(def.name)
 
     return string.format("""
 <div class="fossil-doc" data-title="Template: %s">
     <style>
 %s
-        .fossci-header { margin-bottom: 20px; border-bottom: 1px solid var(--fossci-bg-2, #f1f5f9); padding-bottom: 16px; }
+%s
+        .fossci-header { margin-bottom: 20px; border-bottom: 1px solid var(--fossci-bg-2, #f1f5f9); padding-bottom: 16px; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
         .fossci-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--fossci-heading, #0f172a); letter-spacing: -0.02em; }
         .fossci-header p { color: var(--fossci-muted, #64748b); margin: 0; font-size: 0.95rem; }
         .fossci-header a { color: var(--fossci-accent, #4f46e5); text-decoration: none; font-weight: 600; }
@@ -3167,15 +3232,18 @@ function html.render_template(def, rendered_markdown, nonce)
     </style>
     <div class="fossci-container">
         <div class="fossci-header">
-            <h2>%s</h2>
-            <p>%s</p>
-            <p><a href="templates">&larr; All templates</a></p>
+            <div>
+                <h2>%s</h2>
+                <p>%s</p>
+                <p><a href="templates">&larr; All templates</a></p>
+            </div>
+            <a class="btn btn-primary" href="document-edit?from_template=%s">Create new page from this template</a>
         </div>
-        <p>Select-all and copy the rendered snippet below.</p>
+        <p>Or select-all and copy the rendered snippet below.</p>
         <textarea class="fossci-snippet" id="fossci-template-content" readonly>%s</textarea>
     </div>
 </div>
-""", escaped_label, fossci_container_css(900), escaped_label, escaped_desc, escaped_body)
+""", escaped_label, fossci_container_css(900), fossci_button_css(), escaped_label, escaped_desc, escaped_name, escaped_body)
 end
 
 -- Ad-hoc SQL console (Setup/Admin only -- see cgi.lua's /sql route):
@@ -3445,7 +3513,8 @@ function html.render_document_tree(rows, can_create, nonce)
 
     new_page_link = ""
     if can_create == true then
-        new_page_link = "<a class=\"btn btn-primary\" href=\"document-edit\">+ New page</a>"
+        new_page_link = "<a class=\"btn btn-primary\" href=\"document-edit\">+ New page</a> " ..
+            "<a class=\"btn btn-secondary\" href=\"templates\">From template&hellip;</a>"
     end
 
     return string.format("""
@@ -3643,7 +3712,13 @@ end
 -- an existing one. `parent_options_html` is pre-rendered <option> tags
 -- (cgi.lua builds these from document.all_active, since it needs
 -- entity.get to know which one -- if any -- is currently selected).
-function html.render_document_edit(doc, parent_options_html, csrf_token, error_message, nonce)
+-- `prefill` (only used when doc == nil, i.e. a genuinely new, unsaved
+-- page): {title=, content=} to seed the form with, e.g. from a
+-- template.lua template's own rendered content (cgi.lua's
+-- /document-edit?from_template=<name>). Nothing is created yet --
+-- still a plain new-page form the user reviews/edits before Save,
+-- same as if they'd typed it by hand.
+function html.render_document_edit(doc, parent_options_html, csrf_token, error_message, nonce, prefill)
     is_edit = doc != nil
     heading = "New page"
     entity_id_value = ""
@@ -3655,6 +3730,13 @@ function html.render_document_edit(doc, parent_options_html, csrf_token, error_m
         title_value = html.html_escape(doc.title)
         if doc.content != nil then
             content_value_raw = doc.content
+        end
+    elseif prefill != nil then
+        if prefill.title != nil then
+            title_value = html.html_escape(prefill.title)
+        end
+        if prefill.content != nil then
+            content_value_raw = prefill.content
         end
     end
 
