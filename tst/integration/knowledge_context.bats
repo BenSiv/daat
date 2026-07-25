@@ -65,7 +65,7 @@ send_message() {
 @test "a real chat turn records a knowledge_chat_eval row classified as 'final'" {
     read session csrf < <(session_for admin secret123)
     chat_session=$(start_chat "$session" "$csrf" "Test")
-    send_message "$session" "$csrf" "$chat_session" "hello" "<done>A clean final answer.</done>" > /dev/null
+    send_message "$session" "$csrf" "$chat_session" "hello" "$(done_response "A clean final answer.")" > /dev/null
 
     run sqlite3 .store/store.db "SELECT session_id, provider, reply_kind, quality_status FROM knowledge_chat_eval;"
     [[ "$output" =~ "$chat_session" ]]
@@ -75,7 +75,7 @@ send_message() {
 @test "a reply leaking visible reasoning creates a linked reasoning document under the Knowledge Pool folder" {
     read session csrf < <(session_for admin secret123)
     chat_session=$(start_chat "$session" "$csrf" "Test")
-    send_message "$session" "$csrf" "$chat_session" "hi" "<think>internal reasoning</think>" > /dev/null
+    send_message "$session" "$csrf" "$chat_session" "hi" "$(done_response "<think>internal reasoning</think>")" > /dev/null
 
     run sqlite3 .store/store.db "SELECT tier, source_type FROM document WHERE source_type='reasoning';"
     [[ "$output" =~ "0|reasoning" ]]
@@ -113,9 +113,7 @@ send_message() {
 
     read session csrf < <(session_for admin secret123)
     chat_session=$(start_chat "$session" "$csrf" "Test")
-    scripted="<tool>knowledge</tool><method>distill</method><args>title=Core idea
-content=The one core idea, distilled.
-source_document_id=${source_id}</args>"
+    scripted="$(tool_call_response "knowledge.distill" "{\"title\":\"Core idea\",\"content\":\"The one core idea, distilled.\",\"source_document_id\":${source_id}}")"
     send_message "$session" "$csrf" "$chat_session" "distill the sprawling page" "$scripted" > /dev/null
 
     run sqlite3 .store/store.db "SELECT status, tool, method FROM agent_pending_action;"
@@ -126,7 +124,7 @@ source_document_id=${source_id}</args>"
 
     pending_id=$(sqlite3 .store/store.db "SELECT id FROM agent_pending_action;")
     printf 'csrf_token=%s&pending_id=%s&session_id=%s' "$csrf" "$pending_id" "$chat_session" | \
-        AGENT_PROVIDER=test AGENT_TEST_RESPONSES=$'<done>Distilled.</done>' \
+        AGENT_PROVIDER=test AGENT_TEST_RESPONSES="$(done_response "Distilled.")" \
         GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/chat-approve" QUERY_STRING="" \
         HTTP_COOKIE="session=${session}; csrf=${csrf}" "$BIN" > /dev/null
 
@@ -147,9 +145,7 @@ source_document_id=${source_id}</args>"
     source_id=$(sqlite3 .store/store.db "SELECT id FROM document WHERE title = 'Sprawling page';")
 
     USER=admin AGENT_PROVIDER=test \
-        AGENT_TEST_RESPONSES="<tool>knowledge</tool><method>distill</method><args>title=Core idea
-content=The one core idea, distilled.
-source_document_id=${source_id}</args>" \
+        AGENT_TEST_RESPONSES="$(tool_call_response "knowledge.distill" "{\"title\":\"Core idea\",\"content\":\"The one core idea, distilled.\",\"source_document_id\":${source_id}}")" \
         run "$BIN" knowledge distill
     [[ "$output" =~ "Status: pending_approval" ]]
     [[ "$output" =~ "knowledge.distill" ]]

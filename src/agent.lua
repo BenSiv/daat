@@ -11,6 +11,7 @@
 -- model shrinks.
 
 db = require("db")
+json = require("dkjson")
 agent_provider = require("agent_provider")
 document = require("document")
 entity = require("entity")
@@ -85,8 +86,28 @@ function agent_schema_sql(db_path)
     )
 end
 
+-- tool_call_id: the model's own id for the toolCall block that produced
+-- this pending action -- needed to correlate the eventual approved/
+-- denied result back to it via a real Gemini/pi-ai toolResult message
+-- (the wire protocol requires the exact id the model itself issued).
+-- Added via migration, not AGENT_SCHEMA, so an existing production
+-- agent_pending_action table gets it without a destructive rebuild --
+-- same pattern as document.lua's ensure_document_knowledge_columns.
+function ensure_agent_pending_action_columns(db_path)
+    existing = db.get_columns(db_path, "agent_pending_action")
+    have = {}
+    for _, name in ipairs(existing) do
+        have[name] = true
+    end
+    if have["tool_call_id"] == nil then
+        db.exec(db_path, "ALTER TABLE agent_pending_action ADD COLUMN tool_call_id VARCHAR(255);")
+    end
+end
+
 function agent.init_schema(db_path)
-    return db.exec(db_path, agent_schema_sql(db_path))
+    ok, err = db.exec(db_path, agent_schema_sql(db_path))
+    ensure_agent_pending_action_columns(db_path)
+    return ok, err
 end
 
 --------------------------------------------------------------------------
@@ -219,6 +240,16 @@ function agent.add_message(db_path, session_id, role, content, in_context)
     return tonumber(message_id)
 end
 
+-- Records one tool's result as a real, structured tool_result message
+-- -- JSON-encoded the same way an assistant row is (see
+-- build_history_messages), carrying the tool_call_id/tool_name needed
+-- to correlate it back to the model's own toolCall block via a real
+-- Gemini/pi-ai toolResult message on the next turn.
+function agent.add_tool_result_message(db_path, session_id, tool_call_id, tool_name, text, is_error)
+    content = json.encode({tool_call_id = tool_call_id, tool_name = tool_name, text = text, is_error = is_error == true})
+    return agent.add_message(db_path, session_id, "tool_result", content, true)
+end
+
 function agent.active_messages(db_path, session_id)
     rows = db.query(db_path, string.format(
         "SELECT * FROM agent_message WHERE session_id = %s AND in_context = 1 ORDER BY id ASC;",
@@ -230,24 +261,68 @@ function agent.active_messages(db_path, session_id)
     return rows
 end
 
+-- Renders a structured assistant reply (a decoded {blocks = [...]}
+-- content value -- see build_history_messages' own comment for the
+-- storage shape) into human-readable text: a text block reads as
+-- itself, a toolCall block as a short "-> what ran" line instead of
+-- the raw {name, arguments} structure.
+function display_blocks(blocks)
+    if blocks == nil then
+        return ""
+    end
+    parts = {}
+    for _, block in ipairs(blocks) do
+        if block.type == "text" and block.text != nil then
+            table.insert(parts, block.text)
+        elseif block.type == "toolCall" then
+            table.insert(parts, "-> " .. tostring(block.name) .. "(...)")
+        end
+    end
+    return table.concat(parts, "\n")
+end
+
 -- Cleans a message's content for DISPLAY only -- never called on what
--- active_messages/build_history_prompt feeds back to the model itself,
--- which still needs its own raw <tool>/<method>/<args>/<done> tag
--- protocol and the real page-context text intact to make sense of its
--- own prior turns. A human reading the transcript doesn't need any of
--- that literally: a <done>...</done>-wrapped final answer should just
--- read as its own inner text, a tool call as a short "-> what ran"
--- line instead of raw tags, and the [Current user: ...]/[Current
--- page: ...] annotations html.render_chat_widget's own JS prepends to
--- every user message (see its own comment on why every message, not
--- just the first) are there for the model, not for the user to see
--- restated back to them.
-function agent.display_content(content)
+-- active_messages/build_history_messages feeds back to the model
+-- itself, which still needs the real structured blocks (or, for a
+-- pre-migration row, the raw tag text) intact to make sense of its own
+-- prior turns. A human reading the transcript doesn't need any of that
+-- literally: a final text reply should just read as its own text, a
+-- tool call as a short "-> what ran" line, and the [Current user:
+-- ...]/[Current page: ...] annotations html.render_chat_widget's own
+-- JS prepends to every user message (see its own comment on why every
+-- message, not just the first) are there for the model, not for the
+-- user to see restated back to them.
+--
+-- `role` picks how `content` is decoded: assistant/tool_result rows
+-- store JSON (see build_history_messages) since the pi-ai migration;
+-- json.decode on anything else (plain user text, or a pre-migration
+-- row still holding the old <done>/<tool> tag text -- nothing here is
+-- ever deleted, see this file's header) simply fails to find the
+-- expected shape and falls through to the legacy tag-parsing/plain-text
+-- path below, so old sessions keep rendering correctly with no
+-- separate migration step needed.
+function agent.display_content(content, role)
     if content == nil then
         return content
     end
     content = string.gsub(content, "^%[Current user: .-%]\n", "")
     content = string.gsub(content, "^%[Current page: .-%]\n\n", "")
+
+    if role == "assistant" then
+        decoded, _, _ = json.decode(content)
+        if decoded != nil and decoded.blocks != nil then
+            return display_blocks(decoded.blocks)
+        end
+    elseif role == "tool_result" then
+        decoded, _, _ = json.decode(content)
+        if decoded != nil and decoded.text != nil then
+            return decoded.text
+        end
+        return content
+    end
+
+    -- Legacy fallback: a pre-migration assistant row (or content with
+    -- no role given) holding the old tag-text protocol directly.
     done_message = string.match(content, "^%s*<done>%s*(.-)%s*</done>%s*$")
     if done_message != nil then
         return done_message
@@ -286,7 +361,7 @@ function agent.all_messages(db_path, session_id)
         return {}
     end
     for _, row in ipairs(rows) do
-        row.content = agent.display_content(row.content)
+        row.content = agent.display_content(row.content, row.role)
     end
     return rows
 end
@@ -347,7 +422,7 @@ function agent.compact_if_needed(db_path, session_id, system_prompt, model)
         "state, so that a future model invocation has all the necessary context. Keep the " ..
         "summary under 300 words.\n\nConversation to summarize:\n"
     for _, msg in ipairs(to_compact) do
-        summary_prompt = summary_prompt .. string.upper(msg.role) .. ": " .. msg.content .. "\n"
+        summary_prompt = summary_prompt .. string.upper(msg.role) .. ": " .. agent.display_content(msg.content, msg.role) .. "\n"
     end
 
     summary, err, usage = agent_provider.generate(model, "You are a concise summarizer.", summary_prompt)
@@ -387,11 +462,69 @@ end
 -- a *separate* later request (agent.approve_pending/deny_pending)
 -- executes it (or records the denial) and resumes the loop from there.
 
+-- `parameters` is a real Vertex/Gemini function-declaration Schema
+-- (task: native structured tool-calling via the pi-ai bridge, replacing
+-- the old <tool>/<method>/<args> text protocol) -- verified live
+-- against real Vertex AI, not assumed: `type` values are the uppercase
+-- proto enum ("OBJECT"/"STRING"/"INTEGER", not JSON-Schema's lowercase),
+-- and `additionalProperties = true` genuinely works for the open-ended
+-- "one arg per field" tools (entity.create/update) -- confirmed with a
+-- real call that produced exactly the extra fields asked for alongside
+-- the declared ones. `description` here is what the model actually
+-- sees per tool (replacing the old hand-written system-prompt bullet
+-- list); `destructive` is unchanged, still gates the pending-approval
+-- flow below.
+-- properties = {} (a plain empty Lua table) is genuinely ambiguous to
+-- dkjson.encode -- confirmed live: it comes out as a JSON array ("[]"),
+-- not an object ("{}"), the same empty-table-encoding ambiguity that
+-- bit schema.lua's own JSON columns elsewhere in this codebase -- and a
+-- real Vertex AI call rejects the resulting {"type":"OBJECT",
+-- "properties":[]} with a 400 INVALID_ARGUMENT (confirmed live, not
+-- assumed: every no-arg tool -- entity.list_types/template.list/
+-- knowledge.stats -- broke every real tool-calling turn merely by
+-- being *declared*, before the model even chose one). dkjson's own
+-- __jsontype = "object" metatable marker forces object encoding
+-- regardless of emptiness.
+EMPTY_OBJECT_SCHEMA = {type = "OBJECT", properties = setmetatable({}, {__jsontype = "object"})}
+
 AGENT_TOOLS = {
     document = {
-        search = {destructive = false},
-        create = {destructive = true},
-        update = {destructive = true},
+        search = {
+            destructive = false,
+            description = "Search pages by keyword or topic; returns each matching page's id, title, and a real content excerpt so you can answer from what the page actually says, not just its title.",
+            parameters = {
+                type = "OBJECT",
+                properties = {query = {type = "STRING", description = "search text"}},
+                required = {"query"},
+            },
+        },
+        create = {
+            destructive = true,
+            description = "Create a new page.",
+            parameters = {
+                type = "OBJECT",
+                properties = {
+                    title = {type = "STRING"},
+                    parent_id = {type = "INTEGER", description = "optional parent page id"},
+                    content = {type = "STRING", description = "markdown content"},
+                },
+                required = {"title"},
+            },
+        },
+        update = {
+            destructive = true,
+            description = "Update an existing page.",
+            parameters = {
+                type = "OBJECT",
+                properties = {
+                    entity_id = {type = "INTEGER", description = "page id"},
+                    title = {type = "STRING", description = "optional new title"},
+                    parent_id = {type = "INTEGER", description = "optional new parent id"},
+                    content = {type = "STRING", description = "optional new content -- replaces the whole field, does not append"},
+                },
+                required = {"entity_id"},
+            },
+        },
     },
     -- Generic entity access -- any registered schema, not a curated
     -- subset (schema.lua/entity.lua's own validation is the safety
@@ -400,14 +533,90 @@ AGENT_TOOLS = {
     -- their field names/types itself rather than the system prompt
     -- needing to hardcode every schema that might ever be registered.
     entity = {
-        list_types = {destructive = false},
-        fields = {destructive = false},
-        list = {destructive = false},
-        get = {destructive = false},
-        create = {destructive = true},
-        update = {destructive = true},
-        archive = {destructive = true},
-        unarchive = {destructive = true},
+        list_types = {
+            destructive = false,
+            description = "List every registered entity type (samples, tasks, experiments, whatever this deployment has).",
+            parameters = EMPTY_OBJECT_SCHEMA,
+        },
+        fields = {
+            destructive = false,
+            description = "List an entity type's fields and their types, so you know what's valid before creating/updating one.",
+            parameters = {
+                type = "OBJECT",
+                properties = {entity_type = {type = "STRING"}},
+                required = {"entity_type"},
+            },
+        },
+        list = {
+            destructive = false,
+            description = "List rows of an entity type, optionally filtered to rows where one field equals a value.",
+            parameters = {
+                type = "OBJECT",
+                properties = {
+                    entity_type = {type = "STRING"},
+                    filter_field = {type = "STRING", description = "optional field name"},
+                    filter_value = {type = "STRING", description = "optional value, only used with filter_field"},
+                    limit = {type = "INTEGER", description = "optional, default 20"},
+                    offset = {type = "INTEGER", description = "optional, for paging past the first page"},
+                },
+                required = {"entity_type"},
+            },
+        },
+        get = {
+            destructive = false,
+            description = "Fetch one entity row by id.",
+            parameters = {
+                type = "OBJECT",
+                properties = {entity_type = {type = "STRING"}, entity_id = {type = "INTEGER"}},
+                required = {"entity_type", "entity_id"},
+            },
+        },
+        create = {
+            destructive = true,
+            description = "Create a new entity row. Pass entity_type plus one property per field the entity type actually has (call entity.fields first if unsure).",
+            parameters = {
+                type = "OBJECT",
+                properties = {entity_type = {type = "STRING"}},
+                required = {"entity_type"},
+                additionalProperties = true,
+            },
+        },
+        update = {
+            destructive = true,
+            description = "Update fields on an existing entity row. Pass entity_type/entity_id plus one property per field to change. Some entity types require a reason -- if the tool result says one is required, ask the user why before retrying.",
+            parameters = {
+                type = "OBJECT",
+                properties = {
+                    entity_type = {type = "STRING"},
+                    entity_id = {type = "INTEGER"},
+                    reason = {type = "STRING", description = "optional: why this change is being made"},
+                },
+                required = {"entity_type", "entity_id"},
+                additionalProperties = true,
+            },
+        },
+        archive = {
+            destructive = true,
+            description = "Archive (soft-remove) an entity row. Some entity types require a reason.",
+            parameters = {
+                type = "OBJECT",
+                properties = {
+                    entity_type = {type = "STRING"},
+                    entity_id = {type = "INTEGER"},
+                    reason = {type = "STRING", description = "optional: why this change is being made"},
+                },
+                required = {"entity_type", "entity_id"},
+            },
+        },
+        unarchive = {
+            destructive = true,
+            description = "Restore a previously archived entity row.",
+            parameters = {
+                type = "OBJECT",
+                properties = {entity_type = {type = "STRING"}, entity_id = {type = "INTEGER"}},
+                required = {"entity_type", "entity_id"},
+            },
+        },
     },
     -- Reusable Entry templates (src/template.lua) -- a separate,
     -- filesystem-based system from `document`, invisible to every other
@@ -416,8 +625,20 @@ AGENT_TOOLS = {
     -- get its rendered content, then hand that straight to
     -- document.create's own content arg.
     template = {
-        list = {destructive = false},
-        get = {destructive = false},
+        list = {
+            destructive = false,
+            description = "List reusable Entry templates (name, label, description) available to build a new page from.",
+            parameters = EMPTY_OBJECT_SCHEMA,
+        },
+        get = {
+            destructive = false,
+            description = "Get one template's rendered content, ready to pass straight to document.create's own content arg, plus its suggested default page name.",
+            parameters = {
+                type = "OBJECT",
+                properties = {name = {type = "STRING", description = "template name"}},
+                required = {"name"},
+            },
+        },
     },
     -- Read-only introspection into the knowledge pool's own tiering/
     -- retrieval activity (see knowledge.lua), plus one destructive tool
@@ -426,9 +647,32 @@ AGENT_TOOLS = {
     -- document/entity_event row), so it needs the same human-approval
     -- gate every other destructive tool has.
     knowledge = {
-        stats = {destructive = false},
-        list = {destructive = false},
-        distill = {destructive = true},
+        stats = {
+            destructive = false,
+            description = "Summarize the knowledge pool's tier distribution and retrieval activity.",
+            parameters = EMPTY_OBJECT_SCHEMA,
+        },
+        list = {
+            destructive = false,
+            description = "List knowledge pool documents with their id, tier, atomicity (ok/thin/needs-split), heat, and retrieval count.",
+            parameters = {
+                type = "OBJECT",
+                properties = {tier = {type = "INTEGER", description = "optional, filter to one tier 0-3"}},
+            },
+        },
+        distill = {
+            destructive = true,
+            description = "Write a new, concise, single-idea document distilled from a source you've actually read (e.g. via entity.get). Not a raw copy -- extract the one core idea in your own words. Only do this for a source that's genuinely not already atomic (\"thin\"/\"ok\" sources have nothing worth extracting).",
+            parameters = {
+                type = "OBJECT",
+                properties = {
+                    title = {type = "STRING"},
+                    content = {type = "STRING", description = "the distilled markdown text"},
+                    source_document_id = {type = "INTEGER", description = "optional: the existing document this was distilled from"},
+                },
+                required = {"title", "content"},
+            },
+        },
     },
 }
 
@@ -446,6 +690,26 @@ function agent.is_destructive(tool_name, method_name)
         return false
     end
     return group[method_name].destructive == true
+end
+
+-- Flattens AGENT_TOOLS into the function-declaration list the pi-ai
+-- bridge (and so Vertex/Gemini's own function-calling API) expects --
+-- one entry per method, named "toolname.methodname" (dots are valid in
+-- a Gemini function name, verified live) so agent.execute_tool's own
+-- tool_name/method_name split-on-dot dispatch needs no remapping table
+-- at all in either direction.
+function agent.tool_declarations()
+    declarations = {}
+    for tool_name, methods in pairs(AGENT_TOOLS) do
+        for method_name, spec in pairs(methods) do
+            table.insert(declarations, {
+                name = tool_name .. "." .. method_name,
+                description = spec.description,
+                parameters = spec.parameters,
+            })
+        end
+    end
+    return declarations
 end
 
 function issues_summary(issues)
@@ -848,11 +1112,10 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
     return nil, "unknown tool: " .. tostring(tool_name) .. "." .. tostring(method_name)
 end
 
-function agent.create_pending_action(db_path, session_id, tool_name, method_name, args)
-    json = require("dkjson")
+function agent.create_pending_action(db_path, session_id, tool_name, method_name, args, tool_call_id)
     db.exec(db_path, string.format(
-        "INSERT INTO agent_pending_action (session_id, tool, method, args_json) VALUES (%s, %s, %s, %s);",
-        db.quote(session_id), db.quote(tool_name), db.quote(method_name), db.quote(json.encode(args))
+        "INSERT INTO agent_pending_action (session_id, tool, method, args_json, tool_call_id) VALUES (%s, %s, %s, %s, %s);",
+        db.quote(session_id), db.quote(tool_name), db.quote(method_name), db.quote(json.encode(args)), db.literal(tool_call_id)
     ))
     rows = db.query(db_path, "SELECT MAX(id) AS id FROM agent_pending_action;")
     return tonumber(rows[1].id)
@@ -897,88 +1160,100 @@ end
 -- The turn loop
 --------------------------------------------------------------------------
 
-function build_history_prompt(messages)
-    parts = {}
-    for _, msg in ipairs(messages) do
-        if msg.role == "compaction_summary" then
-            table.insert(parts, "[COMPACTED HISTORY SUMMARY]:\n" .. msg.content)
-        elseif msg.role == "user" then
-            table.insert(parts, "User: " .. msg.content)
-        elseif msg.role == "assistant" then
-            table.insert(parts, "Assistant: " .. msg.content)
-        elseif msg.role == "tool_result" then
-            table.insert(parts, "Tool Output:\n" .. msg.content)
-        end
-    end
-    return table.concat(parts, "\n\n")
-end
-
-function strip_spaces(s)
-    return (string.gsub(s, "^%s*(.-)%s*$", "%1"))
-end
-
--- Splits on "\n" only (not gmatch's "[^\r\n]+", which silently drops
--- every blank line -- exactly the lines a real multi-paragraph
--- Markdown document is full of). Keeps empty lines as empty strings so
--- a value spanning them is reconstructed byte-for-byte, not collapsed.
-function split_lines(s)
-    lines = {}
-    start = 1
-    while true do
-        nl = string.find(s, "\n", start, true)
-        if nl == nil then
-            table.insert(lines, string.sub(s, start))
-            return lines
-        end
-        table.insert(lines, string.sub(s, start, nl - 1))
-        start = nl + 1
-    end
-end
-
--- A real, previously-undiscovered bug (found live: `content=# Heading`
--- followed by several more lines of Markdown -- headings, a blank
--- line, a table -- came back from a real document.create call holding
--- only "# Heading", everything else silently gone): the old
--- implementation split on "[^\r\n]+" (dropping every blank line
--- outright) and re-matched "^(.-)=(.*)$" per line, so ANY multi-line
--- value -- which any real page content is -- lost everything past its
--- own first line, with no error anywhere.
+-- Builds the real, structured message list agent_provider.converse
+-- sends to the model (a near-direct rendering of pi-ai's own
+-- Context.messages -- see agent_provider_pi.lua/bridge/pi-bridge.mjs)
+-- from this session's agent_message rows, replacing the old
+-- build_history_prompt's single flattened text blob. This is the
+-- actual fix for both bugs that motivated the pi-ai migration: no text
+-- protocol to mis-parse means no multi-line-content truncation and no
+-- tool-name-splitting confusion, structurally.
 --
--- A value now continues across as many following lines as don't
--- themselves look like a new key=value pair -- new-key detection is
--- deliberately narrow (a bare identifier: letters/digits/underscore,
--- starting with a letter or underscore, immediately before "=") so a
--- real content line is never mistaken for one just because it happens
--- to contain an "=" somewhere. This can still misfire on a content
--- line that itself starts with something identifier-shaped immediately
--- followed by "=" (e.g. "x=5 is the answer" as literally the first
--- line of a value) -- a narrower edge case than the guaranteed data
--- loss this replaces, not a fully general escaping scheme.
-function parse_tool_call(result)
-    tool_name = string.match(result, "<tool>%s*(.-)%s*</tool>")
-    method_name = string.match(result, "<method>%s*(.-)%s*</method>")
-    args_str = string.match(result, "<args>%s*(.-)%s*</args>")
-    args = {}
-    if args_str != nil then
-        current_key = nil
-        for _, raw_line in ipairs(split_lines(args_str)) do
-            line = (string.gsub(raw_line, "\r$", ""))
-            key, value = string.match(line, "^([%a_][%w_]*)=(.*)$")
-            if key != nil then
-                current_key = key
-                args[current_key] = value
-            elseif current_key != nil then
-                args[current_key] = args[current_key] .. "\n" .. line
+-- assistant/tool_result rows store JSON (see agent.add_message's
+-- callers below and agent.add_tool_result_message) -- decoded back
+-- into real content blocks / a toolResult message here. A row that
+-- fails to decode into the expected shape is a pre-migration row still
+-- holding the old <done>/<tool> tag text (nothing here is ever
+-- deleted): degraded gracefully rather than dropped -- an old assistant
+-- reply becomes a single text block (via agent.display_content's own
+-- legacy-tag rendering), an old tool_result becomes a plain user-role
+-- note, since Gemini's own toolResult message requires a toolCallId to
+-- correlate against a prior toolCall that a pre-migration row never
+-- had.
+function build_history_messages(messages)
+    result = {}
+    for _, msg in ipairs(messages) do
+        if msg.role == "user" then
+            table.insert(result, {role = "user", content = msg.content})
+        elseif msg.role == "compaction_summary" then
+            table.insert(result, {role = "user", content = "[COMPACTED HISTORY SUMMARY]:\n" .. msg.content})
+        elseif msg.role == "assistant" then
+            decoded, _, _ = json.decode(msg.content)
+            if decoded != nil and decoded.blocks != nil then
+                table.insert(result, {role = "assistant", content = decoded.blocks})
+            else
+                table.insert(result, {role = "assistant", content = {{type = "text", text = agent.display_content(msg.content, "assistant")}}})
+            end
+        elseif msg.role == "tool_result" then
+            decoded, _, _ = json.decode(msg.content)
+            if decoded != nil and decoded.text != nil then
+                table.insert(result, {
+                    role = "toolResult",
+                    toolCallId = decoded.tool_call_id,
+                    toolName = decoded.tool_name,
+                    content = {{type = "text", text = decoded.text}},
+                    isError = decoded.is_error == true,
+                })
+            else
+                table.insert(result, {role = "user", content = "[Prior tool result]: " .. tostring(msg.content)})
             end
         end
     end
-    return tool_name, method_name, args
+    return result
 end
 
--- The default system prompt teaching the model the tag protocol and
--- listing the tools in AGENT_TOOLS -- hand-maintained text, not
--- generated from the registry, so a new tool needs a line added here
--- too (see AGENT_TOOLS' own comment).
+-- Only the first toolCall block in a reply is ever acted on -- the old
+-- text-tag protocol only ever supported one tool call per reply too
+-- (a single <tool>/<method>/<args> occurrence), so this carries that
+-- same single-call-per-turn scope forward rather than a regression.
+-- Gemini/Vertex can emit parallel tool calls in one reply; a second
+-- one here is simply left for a future turn once its own result comes
+-- back, not a known real-world problem yet.
+function first_tool_call(blocks)
+    if blocks == nil then
+        return nil
+    end
+    for _, block in ipairs(blocks) do
+        if block.type == "toolCall" then
+            return block
+        end
+    end
+    return nil
+end
+
+-- AGENT_TOOLS' own function-declaration names are always "tool.method"
+-- (see agent.tool_declarations()) with no dots anywhere else in either
+-- half, so splitting on the first dot is exact, not a heuristic.
+function split_tool_name(dotted_name)
+    if dotted_name == nil then
+        return nil, nil
+    end
+    dot = string.find(dotted_name, ".", 1, true)
+    if dot == nil then
+        return nil, nil
+    end
+    return string.sub(dotted_name, 1, dot - 1), string.sub(dotted_name, dot + 1)
+end
+
+-- The default system prompt: domain/behavior guidance only -- the
+-- tools themselves are no longer enumerated here in hand-written text.
+-- Since the pi-ai migration, the model gets the real tool list as
+-- native function declarations (agent.tool_declarations(), passed to
+-- agent_provider.converse's own `tools` argument) with structured
+-- JSON-Schema parameters and per-tool descriptions (AGENT_TOOLS' own
+-- `description` field) -- Gemini/Vertex decides on its own when to
+-- call one and returns a real structured toolCall block, no tag
+-- protocol for the model to get right or for this code to parse.
 --
 -- Appends theme.json's own system_prompt_extra, if a deployment set
 -- one (task #70) -- deployment-specific instructions (domain
@@ -996,7 +1271,7 @@ function agent.default_system_prompt()
         extra = "\n\n" .. theme.system_prompt_extra
     end
     return """
-You are an assistant embedded in a data platform. Answer directly when you can, or use a tool to look up or change data.
+You are an assistant embedded in a data platform. Answer directly when you can, or call one of your available tools to look up or change data.
 
 Some of your messages start with "[Current user: ...]" and/or "[Current
 page: ...]" lines, automatically added by the app, not typed by the user --
@@ -1040,45 +1315,8 @@ candidates apart yourself, or describe them to the user in those terms
 ("there are two pages titled X, one from March about Y and one from June
 about Z -- which do you mean?").
 
-Available tools:
-- document.search -- search pages by keyword or topic; returns each matching page's id, title, and a real content excerpt so you can answer from what the page actually says, not just its title. Args: query=<search text>
-- document.create -- create a new page. Args: title=<title>, parent_id=<optional parent page id>, content=<markdown content>
-- document.update -- update an existing page. Args: entity_id=<page id>, title=<optional new title>, parent_id=<optional new parent id>, content=<optional new content>
-- entity.list_types -- list every registered entity type (samples, tasks, experiments, whatever this deployment has). No args.
-- entity.fields -- list an entity type's fields and their types, so you know what's valid before creating/updating one. Args: entity_type=<name>
-- entity.list -- list rows of an entity type, optionally filtered to rows where one field equals a value. Args: entity_type=<name>, filter_field=<optional field name>, filter_value=<optional value, only used with filter_field>, limit=<optional, default 20>, offset=<optional, for paging past the first page>
-- entity.get -- fetch one entity row by id. Args: entity_type=<name>, entity_id=<id>
-- entity.create -- create a new entity row. Args: entity_type=<name>, plus one arg per field (e.g. status=open, due_date=2026-08-01)
-- entity.update -- update fields on an existing entity row. Args: entity_type=<name>, entity_id=<id>, reason=<optional: why this change is being made>, plus one arg per field to change. Some entity types require a reason -- if the tool result says one is required, ask the user why before retrying.
-- entity.archive -- archive (soft-remove) an entity row. Args: entity_type=<name>, entity_id=<id>, reason=<optional: why this change is being made>. Some entity types require a reason.
-- entity.unarchive -- restore a previously archived entity row. Args: entity_type=<name>, entity_id=<id>
-- template.list -- list reusable Entry templates (name, label, description) available to build a new page from. No args.
-- template.get -- get one template's rendered content, ready to pass straight to document.create's own content arg, plus its suggested default page name. Args: name=<template name>
-- knowledge.stats -- summarize the knowledge pool's tier distribution and retrieval activity. No args.
-- knowledge.list -- list knowledge pool documents with their id, tier, atomicity (ok/thin/needs-split), heat, and retrieval count. Args: tier=<optional, filter to one tier 0-3>
-- knowledge.distill -- write a new, concise, single-idea document distilled from a source you've actually read (e.g. via entity.get). Not a raw copy -- extract the one core idea in your own words. Only do this for a source that's genuinely not already atomic ("thin"/"ok" sources have nothing worth extracting). Args: title=<title>, content=<the distilled markdown text>, source_document_id=<optional: the existing document this was distilled from>. Requires human approval before anything is actually written.
-
-If you don't already know an entity type's fields, call entity.fields first rather than guessing field names.
-
-Each tool name above has two parts separated by a dot: the part before the
-dot is the <tool> tag's value, the part after is the <method> tag's value --
-never put the dot inside either tag, and never repeat the method name in
-both. template.list means <tool>template</tool><method>list</method>, not
-<tool>template.list</tool><method>list</method>.
-
-To call a tool, reply with EXACTLY this shape and nothing else:
-<tool>document</tool>
-<method>search</method>
-<args>
-query=some search text
-</args>
-
-Each argument starts on its own line as key=value. A value can span multiple lines -- including blank lines, e.g. real Markdown page content -- everything up to the next key=value line (or the closing </args>) belongs to it, real newlines and all. Only start a new line with key= when you actually mean a new, different argument. After a tool call you will be given its result as a new turn, and can call another tool or give a final answer.
-
-When you have a final answer for the user, reply with EXACTLY:
-<done>Your final answer here.</done>
-
-Never mix a tool call and a <done> reply in the same turn.
+If you don't already know an entity type's fields, call entity.fields first
+rather than guessing field names.
 """ .. extra
 end
 
@@ -1154,10 +1392,11 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
 
     for turn = 1, MAX_TURNS do
         active = agent.active_messages(db_path, session_id)
-        prompt = build_history_prompt(active)
+        history_messages = build_history_messages(active)
+        audit_prompt = json.encode(history_messages)
 
-        result, err, usage = agent_provider.generate(model, system_prompt, prompt)
-        if result == nil then
+        response, err, usage = agent_provider.converse(model, system_prompt, history_messages, agent.tool_declarations())
+        if response == nil then
             -- Persisted, not just returned -- every run_turn call site
             -- (chat-message, chat-widget-send/approve/deny) previously
             -- discarded this return value entirely, so a provider
@@ -1167,12 +1406,36 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
             -- task #87: still recorded even on failure -- what was
             -- actually sent is exactly as much an audit fact as what
             -- came back, and usage/reasoning simply don't apply here.
-            context_id = knowledge.record_context(db_path, session_id, error_message_id, prompt, model, nil, nil)
+            context_id = knowledge.record_context(db_path, session_id, error_message_id, audit_prompt, model, nil, nil)
             knowledge.record_chat_eval(db_path, session_id, context_id, error_message_id, agent_provider.name(), model, true, nil)
             return {status = "error", message = tostring(err)}
         end
 
-        message_id = agent.add_message(db_path, session_id, "assistant", result, true)
+        -- A bridge-level infrastructure failure (nil response, handled
+        -- above) is distinct from the LLM call itself failing (auth,
+        -- rate limit, a malformed request) -- pi-ai/the bridge surface
+        -- the latter as a real, structured reply with stopReason
+        -- "error"/"aborted" rather than an exception (see
+        -- agent_provider_pi.lua's own comment); treated the same way as
+        -- a bridge failure from run_turn's own perspective, since
+        -- either way there's no usable reply to act on this turn.
+        if response.stopReason == "error" or response.stopReason == "aborted" then
+            error_message = response.errorMessage
+            if error_message == nil then
+                error_message = "model call failed (stopReason: " .. tostring(response.stopReason) .. ")"
+            end
+            error_message_id = agent.add_message(db_path, session_id, "tool_result", "ERROR: " .. tostring(error_message), true)
+            context_id = knowledge.record_context(db_path, session_id, error_message_id, audit_prompt, model, nil, usage)
+            knowledge.record_chat_eval(db_path, session_id, context_id, error_message_id, agent_provider.name(), model, true, nil)
+            return {status = "error", message = tostring(error_message)}
+        end
+
+        content_blocks = response.content
+        if content_blocks == nil then
+            content_blocks = {}
+        end
+        message_id = agent.add_message(db_path, session_id, "assistant", json.encode({blocks = content_blocks}), true)
+        display_text = display_blocks(content_blocks)
 
         -- task #87: persist the exact prompt/reasoning/tokens for this
         -- turn. A reply that leaks visible reasoning (see
@@ -1184,40 +1447,46 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
         -- other pool document, rather than sitting in a second,
         -- parallel log only this table can see.
         reasoning_document_id = nil
-        if knowledge.reply_has_visible_reasoning(result) then
+        if knowledge.reply_has_visible_reasoning(display_text) then
             reasoning_document_id = knowledge.create_document_note(db_path, login,
-                "Chat reasoning (session " .. tostring(session_id) .. ")", result,
+                "Chat reasoning (session " .. tostring(session_id) .. ")", display_text,
                 "reasoning", message_id, tostring(session_id))
         end
-        context_id = knowledge.record_context(db_path, session_id, message_id, prompt, model, reasoning_document_id, usage)
-        knowledge.record_chat_eval(db_path, session_id, context_id, message_id, agent_provider.name(), model, false, result)
+        context_id = knowledge.record_context(db_path, session_id, message_id, audit_prompt, model, reasoning_document_id, usage)
+        knowledge.record_chat_eval(db_path, session_id, context_id, message_id, agent_provider.name(), model, false, display_text)
 
-        done_message = string.match(result, "<done>%s*(.-)%s*</done>")
-        if done_message != nil then
+        tool_call = first_tool_call(content_blocks)
+        if tool_call == nil then
+            -- A plain reply (stopReason "stop"/"length") is the final
+            -- answer -- no <done> sentinel tag needed at all: pi-ai's
+            -- own stopReason already distinguishes "the model wants to
+            -- call a tool" (toolUse) from "the model is finished"
+            -- (stop/length), which is what native function-calling
+            -- gets for free over the old text protocol.
             sync_session_document(db_path, login, session_id)
-            return {status = "done", message = done_message}
+            return {status = "done", message = display_text}
         end
 
-        tool_name, method_name, args = parse_tool_call(result)
-        if tool_name == nil or method_name == nil then
-            sync_session_document(db_path, login, session_id)
-            return {status = "done", message = result}
+        if tool_call.arguments == nil then
+            tool_call.arguments = {}
         end
-
-        if not agent.is_known_tool(tool_name, method_name) then
-            agent.add_message(db_path, session_id, "tool_result",
-                "ERROR: unknown tool " .. tostring(tool_name) .. "." .. tostring(method_name), true)
+        tool_name, method_name = split_tool_name(tool_call.name)
+        if tool_name == nil or not agent.is_known_tool(tool_name, method_name) then
+            agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name,
+                "ERROR: unknown tool " .. tostring(tool_call.name), true)
         elseif agent.is_destructive(tool_name, method_name) then
-            pending_id = agent.create_pending_action(db_path, session_id, tool_name, method_name, args)
+            pending_id = agent.create_pending_action(db_path, session_id, tool_name, method_name, tool_call.arguments, tool_call.id)
             sync_session_document(db_path, login, session_id)
-            return {status = "pending_approval", pending_id = pending_id, tool = tool_name, method = method_name, args = args}
+            return {status = "pending_approval", pending_id = pending_id, tool = tool_name, method = method_name, args = tool_call.arguments}
         else
-            tool_result, tool_err = agent.execute_tool(db_path, login, session_id, tool_name, method_name, args)
+            tool_result, tool_err = agent.execute_tool(db_path, login, session_id, tool_name, method_name, tool_call.arguments)
             summary = tostring(tool_result)
+            is_error = false
             if tool_err != nil then
                 summary = "ERROR: " .. tostring(tool_err)
+                is_error = true
             end
-            agent.add_message(db_path, session_id, "tool_result", summary, true)
+            agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name, summary, is_error)
         end
     end
 
@@ -1248,7 +1517,7 @@ You are reviewing this deployment's knowledge pool: documents captured from real
 
 Use knowledge.list to see current pool documents: id, tier, atomicity (ok / thin / needs-split), effective heat, retrieval count. For a document flagged "needs-split" (covers more than one real idea, or is unusually long/unfocused), read its full content with entity.get (entity_type=document) and write ONE genuinely atomic, single-idea document distilled from it with knowledge.distill -- concise, self-contained, in your own words, not a verbatim copy of the source. Do not distill from a document that's already "ok" or "thin" -- there's nothing worth extracting that isn't already there as-is.
 
-Distilling nothing this pass is a completely acceptable outcome -- do not distill from a document you're unsure about; say why you're leaving it alone instead. When you're done, summarize what you reviewed and what you did (or didn't) distill, and end with a <done> message.
+Distilling nothing this pass is a completely acceptable outcome -- do not distill from a document you're unsure about; say why you're leaving it alone instead. When you're done, summarize what you reviewed and what you did (or didn't) distill.
 """
 
 function agent.run_knowledge_distillation(db_path, login, model)
@@ -1272,7 +1541,6 @@ function agent.approve_pending(db_path, pending_id, login, system_prompt, model)
         return nil, "action already " .. tostring(pending.status)
     end
 
-    json = require("dkjson")
     args, _, _ = json.decode(pending.args_json)
     if args == nil then
         args = {}
@@ -1280,10 +1548,12 @@ function agent.approve_pending(db_path, pending_id, login, system_prompt, model)
 
     tool_result, tool_err = agent.execute_tool(db_path, login, pending.session_id, pending.tool, pending.method, args)
     summary = tostring(tool_result)
+    is_error = false
     if tool_err != nil then
         summary = "ERROR: " .. tostring(tool_err)
+        is_error = true
     end
-    agent.add_message(db_path, pending.session_id, "tool_result", summary, true)
+    agent.add_tool_result_message(db_path, pending.session_id, pending.tool_call_id, pending.tool .. "." .. pending.method, summary, is_error)
     agent.resolve_pending_action(db_path, pending_id, "approved")
 
     return agent.run_turn(db_path, pending.session_id, login, system_prompt, model, nil)
@@ -1301,7 +1571,7 @@ function agent.deny_pending(db_path, pending_id, login, system_prompt, model)
         return nil, "action already " .. tostring(pending.status)
     end
 
-    agent.add_message(db_path, pending.session_id, "tool_result", "User denied execution of this action.", true)
+    agent.add_tool_result_message(db_path, pending.session_id, pending.tool_call_id, pending.tool .. "." .. pending.method, "User denied execution of this action.", true)
     agent.resolve_pending_action(db_path, pending_id, "denied")
 
     return agent.run_turn(db_path, pending.session_id, login, system_prompt, model, nil)

@@ -63,6 +63,31 @@ run_cgi() {
     run "$BIN"
 }
 
+# Builds one scripted structured-tool-call turn for AGENT_TEST_RESPONSES
+# (agent_provider_test.converse expects each "\1"-delimited entry to be
+# a JSON object mirroring the pi-ai bridge's own AssistantMessage shape
+# -- see agent_provider_pi.lua/bridge/pi-bridge.mjs) -- replaces the old
+# <tool>/<method>/<args> tag-text scripting since the pi-ai migration.
+# `dotted_name` is "tool.method" (e.g. "document.search"); `args_json`
+# is a raw JSON object literal -- build it by hand, test args here are
+# always simple key/value pairs that never need escaping.
+tool_call_response() {
+    local dotted_name="$1"
+    local args_json="$2"
+    printf '{"content":[{"type":"toolCall","id":"call_1","name":"%s","arguments":%s}],"stopReason":"toolUse"}' "$dotted_name" "$args_json"
+}
+
+# Builds one scripted final-answer turn for AGENT_TEST_RESPONSES. `text`
+# is JSON-escaped (backslash/quote/newline) so callers can pass a plain
+# shell string without hand-escaping it themselves.
+done_response() {
+    local text="$1"
+    text="${text//\\/\\\\}"
+    text="${text//\"/\\\"}"
+    text="${text//$'\n'/\\n}"
+    printf '{"content":[{"type":"text","text":"%s"}],"stopReason":"stop"}' "$text"
+}
+
 # Same as run_cgi, but authenticated as a "is" (Setup+Admin) capability
 # user -- for routes gated above the baseline "i" capability (/sql).
 run_cgi_admin() {

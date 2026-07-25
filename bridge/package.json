@@ -1,0 +1,16 @@
+{
+  "name": "platform-wip-pi-bridge",
+  "private": true,
+  "type": "module",
+  "version": "1.0.0",
+  "description": "One-shot stdin/stdout JSON bridge between agent.lua and @earendil-works/pi-ai, giving the chat agent real structured (JSON) multi-provider tool-calling instead of hand-rolled XML-tag scraping.",
+  "scripts": {
+    "build": "esbuild pi-bridge.mjs --bundle --platform=node --format=cjs --outfile=dist/pi-bridge.cjs"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "^0.82.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1"
+  }
+}

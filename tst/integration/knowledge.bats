@@ -48,7 +48,7 @@ start_chat() {
 search_for_bioreactor() {
     resp=$(start_chat)
     session_id=$(extract_query_param "$resp" "session_id")
-    scripted=$'<tool>document</tool>\n<method>search</method>\n<args>\nquery=bioreactor\n</args>\1<done>Found it.</done>'
+    scripted="$(tool_call_response "document.search" '{"query":"bioreactor"}')"$'\1'"$(done_response "Found it.")"
     raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=find+bioreactor+pages" "$COOKIE" "$scripted" >/dev/null
 }
 
@@ -66,11 +66,11 @@ search_for_bioreactor_extra() {
     local extra_response="$1"
     resp=$(start_chat)
     session_id=$(extract_query_param "$resp" "session_id")
-    scripted=$'<tool>document</tool>\n<method>search</method>\n<args>\nquery=bioreactor\n</args>'
+    scripted="$(tool_call_response "document.search" '{"query":"bioreactor"}')"
     if [ -n "$extra_response" ]; then
         scripted="${scripted}"$'\1'"${extra_response}"
     fi
-    scripted="${scripted}"$'\1<done>Found it.</done>'
+    scripted="${scripted}"$'\1'"$(done_response "Found it.")"
     raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=find+bioreactor+pages" "$COOKIE" "$scripted" >/dev/null
 }
 
@@ -216,7 +216,7 @@ search_for_bioreactor_extra() {
 
     resp=$(start_chat)
     session_id=$(extract_query_param "$resp" "session_id")
-    scripted=$'<tool>document</tool>\n<method>search</method>\n<args>\nquery=bioreactor\n</args>\1<done>Found it.</done>'
+    scripted="$(tool_call_response "document.search" '{"query":"bioreactor"}')"$'\1'"$(done_response "Found it.")"
     raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=find+bioreactor+pages" "$COOKIE" "$scripted" >/dev/null
 
     # The linked neighbor ("Cleaning Checklist") never matched the query
@@ -234,7 +234,7 @@ search_for_bioreactor_extra() {
 
     resp=$(start_chat)
     session_id=$(extract_query_param "$resp" "session_id")
-    scripted=$'<tool>knowledge</tool>\n<method>stats</method>\n<args>\n</args>\1<done>Here you go.</done>'
+    scripted="$(tool_call_response "knowledge.stats" '{}')"$'\1'"$(done_response "Here you go.")"
     raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=summarize+the+knowledge+pool" "$COOKIE" "$scripted" >/dev/null
 
     run raw_get "/chat" "session_id=${session_id}"

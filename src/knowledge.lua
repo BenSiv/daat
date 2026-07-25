@@ -88,7 +88,13 @@ CREATE TABLE IF NOT EXISTS knowledge_context (
     id INTEGER PRIMARY KEY %s,
     session_id TEXT NOT NULL,
     message_id INTEGER,
-    prompt TEXT,
+    -- LONGTEXT, not TEXT -- MariaDB's plain TEXT caps at 65,535 bytes;
+    -- since the pi-ai migration this column stores the full JSON-encoded
+    -- message history sent to the model, not a short flattened prompt,
+    -- so it hits that cap far more easily than before (same bug class
+    -- already fixed for document.content/entity_event.field_changes --
+    -- see schema.lua's SQL_TYPE.text).
+    prompt LONGTEXT,
     model_id TEXT,
     reasoning_document_id INTEGER,
     prompt_tokens INTEGER,
