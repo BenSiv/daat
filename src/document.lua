@@ -37,6 +37,7 @@
 db = require("db")
 schema = require("schema")
 entity = require("entity")
+json = require("dkjson")
 
 document = {}
 
@@ -943,12 +944,47 @@ function document.search(db_path, query_text, limit, use_semantic)
     return results
 end
 
--- CLI entry point: `platform document reindex-embeddings [entity_id]`
+-- CLI entry point: `platform document <create-json|reindex-embeddings [entity_id]>`
 -- -- for bulk backfill (documents saved before task #105, or after a
 -- provider outage silently dropped some best-effort saves) now that
 -- create_page/update_page already reindex on every save.
 function document.do_document(cmd_args, db_path)
     action = cmd_args[1]
+
+    -- Bulk page import (e.g. meeting notes, a literature corpus) --
+    -- deliberately NOT the generic `entity create-json` action: that
+    -- goes through entity.create_batch -> entity.create directly, which
+    -- skips document.create_page's own side effects (document.sync_links
+    -- for backlinks, document.reindex_embedding for semantic search) --
+    -- a plain entity-create bulk import would leave every new page
+    -- unfindable by embedding similarity and invisible to backlinks
+    -- until a full document reindex-embeddings run, silently. Also
+    -- deliberately NOT all-or-nothing the way create_batch's own
+    -- validate-everything-first gate is: a real, heterogeneous batch
+    -- (hundreds of files of unpredictable quality) shouldn't have one
+    -- bad row block every other row -- each is created independently,
+    -- successes and failures both reported.
+    if action == "create-json" then
+        input = io.read("*all")
+        rows_values, _, decode_err = json.decode(input)
+        if rows_values == nil then
+            print(json.encode({error = "Invalid JSON input: " .. tostring(decode_err)}))
+            return
+        end
+        author = os.getenv("USER")
+        created_ids = {}
+        failed = {}
+        for i, values in ipairs(rows_values) do
+            id, issues = document.create_page(db_path, author, values.title, values.parent_id, values.content, nil)
+            if id != nil then
+                table.insert(created_ids, id)
+            else
+                table.insert(failed, {row_index = i, title = values.title, issues = issues})
+            end
+        end
+        print(json.encode({created_ids = created_ids, failed = failed}))
+        return
+    end
 
     if action == "reindex-embeddings" then
         entity_id = tonumber(cmd_args[2])
@@ -966,7 +1002,7 @@ function document.do_document(cmd_args, db_path)
         return
     end
 
-    print("Usage: platform document reindex-embeddings [entity_id]")
+    print("Usage: platform document <create-json|reindex-embeddings [entity_id]>")
 end
 
 return document

@@ -293,6 +293,46 @@ save_document_as() {
     [ "$output" = "0" ]
 }
 
+@test "document create-json bulk-creates pages with full document.create_page side effects (wikilinks, embeddings)" {
+    # Deliberately NOT the generic `entity create-json` action -- that
+    # skips document.create_page's own side effects entirely (a bulk
+    # import task surfaced this: pages existed but were unfindable by
+    # semantic search and had no backlinks, silently).
+    payload='[{"title": "Source Page", "content": "hello"}, {"title": "Linking Page", "content": "See [[Source Page]] for details"}]'
+    run bash -c "printf '%s' '$payload' | AGENT_PROVIDER=test '$BIN' document create-json"
+    [[ "$output" =~ '"created_ids":[1,2]' ]] || [[ "$output" =~ '"created_ids":[' ]]
+    [[ "$output" =~ '"failed":[]' ]]
+
+    run "$BIN" entity list document
+    [[ "$output" =~ "#1" ]]
+    [[ "$output" =~ "#2" ]]
+
+    # wikilink sync ran (document_link populated), not just a raw insert
+    run bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db \"SELECT from_document_id, to_document_id FROM document_link;\""
+    [[ "$output" =~ "2|1" ]]
+
+    # embedding reindex ran too (a real provider was configured)
+    run bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db 'SELECT COUNT(*) FROM document_embedding;'"
+    [ "$output" = "2" ]
+}
+
+@test "document create-json reports per-row failures without blocking the rest of the batch" {
+    # A real bulk import is heterogeneous (hundreds of files of
+    # unpredictable quality) -- one bad row (missing the required
+    # title field here) must not block every other row, unlike the
+    # generic entity create-json/create_batch's own all-or-nothing
+    # validate-everything-first gate.
+    payload='[{"title": "Good Page 1", "content": "ok"}, {"content": "no title here"}, {"title": "Good Page 2", "content": "ok"}]'
+    run bash -c "printf '%s' '$payload' | AGENT_PROVIDER=test '$BIN' document create-json"
+    [[ "$output" =~ '"row_index":2' ]]
+
+    run "$BIN" entity list document
+    [[ "$output" =~ "#1" ]]
+    [[ "$output" =~ "#2" ]]
+    # only the two good rows actually got created (not 3)
+    [ "$(echo "$output" | wc -l)" -eq 2 ]
+}
+
 @test "document reindex-embeddings CLI still exists, for bulk backfill after a save-time provider failure" {
     save_document "csrf_token=${CSRF}&title=Home&parent_id=&content=hello" >/dev/null
     # The save above ran with no configured provider, so it never got
