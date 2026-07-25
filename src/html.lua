@@ -3468,11 +3468,11 @@ function render_document_tree_level(by_parent, key, depth)
         if nested == "" then
             items = items .. "<li class=\"fossci-tree-leaf\">" .. link .. "</li>"
         else
-            open_attr = ""
-            if depth < 1 then
-                open_attr = " open"
-            end
-            items = items .. "<li><details" .. open_attr .. "><summary>" .. link .. "</summary><ul>" ..
+            -- Collapsed by default at every depth, including the top
+            -- level (task: Ben's own explicit ask, prompted by the tree
+            -- getting long after a real bulk import). Was "open" at
+            -- depth 0 only; the user navigates inward as needed instead.
+            items = items .. "<li><details><summary>" .. link .. "</summary><ul>" ..
                 nested .. "</ul></details></li>"
         end
     end

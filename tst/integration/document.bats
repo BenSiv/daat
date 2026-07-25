@@ -75,6 +75,20 @@ raw_document_preview() {
     [[ "$output" =~ 'Home</a></summary><ul><li><details><summary><a href="document?entity_id=2">Guides</a></summary><ul><li class="fossci-tree-leaf"><a href="document?entity_id=3">Setup' ]]
 }
 
+@test "the /documents tree is collapsed by default at every depth, including the top level" {
+    # Was "open" at depth 0 only (the whole top level pre-expanded) --
+    # changed to collapsed everywhere per Ben's own explicit ask, after
+    # a real bulk import made the top level long enough that having it
+    # pre-expanded was no longer useful.
+    save_document "csrf_token=${CSRF}&title=Home&parent_id=&content=" >/dev/null
+    save_document "csrf_token=${CSRF}&title=Guides&parent_id=1&content=" >/dev/null
+
+    run get_route "/documents" ""
+    [[ "$output" =~ "200 OK" ]]
+    [[ ! "$output" =~ "<details open>" ]]
+    [[ "$output" =~ "<details><summary>" ]]
+}
+
 @test "/document shows breadcrumbs from root to self" {
     save_document "csrf_token=${CSRF}&title=Home&parent_id=&content=" >/dev/null
     save_document "csrf_token=${CSRF}&title=Guides&parent_id=1&content=" >/dev/null
