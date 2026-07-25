@@ -229,6 +229,33 @@ EOF
     [[ "$output" =~ "Created it." ]]
 }
 
+@test "a document.create tool call preserves real multi-line content, including blank lines (regression)" {
+    # Found live: asked for "an example markdown table", the model's
+    # own tool call included a full multi-paragraph body (a heading,
+    # blank line, prose, blank line, a table), but the stored page held
+    # only the first line -- parse_tool_call's old line-based args
+    # parser (a) skipped every blank line outright (gmatch "[^\r\n]+")
+    # and (b) re-matched "key=value" per line, so anything past the
+    # first line of a multi-line value was silently discarded, with no
+    # error anywhere. This is exactly the shape of any real page
+    # content, not an edge case.
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted=$'<tool>document</tool>\n<method>create</method>\n<args>\ntitle=Table Test\ncontent=# Heading\n\nSome text.\n\n| A | B |\n|---|---|\n| 1 | 2 |\n</args>'
+    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=make+a+table" "$COOKIE" "$scripted" >/dev/null
+
+    page_html=$(raw_get "/chat" "session_id=${session_id}" "$COOKIE")
+    pending_id=$(printf '%s' "$page_html" | grep -o 'pending_id" value="[0-9]*"' | grep -o '[0-9]*' | head -1)
+    raw_post "/chat-approve" "csrf_token=${CSRF}&pending_id=${pending_id}&session_id=${session_id}" "$COOKIE" $'<done>Created.</done>' >/dev/null
+
+    stored_content=$(sqlite3 "$TEST_DIR/.store/store.db" "SELECT content FROM document WHERE title = 'Table Test';")
+    [[ "$stored_content" =~ "# Heading" ]]
+    [[ "$stored_content" =~ "Some text." ]]
+    [[ "$stored_content" =~ "| A | B |" ]]
+    [[ "$stored_content" =~ "| 1 | 2 |" ]]
+}
+
 @test "denying a pending action never executes it, and records the denial" {
     resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
     session_id=$(extract_query_param "$resp" "session_id")

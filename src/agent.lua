@@ -888,16 +888,58 @@ function strip_spaces(s)
     return (string.gsub(s, "^%s*(.-)%s*$", "%1"))
 end
 
+-- Splits on "\n" only (not gmatch's "[^\r\n]+", which silently drops
+-- every blank line -- exactly the lines a real multi-paragraph
+-- Markdown document is full of). Keeps empty lines as empty strings so
+-- a value spanning them is reconstructed byte-for-byte, not collapsed.
+function split_lines(s)
+    lines = {}
+    start = 1
+    while true do
+        nl = string.find(s, "\n", start, true)
+        if nl == nil then
+            table.insert(lines, string.sub(s, start))
+            return lines
+        end
+        table.insert(lines, string.sub(s, start, nl - 1))
+        start = nl + 1
+    end
+end
+
+-- A real, previously-undiscovered bug (found live: `content=# Heading`
+-- followed by several more lines of Markdown -- headings, a blank
+-- line, a table -- came back from a real document.create call holding
+-- only "# Heading", everything else silently gone): the old
+-- implementation split on "[^\r\n]+" (dropping every blank line
+-- outright) and re-matched "^(.-)=(.*)$" per line, so ANY multi-line
+-- value -- which any real page content is -- lost everything past its
+-- own first line, with no error anywhere.
+--
+-- A value now continues across as many following lines as don't
+-- themselves look like a new key=value pair -- new-key detection is
+-- deliberately narrow (a bare identifier: letters/digits/underscore,
+-- starting with a letter or underscore, immediately before "=") so a
+-- real content line is never mistaken for one just because it happens
+-- to contain an "=" somewhere. This can still misfire on a content
+-- line that itself starts with something identifier-shaped immediately
+-- followed by "=" (e.g. "x=5 is the answer" as literally the first
+-- line of a value) -- a narrower edge case than the guaranteed data
+-- loss this replaces, not a fully general escaping scheme.
 function parse_tool_call(result)
     tool_name = string.match(result, "<tool>%s*(.-)%s*</tool>")
     method_name = string.match(result, "<method>%s*(.-)%s*</method>")
     args_str = string.match(result, "<args>%s*(.-)%s*</args>")
     args = {}
     if args_str != nil then
-        for line in string.gmatch(args_str, "[^\r\n]+") do
-            k, v = string.match(line, "^(.-)=(.*)$")
-            if k != nil and v != nil then
-                args[strip_spaces(k)] = v
+        current_key = nil
+        for _, raw_line in ipairs(split_lines(args_str)) do
+            line = (string.gsub(raw_line, "\r$", ""))
+            key, value = string.match(line, "^([%a_][%w_]*)=(.*)$")
+            if key != nil then
+                current_key = key
+                args[current_key] = value
+            elseif current_key != nil then
+                args[current_key] = args[current_key] .. "\n" .. line
             end
         end
     end
@@ -985,7 +1027,7 @@ To call a tool, reply with EXACTLY this shape and nothing else:
 query=some search text
 </args>
 
-Each argument goes on its own line as key=value. After a tool call you will be given its result as a new turn, and can call another tool or give a final answer.
+Each argument starts on its own line as key=value. A value can span multiple lines -- including blank lines, e.g. real Markdown page content -- everything up to the next key=value line (or the closing </args>) belongs to it, real newlines and all. Only start a new line with key= when you actually mean a new, different argument. After a tool call you will be given its result as a new turn, and can call another tool or give a final answer.
 
 When you have a final answer for the user, reply with EXACTLY:
 <done>Your final answer here.</done>
