@@ -789,6 +789,42 @@ function cgi.handle_request()
             html.page_shell(entity_type .. " #" .. tostring(entity_id), "data", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author, page_context))
     end
 
+    -- Single-row edit form for any entity type (task: no UI existed to
+    -- update a generic entity at all, only /register's create-only
+    -- sheet -- found live when asked how to mark a task done in the
+    -- UI). GET-only rendering here, same as /register: the write
+    -- capability check happens at submit time via /api/update (below),
+    -- not here, matching /register's own existing precedent of not
+    -- gating the form's mere display.
+    if path_info == "/entity-edit" then
+        entity_type = params.type
+        entity_id = tonumber(params.entity_id)
+        if entity_type == nil or entity_type == "" or entity_id == nil then
+            return print_response("400 Bad Request", "text/html", "<h3>Error: Missing 'type' or 'entity_id' parameter</h3>")
+        end
+        if not schema.valid_name_syntax(entity_type) then
+            return print_response("400 Bad Request", "text/html", "<h3>Error: Invalid 'type' parameter</h3>")
+        end
+
+        layout, err = schema.layout(db_path, entity_type)
+        if layout == nil then
+            return print_response("404 Not Found", "text/html", "<h3>Error: " .. tostring(err) .. "</h3>")
+        end
+        layout_json = json.encode(layout)
+
+        row = entity.get(db_path, entity_type, entity_id)
+        if row == nil then
+            return print_response("404 Not Found", "text/html", "<h3>Error: no such " .. html.html_escape(entity_type) .. " #" .. tostring(entity_id) .. "</h3>")
+        end
+        row_json = json.encode(row)
+
+        body = html.render_entity_edit(entity_type, layout_json, row_json, entity_id, nonce)
+        page_context = {page_type = "entity_edit", entity_type = entity_type, entity_id = entity_id,
+                         title = "Edit " .. entity_type .. " #" .. tostring(entity_id)}
+        return print_response("200 OK", "text/html",
+            html.page_shell("Edit " .. entity_type .. " #" .. tostring(entity_id), "data", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author, page_context))
+    end
+
     -- task #73: same visibility as /detail (viewing/printing a label
     -- isn't a data mutation -- only creating/editing the template
     -- itself needs Admin, enforced on the label_template entity's own

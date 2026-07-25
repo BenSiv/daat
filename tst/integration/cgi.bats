@@ -106,6 +106,27 @@ teardown() {
     [[ "$output" =~ "Register sample" ]]
 }
 
+@test "/entity-edit renders a prefilled single-row edit form for a real entity" {
+    run_cgi "/entity-edit" "type=sample&entity_id=3"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "200 OK" ]]
+    [[ "$output" =~ "Edit sample #3" ]]
+    # the row's current values are embedded as JSON for the client JS to prefill
+    [[ "$output" =~ '"lot_number":"LOT-42"' ]]
+    # posts to the existing /api/update endpoint, not a new/duplicate write path
+    [[ "$output" =~ "/api/update" ]]
+}
+
+@test "/entity-edit 404s for a nonexistent entity id" {
+    run_cgi "/entity-edit" "type=sample&entity_id=999"
+    [[ "$output" =~ "404 Not Found" ]]
+}
+
+@test "/detail links to /entity-edit for the same type and id" {
+    run_cgi "/detail" "type=sample&entity_id=3"
+    [[ "$output" =~ 'href="entity-edit?type=sample&entity_id=3"' ]]
+}
+
 @test "/browse lists an entity type's rows" {
     run_cgi "/browse" "type=sample"
     [ "$status" -eq 0 ]

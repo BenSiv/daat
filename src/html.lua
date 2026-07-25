@@ -1037,6 +1037,293 @@ function html.render(entity_type, layout_json, nonce, locked_fields)
 """, escaped_type, fossci_container_css(1200), fossci_button_css(), escaped_type, escaped_type, escaped_type, nonce, json_for_script(layout_json), js_string_literal(entity_type), json_for_script(locked_fields_json))
 end
 
+-- Single-row edit form for an existing entity -- the generic-entity
+-- counterpart to render_document_edit (documents already had their own
+-- edit page; every other entity type had none at all, only /register's
+-- create-only sheet and /detail's read-only view). Deliberately a
+-- separate function from html.render rather than a "mode" flag on it:
+-- that function's whole design (add/delete rows, batch submit) is
+-- for bulk entry, and bolting a single prefilled, non-deletable row
+-- onto it would tangle two different concerns. Reuses the same
+-- per-field-type input rendering (select/multi_select/number/date/
+-- reference/multi_reference with autocomplete) since that logic is
+-- exactly what's needed here too, just for one row instead of many,
+-- submitting to /api/update (already exists, task #93) instead of
+-- /api/submit.
+function html.render_entity_edit(entity_type, layout_json, row_json, entity_id, nonce)
+    escaped_type = html.html_escape(entity_type)
+    return string.format("""
+<div class="fossil-doc" data-title="Edit %s #%s">
+    <style>
+%s
+%s
+        .fossci-header { margin-bottom: 24px; border-bottom: 1px solid var(--fossci-bg-2, #f1f5f9); padding-bottom: 16px; }
+        .fossci-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--fossci-heading, #0f172a); letter-spacing: -0.02em; }
+        .fossci-header a { color: var(--fossci-accent, #4f46e5); text-decoration: none; font-weight: 600; font-size: 0.9rem; }
+        .fossci-header a:hover { text-decoration: underline; }
+        .fossci-edit-fields { display: flex; flex-direction: column; gap: 14px; max-width: 640px; }
+        .fossci-edit-field label { display: block; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--fossci-muted, #64748b); font-weight: 600; margin-bottom: 6px; }
+        .fossci-edit-field label .req-dot { color: #ef4444; font-weight: bold; }
+        .fossci-edit-field { position: relative; }
+        .cell-input {
+            width: 100%%; padding: 9px 12px; border: 1px solid var(--fossci-border-2, #cbd5e1);
+            border-radius: var(--fossci-radius-sm, 8px); font-size: 0.9rem; background: #ffffff;
+            box-sizing: border-box; color: var(--fossci-input-text, #1e293b);
+        }
+        .cell-input.error { border-color: #f87171; background-color: #fef2f2; }
+        .error-badge { color: #ef4444; font-size: 0.75rem; margin-top: 4px; display: block; font-weight: 500; }
+        .autocomplete-results {
+            position: absolute; top: 100%%; left: 0; right: 0; background: #ffffff;
+            border: 1px solid var(--fossci-border, #e2e8f0); border-radius: var(--fossci-radius-sm, 8px);
+            max-height: 220px; overflow-y: auto; z-index: 1000;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05); margin-top: 6px;
+        }
+        .autocomplete-results div { padding: 8px 12px; cursor: pointer; font-size: 0.88rem; }
+        .autocomplete-results div:hover { background: var(--fossci-bg-2, #f1f5f9); }
+        .status-msg { display: none; padding: 12px 16px; border-radius: var(--fossci-radius-sm, 8px); font-size: 0.9rem; margin-top: 16px; max-width: 640px; }
+        .status-msg.success { display: block; background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
+        .status-msg.error { display: block; background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
+    </style>
+
+    <div class="fossci-container">
+        <div class="fossci-header">
+            <h2>Edit %s #%s</h2>
+            <a href="detail?type=%s&entity_id=%s">&larr; Back to detail</a>
+        </div>
+
+        <div class="fossci-edit-fields" id="edit-fields"><!-- fields injected --></div>
+
+        <div class="fossci-actions" style="margin-top: 20px;">
+            <button type="button" class="btn btn-primary" id="btn-save">Save changes</button>
+        </div>
+
+        <div id="status-message" class="status-msg"></div>
+    </div>
+
+    <script nonce="%s">
+        const layout = %s;
+        const row = %s;
+        const entityType = "%s";
+        const entityId = %s;
+        const baseUrl = window.location.pathname.replace(/\/entity-edit\/?$/, "");
+
+        function getCsrfToken() {
+            const match = document.cookie.match(/(?:^|;\s*)csrf=([^;]*)/);
+            return match ? match[1] : "";
+        }
+
+        function clearCellError(input) {
+            input.classList.remove("error");
+            const parent = input.parentElement;
+            const existingBadge = parent.querySelector(".error-badge");
+            if (existingBadge) { existingBadge.remove(); }
+        }
+
+        function highlightError(fieldName, message) {
+            const input = document.querySelector(`[name="${fieldName}"]`);
+            if (!input) return;
+            input.classList.add("error");
+            const parent = input.parentElement;
+            let badge = parent.querySelector(".error-badge");
+            if (!badge) {
+                badge = document.createElement("span");
+                badge.classList.add("error-badge");
+                parent.appendChild(badge);
+            }
+            badge.innerText = message;
+        }
+
+        function setupAutocomplete(input, refType, multi) {
+            const wrapper = input.parentElement;
+            let resultsContainer = null;
+            let debounceTimer;
+            input.addEventListener("input", () => {
+                clearTimeout(debounceTimer);
+                const raw = input.value;
+                const query = (multi ? raw.split(",").pop() : raw).trim();
+                if (resultsContainer) { resultsContainer.remove(); resultsContainer = null; }
+                if (query.length === 0) return;
+                debounceTimer = setTimeout(() => {
+                    fetch(`${baseUrl}/api/autocomplete?type=${refType}&query=${encodeURIComponent(query)}`)
+                        .then(res => res.json())
+                        .then(data => {
+                            if (resultsContainer) { resultsContainer.remove(); }
+                            if (!data || data.length === 0) return;
+                            resultsContainer = document.createElement("div");
+                            resultsContainer.className = "autocomplete-results";
+                            data.forEach(item => {
+                                const opt = document.createElement("div");
+                                opt.innerText = item.label;
+                                opt.addEventListener("mousedown", (e) => {
+                                    e.preventDefault();
+                                    if (multi) {
+                                        const parts = raw.split(",").map(s => s.trim()).filter(s => s.length > 0);
+                                        parts.pop();
+                                        if (!parts.includes(String(item.id))) { parts.push(String(item.id)); }
+                                        input.value = parts.join(", ") + ", ";
+                                    } else {
+                                        input.value = item.id;
+                                    }
+                                    resultsContainer.remove();
+                                    resultsContainer = null;
+                                    input.focus();
+                                });
+                                resultsContainer.appendChild(opt);
+                            });
+                            wrapper.appendChild(resultsContainer);
+                        });
+                }, 200);
+            });
+            document.addEventListener("click", (e) => {
+                if (e.target !== input && resultsContainer && !resultsContainer.contains(e.target)) {
+                    resultsContainer.remove();
+                    resultsContainer = null;
+                }
+            });
+        }
+
+        function buildFields() {
+            const container = document.getElementById("edit-fields");
+            layout.fields.forEach(field => {
+                const wrapper = document.createElement("div");
+                wrapper.classList.add("fossci-edit-field");
+                const label = document.createElement("label");
+                label.innerHTML = field.label + (field.required ? ' <span class="req-dot">*</span>' : '');
+                wrapper.appendChild(label);
+
+                const current = row[field.name];
+                let input;
+                if (field.type === "select") {
+                    input = document.createElement("select");
+                    input.classList.add("cell-input");
+                    const optEmpty = document.createElement("option");
+                    optEmpty.value = ""; optEmpty.innerText = "";
+                    input.appendChild(optEmpty);
+                    field.values.forEach(val => {
+                        const opt = document.createElement("option");
+                        opt.value = val; opt.innerText = val;
+                        if (current === val) { opt.selected = true; }
+                        input.appendChild(opt);
+                    });
+                } else if (field.type === "multi_select") {
+                    input = document.createElement("select");
+                    input.classList.add("cell-input");
+                    input.multiple = true;
+                    const currentList = Array.isArray(current) ? current : [];
+                    field.values.forEach(val => {
+                        const opt = document.createElement("option");
+                        opt.value = val; opt.innerText = val;
+                        if (currentList.includes(val)) { opt.selected = true; }
+                        input.appendChild(opt);
+                    });
+                } else {
+                    input = document.createElement("input");
+                    input.classList.add("cell-input");
+                    if (field.type === "number") {
+                        input.type = "number"; input.step = "any";
+                        if (field.min !== undefined && field.min !== null) { input.min = field.min; }
+                        if (field.max !== undefined && field.max !== null) { input.max = field.max; }
+                        if (current !== undefined && current !== null) { input.value = current; }
+                    } else if (field.type === "date") {
+                        input.type = "date";
+                        if (current) { input.value = current; }
+                    } else if (field.type === "multi_reference") {
+                        input.type = "text";
+                        input.setAttribute("autocomplete", "off");
+                        input.placeholder = "Search ID or name, pick several...";
+                        const currentList = Array.isArray(current) ? current : [];
+                        if (currentList.length > 0) { input.value = currentList.join(", ") + ", "; }
+                        setupAutocomplete(input, field.ref_entity_type, true);
+                    } else {
+                        input.type = "text";
+                        if (current !== undefined && current !== null) { input.value = current; }
+                        if (field.type === "reference") {
+                            input.setAttribute("autocomplete", "off");
+                            input.placeholder = "Search ID or name...";
+                            setupAutocomplete(input, field.ref_entity_type, false);
+                        }
+                    }
+                }
+                input.name = field.name;
+                input.addEventListener("input",  () => clearCellError(input));
+                input.addEventListener("change", () => clearCellError(input));
+                wrapper.appendChild(input);
+                container.appendChild(wrapper);
+            });
+
+            const reasonWrapper = document.createElement("div");
+            reasonWrapper.classList.add("fossci-edit-field");
+            const reasonLabel = document.createElement("label");
+            reasonLabel.innerText = "Reason for this change (optional unless required)";
+            reasonWrapper.appendChild(reasonLabel);
+            const reasonInput = document.createElement("input");
+            reasonInput.type = "text";
+            reasonInput.classList.add("cell-input");
+            reasonInput.id = "fossci-edit-reason";
+            reasonInput.placeholder = "Why is this changing?";
+            reasonWrapper.appendChild(reasonInput);
+            container.appendChild(reasonWrapper);
+        }
+
+        function submitEdit() {
+            document.querySelectorAll(".cell-input").forEach(clearCellError);
+            const payload = {};
+            layout.fields.forEach(field => {
+                const el = document.querySelector(`[name="${field.name}"]`);
+                if (!el) return;
+                let val = el.value;
+                if (field.type === "number" && val !== "") { val = parseFloat(val); }
+                if (field.type === "multi_select") {
+                    val = Array.from(el.selectedOptions).map(o => o.value);
+                } else if (field.type === "multi_reference") {
+                    val = val.split(",").map(s => s.trim()).filter(s => s.length > 0);
+                }
+                payload[field.name] = val;
+            });
+
+            const msg = document.getElementById("status-message");
+            msg.className = "status-msg";
+            msg.innerText = "Saving...";
+            msg.style.display = "block";
+
+            const reasonEl = document.getElementById("fossci-edit-reason");
+            const reasonParam = reasonEl.value ? `&reason=${encodeURIComponent(reasonEl.value)}` : "";
+            fetch(`${baseUrl}/api/update?type=${entityType}&entity_id=${entityId}${reasonParam}`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() },
+                body: JSON.stringify(payload)
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.success) {
+                    window.location.href = `${baseUrl}/detail?type=${entityType}&entity_id=${entityId}`;
+                } else {
+                    msg.className = "status-msg error";
+                    msg.innerText = "Save failed. Please check highlighted errors below.";
+                    if (data.issues && data.issues.length > 0) {
+                        data.issues.forEach(issue => {
+                            if (issue.field) { highlightError(issue.field, issue.message); }
+                            else { msg.innerText = issue.message; }
+                        });
+                    }
+                }
+            })
+            .catch(err => {
+                console.error("Save error", err);
+                msg.className = "status-msg error";
+                msg.innerText = "An unexpected error occurred while saving.";
+            });
+        }
+
+        buildFields();
+        document.getElementById("btn-save").addEventListener("click", submitEdit);
+    </script>
+</div>
+""", escaped_type, tostring(entity_id), fossci_container_css(1200), fossci_button_css(),
+     escaped_type, tostring(entity_id), escaped_type, tostring(entity_id),
+     nonce, json_for_script(layout_json), json_for_script(row_json), js_string_literal(entity_type), tostring(entity_id))
+end
+
 -- A multivalue field's value (task #84) is a plain Lua array, not a
 -- scalar -- both a row's own current value (entity.get attaches it) and
 -- a ledger history change's old/new (json-decoded from field_changes).
@@ -1381,6 +1668,8 @@ function html.render_detail(db_path, entity_type, layout, row, history, nonce, h
         title_id_part = html.html_escape(own_label) .. " (#" .. id_str .. ")"
     end
 
+    edit_link = "<a class=\"btn btn-secondary\" href=\"entity-edit?type=" .. escaped_type .. "&entity_id=" .. id_str .. "\">Edit</a>"
+
     print_label_html = ""
     print_label_js_block = ""
     if has_label_template == true then
@@ -1481,6 +1770,7 @@ function html.render_detail(db_path, entity_type, layout, row, history, nonce, h
             <h2>%s %s</h2>
             <a href="browse?type=%s">&larr; Back to browse</a>
             %s
+            %s
         </div>
 
         <div class="fossci-detail-fields">
@@ -1500,7 +1790,7 @@ function html.render_detail(db_path, entity_type, layout, row, history, nonce, h
 </div>
 %s
 %s
-""", escaped_type, title_id_part, fossci_container_css(1200), html.popover_css(), escaped_type, title_id_part, escaped_type, print_label_html, fields_html, related_html, history_rows, html.popover_js(nonce), print_label_js_block)
+""", escaped_type, title_id_part, fossci_container_css(1200), html.popover_css(), escaped_type, title_id_part, escaped_type, edit_link, print_label_html, fields_html, related_html, history_rows, html.popover_js(nonce), print_label_js_block)
 end
 
 -- task #112: "Related records" -- every real, plain `reference` field
