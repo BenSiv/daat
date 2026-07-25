@@ -99,6 +99,27 @@ search_for_bioreactor_extra() {
     [ "${#tool_result}" -lt 1400 ]
 }
 
+@test "document.search excludes chat-session transcripts from results, even when they match the query" {
+    # Found live: searching for real domain content ("standard experiment
+    # page template") returned old chat transcripts (containing the
+    # query's own words, since the user's message is part of the
+    # transcript) mixed in with real docs, degrading the agent's own
+    # ability to find real content via its own document.search tool.
+    "$BIN" entity create document title="Bioreactor SOP" content="cleaning steps for the bioreactor procedure"
+    search_for_bioreactor
+    # this first session's own transcript is now a real document
+    # (source_type='chat_session') containing "find bioreactor pages"
+    # verbatim -- confirm it actually exists, so this test would have
+    # caught the real bug (nothing to exclude if it were never created).
+    chat_doc_count=$(sqlite3 .store/store.db "SELECT COUNT(*) FROM document WHERE source_type='chat_session' AND content LIKE '%bioreactor%';")
+    [ "$chat_doc_count" -ge 1 ]
+
+    search_for_bioreactor
+    tool_result=$(sqlite3 .store/store.db "SELECT content FROM agent_message WHERE role='tool_result' ORDER BY id DESC LIMIT 1;")
+    [[ "$tool_result" =~ "Bioreactor SOP" ]]
+    [[ ! "$tool_result" =~ "Chat:" ]]
+}
+
 @test "a chat search creates a tier-0 note, logs the retrieval, and runs review" {
     "$BIN" entity create document title="Bioreactor Notes" content="cleaning steps for the bioreactor procedure"
     search_for_bioreactor

@@ -893,13 +893,22 @@ function document.search(db_path, query_text, limit, use_semantic)
         query_vector = vector
     end
 
+    -- Chat sessions are saved as their own searchable documents (task
+    -- #108, source_type = 'chat_session', knowledge.sync_session_document)
+    -- but excluded here from ordinary content search -- confirmed live
+    -- that they otherwise pollute real results (a "standard experiment
+    -- template" search turned up old chat transcripts full of tool-call
+    -- noise and a stale error message instead of real experiment docs).
+    -- Still reachable directly (entity.get/detail), just not surfaced by
+    -- document.search's relevance ranking against real content.
     rows = db.query(db_path, """
         SELECT d.id, d.title, d.content, d.tier, d.heat, d.retrieval_count, d.last_retrieved_at,
                d.source_type, d.source_id, d.content_hash, e.vector_json
         FROM document d
         LEFT JOIN document_embedding e ON e.document_id = d.id
         WHERE (d.archived_at IS NULL OR d.archived_at = '')
-          AND (d.merged_into IS NULL OR d.merged_into = '');
+          AND (d.merged_into IS NULL OR d.merged_into = '')
+          AND (d.source_type IS NULL OR d.source_type != 'chat_session');
     """)
     if rows == nil then
         return {}
