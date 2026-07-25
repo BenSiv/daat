@@ -975,9 +975,19 @@ function document.do_document(cmd_args, db_path)
         created_ids = {}
         failed = {}
         for i, values in ipairs(rows_values) do
-            id, issues = document.create_page(db_path, author, values.title, values.parent_id, values.content, nil)
-            if id != nil then
-                table.insert(created_ids, id)
+            -- pcalled: db.exec/db.query raise a hard Lua error() on a
+            -- genuine SQL failure (e.g. "Data too long for column",
+            -- found live importing a literature corpus before the
+            -- underlying column was widened) rather than returning
+            -- nil+issues -- without this, one such row would crash the
+            -- whole create-json process, silently losing every other
+            -- row already queued in the same invocation, not just the
+            -- bad one.
+            ok, id_or_err, issues = pcall(document.create_page, db_path, author, values.title, values.parent_id, values.content, nil)
+            if ok == false then
+                table.insert(failed, {row_index = i, title = values.title, issues = tostring(id_or_err)})
+            elseif id_or_err != nil then
+                table.insert(created_ids, id_or_err)
             else
                 table.insert(failed, {row_index = i, title = values.title, issues = issues})
             end

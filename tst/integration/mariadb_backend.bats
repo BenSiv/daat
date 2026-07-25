@@ -109,6 +109,40 @@ EOF
     [[ "$output" =~ "concentration: 10 -> 99" ]]
 }
 
+@test "a text field over 65535 bytes survives on MariaDB, including the ledger's own diff (task: bulk literature import)" {
+    # Found live bulk-importing a literature corpus: MariaDB's plain
+    # TEXT caps at 65,535 *bytes* (not characters), so any real paper's
+    # full content -- and the ledger's own field_changes JSON diff,
+    # which embeds that same content -- routinely exceeded it ("Data
+    # too long for column"), silently fine on SQLite the whole time
+    # regardless of the declared column type. Fixed by declaring
+    # "text"-typed fields (schema.lua's SQL_TYPE) and the ledger's
+    # field_changes column as LONGTEXT instead.
+    "$BIN" init
+    mkdir -p schemas
+    cat > schemas/paper.lua <<'EOF'
+return {
+  name = "paper",
+  fields = {
+    {name = "body", type = "text", required = true},
+  },
+}
+EOF
+    "$BIN" schema add schemas/paper.lua
+
+    big_content=$(python3 -c "print('x' * 200000)")
+    run "$BIN" entity create paper "body=${big_content}"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "Created paper #1" ]]
+
+    run "$BIN" entity show paper 1
+    stored_len=$(printf '%s' "$output" | grep -o 'x*' | awk '{ if (length($0) > max) max = length($0) } END { print max }')
+    [ "$stored_len" -eq 200000 ]
+
+    run "$BIN" ledger history 1
+    [[ "$output" =~ "create" ]]
+}
+
 @test "the /sql ad-hoc console works against a real MariaDB backend, not just SQLite" {
     # Found live, in real production: view.run_adhoc called
     # sqlite3.open(db_path) directly, bypassing db.lua's own backend

@@ -44,7 +44,13 @@ CREATE TABLE IF NOT EXISTS entity_event (
     entity_id INTEGER,
     entity_type TEXT NOT NULL,
     event_type TEXT NOT NULL,
-    field_changes TEXT NOT NULL,
+    -- LONGTEXT, not TEXT -- this stores a JSON diff that includes the
+    -- full old/new value of whatever changed, so any "text"-typed field
+    -- (schema.lua's own SQL_TYPE.text, same reasoning) can make this
+    -- exceed MariaDB's real TEXT cap (65,535 bytes) just as easily as
+    -- the column it's recording a change to. Found live importing a
+    -- literature corpus: real paper text routinely blew past it.
+    field_changes LONGTEXT NOT NULL,
     author TEXT,
     created_at TEXT DEFAULT (%s),
     source_notebook_entry_id TEXT,

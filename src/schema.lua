@@ -201,8 +201,18 @@ function is_reserved_field_name(name)
     return false
 end
 
+-- "text" is LONGTEXT, not TEXT (task: found live, bulk-importing a
+-- literature corpus -- MariaDB's plain TEXT caps at 65,535 *bytes*,
+-- not characters, so real multi-KB paper text routinely exceeded it
+-- ("Data too long for column"), silently correct on SQLite the whole
+-- time since it has no such cap regardless of the declared type name.
+-- Safe to change unconditionally rather than branch per backend:
+-- SQLite's type-affinity rules key off the substring "TEXT" in the
+-- declared type name, so a LONGTEXT column behaves identically to a
+-- plain TEXT one there (verified directly: stores 500KB with no
+-- truncation, `pragma_table_info` reports the type as declared).
 SQL_TYPE = {
-    text = "TEXT",
+    text = "LONGTEXT",
     number = "REAL",
     date = "TEXT",
     select = "TEXT",
