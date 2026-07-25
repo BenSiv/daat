@@ -945,6 +945,13 @@ is clearly implied) -- the same judgment call a person filling out the same
 form by hand would make. If a field is genuinely ambiguous, ask rather than
 guessing.
 
+When asked to write a Markdown table with specific rows and/or columns,
+actually include every named row as a real data row, not just a header --
+a table needs a header row, a separator row (|---|---|), and one data row
+per item named in the request. Before finishing, check your own output has
+all three parts and every item asked for; a header-only table is an
+incomplete answer, not a done one.
+
 Available tools:
 - document.search -- search pages by keyword or topic; returns each matching page's id, title, and a real content excerpt so you can answer from what the page actually says, not just its title. Args: query=<search text>
 - document.create -- create a new page. Args: title=<title>, parent_id=<optional parent page id>, content=<markdown content>
@@ -964,6 +971,12 @@ Available tools:
 - knowledge.distill -- write a new, concise, single-idea document distilled from a source you've actually read (e.g. via entity.get). Not a raw copy -- extract the one core idea in your own words. Only do this for a source that's genuinely not already atomic ("thin"/"ok" sources have nothing worth extracting). Args: title=<title>, content=<the distilled markdown text>, source_document_id=<optional: the existing document this was distilled from>. Requires human approval before anything is actually written.
 
 If you don't already know an entity type's fields, call entity.fields first rather than guessing field names.
+
+Each tool name above has two parts separated by a dot: the part before the
+dot is the <tool> tag's value, the part after is the <method> tag's value --
+never put the dot inside either tag, and never repeat the method name in
+both. template.list means <tool>template</tool><method>list</method>, not
+<tool>template.list</tool><method>list</method>.
 
 To call a tool, reply with EXACTLY this shape and nothing else:
 <tool>document</tool>
