@@ -384,8 +384,9 @@ not skipped as an oversight.
   conversion can legitimately round the same bit-identical double
   differently at the ~15th significant digit -- confirmed directly, not
   a real discrepancy) across all 39 tables before cutover.
-- Cut `fossci-app-prod`'s startup script over to the new connection
-  config via the existing `deploy.sh --redeploy` path; kept the SQLite
+- Cut `fossci-app-prod`'s (since renamed to `platform-app-prod`; no
+  instance by the old name exists anymore) startup script over to the
+  new connection config via the existing `deploy.sh --redeploy` path; kept the SQLite
   file + its existing snapshot policy around, untouched, as a rollback
   path. Verified live post-cutover: both containers (`platform`,
   `cloudsql-proxy`) up, `platform.env` shows `PLATFORM_DB_BACKEND=mariadb`,
