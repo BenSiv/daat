@@ -97,6 +97,28 @@ function agent_provider_test.converse(model, system_prompt, messages, tools)
         end
     end
 
+    -- A real tool-calling turn always passes a non-empty tools list
+    -- (agent.tool_declarations() is never empty) -- an empty/nil tools
+    -- list is a structural signal this is a no-tools call instead (in
+    -- this app, only run_self_check makes one). Defaults to CONFIRM so
+    -- every existing scripted test's own AGENT_TEST_RESPONSES sequence
+    -- keeps completing in exactly the turn count it was written
+    -- against, undisturbed -- self-check calls don't consume from that
+    -- list at all. AGENT_TEST_SELF_CHECK_RESPONSE lets a test opt into
+    -- a specific (e.g. non-confirm) self-check reply instead, to test
+    -- the reject-and-continue path on purpose.
+    if tools == nil or #tools == 0 then
+        override = os.getenv("AGENT_TEST_SELF_CHECK_RESPONSE")
+        if override != nil and override != "" then
+            override_response, _, decode_err = json.decode(override)
+            if override_response == nil then
+                return nil, "AGENT_TEST_SELF_CHECK_RESPONSE is not valid JSON: " .. tostring(decode_err)
+            end
+            return override_response, nil, {prompt_tokens = 0, completion_tokens = 0, total_tokens = 0}
+        end
+        return {content = {{type = "text", text = "CONFIRM"}}, stopReason = "stop"}, nil, {prompt_tokens = 0, completion_tokens = 0, total_tokens = 0}
+    end
+
     TEST_RESPONSE_INDEX = TEST_RESPONSE_INDEX + 1
     raw = os.getenv("AGENT_TEST_RESPONSES")
     scripted = nil

@@ -1291,6 +1291,12 @@ function build_history_messages(messages)
             else
                 table.insert(result, {role = "user", content = "[Prior tool result]: " .. tostring(msg.content)})
             end
+        elseif msg.role == "self_check" then
+            -- Fed back as a plain user turn -- see run_self_check's own
+            -- comment for why this role exists at all; the model just
+            -- sees it as the next thing to respond to, same as a real
+            -- user message would be.
+            table.insert(result, {role = "user", content = msg.content})
         end
     end
     return result
@@ -1403,7 +1409,7 @@ rather than guessing field names.
 """ .. extra
 end
 
-ROLE_LABELS = {user = "User", assistant = "Assistant", tool_result = "Tool result"}
+ROLE_LABELS = {user = "User", assistant = "Assistant", tool_result = "Tool result", self_check = "Self-check"}
 
 -- A human-readable transcript of a session's full message history (task
 -- #108 follow-up, explicit user direction: "every conversation with the
@@ -1444,6 +1450,75 @@ function sync_session_document(db_path, login, session_id)
     messages = agent.all_messages(db_path, session_id)
     transcript = build_session_transcript(messages)
     knowledge.sync_session_document(db_path, login, session_id, "Chat: " .. title, transcript)
+end
+
+SELF_CHECK_PROMPT = """
+Before this reply is sent to the user, check it against the conversation and tool results above:
+- Is every factual claim directly supported by a tool result you actually gathered, not assumed or guessed?
+- If your answer concludes zero, none, or "not found", did you verify the underlying values genuinely don't exist (e.g. a broader search, or checking the value exists at all independent of the specific query/filter you used) rather than trusting a single query or lookup that could itself have been wrong?
+- Is there an obvious next check you skipped that would meaningfully change or confirm the answer?
+
+If the reply holds up, respond with EXACTLY: CONFIRM
+Otherwise, do not repeat the reply -- just say what to check next, as if continuing your own investigation.
+"""
+
+-- A structural, code-enforced verification step, not a prompt
+-- reminder -- runs on every proposed final answer, unconditionally.
+-- Generalizes across any class of premature-answer mistake (a wrong
+-- guess taken at face value, an unverified zero/not-found conclusion,
+-- a skipped obvious next step) instead of hardcoding a fix for
+-- whichever specific mistake was last observed (found live: the model
+-- once guessed a plain-English plural table name for entity.query
+-- without checking first -- the fix isn't "detect plural guesses,"
+-- it's "always double-check your own conclusion before it goes out,"
+-- which catches that and any other class of mistake the same way,
+-- because it's judged by the same reasoning engine, not a hardcoded
+-- pattern list). Reuses the exact message history the real turn
+-- already built, plus one more directive message, so the critique
+-- sees everything the original answer saw -- no separate context to
+-- keep in sync.
+--
+-- Fails OPEN, not closed: if the critique call itself errors (bridge/
+-- network issue), this returns true (confirmed) so the user's real
+-- answer still goes out rather than being blocked on a meta-check
+-- that couldn't run -- a self-check infrastructure hiccup should never
+-- leave the user worse off than no self-check at all.
+--
+-- Returns true (answer confirmed, safe to return to the user) or
+-- false (a "self_check" message has been recorded with what to check
+-- next; the turn loop should continue instead of returning).
+function run_self_check(db_path, session_id, system_prompt, model, active_messages)
+    history_messages = build_history_messages(active_messages)
+    table.insert(history_messages, {role = "user", content = SELF_CHECK_PROMPT})
+    audit_prompt = json.encode(history_messages)
+
+    response, err, usage = agent_provider.converse(model, system_prompt, history_messages, {})
+    if response == nil or response.stopReason == "error" or response.stopReason == "aborted" then
+        return true
+    end
+
+    content_blocks = response.content
+    if content_blocks == nil then
+        content_blocks = {}
+    end
+    critique_text = display_blocks(content_blocks)
+    trimmed = string.gsub(critique_text, "^%s+", "")
+
+    if string.find(string.lower(trimmed), "^confirm") != nil then
+        -- Deliberately not audited via knowledge.record_context here --
+        -- a confirm produces no new message and changes nothing, so
+        -- there's no real event for an audit row to attach to; adding
+        -- one anyway would shift "the most recent context row" away
+        -- from the actual reply for any other code (or human) that
+        -- reasonably assumes that row explains the latest real turn.
+        -- A self-check that actually finds something to say (below)
+        -- creates a real message, and gets a real audit row tied to it.
+        return true
+    end
+
+    message_id = agent.add_message(db_path, session_id, "self_check", critique_text, true)
+    knowledge.record_context(db_path, session_id, message_id, audit_prompt, model, nil, usage)
+    return false
 end
 
 -- Runs the turn loop starting from the session's current active-message
@@ -1549,60 +1624,72 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
 
         tool_calls = all_tool_calls(content_blocks)
         if #tool_calls == 0 then
-            -- A plain reply (stopReason "stop"/"length") is the final
-            -- answer -- no <done> sentinel tag needed at all: pi-ai's
-            -- own stopReason already distinguishes "the model wants to
-            -- call a tool" (toolUse) from "the model is finished"
-            -- (stop/length), which is what native function-calling
-            -- gets for free over the old text protocol.
-            sync_session_document(db_path, login, session_id)
-            return {status = "done", message = display_text}
-        end
-
-        -- Every non-destructive call in this turn runs now, in the
-        -- order proposed -- real parallel-tool-call support (see
-        -- all_tool_calls' own comment). At most one destructive call
-        -- can still pause for approval per turn: the pending-approval
-        -- state machine (agent_pending_action) only tracks one
-        -- outstanding action per session, so the first destructive
-        -- call found pauses the whole turn same as before; any
-        -- destructive call after it gets an explicit "skipped" result
-        -- instead of being silently dropped, so every call the model
-        -- made still gets a real, visible outcome to react to.
-        pending_call = nil
-        for _, tool_call in ipairs(tool_calls) do
-            if tool_call.arguments == nil then
-                tool_call.arguments = {}
+            -- A plain reply (stopReason "stop"/"length") is a PROPOSED
+            -- final answer -- pi-ai's own stopReason already
+            -- distinguishes "the model wants to call a tool" (toolUse)
+            -- from "the model is finished" (stop/length), which is
+            -- what native function-calling gets for free over the old
+            -- text protocol, but "finished" isn't the same as
+            -- "correct." run_self_check gets one more real turn to
+            -- verify it before it actually goes out -- skipped only on
+            -- the very last allowed turn, where there's no budget left
+            -- to act on a critique anyway, so a real answer shouldn't
+            -- be downgraded into a generic turn-limit failure instead.
+            confirmed = true
+            if turn < MAX_TURNS then
+                active_after_answer = agent.active_messages(db_path, session_id)
+                confirmed = run_self_check(db_path, session_id, system_prompt, model, active_after_answer)
             end
-            tool_name, method_name = split_tool_name(tool_call.name)
-            if tool_name == nil or not agent.is_known_tool(tool_name, method_name) then
-                agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name,
-                    "ERROR: unknown tool " .. tostring(tool_call.name), true)
-            elseif agent.is_destructive(tool_name, method_name) then
-                if pending_call == nil then
-                    pending_call = {tool_call = tool_call, tool_name = tool_name, method_name = method_name}
-                else
+            if confirmed == true then
+                sync_session_document(db_path, login, session_id)
+                return {status = "done", message = display_text}
+            end
+        else
+            -- Every non-destructive call in this turn runs now, in the
+            -- order proposed -- real parallel-tool-call support (see
+            -- all_tool_calls' own comment). At most one destructive call
+            -- can still pause for approval per turn: the pending-approval
+            -- state machine (agent_pending_action) only tracks one
+            -- outstanding action per session, so the first destructive
+            -- call found pauses the whole turn same as before; any
+            -- destructive call after it gets an explicit "skipped" result
+            -- instead of being silently dropped, so every call the model
+            -- made still gets a real, visible outcome to react to.
+            pending_call = nil
+            for _, tool_call in ipairs(tool_calls) do
+                if tool_call.arguments == nil then
+                    tool_call.arguments = {}
+                end
+                tool_name, method_name = split_tool_name(tool_call.name)
+                if tool_name == nil or not agent.is_known_tool(tool_name, method_name) then
                     agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name,
-                        "ERROR: skipped -- only one destructive action can be proposed per turn; resolve the pending one first, then ask for this one again", true)
+                        "ERROR: unknown tool " .. tostring(tool_call.name), true)
+                elseif agent.is_destructive(tool_name, method_name) then
+                    if pending_call == nil then
+                        pending_call = {tool_call = tool_call, tool_name = tool_name, method_name = method_name}
+                    else
+                        agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name,
+                            "ERROR: skipped -- only one destructive action can be proposed per turn; resolve the pending one first, then ask for this one again", true)
+                    end
+                else
+                    tool_result, tool_err = agent.execute_tool(db_path, login, session_id, tool_name, method_name, tool_call.arguments)
+                    summary = tostring(tool_result)
+                    is_error = false
+                    if tool_err != nil then
+                        summary = "ERROR: " .. tostring(tool_err)
+                        is_error = true
+                    end
+                    agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name, summary, is_error)
                 end
-            else
-                tool_result, tool_err = agent.execute_tool(db_path, login, session_id, tool_name, method_name, tool_call.arguments)
-                summary = tostring(tool_result)
-                is_error = false
-                if tool_err != nil then
-                    summary = "ERROR: " .. tostring(tool_err)
-                    is_error = true
-                end
-                agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name, summary, is_error)
             end
-        end
 
-        if pending_call != nil then
-            pending_id = agent.create_pending_action(db_path, session_id, pending_call.tool_name, pending_call.method_name,
-                pending_call.tool_call.arguments, pending_call.tool_call.id)
-            sync_session_document(db_path, login, session_id)
-            return {status = "pending_approval", pending_id = pending_id, tool = pending_call.tool_name,
-                method = pending_call.method_name, args = pending_call.tool_call.arguments}
+            if pending_call != nil then
+                pending_id = agent.create_pending_action(db_path, session_id, pending_call.tool_name, pending_call.method_name,
+                    pending_call.tool_call.arguments, pending_call.tool_call.id)
+                sync_session_document(db_path, login, session_id)
+                return {status = "pending_approval", pending_id = pending_id, tool = pending_call.tool_name,
+                    method = pending_call.method_name, args = pending_call.tool_call.arguments}
+            end
         end
     end
 

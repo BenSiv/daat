@@ -524,6 +524,38 @@ EOF
     [[ "$output" =~ "403 Forbidden" ]]
 }
 
+@test "self-check: an unconfirmed answer isn't returned as-is -- it's recorded and the loop keeps going instead" {
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(done_response "There are 0.")"$'\1'"$(done_response "Actually there are 5, I checked again.")"
+    printf 'csrf_token=%s&session_id=%s&message=how+many' "$CSRF" "$session_id" | \
+        AGENT_PROVIDER=test AGENT_TEST_RESPONSES="$scripted" \
+        AGENT_TEST_SELF_CHECK_RESPONSE="$(done_response "Did you verify that? Check again.")" \
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/chat-message" QUERY_STRING="" \
+        HTTP_COOKIE="$COOKIE" "$BIN" >/dev/null
+
+    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    [[ "$output" =~ "There are 0." ]]
+    [[ "$output" =~ 'class="fossci-chat-msg fossci-chat-self_check"' ]]
+    [[ "$output" =~ "Did you verify that" ]]
+    [[ "$output" =~ "Actually there are 5" ]]
+}
+
+@test "self-check: a confirmed answer returns normally, in exactly one turn -- no self-check message stored" {
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=hi" "$COOKIE" "$(done_response "Hello!")" >/dev/null
+
+    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    [[ "$output" =~ "Hello!" ]]
+    [[ ! "$output" =~ 'class="fossci-chat-msg fossci-chat-self_check"' ]]
+
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM agent_message WHERE role = 'self_check';"
+    [ "$output" -eq 0 ]
+}
+
 @test "compaction marks old turns out of context (dimmed) but never deletes them" {
     resp=$(start_chat "$COOKIE" "$CSRF" "Long chat")
     session_id=$(extract_query_param "$resp" "session_id")

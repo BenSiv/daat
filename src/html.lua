@@ -3893,6 +3893,7 @@ CHAT_ROLE_LABELS = {
     assistant = "Assistant",
     tool_result = "Tool result",
     compaction_summary = "Compacted summary",
+    self_check = "Self-check",
 }
 
 -- Every message renders, including ones marked out-of-context by
@@ -3910,6 +3911,7 @@ function fossci_chat_thread_css()
         .fossci-chat-user { background: #eef2ff; }
         .fossci-chat-tool_result { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85rem; }
         .fossci-chat-compaction_summary { font-style: italic; color: var(--fossci-muted, #64748b); }
+        .fossci-chat-self_check { font-style: italic; color: var(--fossci-muted, #64748b); border-left: 3px solid #fbbf24; }
         .fossci-chat-out-of-context { opacity: 0.45; }
         .fossci-chat-input-form { display: flex; gap: 8px; }
         .fossci-chat-input-form input[type=text] { flex: 1; padding: 8px 10px; border: 1px solid var(--fossci-border, #e2e8f0); border-radius: var(--fossci-radius-sm, 8px); }
@@ -4044,6 +4046,7 @@ function html.render_chat(sessions, session, messages, pending, csrf_token, nonc
         .fossci-chat-user { background: #eef2ff; }
         .fossci-chat-tool_result { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85rem; }
         .fossci-chat-compaction_summary { font-style: italic; color: var(--fossci-muted, #64748b); }
+        .fossci-chat-self_check { font-style: italic; color: var(--fossci-muted, #64748b); border-left: 3px solid #fbbf24; }
         .fossci-chat-out-of-context { opacity: 0.45; }
         .fossci-chat-input-form { display: flex; gap: 8px; }
         .fossci-chat-input-form input[type=text] { flex: 1; padding: 8px 10px; border: 1px solid var(--fossci-border, #e2e8f0); border-radius: var(--fossci-radius-sm, 8px); }
@@ -4195,7 +4198,7 @@ function html.render_chat_widget(nonce)
         return parts.join(' ');
     }
 
-    var ROLE_LABELS = {user: 'You', assistant: 'Assistant', tool_result: 'Tool result', compaction_summary: 'Compacted summary'};
+    var ROLE_LABELS = {user: 'You', assistant: 'Assistant', tool_result: 'Tool result', compaction_summary: 'Compacted summary', self_check: 'Self-check'};
     function escapeHtml(s) {
         return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
