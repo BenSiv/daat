@@ -13,6 +13,7 @@ json = require("dkjson")
 paths = require("paths")
 lfs = require("lfs")
 sandbox = require("sandbox")
+schema = require("schema")
 
 view = {}
 
@@ -519,6 +520,134 @@ function view.run_adhoc(db_path, sql_text)
         truncated = true
         capped_rows = {}
         for i = 1, ADHOC_ROW_CAP do
+            table.insert(capped_rows, rows[i])
+        end
+        rows = capped_rows
+    end
+    return column_names, rows, nil, truncated
+end
+
+--------------------------------------------------------------------------
+-- Read-only SQL for the chat agent (task: multi-step reasoning --
+-- entity.list's own single-table exact-match filter can't express
+-- joins/aggregates/grouping, which real questions genuinely need --
+-- see agent.lua's entity.query tool)
+--------------------------------------------------------------------------
+--
+-- A materially stricter boundary than the admin-only /sql console
+-- (view.run_adhoc above) needs, even though both start from the same
+-- is_select_only check: a human typing SQL into an admin-gated console
+-- is one trust level, an LLM composing SQL from a conversation
+-- (prompt injection can steer what gets generated in a way a human's
+-- own intent never is) is a different, lower one. entity.list/
+-- entity.get structurally can never reach a non-entity table at all
+-- (they only ever go through the schema-registered entity
+-- abstraction) -- this tool has to enforce that same boundary itself,
+-- by checking every table the query actually references against the
+-- registered entity type list, rejecting anything else (auth_user's
+-- password hashes, api_key secrets, agent_message/agent_pending_action,
+-- schema_sync_state, or any other internal table entity.list/get
+-- could never expose either).
+
+-- A separate, smaller cap than ADHOC_ROW_CAP -- that one is sized for
+-- a human reading an HTML table in a browser; this result goes
+-- straight into the model's own prompt/context, where 1000 rows would
+-- be wasteful at best and a real token-cost problem at worst.
+AGENT_QUERY_ROW_CAP = 200
+
+-- Collects every identifier immediately following `keyword` (word-
+-- boundary matched, same convention as FORBIDDEN_SQL_WORDS -- so a
+-- column literally named e.g. "from_date" is never mistaken for a
+-- FROM clause), including old-style comma-joined table lists
+-- ("FROM a, b" -- not just "FROM a JOIN b"). Scans the whole query
+-- text, not just its top level, so a table referenced only inside a
+-- subquery is still caught -- deliberately does NOT special-case CTEs
+-- (a WITH-clause alias would be checked against the allowlist and
+-- rejected as an unregistered "table" too); a real but accepted
+-- limitation for this first version, not a silent gap -- the model
+-- can express anything needed here as a direct join instead.
+function extract_after_keyword(lowered_sql, keyword, names)
+    start = 1
+    while true do
+        s, e = string.find(lowered_sql, "%f[%a]" .. keyword .. "%f[%A]%s+", start)
+        if s == nil then
+            return
+        end
+        rest = string.sub(lowered_sql, e + 1)
+        ident = string.match(rest, "^([%a_][%w_]*)")
+        if ident != nil then
+            table.insert(names, ident)
+            pos = e + string.len(ident)
+            while true do
+                tail = string.sub(lowered_sql, pos + 1)
+                comma_ident = string.match(tail, "^%s*,%s*([%a_][%w_]*)")
+                if comma_ident == nil then
+                    break
+                end
+                table.insert(names, comma_ident)
+                _, comma_end = string.find(tail, "^%s*,%s*[%a_][%w_]*")
+                pos = pos + comma_end
+            end
+        end
+        start = e + 1
+    end
+end
+
+function referenced_table_names(sql_text)
+    lowered = string.lower(sql_text)
+    names = {}
+    extract_after_keyword(lowered, "from", names)
+    extract_after_keyword(lowered, "join", names)
+    return names
+end
+
+function view.run_agent_query(db_path, sql_text)
+    if view.is_select_only(sql_text) == false then
+        return nil, nil, "refusing to run: not a plain SELECT"
+    end
+
+    referenced = referenced_table_names(sql_text)
+    if #referenced == 0 then
+        return nil, nil, "refusing to run: no FROM/JOIN table found"
+    end
+
+    allowed = {}
+    for _, t in ipairs(schema.list(db_path)) do
+        allowed[t.name] = true
+    end
+    for _, name in ipairs(referenced) do
+        if allowed[name] == nil then
+            return nil, nil, "refusing to run: '" .. name .. "' is not a registered entity type -- only registered entity tables can be queried this way"
+        end
+    end
+
+    query_text = sql_text
+    body = string.gsub(sql_text, "%s+$", "")
+    if string.sub(body, -1) == ";" then
+        body = string.sub(body, 1, -2)
+    end
+    has_own_limit = string.find(string.lower(body), "%f[%a]limit%f[%A]") != nil
+    capped = false
+    if has_own_limit == false then
+        query_text = body .. string.format(" LIMIT %d;", AGENT_QUERY_ROW_CAP + 1)
+        capped = true
+    end
+
+    ok, rows, column_names = pcall(db.query, db_path, query_text)
+    if ok == false then
+        return nil, nil, "invalid sql: " .. tostring(rows)
+    end
+    if rows == nil then
+        rows = {}
+    end
+    if column_names == nil then
+        column_names = {}
+    end
+    truncated = false
+    if capped == true and #rows > AGENT_QUERY_ROW_CAP then
+        truncated = true
+        capped_rows = {}
+        for i = 1, AGENT_QUERY_ROW_CAP do
             table.insert(capped_rows, rows[i])
         end
         rows = capped_rows

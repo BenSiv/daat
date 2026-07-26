@@ -311,6 +311,41 @@ EOF
     [[ "$output" =~ "task" ]]
 }
 
+@test "parallel tool calls: every toolCall in one turn gets a real result, not just the first" {
+    write_task_schema
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(multi_tool_call_response "entity.list_types" "{}" "entity.fields" '{"entity_type":"task"}')"$'\1'"$(done_response "Got both.")"
+    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=what+types+and+fields+does+task+have" "$COOKIE" "$scripted" >/dev/null
+
+    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    [[ "$output" =~ "document" ]]
+    [[ "$output" =~ "task" ]]
+    [[ "$output" =~ "title (text, required)" ]]
+    [[ "$output" =~ "Got both." ]]
+}
+
+@test "when a turn proposes two destructive calls, only the first pauses for approval -- the second gets a real skipped result, not a silent drop" {
+    write_task_schema
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(multi_tool_call_response \
+        "entity.create" '{"entity_type":"task","title":"First task","status":"open"}' \
+        "entity.create" '{"entity_type":"task","title":"Second task","status":"open"}')"
+    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=create+two+tasks" "$COOKIE" "$scripted" >/dev/null
+
+    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    [[ "$output" =~ "wants to run" ]]
+    [[ "$output" =~ "skipped" ]]
+
+    # Only the pending one is a real, resolvable action -- the skipped
+    # one never became a second agent_pending_action row.
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM agent_pending_action;"
+    [ "$output" -eq 1 ]
+}
+
 @test "entity.fields lists a type's field names and types, for discovery before create/update" {
     write_task_schema
     resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
@@ -349,6 +384,55 @@ EOF
 
     run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
     [[ "$output" =~ "task_note.task -&gt; task (reference)" ]]
+}
+
+@test "entity.query answers a real join+aggregate question entity.list's own single-table filter can't express" {
+    write_task_schema
+    write_task_note_schema
+    "$BIN" entity create task title="Ship it" status=open >/dev/null
+    task_id=$(sqlite3 "$TEST_DIR/.store/store.db" "SELECT id FROM task WHERE title = 'Ship it';")
+    "$BIN" entity create task_note body="first note" task="$task_id" >/dev/null
+    "$BIN" entity create task_note body="second note" task="$task_id" >/dev/null
+
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    sql="SELECT task.title, COUNT(*) AS note_count FROM task_note JOIN task ON task_note.task = task.id GROUP BY task.title"
+    scripted="$(tool_call_response "entity.query" "$(printf '{"sql":"%s"}' "$sql")")"$'\1'"$(done_response "Counted.")"
+    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=how+many+notes+per+task" "$COOKIE" "$scripted" >/dev/null
+
+    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    [[ "$output" =~ "Ship it" ]]
+    [[ "$output" =~ "note_count" ]]
+    [[ "$output" =~ "| 2" ]]
+}
+
+@test "entity.query refuses any table that isn't a registered entity type, even a real internal one" {
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(tool_call_response "entity.query" '{"sql":"SELECT * FROM agent_message"}')"
+    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=show+me+internal+messages" "$COOKIE" "$scripted" >/dev/null
+
+    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    [[ "$output" =~ "not a registered entity type" ]]
+}
+
+@test "entity.query refuses non-SELECT SQL the same way the admin /sql console does" {
+    write_task_schema
+    "$BIN" entity create task title="Untouchable" status=open >/dev/null
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(tool_call_response "entity.query" '{"sql":"DELETE FROM task"}')"
+    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=delete+all+tasks" "$COOKIE" "$scripted" >/dev/null
+
+    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    [[ "$output" =~ "not a plain SELECT" ]]
+
+    # Never actually ran -- refused before it ever reached db.query.
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM task;"
+    [ "$output" -eq 1 ]
 }
 
 @test "entity.list and entity.get read real rows (non-destructive, auto-executes)" {

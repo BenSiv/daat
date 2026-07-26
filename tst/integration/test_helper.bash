@@ -77,6 +77,29 @@ tool_call_response() {
     printf '{"content":[{"type":"toolCall","id":"call_1","name":"%s","arguments":%s}],"stopReason":"toolUse"}' "$dotted_name" "$args_json"
 }
 
+# Builds one scripted turn with MULTIPLE parallel toolCall blocks (task:
+# real parallel-tool-call execution, not just the first) -- pass
+# "dotted_name" "args_json" pairs, e.g.:
+#   multi_tool_call_response "entity.list_types" "{}" "entity.fields" '{"entity_type":"task"}'
+multi_tool_call_response() {
+    local all_blocks=""
+    local i=1
+    while [ "$#" -gt 0 ]; do
+        local dotted_name="$1"
+        local args_json="$2"
+        shift 2
+        local entry
+        entry=$(printf '{"type":"toolCall","id":"call_%d","name":"%s","arguments":%s}' "$i" "$dotted_name" "$args_json")
+        if [ -z "$all_blocks" ]; then
+            all_blocks="$entry"
+        else
+            all_blocks="${all_blocks},${entry}"
+        fi
+        i=$((i + 1))
+    done
+    printf '{"content":[%s],"stopReason":"toolUse"}' "$all_blocks"
+}
+
 # Builds one scripted final-answer turn for AGENT_TEST_RESPONSES. `text`
 # is JSON-escaped (backslash/quote/newline) so callers can pass a plain
 # shell string without hand-escaping it themselves.

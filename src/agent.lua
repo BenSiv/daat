@@ -20,6 +20,7 @@ knowledge = require("knowledge")
 auth = require("auth")
 template = require("template")
 config = require("config")
+view = require("view")
 
 agent = {}
 
@@ -581,6 +582,15 @@ AGENT_TOOLS = {
             description = "List every reference relationship between registered entity types (which type's field points at which other type -- e.g. 'sample.experiment -> experiment'). Call this when a value you're looking for isn't a field on the entity type you expected -- it's often a field on a DIFFERENT type that references the one you started from (e.g. a 'variety' filter for experiments actually lives on the samples that reference each experiment, not on the experiment itself). No args -- always returns the full relationship graph, small enough to read in one call.",
             parameters = EMPTY_OBJECT_SCHEMA,
         },
+        query = {
+            destructive = false,
+            description = "Run a read-only SQL SELECT against registered entity tables, for anything entity.list's own single-table exact-match filter can't express: joins across related types (call entity.relationships first to find the join path), counts, aggregates, grouping. Table and column names are this deployment's real registered entity type/field names -- call entity.list_types/entity.fields/entity.relationships first if unsure, don't guess. Must be a single plain SELECT statement (no semicolons, no INSERT/UPDATE/DELETE/DDL) referencing only registered entity tables -- anything else is refused. Results capped at 200 rows.",
+            parameters = {
+                type = "OBJECT",
+                properties = {sql = {type = "STRING", description = "a single SELECT statement"}},
+                required = {"sql"},
+            },
+        },
         list = {
             destructive = false,
             description = "List rows of an entity type, optionally filtered to rows where one field equals a value.",
@@ -954,6 +964,33 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
         return table.concat(lines, "\n")
     end
 
+    if tool_name == "entity" and method_name == "query" then
+        if args.sql == nil then
+            return nil, "query requires sql"
+        end
+        column_names, rows, err, truncated = view.run_agent_query(db_path, args.sql)
+        if column_names == nil then
+            return nil, tostring(err)
+        end
+        if #rows == 0 then
+            return "Query returned no rows."
+        end
+        lines = {}
+        table.insert(lines, table.concat(column_names, " | "))
+        for _, row in ipairs(rows) do
+            values = {}
+            for _, col in ipairs(column_names) do
+                table.insert(values, tostring(row[col]))
+            end
+            table.insert(lines, table.concat(values, " | "))
+        end
+        result = table.concat(lines, "\n")
+        if truncated == true then
+            result = result .. "\n\n(truncated at 200 rows -- add your own LIMIT or narrow the query for a complete result)"
+        end
+        return result
+    end
+
     if tool_name == "entity" and method_name == "list" then
         if args.entity_type == nil then
             return nil, "list requires entity_type"
@@ -1259,23 +1296,22 @@ function build_history_messages(messages)
     return result
 end
 
--- Only the first toolCall block in a reply is ever acted on -- the old
--- text-tag protocol only ever supported one tool call per reply too
--- (a single <tool>/<method>/<args> occurrence), so this carries that
--- same single-call-per-turn scope forward rather than a regression.
--- Gemini/Vertex can emit parallel tool calls in one reply; a second
--- one here is simply left for a future turn once its own result comes
--- back, not a known real-world problem yet.
-function first_tool_call(blocks)
+-- Every toolCall block in a reply, in the order the model proposed
+-- them -- Gemini/Vertex can and does emit more than one per turn
+-- (confirmed live). An earlier version of this only ever acted on the
+-- first and silently dropped the rest; real multi-step reasoning needs
+-- every call it made to get a real result, not a dropped one.
+function all_tool_calls(blocks)
     if blocks == nil then
-        return nil
+        return {}
     end
+    calls = {}
     for _, block in ipairs(blocks) do
         if block.type == "toolCall" then
-            return block
+            table.insert(calls, block)
         end
     end
-    return nil
+    return calls
 end
 
 -- AGENT_TOOLS' own function-declaration names are always "tool.method"
@@ -1511,8 +1547,8 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
         context_id = knowledge.record_context(db_path, session_id, message_id, audit_prompt, model, reasoning_document_id, usage)
         knowledge.record_chat_eval(db_path, session_id, context_id, message_id, agent_provider.name(), model, false, display_text)
 
-        tool_call = first_tool_call(content_blocks)
-        if tool_call == nil then
+        tool_calls = all_tool_calls(content_blocks)
+        if #tool_calls == 0 then
             -- A plain reply (stopReason "stop"/"length") is the final
             -- answer -- no <done> sentinel tag needed at all: pi-ai's
             -- own stopReason already distinguishes "the model wants to
@@ -1523,26 +1559,50 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
             return {status = "done", message = display_text}
         end
 
-        if tool_call.arguments == nil then
-            tool_call.arguments = {}
-        end
-        tool_name, method_name = split_tool_name(tool_call.name)
-        if tool_name == nil or not agent.is_known_tool(tool_name, method_name) then
-            agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name,
-                "ERROR: unknown tool " .. tostring(tool_call.name), true)
-        elseif agent.is_destructive(tool_name, method_name) then
-            pending_id = agent.create_pending_action(db_path, session_id, tool_name, method_name, tool_call.arguments, tool_call.id)
-            sync_session_document(db_path, login, session_id)
-            return {status = "pending_approval", pending_id = pending_id, tool = tool_name, method = method_name, args = tool_call.arguments}
-        else
-            tool_result, tool_err = agent.execute_tool(db_path, login, session_id, tool_name, method_name, tool_call.arguments)
-            summary = tostring(tool_result)
-            is_error = false
-            if tool_err != nil then
-                summary = "ERROR: " .. tostring(tool_err)
-                is_error = true
+        -- Every non-destructive call in this turn runs now, in the
+        -- order proposed -- real parallel-tool-call support (see
+        -- all_tool_calls' own comment). At most one destructive call
+        -- can still pause for approval per turn: the pending-approval
+        -- state machine (agent_pending_action) only tracks one
+        -- outstanding action per session, so the first destructive
+        -- call found pauses the whole turn same as before; any
+        -- destructive call after it gets an explicit "skipped" result
+        -- instead of being silently dropped, so every call the model
+        -- made still gets a real, visible outcome to react to.
+        pending_call = nil
+        for _, tool_call in ipairs(tool_calls) do
+            if tool_call.arguments == nil then
+                tool_call.arguments = {}
             end
-            agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name, summary, is_error)
+            tool_name, method_name = split_tool_name(tool_call.name)
+            if tool_name == nil or not agent.is_known_tool(tool_name, method_name) then
+                agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name,
+                    "ERROR: unknown tool " .. tostring(tool_call.name), true)
+            elseif agent.is_destructive(tool_name, method_name) then
+                if pending_call == nil then
+                    pending_call = {tool_call = tool_call, tool_name = tool_name, method_name = method_name}
+                else
+                    agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name,
+                        "ERROR: skipped -- only one destructive action can be proposed per turn; resolve the pending one first, then ask for this one again", true)
+                end
+            else
+                tool_result, tool_err = agent.execute_tool(db_path, login, session_id, tool_name, method_name, tool_call.arguments)
+                summary = tostring(tool_result)
+                is_error = false
+                if tool_err != nil then
+                    summary = "ERROR: " .. tostring(tool_err)
+                    is_error = true
+                end
+                agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name, summary, is_error)
+            end
+        end
+
+        if pending_call != nil then
+            pending_id = agent.create_pending_action(db_path, session_id, pending_call.tool_name, pending_call.method_name,
+                pending_call.tool_call.arguments, pending_call.tool_call.id)
+            sync_session_document(db_path, login, session_id)
+            return {status = "pending_approval", pending_id = pending_id, tool = pending_call.tool_name,
+                method = pending_call.method_name, args = pending_call.tool_call.arguments}
         end
     end
 
