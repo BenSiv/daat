@@ -79,7 +79,26 @@ function main()
     end
 
     if command == nil or command == "-h" or command == "--help" then
-        print("Usage: platform <init|schema|entity|ledger|extension|view|user|api-key|document|knowledge> ...")
+        print("Usage: platform <init|schema|entity|ledger|extension|view|user|api-key|document|knowledge|agent> ...")
+        return
+    end
+
+    -- "agent" has no command_funcs entry of its own -- no other CLI
+    -- subcommands live under it yet -- so it's special-cased here,
+    -- before the generic command_funcs lookup below, the same reason
+    -- "knowledge distill" further down is dispatched outside of
+    -- knowledge.do_knowledge instead of through it: see the
+    -- require("agent") comment above main(). Meant to be invoked
+    -- periodically (cron/systemd timer), the same way extension_job's
+    -- own "platform extension run-pending" already is.
+    if command == "agent" and arg[2] == "run-pending-background" then
+        if config.is_initialized(".") == false then
+            print("Not initialized. Run 'platform init' first.")
+            return
+        end
+        db_path = config.db_path(".")
+        result = agent.run_pending_background_tasks(db_path, agent.default_model())
+        print(string.format("Ran %d, failed %d", result.ran, result.failed))
         return
     end
 

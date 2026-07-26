@@ -77,13 +77,34 @@ CREATE TABLE IF NOT EXISTS agent_pending_action (
     created_at TEXT DEFAULT (%s),
     resolved_at TEXT
 );
+
+-- A background.start request (see AGENT_TOOLS.background below) --
+-- mirrors extension_job's own queue shape (status/attempts/last_error),
+-- not agent_pending_action's: there's nothing here for a human to
+-- approve/deny, just a question that needs more turns than one HTTP
+-- request affords. Drained by a real, separate process (the CLI's
+-- "platform agent run-pending-background", meant to be invoked
+-- periodically the same way extension_job's own "platform extension
+-- run-pending" already is), never inline in a chat turn.
+CREATE TABLE IF NOT EXISTS agent_background_task (
+    id INTEGER PRIMARY KEY %s,
+    session_id TEXT NOT NULL,
+    question TEXT NOT NULL,
+    status VARCHAR(32) NOT NULL DEFAULT 'pending',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    result TEXT,
+    created_at TEXT DEFAULT (%s),
+    updated_at TEXT DEFAULT (%s)
+);
 """
 
 function agent_schema_sql(db_path)
     return string.format(AGENT_SCHEMA,
         db.now_expr(db_path), db.now_expr(db_path),
         db.autoincrement_keyword(db_path), db.now_expr(db_path),
-        db.autoincrement_keyword(db_path), db.now_expr(db_path)
+        db.autoincrement_keyword(db_path), db.now_expr(db_path),
+        db.autoincrement_keyword(db_path), db.now_expr(db_path), db.now_expr(db_path)
     )
 end
 
@@ -800,6 +821,34 @@ AGENT_TOOLS = {
             },
         },
     },
+    -- Hands a question off to a separate, later process (the CLI's
+    -- "platform agent run-pending-background", meant to run on a timer --
+    -- see agent_background_task above) instead of digging in inline, for
+    -- something that would need more turns than research.investigate's
+    -- own bounded budget affords within one HTTP request. Not a
+    -- replacement for research.investigate -- reach for this only when
+    -- that isn't enough, since a background task's finding doesn't reach
+    -- the user until they check back or ask again.
+    background = {
+        start = {
+            destructive = false,
+            description = "Hand a question off to a background task that keeps digging after this turn ends, for something that would need more turns than research.investigate's own budget -- use research.investigate first; only use this if that isn't enough. Returns a task id immediately; the finding is appended to this same conversation once it's ready (check with background.status, or just ask again later).",
+            parameters = {
+                type = "OBJECT",
+                properties = {question = {type = "STRING", description = "the specific question to research in the background"}},
+                required = {"question"},
+            },
+        },
+        status = {
+            destructive = false,
+            description = "Check on a background task started with background.start: still pending, or its finding if done.",
+            parameters = {
+                type = "OBJECT",
+                properties = {task_id = {type = "INTEGER", description = "the id returned by background.start"}},
+                required = {"task_id"},
+            },
+        },
+    },
 }
 
 function agent.is_known_tool(tool_name, method_name)
@@ -1343,6 +1392,38 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
         return finding
     end
 
+    if tool_name == "background" and method_name == "start" then
+        if args.question == nil then
+            return nil, "start requires question"
+        end
+        task_id = agent.enqueue_background_task(db_path, session_id, args.question)
+        return "Started background task #" .. tostring(task_id) ..
+            " -- its finding will be added to this conversation once it's ready; check with background.status(" ..
+            tostring(task_id) .. ") or just ask again later."
+    end
+
+    -- Ownership checked against the CURRENT session (not the task's own
+    -- login) -- same "not found" wording either way a mismatch could
+    -- happen (unknown id, or a real id belonging to someone else's
+    -- session), so a guessed/incremented task_id can't be used to read
+    -- another user's background task.
+    if tool_name == "background" and method_name == "status" then
+        target_id = tonumber(args.task_id)
+        if target_id == nil then
+            return nil, "status requires task_id"
+        end
+        task = agent.get_background_task(db_path, target_id)
+        if task == nil or task.session_id != session_id then
+            return nil, "no such background task #" .. tostring(target_id)
+        end
+        if task.status == "done" then
+            return "Task #" .. tostring(target_id) .. " (done): " .. tostring(task.result)
+        elseif task.status == "failed" then
+            return "Task #" .. tostring(target_id) .. " (failed after " .. tostring(task.attempts) .. " attempts): " .. tostring(task.last_error)
+        end
+        return "Task #" .. tostring(target_id) .. " is still " .. tostring(task.status) .. "."
+    end
+
     return nil, "unknown tool: " .. tostring(tool_name) .. "." .. tostring(method_name)
 end
 
@@ -1704,7 +1785,9 @@ tried, rather than guessing.
 -- clarify, since "ask the user a question" is a whole-turn decision that
 -- belongs to the outer loop, not something a bounded sub-investigation
 -- should be able to trigger on its own; a sub-investigation that can't
--- find something just reports that in its own finding instead. Destructive
+-- find something just reports that in its own finding instead -- and
+-- except background, for the same reason: a bounded sub-investigation
+-- shouldn't be able to spawn an unbounded one of its own. Destructive
 -- tools are never declared here at all (rather than declared-then-refused)
 -- so the model isn't even told they exist from inside a pass that's meant
 -- to be read-only investigation, not a place a write could plausibly
@@ -1712,7 +1795,7 @@ tried, rather than guessing.
 function research_tool_declarations()
     declarations = {}
     for tool_name, methods in pairs(AGENT_TOOLS) do
-        if tool_name != "research" and tool_name != "clarify" then
+        if tool_name != "research" and tool_name != "clarify" and tool_name != "background" then
             for method_name, spec in pairs(methods) do
                 if spec.destructive == false then
                     table.insert(declarations, {
@@ -1737,12 +1820,22 @@ end
 -- its context) or its compaction budget -- only the synthesized finding
 -- returned below ever becomes part of the real session, as this tool
 -- call's own tool_result message.
-function run_research_loop(db_path, author, session_id, model, question)
+--
+-- `max_turns` defaults to RESEARCH_MAX_TURNS (the interactive
+-- research.investigate tool's own bound) when nil -- the background
+-- worker (agent.run_pending_background_tasks) reuses this same loop
+-- with a looser AGENT_BACKGROUND_MAX_TURNS budget instead, since it
+-- isn't bound to one HTTP request's lifetime the way an inline tool
+-- call is.
+function run_research_loop(db_path, author, session_id, model, question, max_turns)
+    if max_turns == nil then
+        max_turns = RESEARCH_MAX_TURNS
+    end
     messages = {{role = "user", content = question}}
     tools = research_tool_declarations()
     last_text = nil
 
-    for turn = 1, RESEARCH_MAX_TURNS do
+    for turn = 1, max_turns do
         response, err, usage = agent_provider.converse(model, RESEARCH_SYSTEM_PROMPT, messages, tools)
         if response == nil then
             if last_text != nil then
@@ -1783,8 +1876,8 @@ function run_research_loop(db_path, author, session_id, model, question)
             if tool_name == nil or not agent.is_known_tool(tool_name, method_name) then
                 result_text = "ERROR: unknown tool " .. tostring(tool_call.name)
                 is_error = true
-            elseif agent.is_destructive(tool_name, method_name) or tool_name == "research" or tool_name == "clarify" then
-                result_text = "ERROR: research is read-only and can't ask the user directly -- cannot perform destructive actions, delegate further, or ask a clarifying question; report what you've found (including any real ambiguity) instead"
+            elseif agent.is_destructive(tool_name, method_name) or tool_name == "research" or tool_name == "clarify" or tool_name == "background" then
+                result_text = "ERROR: research is read-only and can't ask the user directly or hand off further -- cannot perform destructive actions, delegate further, ask a clarifying question, or start a background task; report what you've found (including any real ambiguity) instead"
                 is_error = true
             else
                 tool_result, tool_err = agent.execute_tool(db_path, author, session_id, tool_name, method_name, tool_call.arguments)
@@ -1805,6 +1898,137 @@ function run_research_loop(db_path, author, session_id, model, question)
         return "(research exceeded its turn budget with no finding)"
     end
     return "(research exceeded its turn budget -- last, possibly incomplete, finding) " .. last_text
+end
+
+--------------------------------------------------------------------------
+-- Background tasks (background.start / background.status)
+--------------------------------------------------------------------------
+--
+-- A real async job queue, same shape as extension_job (status/attempts/
+-- last_error, drained by a separate periodically-invoked process) --
+-- not agent_pending_action's approve/deny shape, since there's nothing
+-- for a human to approve here, just a question that needs more turns
+-- than one HTTP request affords.
+
+AGENT_BACKGROUND_MAX_ATTEMPTS = 3
+AGENT_BACKGROUND_MAX_TURNS = 20
+
+function agent.enqueue_background_task(db_path, session_id, question)
+    db.exec(db_path, string.format(
+        "INSERT INTO agent_background_task (session_id, question) VALUES (%s, %s);",
+        db.quote(session_id), db.quote(question)
+    ))
+    rows = db.query(db_path, "SELECT MAX(id) AS id FROM agent_background_task;")
+    return tonumber(rows[1].id)
+end
+
+-- No ownership check here (unlike agent.get_pending_action) -- callers
+-- that expose this to a user-facing request (background.status, in
+-- agent.execute_tool) are responsible for checking task.session_id
+-- against their own current session themselves, since this is also used
+-- by the worker (agent.run_pending_background_tasks), which has no
+-- "current session" of its own at all.
+function agent.get_background_task(db_path, task_id)
+    rows = db.query(db_path, string.format(
+        "SELECT * FROM agent_background_task WHERE id = %d;", tonumber(task_id)
+    ))
+    if rows == nil or rows[1] == nil then
+        return nil
+    end
+    return rows[1]
+end
+
+function agent.pending_background_tasks(db_path, limit)
+    if limit == nil then
+        limit = 10
+    end
+    rows = db.query(db_path, string.format(
+        "SELECT * FROM agent_background_task WHERE status = 'pending' AND attempts < %d ORDER BY id ASC LIMIT %d;",
+        AGENT_BACKGROUND_MAX_ATTEMPTS, limit
+    ))
+    if rows == nil then
+        return {}
+    end
+    return rows
+end
+
+function agent.mark_background_task_done(db_path, task, result)
+    db.exec(db_path, string.format(
+        "UPDATE agent_background_task SET status = 'done', result = %s, updated_at = %s WHERE id = %d;",
+        db.quote(result), db.now_expr(db_path), tonumber(task.id)
+    ))
+end
+
+-- Same retry convention as extension.mark_job_failed: stays 'pending'
+-- (so it's retried) until it has failed AGENT_BACKGROUND_MAX_ATTEMPTS
+-- times, at which point it moves to 'failed' and is no longer picked
+-- up -- one broken task never blocks or affects any other.
+function agent.mark_background_task_failed(db_path, task, message)
+    attempts = tonumber(task.attempts) + 1
+    status = "pending"
+    if attempts >= AGENT_BACKGROUND_MAX_ATTEMPTS then
+        status = "failed"
+    end
+    db.exec(db_path, string.format(
+        "UPDATE agent_background_task SET status = %s, attempts = %d, last_error = %s, updated_at = %s WHERE id = %d;",
+        db.quote(status), attempts, db.quote(message), db.now_expr(db_path), tonumber(task.id)
+    ))
+end
+
+-- Which real login a session belongs to, with no ownership check of its
+-- own -- unlike agent.get_session (an HTTP-request-scoped security
+-- boundary), this is for the background worker below, which runs as a
+-- system/cron process with no authenticated "current user" of its own;
+-- it exists purely so a resumed task can still be attributed to the
+-- same real login the original chat session belongs to, exactly as if
+-- that user's own turn had just kept running.
+function agent.session_login(db_path, session_id)
+    rows = db.query(db_path, string.format(
+        "SELECT login FROM agent_session WHERE id = %s;", db.quote(session_id)
+    ))
+    if rows == nil or rows[1] == nil then
+        return nil
+    end
+    return rows[1].login
+end
+
+-- Drains pending agent_background_task rows (oldest first, up to
+-- `limit`), same "run, mark done/failed, one row's failure never
+-- affects another" shape as entity.run_pending_jobs. Meant to be
+-- invoked periodically by whatever the deployer already uses for
+-- scheduled tasks (cron/systemd timer) -- platform is a one-shot CGI/CLI
+-- process, so there's no long-lived place inside it to run this on a
+-- timer itself; see "platform agent run-pending-background" in main.lua.
+-- A finished task's finding is appended to its own session as a new
+-- assistant message -- not routed back through agent.run_turn, since
+-- the outer turn that started it already returned its own answer to the
+-- user; this is a new, independent event, not a resumption of a paused
+-- one (contrast agent.approve_pending/deny_pending, which genuinely
+-- resume a paused turn).
+function agent.run_pending_background_tasks(db_path, model, limit)
+    ran = 0
+    failed = 0
+    for _, task in ipairs(agent.pending_background_tasks(db_path, limit)) do
+        login = agent.session_login(db_path, task.session_id)
+        if login == nil then
+            agent.mark_background_task_failed(db_path, task, "session no longer exists")
+            failed = failed + 1
+        else
+            finding, err = run_research_loop(db_path, login, task.session_id, model, task.question, AGENT_BACKGROUND_MAX_TURNS)
+            if finding == nil then
+                agent.mark_background_task_failed(db_path, task, tostring(err))
+                failed = failed + 1
+            else
+                agent.mark_background_task_done(db_path, task, finding)
+                message_text = "Background research finished: " .. finding
+                agent.add_message(db_path, task.session_id, "assistant",
+                    json.encode({blocks = {{type = "text", text = message_text}}}), true)
+                sync_session_document(db_path, login, task.session_id)
+                ran = ran + 1
+            end
+        end
+    end
+    return {ran = ran, failed = failed}
 end
 
 -- Runs the turn loop starting from the session's current active-message

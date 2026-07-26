@@ -545,6 +545,84 @@ EOF
     [ "$output" -eq 0 ]
 }
 
+@test "background.start enqueues without blocking the turn; platform agent run-pending-background drains it into the same conversation" {
+    write_task_schema
+    write_task_note_schema
+    "$BIN" entity create task title="Ship it" status=open >/dev/null
+    task_id=$(sqlite3 "$TEST_DIR/.store/store.db" "SELECT id FROM task WHERE title = 'Ship it';")
+    "$BIN" entity create task_note body="first note" task="$task_id" >/dev/null
+    "$BIN" entity create task_note body="second note" task="$task_id" >/dev/null
+
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(tool_call_response "background.start" '{"question":"how many task_notes reference the Ship it task"}')"$'\1'"$(done_response "I will dig into that and let you know.")"
+    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=dig+deeper+on+this+one" "$COOKIE" "$scripted" >/dev/null
+
+    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    [[ "$output" =~ "Started background task" ]]
+    [[ "$output" =~ "I will dig into that and let you know." ]]
+
+    # Enqueued, not executed inline -- the turn already returned.
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT status FROM agent_background_task;"
+    [ "$output" = "pending" ]
+
+    # Drain it via the real CLI worker, exactly as a systemd timer would.
+    sql="SELECT COUNT(*) AS note_count FROM task_note JOIN task ON task_note.task = task.id WHERE task.title = 'Ship it'"
+    worker_scripted="$(tool_call_response "entity.query" "$(printf '{"sql":"%s"}' "$sql")")"$'\1'"$(done_response "There are 2 notes on the Ship it task.")"
+    AGENT_PROVIDER=test AGENT_TEST_RESPONSES="$worker_scripted" run "$BIN" agent run-pending-background
+    [[ "$output" =~ "Ran 1, failed 0" ]]
+
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT status FROM agent_background_task;"
+    [ "$output" = "done" ]
+
+    # The finding is appended to the same conversation as a new message --
+    # no separate resume endpoint, the user just sees it next time they
+    # look at this chat.
+    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    [[ "$output" =~ "There are 2 notes on the Ship it task." ]]
+}
+
+@test "background.status reports pending before the worker runs, and the real finding after" {
+    write_task_schema
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=dig+deeper" "$COOKIE" \
+        "$(tool_call_response "background.start" '{"question":"anything unusual about open tasks"}')"$'\1'"$(done_response "On it.")" >/dev/null
+    task_id=$(sqlite3 "$TEST_DIR/.store/store.db" "SELECT id FROM agent_background_task;")
+
+    scripted="$(tool_call_response "background.status" "$(printf '{"task_id":%s}' "$task_id")")"$'\1'"$(done_response "Still working on it.")"
+    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=any+update" "$COOKIE" "$scripted" >/dev/null
+    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    [[ "$output" =~ "is still pending" ]]
+
+    AGENT_PROVIDER=test AGENT_TEST_RESPONSES="$(done_response "Nothing unusual found.")" run "$BIN" agent run-pending-background
+
+    scripted2="$(tool_call_response "background.status" "$(printf '{"task_id":%s}' "$task_id")")"$'\1'"$(done_response "Here it is.")"
+    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=any+update+now" "$COOKIE" "$scripted2" >/dev/null
+    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    [[ "$output" =~ "(done): Nothing unusual found." ]]
+}
+
+@test "background.status refuses a task_id belonging to a different session" {
+    write_task_schema
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+    other_resp=$(start_chat "$COOKIE" "$CSRF" "Other+chat")
+    other_session_id=$(extract_query_param "$other_resp" "session_id")
+
+    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${other_session_id}&message=dig+deeper" "$COOKIE" \
+        "$(tool_call_response "background.start" '{"question":"something"}')"$'\1'"$(done_response "On it.")" >/dev/null
+    other_task_id=$(sqlite3 "$TEST_DIR/.store/store.db" "SELECT id FROM agent_background_task;")
+
+    scripted="$(tool_call_response "background.status" "$(printf '{"task_id":%s}' "$other_task_id")")"$'\1'"$(done_response "Couldn't find it.")"
+    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=check+task" "$COOKIE" "$scripted" >/dev/null
+
+    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    [[ "$output" =~ "no such background task" ]]
+}
+
 @test "entity.list and entity.get read real rows (non-destructive, auto-executes)" {
     write_task_schema
     "$BIN" entity create task title="Ship it" status=open >/dev/null
