@@ -265,7 +265,12 @@ end
 -- content value -- see build_history_messages' own comment for the
 -- storage shape) into human-readable text: a text block reads as
 -- itself, a toolCall block as a short "-> what ran" line instead of
--- the raw {name, arguments} structure.
+-- the raw {name, arguments} structure. Deliberately silent on
+-- "thinking" blocks (Gemini 2.5's own thought-summary output, see
+-- extract_thinking_text below) -- the chat transcript should show the
+-- clean final answer, not the model's own reasoning inline; the
+-- reasoning itself is split out into a separate Knowledge Pool
+-- document instead (see run_turn's own reasoning_document_id handling).
 function display_blocks(blocks)
     if blocks == nil then
         return ""
@@ -279,6 +284,30 @@ function display_blocks(blocks)
         end
     end
     return table.concat(parts, "\n")
+end
+
+-- Pulls out Gemini 2.5's own thought-summary blocks (requested via the
+-- bridge's own thinking config -- see agent_provider_pi.lua/bridge/
+-- pi-bridge.mjs), a real structural signal, not text-pattern matching.
+-- Returns nil (not "") when there's nothing to pull, so callers can
+-- tell "no thinking this turn" apart from "thinking was an empty
+-- string" and fall back to the legacy text-based
+-- knowledge.reply_has_visible_reasoning check for models/providers
+-- that leak reasoning as plain text instead of a real block type.
+function extract_thinking_text(blocks)
+    if blocks == nil then
+        return nil
+    end
+    parts = {}
+    for _, block in ipairs(blocks) do
+        if block.type == "thinking" and block.thinking != nil then
+            table.insert(parts, block.thinking)
+        end
+    end
+    if #parts == 0 then
+        return nil
+    end
+    return table.concat(parts, "\n\n")
 end
 
 -- Cleans a message's content for DISPLAY only -- never called on what
@@ -1438,16 +1467,25 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
         display_text = display_blocks(content_blocks)
 
         -- task #87: persist the exact prompt/reasoning/tokens for this
-        -- turn. A reply that leaks visible reasoning (see
-        -- knowledge.reply_has_visible_reasoning) gets that reasoning
-        -- split out into its own document (source_type='reasoning',
-        -- task #106: a real Notebook page under the Knowledge Pool
-        -- folder, not a separate knowledge_note) -- it then goes
-        -- through the same tiering/retrieval/decay pipeline as every
-        -- other pool document, rather than sitting in a second,
-        -- parallel log only this table can see.
+        -- turn. Real thinking content (Gemini 2.5's own thought-summary
+        -- blocks, see extract_thinking_text) gets split out into its
+        -- own document (source_type='reasoning', task #106: a real
+        -- Notebook page under the Knowledge Pool folder, not a
+        -- separate knowledge_note) -- it then goes through the same
+        -- tiering/retrieval/decay pipeline as every other pool
+        -- document, rather than sitting in a second, parallel log only
+        -- this table can see. Falls back to the legacy text-pattern
+        -- check (knowledge.reply_has_visible_reasoning) only when
+        -- there's no real thinking block at all -- some other
+        -- provider/model might still leak reasoning as plain text
+        -- instead of a real structured block.
         reasoning_document_id = nil
-        if knowledge.reply_has_visible_reasoning(display_text) then
+        thinking_text = extract_thinking_text(content_blocks)
+        if thinking_text != nil then
+            reasoning_document_id = knowledge.create_document_note(db_path, login,
+                "Chat reasoning (session " .. tostring(session_id) .. ")", thinking_text,
+                "reasoning", message_id, tostring(session_id))
+        elseif knowledge.reply_has_visible_reasoning(display_text) then
             reasoning_document_id = knowledge.create_document_note(db_path, login,
                 "Chat reasoning (session " .. tostring(session_id) .. ")", display_text,
                 "reasoning", message_id, tostring(session_id))

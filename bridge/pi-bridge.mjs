@@ -22,10 +22,15 @@
 //   }
 //
 // Response shape (mirrors pi-ai's own AssistantMessage):
-//   {"content": [{"type":"text","text":"..."} | {"type":"toolCall",...}],
+//   {"content": [{"type":"text","text":"..."} | {"type":"toolCall",...} |
+//                {"type":"thinking","thinking":"...","thinkingSignature":"..."}],
 //    "stopReason": "stop" | "toolUse" | "length" | "error" | "aborted",
 //    "errorMessage": "..." (only on stopReason "error"/"aborted"),
 //    "usage": {"input":N, "output":N, "totalTokens":N}}
+// A "thinking" block (Gemini 2.5's own thought-summary output, requested
+// via google-vertex's own `thinking.enabled` option below) is real model
+// output, not a wrapper convention -- note its text field is `thinking`,
+// not `text`, matching pi-ai's own ThinkingContent type exactly.
 //
 // Never throws on a normal request failure (auth, rate limit, etc.) --
 // pi-ai itself surfaces those as stopReason "error"/"aborted" on the
@@ -126,9 +131,19 @@ async function main() {
         tools: request.tools || [],
     };
 
+    // Gemini 2.5's thought-summary feature (task: chat agent thinking
+    // visibility) -- google-vertex-specific (GoogleVertexOptions.thinking,
+    // confirmed against pi-ai's own source), so only passed for that
+    // provider. No level/budgetTokens set: leaves the actual thinking
+    // budget to Vertex's own default rather than picking one ourselves.
+    // Response content then includes real {type:"thinking", thinking:
+    // "..."} blocks alongside text/toolCall ones -- see
+    // agent.lua's own extract_thinking_text/display_blocks.
+    const completeOptions = request.provider === "google-vertex" ? { thinking: { enabled: true } } : undefined;
+
     let response;
     try {
-        response = await models.complete(model, context);
+        response = await models.complete(model, context, completeOptions);
     } catch (e) {
         // Should be rare (pi-ai's own contract keeps normal failures out
         // of exceptions -- see the header comment) but not impossible,

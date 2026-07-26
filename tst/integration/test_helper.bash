@@ -88,6 +88,25 @@ done_response() {
     printf '{"content":[{"type":"text","text":"%s"}],"stopReason":"stop"}' "$text"
 }
 
+# Builds one scripted final-answer turn carrying a real Gemini 2.5
+# thought-summary block alongside the final text (task: chat agent
+# thinking visibility) -- mirrors what the pi-ai bridge itself returns
+# when thinking is enabled (see agent_provider_pi.lua/bridge/
+# pi-bridge.mjs and agent.lua's own extract_thinking_text). Both
+# `thinking_text`/`answer_text` are JSON-escaped the same way
+# done_response's own `text` is.
+thinking_response() {
+    local thinking_text="$1"
+    local answer_text="$2"
+    thinking_text="${thinking_text//\\/\\\\}"
+    thinking_text="${thinking_text//\"/\\\"}"
+    thinking_text="${thinking_text//$'\n'/\\n}"
+    answer_text="${answer_text//\\/\\\\}"
+    answer_text="${answer_text//\"/\\\"}"
+    answer_text="${answer_text//$'\n'/\\n}"
+    printf '{"content":[{"type":"thinking","thinking":"%s"},{"type":"text","text":"%s"}],"stopReason":"stop"}' "$thinking_text" "$answer_text"
+}
+
 # Same as run_cgi, but authenticated as a "is" (Setup+Admin) capability
 # user -- for routes gated above the baseline "i" capability (/sql).
 run_cgi_admin() {
