@@ -72,7 +72,7 @@ raw_document_preview() {
     # nested inside Home's -- not just present anywhere on the page.
     # Collapsible <details>/<summary> nodes now, not a flat always-
     # expanded <ul><li> -- see html.lua's render_document_tree_level.
-    [[ "$output" =~ 'Home</a></summary><ul><li><details><summary><a href="document?entity_id=2">Guides</a></summary><ul><li class="fossci-tree-leaf"><a href="document?entity_id=3">Setup' ]]
+    [[ "$output" =~ 'Home</a></summary><ul><li><details><summary><a href="document?entity_id=2">Guides</a></summary><ul><li class="platform-tree-leaf"><a href="document?entity_id=3">Setup' ]]
 }
 
 @test "/document-edit's parent picker disambiguates duplicate titles without ever showing a raw internal id" {
@@ -192,7 +192,7 @@ EOF
     run get_route "/document" "entity_id=3"
     [[ "$output" =~ "LOT-1" ]]
     [[ ! "$output" =~ "LOT-2" ]]
-    [[ "$output" =~ "fossci-view-table" ]]
+    [[ "$output" =~ "platform-view-table" ]]
     [[ ! "$output" =~ "{{view:" ]]
 }
 

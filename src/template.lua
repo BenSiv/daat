@@ -3,11 +3,11 @@
 -- doc/schema.md's conventions), rendered into a plain Markdown snippet
 -- the user copies into a new Fossil wiki page they create themselves.
 --
--- Deliberately a snippet generator, not a live wiki-write: fossci's own
+-- Deliberately a snippet generator, not a live wiki-write: platform's own
 -- sandboxed request-handling has no path to invoke Fossil's own
 -- wiki-create machinery (that's a `fossil` CLI operation, done outside
--- fossci entirely -- see e.g. convert_entries_to_wiki.py, a standalone
--- script, not a fossci extension). A template only ever produces inert
+-- platform entirely -- see e.g. convert_entries_to_wiki.py, a standalone
+-- script, not a platform extension). A template only ever produces inert
 -- text, so unlike views (raw SQL) or extensions (sandboxed code), it
 -- carries no execution risk and needs no admin-approval registry.
 --
@@ -36,7 +36,7 @@
 -- prefills the "New page name" field with (html.lua's own render_template
 -- falls back to `label` if absent) -- a deployment's own page-naming
 -- convention (e.g. a folder-path prefix) belongs here, in a deployment's
--- own template files, never hardcoded into fossci itself.
+-- own template files, never hardcoded into platform itself.
 
 paths = require("paths")
 lfs = require("lfs")

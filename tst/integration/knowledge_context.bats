@@ -204,7 +204,7 @@ send_message() {
     read session csrf < <(session_for admin secret123)
     GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/" QUERY_STRING="" \
         HTTP_COOKIE="session=${session}; csrf=${csrf}" run "$BIN"
-    [[ "$output" =~ "e.target.classList.add('fossci-feedback-pressed')" ]]
+    [[ "$output" =~ "e.target.classList.add('platform-feedback-pressed')" ]]
     [[ "$output" =~ "b.disabled = true" ]]
     [[ "$output" =~ "showFeedbackError" ]]
     [[ "$output" =~ "Couldn\\'t record feedback." ]]

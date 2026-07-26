@@ -87,8 +87,8 @@ raw_admin_action() {
     # first -- no billing/security exposure by itself), but showing
     # controls nobody can use is confusing UX and worth not doing.
     GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/login" QUERY_STRING="" run "$BIN"
-    [[ ! "$output" =~ '<a class="fossci-nav-link' ]]
-    [[ ! "$output" =~ 'id="fossci-chat-widget"' ]]
+    [[ ! "$output" =~ '<a class="platform-nav-link' ]]
+    [[ ! "$output" =~ 'id="platform-chat-widget"' ]]
 
     "$BIN" user add alice secret123 i
     raw=$(raw_login alice secret123)
@@ -96,8 +96,8 @@ raw_admin_action() {
     csrf=$(printf '%s' "$raw" | grep -o 'Set-Cookie: csrf=[^;]*' | sed 's/Set-Cookie: csrf=//')
     GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/" QUERY_STRING="" \
         HTTP_COOKIE="session=${session}; csrf=${csrf}" run "$BIN"
-    [[ "$output" =~ '<a class="fossci-nav-link' ]]
-    [[ "$output" =~ 'id="fossci-chat-widget"' ]]
+    [[ "$output" =~ '<a class="platform-nav-link' ]]
+    [[ "$output" =~ 'id="platform-chat-widget"' ]]
 }
 
 @test "an unauthenticated /chat-start or /chat-message never reaches the agent" {

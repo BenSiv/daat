@@ -1,4 +1,4 @@
--- Capability-scoped execution for anything that isn't fossci's own
+-- Capability-scoped execution for anything that isn't platform's own
 -- trusted code: schema files, extension manifests, and (from M1 on)
 -- extension hook bodies. See doc/architecture.md, "Extension sandboxing:
 -- pure Luam, no C required" -- this is the whole mechanism, no second

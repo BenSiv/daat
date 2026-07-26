@@ -190,17 +190,17 @@ function format_change_value(v)
     return tostring(v)
 end
 
--- CLI entry point: `fossci ledger <show|history> <entity_id>`
+-- CLI entry point: `platform ledger <show|history> <entity_id>`
 function ledger.do_ledger(cmd_args, db_path)
     action = cmd_args[1]
     entity_id = tonumber(cmd_args[2])
 
     if action != "show" and action != "history" then
-        print("Usage: fossci ledger <show|history> <entity_id>")
+        print("Usage: platform ledger <show|history> <entity_id>")
         return
     end
     if entity_id == nil then
-        print("Usage: fossci ledger " .. action .. " <entity_id>")
+        print("Usage: platform ledger " .. action .. " <entity_id>")
         return
     end
 

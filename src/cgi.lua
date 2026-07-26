@@ -737,7 +737,7 @@ function cgi.handle_request()
 
     -- Landing page for admin/setup-only tooling (SQL console, user
     -- admin, templates) -- a single "System" destination rather than
-    -- three separate top-level tabs, matching the old fossci
+    -- three separate top-level tabs, matching the old platform
     -- deployment's own "System" concept.
     if path_info == "/system" then
         if show_sql_nav == false and show_admin_nav == false then

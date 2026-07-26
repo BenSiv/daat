@@ -133,7 +133,7 @@ open('$1','wb').write(base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1
     GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/" QUERY_STRING="" \
         HTTP_COOKIE="session=${session}; csrf=${csrf}" run "$BIN"
     [[ "$output" =~ "<title>My Lab</title>" ]]
-    [[ "$output" =~ "fossci-accent: #ff6600;" ]]
+    [[ "$output" =~ "platform-accent: #ff6600;" ]]
 }
 
 @test "settings-save rejects a color value that would break out of the <style> block" {

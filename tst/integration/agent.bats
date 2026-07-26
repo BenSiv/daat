@@ -78,7 +78,7 @@ start_chat() {
 
     run raw_get "/chat" "" "$COOKIE"
     [[ "$output" =~ "Timestamped chat" ]]
-    [[ "$output" =~ "fossci-chat-session-started" ]]
+    [[ "$output" =~ "platform-chat-session-started" ]]
 }
 
 @test "chat-message with a plain <done> reply records both turns and returns the message" {
@@ -537,7 +537,7 @@ EOF
 
     run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
     [[ "$output" =~ "There are 0." ]]
-    [[ "$output" =~ 'class="fossci-chat-msg fossci-chat-self_check"' ]]
+    [[ "$output" =~ 'class="platform-chat-msg platform-chat-self_check"' ]]
     [[ "$output" =~ "Did you verify that" ]]
     [[ "$output" =~ "Actually there are 5" ]]
 }
@@ -550,7 +550,7 @@ EOF
 
     run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
     [[ "$output" =~ "Hello!" ]]
-    [[ ! "$output" =~ 'class="fossci-chat-msg fossci-chat-self_check"' ]]
+    [[ ! "$output" =~ 'class="platform-chat-msg platform-chat-self_check"' ]]
 
     run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM agent_message WHERE role = 'self_check';"
     [ "$output" -eq 0 ]
@@ -566,7 +566,7 @@ EOF
     done
 
     run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
-    [[ "$output" =~ "fossci-chat-out-of-context" ]]
+    [[ "$output" =~ "platform-chat-out-of-context" ]]
     [[ "$output" =~ "Compacted summary" ]]
 
     # Nothing deleted -- the full transcript is still all there.

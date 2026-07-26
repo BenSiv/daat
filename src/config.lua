@@ -34,7 +34,7 @@ SESSION_SECRET_FILE = "session_secret"
 THEME_FILE = "theme.json"
 
 -- The CSS custom-property names a theme.json may override -- matches
--- html.lua's own var(--fossci-*, <fallback>) usage sites exactly, so a
+-- html.lua's own var(--platform-*, <fallback>) usage sites exactly, so a
 -- deployment can only override colors/tokens the app already exposes
 -- as a hook, never introduce a new one by typo.
 THEME_COLOR_KEYS = {
@@ -225,7 +225,7 @@ end
 -- just a hook. A deployment that wants one drops an optional
 -- theme.json at the store root (e.g. seeded by its own deploy tooling,
 -- outside this repo) -- absent or malformed, every value below falls
--- back to nil, which leaves html.lua's existing var(--fossci-*,
+-- back to nil, which leaves html.lua's existing var(--platform-*,
 -- <fallback>) defaults (its current indigo/slate palette) untouched.
 -- site_name similarly defaults to a generic label, never a company name.
 function config.load_theme(root)

@@ -124,12 +124,12 @@ EOF
     read TEST_SESSION_COOKIE TEST_CSRF_TOKEN < <(login_test_user "viewer4" "i")
     GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/detail" QUERY_STRING="type=sample&entity_id=2" \
         HTTP_COOKIE="session=${TEST_SESSION_COOKIE}; csrf=${TEST_CSRF_TOKEN}" run "$BIN"
-    [[ "$output" =~ "fossci-print-label-btn" ]]
+    [[ "$output" =~ "platform-print-label-btn" ]]
     [[ "$output" =~ "BrowserPrint-3.0.216.min.js" ]]
 
     GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/detail" QUERY_STRING="type=experiment&entity_id=1" \
         HTTP_COOKIE="session=${TEST_SESSION_COOKIE}; csrf=${TEST_CSRF_TOKEN}" run "$BIN"
-    [[ ! "$output" =~ "fossci-print-label-btn" ]]
+    [[ ! "$output" =~ "platform-print-label-btn" ]]
 }
 
 @test "creating and editing a label_template row is ledgered exactly like any other entity" {

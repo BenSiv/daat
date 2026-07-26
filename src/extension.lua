@@ -175,7 +175,7 @@ end
 
 -- Extensions (name + manifest) declaring interest in this event + entity
 -- type. Extensions with a bad manifest are silently excluded here (they
--- already surface via extension.all()/`fossci extension list`).
+-- already surface via extension.all()/`platform extension list`).
 function extension.matching(ext_dir, event_name, entity_type)
     result = {}
     for _, entry in ipairs(extension.all(ext_dir)) do

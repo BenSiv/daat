@@ -901,7 +901,7 @@ end
 -- with a digit, matching how every real schema file names itself
 -- (`schema.register`'s `def.name`, always written this way by hand).
 --
--- Security finding, fixed 2026-07-17 (see fossci's own TODO.md, M3):
+-- Security finding, fixed 2026-07-17 (see platform's own TODO.md, M3):
 -- `entity_type` flows unescaped into raw SQL as a table name
 -- (`entity.lua`/`db.lua`, `"SELECT * FROM " .. entity_type`) and into a
 -- file path for schema lookup (`schemas_dir .. "/" .. name .. ".lua"`)
@@ -1007,14 +1007,14 @@ function schema.list(db_path)
     return rows
 end
 
--- CLI entry point: `fossci schema <add|list|show|show-json|sync> [args]`
+-- CLI entry point: `platform schema <add|list|show|show-json|sync> [args]`
 function schema.do_schema(cmd_args, db_path)
     action = cmd_args[1]
 
     if action == "add" then
         path = cmd_args[2]
         if path == nil then
-            print("Usage: fossci schema add <file>")
+            print("Usage: platform schema add <file>")
             return
         end
         def, err = schema.load_file(path)
@@ -1038,7 +1038,7 @@ function schema.do_schema(cmd_args, db_path)
     if action == "show-json" or (action == "show" and cmd_args[3] == "--json") then
         name = cmd_args[2]
         if name == nil then
-            print("Usage: fossci schema show-json <name>")
+            print("Usage: platform schema show-json <name>")
             return
         end
         schema.sync_all(db_path)
@@ -1054,7 +1054,7 @@ function schema.do_schema(cmd_args, db_path)
     if action == "show" then
         name = cmd_args[2]
         if name == nil then
-            print("Usage: fossci schema show <name>")
+            print("Usage: platform schema show <name>")
             return
         end
         schema.sync_all(db_path)
@@ -1078,7 +1078,7 @@ function schema.do_schema(cmd_args, db_path)
         return
     end
 
-    print("Usage: fossci schema <add|list|show|show-json|sync> [args]")
+    print("Usage: platform schema <add|list|show|show-json|sync> [args]")
 end
 
 return schema

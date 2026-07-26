@@ -57,11 +57,11 @@ teardown() {
     run_cgi "/data" ""
     [ "$status" -eq 0 ]
     [[ "$output" =~ "200 OK" ]]
-    [[ "$output" =~ "fossci-diagram-node\" data-entity-type=\"person\"" ]]
-    [[ "$output" =~ "fossci-diagram-node\" data-entity-type=\"experiment\"" ]]
-    [[ "$output" =~ "fossci-diagram-node\" data-entity-type=\"sample\"" ]]
-    [[ "$output" =~ "fossci-diagram-edge\" data-from=\"experiment\" data-to=\"person\"" ]]
-    [[ "$output" =~ "fossci-diagram-edge\" data-from=\"sample\" data-to=\"experiment\"" ]]
+    [[ "$output" =~ "platform-diagram-node\" data-entity-type=\"person\"" ]]
+    [[ "$output" =~ "platform-diagram-node\" data-entity-type=\"experiment\"" ]]
+    [[ "$output" =~ "platform-diagram-node\" data-entity-type=\"sample\"" ]]
+    [[ "$output" =~ "platform-diagram-edge\" data-from=\"experiment\" data-to=\"person\"" ]]
+    [[ "$output" =~ "platform-diagram-edge\" data-from=\"sample\" data-to=\"experiment\"" ]]
 }
 
 @test "/data's diagram is a real ERD: boxes show real field name/type rows, edges carry cardinality labels (task #86)" {
@@ -70,10 +70,10 @@ teardown() {
     # sample's own real fields, not just its name -- a required text
     # field and the reference field that becomes the experiment edge.
     [[ "$output" =~ '>lot_number<' ]]
-    [[ "$output" =~ 'fossci-diagram-row-type" x="'[0-9.]*'" y="'[0-9.]*'">text<' ]]
-    [[ "$output" =~ 'fossci-diagram-row-type" x="'[0-9.]*'" y="'[0-9.]*'">reference<' ]]
+    [[ "$output" =~ 'platform-diagram-row-type" x="'[0-9.]*'" y="'[0-9.]*'">text<' ]]
+    [[ "$output" =~ 'platform-diagram-row-type" x="'[0-9.]*'" y="'[0-9.]*'">reference<' ]]
     # every box gets a synthetic PK id row, not itself a real schema field
-    [[ "$output" =~ "fossci-diagram-row-name fossci-diagram-row-pk\" x=\"" ]]
+    [[ "$output" =~ "platform-diagram-row-name platform-diagram-row-pk\" x=\"" ]]
     [[ "$output" =~ '>id<' ]]
     # the experiment -> person edge is a plain reference: cardinality
     # "*" on the referencing (experiment) end, "1" on the referenced
@@ -101,7 +101,7 @@ teardown() {
 
 @test "/data shows an entity search box" {
     run_cgi "/data" ""
-    [[ "$output" =~ "fossci-entity-search-input" ]]
+    [[ "$output" =~ "platform-entity-search-input" ]]
     [[ "$output" =~ "api/entity-search" ]]
 }
 
@@ -230,20 +230,20 @@ EOF
 
 @test "/browse and /detail links are plain relative paths, not tied to any particular mount point" {
     # Regression: several links here used to carry a leftover
-    # "fossci/" path segment from an old mount-point convention this
+    # "platform/" path segment from an old mount-point convention this
     # app no longer uses -- broken under any real deployment, since
-    # there's no route at "fossci/browse" etc. Every link/action/src
+    # there's no route at "platform/browse" etc. Every link/action/src
     # this app renders for its own pages must be a plain relative
     # reference (or none at all), so it resolves correctly no matter
     # what path prefix a web server mounts this app under.
     run_cgi "/browse" "type=sample"
     [[ "$output" =~ 'href="detail?type=sample' ]]
-    [[ ! "$output" =~ "fossci/detail" ]]
-    [[ ! "$output" =~ "fossci/browse" ]]
+    [[ ! "$output" =~ "platform/detail" ]]
+    [[ ! "$output" =~ "platform/browse" ]]
 
     run_cgi "/detail" "type=sample&entity_id=3"
     [[ "$output" =~ 'href="browse?type=sample"' ]]
-    [[ ! "$output" =~ "fossci/browse" ]]
+    [[ ! "$output" =~ "platform/browse" ]]
 }
 
 @test "/browse rejects a 'type' shaped like a stacked-SQL-statement injection" {
@@ -286,7 +286,7 @@ EOF
     # otherwise wins with nothing overriding it here.
     run_cgi_admin "/sql" ""
     [ "$status" -eq 0 ]
-    [[ "$output" =~ "fossci-sql-input" ]]
+    [[ "$output" =~ "platform-sql-input" ]]
     [[ "$output" =~ "max-width: 100%" ]]
 }
 
@@ -295,19 +295,19 @@ EOF
     # default indigo/slate instead of the deployment's real theme --
     # ?embed=1 skips html.page_shell entirely (to avoid nesting a
     # second full page inside the iframe), which also meant it never
-    # got the :root { --fossci-x: ...; } block a real theme.json
-    # compiles to, so every var(--fossci-*, fallback) silently fell
+    # got the :root { --platform-x: ...; } block a real theme.json
+    # compiles to, so every var(--platform-*, fallback) silently fell
     # back to the generic default.
     cat > theme.json <<'EOF'
 {"site_name": "Celleste", "colors": {"accent": "#C97F1E"}}
 EOF
     run_cgi_admin "/sql" "embed=1"
     [ "$status" -eq 0 ]
-    [[ "$output" =~ "--fossci-accent: #C97F1E;" ]]
+    [[ "$output" =~ "--platform-accent: #C97F1E;" ]]
 }
 
 @test "/sql's popover JS repositions via fixed viewport coordinates, not left CSS clipped by the scrolling table wrapper (task #111)" {
-    # The result table is wrapped in .fossci-table-wrapper (overflow-x:
+    # The result table is wrapped in .platform-table-wrapper (overflow-x:
     # auto), which per the CSS Overflow spec forces overflow-y to auto
     # too -- clipping/trapping the default position:absolute popover at
     # the wrapper's edge once the table is long enough to overflow.
@@ -315,7 +315,7 @@ EOF
     # fixed) on hover instead of relying on CSS positioning alone.
     run_cgi_admin "/sql" "q=SELECT+id%2C+lot_number%2C+experiment+FROM+sample%3B"
     [ "$status" -eq 0 ]
-    [[ "$output" =~ "data-fossci-popover-src" ]]
+    [[ "$output" =~ "data-platform-popover-src" ]]
     [[ "$output" =~ "getBoundingClientRect" ]]
     [[ "$output" =~ "pop.style.position = 'fixed'" ]]
 }
@@ -436,9 +436,9 @@ EOF
     [ "$status" -eq 0 ]
     [[ "$output" =~ 'title="Tasks"' ]]
     # The Tasks link itself carries the active class...
-    [[ "$output" =~ 'class="fossci-nav-link fossci-nav-link-active" href="view?view_name=prioritized_tasks"' ]]
+    [[ "$output" =~ 'class="platform-nav-link platform-nav-link-active" href="view?view_name=prioritized_tasks"' ]]
     # ...and Data does not.
-    [[ ! "$output" =~ 'class="fossci-nav-link fossci-nav-link-active" href="data"' ]]
+    [[ ! "$output" =~ 'class="platform-nav-link platform-nav-link-active" href="data"' ]]
 }
 
 @test "/view?view_name=some_other_view still highlights Data (only prioritized_tasks maps to Tasks)" {
@@ -458,7 +458,7 @@ EOF
 
     run_cgi "/view" "view_name=samples_with_type"
     [ "$status" -eq 0 ]
-    [[ "$output" =~ 'class="fossci-nav-link fossci-nav-link-active" href="data"' ]]
+    [[ "$output" =~ 'class="platform-nav-link platform-nav-link-active" href="data"' ]]
 }
 
 @test "/view refuses to run an unapproved view" {

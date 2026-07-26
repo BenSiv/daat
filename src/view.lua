@@ -63,7 +63,7 @@ end
 -- Rejects anything but a single, plain SELECT statement: no stacked
 -- statements (a ";" anywhere but optionally trailing), and no
 -- DDL/DML/pragma/attach keywords, matched on word boundaries (not bare
--- substring search -- fossci's own tables have columns like
+-- substring search -- platform's own tables have columns like
 -- updated_at/updated_by, which a naive substring check for "update"
 -- would wrongly reject).
 FORBIDDEN_SQL_WORDS = {
@@ -151,7 +151,7 @@ function view.validate(def)
         end
         -- "id" and "name" are confirmed to collide with Fossil's own
         -- /ext dispatch parameters (see doc/deployment.md) -- a query
-        -- param with either of these names never reaches fossci at
+        -- param with either of these names never reaches platform at
         -- all, so reject them here rather than let an author discover
         -- it as a mysterious 404 later.
         if def.param.name == "id" or def.param.name == "name" then
@@ -276,7 +276,7 @@ end
 -- SQLite: real bind-parameter execution via sqlite3's own prepared-
 -- statement API -- never string-interpolated into the SQL text (db.
 -- exec/db.query's own %s substitution is fine for identifiers/
--- literals fossci itself builds, but a runtime-supplied value needs
+-- literals platform itself builds, but a runtime-supplied value needs
 -- the real thing). sqlite3 isn't shared as a global across modules in
 -- Luam (each require() gets its own reference; see src/db.lua for the
 -- same require), so it's pulled in locally here rather than assumed
@@ -655,7 +655,7 @@ function view.run_agent_query(db_path, sql_text)
     return column_names, rows, nil, truncated
 end
 
--- CLI entry point: `fossci view <list|show|approve|revoke> [args]`
+-- CLI entry point: `platform view <list|show|approve|revoke> [args]`
 function view.do_view(cmd_args, db_path)
     config = require("config")
     views_dir = config.views_dir()
@@ -683,7 +683,7 @@ function view.do_view(cmd_args, db_path)
     if action == "show" then
         name = cmd_args[2]
         if name == nil then
-            print("Usage: fossci view show <name>")
+            print("Usage: platform view show <name>")
             return
         end
         def, err = view.load(views_dir, name)
@@ -709,7 +709,7 @@ function view.do_view(cmd_args, db_path)
     if action == "approve" then
         name = cmd_args[2]
         if name == nil then
-            print("Usage: fossci view approve <name>")
+            print("Usage: platform view approve <name>")
             return
         end
         def, err = view.load(views_dir, name)
@@ -725,7 +725,7 @@ function view.do_view(cmd_args, db_path)
     if action == "revoke" then
         name = cmd_args[2]
         if name == nil then
-            print("Usage: fossci view revoke <name>")
+            print("Usage: platform view revoke <name>")
             return
         end
         view.revoke(db_path, name)
@@ -733,7 +733,7 @@ function view.do_view(cmd_args, db_path)
         return
     end
 
-    print("Usage: fossci view <list|show|approve|revoke> [args]")
+    print("Usage: platform view <list|show|approve|revoke> [args]")
 end
 
 return view

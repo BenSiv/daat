@@ -59,28 +59,28 @@ function js_string_literal(s)
     return s
 end
 
--- The ".fossci-container" shell (card look: padding/shadow/border/
+-- The ".platform-container" shell (card look: padding/shadow/border/
 -- rounded corners) was copy-pasted, identically byte-for-byte except
 -- max_width, into every render_* function's own inline <style> block --
 -- ten separate copies, confirmed by grepping the file directly. One
 -- shared definition instead; each caller supplies just the max-width
 -- its own page already used (1200/1100/900/800), so this is a pure
 -- de-duplication, not a visual change anywhere.
-function fossci_container_css(max_width)
+function platform_container_css(max_width)
     if max_width == nil then
         max_width = 1200
     end
     return string.format("""
-        .fossci-container {
+        .platform-container {
             font-family: 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            color: var(--fossci-text, #334155);
+            color: var(--platform-text, #334155);
             background: #ffffff;
             padding: 28px;
-            border-radius: var(--fossci-radius-lg, 16px);
+            border-radius: var(--platform-radius-lg, 16px);
             box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.05);
             margin: 20px auto;
             max-width: %dpx;
-            border: 1px solid var(--fossci-bg-2, #f1f5f9);
+            border: 1px solid var(--platform-bg-2, #f1f5f9);
         }
 """, max_width)
 end
@@ -93,11 +93,11 @@ end
 -- font-size step smaller (0.85rem vs the others' inherited 0.9rem) --
 -- confirmed via a real rendered-page diff, not just reading the CSS.
 -- One copy now, used everywhere a button appears.
-function fossci_button_css()
+function platform_button_css()
     return """
         .btn {
             padding: 10px 20px;
-            border-radius: var(--fossci-radius-sm, 8px);
+            border-radius: var(--platform-radius-sm, 8px);
             font-weight: 600;
             font-size: 0.9rem;
             cursor: pointer;
@@ -109,22 +109,22 @@ function fossci_button_css()
             text-decoration: none;
         }
         .btn-primary {
-            background: var(--fossci-accent, #4f46e5);
+            background: var(--platform-accent, #4f46e5);
             color: #ffffff;
         }
         .btn-primary:hover { filter: brightness(1.08); }
         .btn-primary:active { transform: scale(0.98); }
         .btn-secondary {
-            background: var(--fossci-bg, #f8fafc);
-            color: var(--fossci-th-text, #475569);
-            border: 1px solid var(--fossci-border, #e2e8f0);
+            background: var(--platform-bg, #f8fafc);
+            color: var(--platform-th-text, #475569);
+            border: 1px solid var(--platform-border, #e2e8f0);
         }
-        .btn-secondary:hover { background: var(--fossci-bg-2, #f1f5f9); color: var(--fossci-heading, #0f172a); }
+        .btn-secondary:hover { background: var(--platform-bg-2, #f1f5f9); color: var(--platform-heading, #0f172a); }
         .btn-secondary:active { transform: scale(0.98); }
         .btn-secondary:disabled { opacity: 0.6; cursor: default; transform: none; }
         .btn-delete {
             background: transparent;
-            color: var(--fossci-muted-2, #94a3b8);
+            color: var(--platform-muted-2, #94a3b8);
             font-size: 1.25rem;
             cursor: pointer;
             transition: color 0.15s ease;
@@ -140,19 +140,19 @@ end
 -- moving Data-index row counts and SQL-result entity previews off the
 -- page by default (see render_index/render_sql). Reused as shared
 -- blocks rather than duplicated per render_* function, matching how a
--- few other repeated style rules (.fossci-container, .btn-primary,
+-- few other repeated style rules (.platform-container, .btn-primary,
 -- etc.) already work in this file -- each render_* function embeds its
 -- own self-contained <style>/<script>, there is no separate
--- shared-asset loading mechanism in fossci today.
+-- shared-asset loading mechanism in platform today.
 --
 -- Two trigger shapes, same visual popover, split into CSS-only vs
 -- CSS+JS so a page with only the cheap precomputed case (no JS/nonce
 -- needed at all) doesn't have to carry the fetch machinery:
---   - A trigger with a `.fossci-popover` child already containing real
---     markup (no `data-fossci-popover-src`) just reveals it on hover --
+--   - A trigger with a `.platform-popover` child already containing real
+--     markup (no `data-platform-popover-src`) just reveals it on hover --
 --     pure CSS, for callers that can cheaply precompute the content
 --     server-side. Only needs popover_css().
---   - `data-fossci-popover-src="URL"` -- lazy-fetched (debounced,
+--   - `data-platform-popover-src="URL"` -- lazy-fetched (debounced,
 --     cached per URL for the page's lifetime) JSON `{html: "..."}`
 --     response, shown on hover. For cases where precomputing/embedding
 --     every possible preview server-side would be wasteful (e.g. one
@@ -160,22 +160,22 @@ end
 function html.popover_css()
     return """
 <style>
-.fossci-popover-trigger { position: relative; cursor: help; }
-.fossci-popover-trigger[data-fossci-popover-src] { cursor: pointer; }
-.fossci-popover {
+.platform-popover-trigger { position: relative; cursor: help; }
+.platform-popover-trigger[data-platform-popover-src] { cursor: pointer; }
+.platform-popover {
     position: absolute; z-index: 100; left: 0; top: 100%; margin-top: 6px;
     min-width: 180px; max-width: 320px; padding: 10px 12px;
-    background: var(--fossci-bg, #ffffff); border: 1px solid var(--fossci-border, #e2e8f0);
-    border-radius: var(--fossci-radius-sm, 8px); box-shadow: 0 6px 20px rgba(0,0,0,0.12);
-    font-size: 0.85rem; font-weight: 400; color: var(--fossci-text, #334155);
+    background: var(--platform-bg, #ffffff); border: 1px solid var(--platform-border, #e2e8f0);
+    border-radius: var(--platform-radius-sm, 8px); box-shadow: 0 6px 20px rgba(0,0,0,0.12);
+    font-size: 0.85rem; font-weight: 400; color: var(--platform-text, #334155);
     text-align: left; white-space: normal;
     opacity: 0; visibility: hidden; transform: translateY(-4px);
-    transition: var(--fossci-transition, all 0.2s cubic-bezier(0.4, 0, 0.2, 1));
+    transition: var(--platform-transition, all 0.2s cubic-bezier(0.4, 0, 0.2, 1));
     pointer-events: none;
 }
-.fossci-popover-trigger:hover .fossci-popover,
-.fossci-popover-trigger:focus .fossci-popover { opacity: 1; visibility: visible; transform: translateY(0); pointer-events: auto; }
-.fossci-popover-loading, .fossci-popover-error { color: var(--fossci-muted, #94a3b8); font-style: italic; }
+.platform-popover-trigger:hover .platform-popover,
+.platform-popover-trigger:focus .platform-popover { opacity: 1; visibility: visible; transform: translateY(0); pointer-events: auto; }
+.platform-popover-loading, .platform-popover-error { color: var(--platform-muted, #94a3b8); font-style: italic; }
 </style>
 """
 end
@@ -191,26 +191,26 @@ function html.popover_js(nonce)
 (function(){
     var cache = {};
     function loadInto(trigger, pop){
-        var src = trigger.getAttribute('data-fossci-popover-src');
+        var src = trigger.getAttribute('data-platform-popover-src');
         if(cache[src] != null){ pop.innerHTML = cache[src]; return; }
-        pop.innerHTML = '<span class="fossci-popover-loading">Loading...</span>';
+        pop.innerHTML = '<span class="platform-popover-loading">Loading...</span>';
         fetch(src).then(function(resp){ return resp.json(); }).then(function(data){
             var html = (data && data.html) ? data.html : 'No preview available.';
             cache[src] = html;
             pop.innerHTML = html;
         }).catch(function(){
-            pop.innerHTML = '<span class="fossci-popover-error">Preview failed to load.</span>';
+            pop.innerHTML = '<span class="platform-popover-error">Preview failed to load.</span>';
         });
     }
-    document.querySelectorAll('.fossci-popover-trigger[data-fossci-popover-src]').forEach(function(trigger){
-        var pop = trigger.querySelector('.fossci-popover');
+    document.querySelectorAll('.platform-popover-trigger[data-platform-popover-src]').forEach(function(trigger){
+        var pop = trigger.querySelector('.platform-popover');
         if(!pop) return;
         var timer = null;
         var loaded = false;
         trigger.addEventListener('mouseenter', function(){
-            // task #111: .fossci-popover's default CSS is `position:
+            // task #111: .platform-popover's default CSS is `position:
             // absolute` relative to the trigger -- fine standalone, but
-            // a long result table is wrapped in `.fossci-table-wrapper
+            // a long result table is wrapped in `.platform-table-wrapper
             // { overflow-x: auto }`, and per the CSS Overflow spec
             // setting only one axis forces the *other* axis to compute
             // as auto too (an explicit `overflow-y: visible` on the
@@ -222,7 +222,7 @@ function html.popover_js(nonce)
             // entirely, since a fixed-position element is placed
             // relative to the viewport, not any scrolling ancestor.
             var rect = trigger.getBoundingClientRect();
-            var popWidth = 320; // matches .fossci-popover's max-width
+            var popWidth = 320; // matches .platform-popover's max-width
             var left = Math.min(rect.left, window.innerWidth - popWidth - 12);
             left = Math.max(left, 8);
             pop.style.position = 'fixed';
@@ -262,7 +262,7 @@ THEME_COLOR_KEYS = {
 -- theme is config.load_theme(root)'s return value: {site_name=...,
 -- colors={...}}. This is deliberately the *only* place branding enters
 -- a page -- platform itself ships no colors or company name of its
--- own beyond the existing var(--fossci-*, <fallback>) defaults already
+-- own beyond the existing var(--platform-*, <fallback>) defaults already
 -- used throughout this file, which are left completely untouched when
 -- theme.colors is empty (the out-of-the-box, unconfigured case).
 -- Plain, generic (not brand-specific) 20x20 line icons for the nav
@@ -278,12 +278,12 @@ ICON_SYSTEM = "<svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none
 -- the icon rail's own order (see html.render_chat_widget below).
 ICON_CHAT_BUBBLE = "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z\"/></svg>"
 
--- The `:root { --fossci-x: value; ... }` block a deployment's real
+-- The `:root { --platform-x: value; ... }` block a deployment's real
 -- theme.json colors compile down to -- shared by html.page_shell (the
 -- normal full-page case) and by /sql?embed=1's iframe fragment (cgi.lua),
 -- which skips page_shell entirely (see its own comment on why) but still
 -- needs these variables defined somewhere in its own document, or every
--- var(--fossci-*, fallback) in its styles silently resolves to the
+-- var(--platform-*, fallback) in its styles silently resolves to the
 -- generic fallback instead of the deployment's real palette -- confirmed
 -- live: the embedded SQL widget on /data was rendering in the default
 -- indigo/slate colors instead of Celleste's real brown/gold theme.
@@ -293,7 +293,7 @@ function html.theme_root_css(theme)
         value = theme.colors[key]
         if value != nil then
             css_name = string.gsub(key, "_", "-")
-            table.insert(root_vars, "--fossci-" .. css_name .. ": " .. value .. ";")
+            table.insert(root_vars, "--platform-" .. css_name .. ": " .. value .. ";")
         end
     end
     if #root_vars == 0 then
@@ -366,19 +366,19 @@ function html.page_shell(title, active, body, nonce, show_sql, show_admin, has_t
     brand_html = ""
     if theme.has_logo == true then
         brand_html = string.format(
-            '<a class="fossci-nav-brand" href="/" title="%s"><img src="theme-asset?name=logo.png" alt="%s"></a>',
+            '<a class="platform-nav-brand" href="/" title="%s"><img src="theme-asset?name=logo.png" alt="%s"></a>',
             html.html_escape(theme.site_name), html.html_escape(theme.site_name)
         )
     end
 
     nav_links = {}
     for _, item in ipairs(nav_items) do
-        link_class = "fossci-nav-link"
+        link_class = "platform-nav-link"
         if item.key == active then
-            link_class = link_class .. " fossci-nav-link-active"
+            link_class = link_class .. " platform-nav-link-active"
         end
         table.insert(nav_links, string.format(
-            '<a class="%s" href="%s" title="%s">%s<span class="fossci-nav-label">%s</span></a>',
+            '<a class="%s" href="%s" title="%s">%s<span class="platform-nav-label">%s</span></a>',
             link_class, item.href, html.html_escape(item.label), item.icon, html.html_escape(item.label)
         ))
     end
@@ -386,8 +386,8 @@ function html.page_shell(title, active, body, nonce, show_sql, show_admin, has_t
     user_box = ""
     if author != nil then
         user_box = string.format("""
-<div class="fossci-nav-user">
-    <div class="fossci-nav-user-name">%s</div>
+<div class="platform-nav-user">
+    <div class="platform-nav-user-name">%s</div>
     <a href="logout">Log out</a>
 </div>
 """, html.html_escape(author))
@@ -422,9 +422,9 @@ html, body { margin: 0; height: 100%%; }
 body {
     display: flex;
     font-family: 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    background: var(--fossci-bg-2, #f1f5f9);
+    background: var(--platform-bg-2, #f1f5f9);
 }
-.fossci-nav {
+.platform-nav {
     width: 72px;
     flex-shrink: 0;
     display: flex;
@@ -432,79 +432,79 @@ body {
     align-items: stretch;
     gap: 2px;
     padding: 12px 8px;
-    background: var(--fossci-bg, #ffffff);
-    border-right: 1px solid var(--fossci-border, #e2e8f0);
+    background: var(--platform-bg, #ffffff);
+    border-right: 1px solid var(--platform-border, #e2e8f0);
     min-height: 100vh;
 }
-.fossci-nav-link {
+.platform-nav-link {
     position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
     padding: 12px;
-    border-radius: var(--fossci-radius-sm, 8px);
-    color: var(--fossci-th-text, #475569);
+    border-radius: var(--platform-radius-sm, 8px);
+    color: var(--platform-th-text, #475569);
     text-decoration: none;
-    transition: var(--fossci-transition, all 0.15s ease);
+    transition: var(--platform-transition, all 0.15s ease);
 }
-.fossci-nav-link:hover { background: var(--fossci-bg-2, #f1f5f9); color: var(--fossci-heading, #0f172a); }
-.fossci-nav-link-active { background: var(--fossci-accent, #4f46e5); color: #ffffff; }
-.fossci-nav-spacer { flex: 1; }
-.fossci-nav-label {
+.platform-nav-link:hover { background: var(--platform-bg-2, #f1f5f9); color: var(--platform-heading, #0f172a); }
+.platform-nav-link-active { background: var(--platform-accent, #4f46e5); color: #ffffff; }
+.platform-nav-spacer { flex: 1; }
+.platform-nav-label {
     position: absolute;
     left: calc(100%% + 8px);
     top: 50%%;
     transform: translateY(-50%%);
     padding: 6px 10px;
     white-space: nowrap;
-    background: var(--fossci-heading, #1e293b);
+    background: var(--platform-heading, #1e293b);
     color: #ffffff;
-    border-radius: var(--fossci-radius-sm, 8px);
+    border-radius: var(--platform-radius-sm, 8px);
     font-size: 0.8rem;
     font-weight: 600;
     opacity: 0;
     visibility: hidden;
     pointer-events: none;
     z-index: 20;
-    transition: var(--fossci-transition, all 0.15s ease);
+    transition: var(--platform-transition, all 0.15s ease);
 }
-.fossci-nav-link:hover .fossci-nav-label, .fossci-nav-link:focus .fossci-nav-label { opacity: 1; visibility: visible; }
-.fossci-nav-user {
+.platform-nav-link:hover .platform-nav-label, .platform-nav-link:focus .platform-nav-label { opacity: 1; visibility: visible; }
+.platform-nav-user {
     padding: 10px 6px;
-    border-top: 1px solid var(--fossci-border, #e2e8f0);
+    border-top: 1px solid var(--platform-border, #e2e8f0);
     text-align: center;
 }
-.fossci-nav-user-name {
+.platform-nav-user-name {
     font-size: 0.7rem;
     font-weight: 600;
-    color: var(--fossci-muted, #64748b);
+    color: var(--platform-muted, #64748b);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     margin-bottom: 4px;
 }
-.fossci-nav-user a { font-size: 0.75rem; color: var(--fossci-accent, #4f46e5); text-decoration: none; font-weight: 600; }
-.fossci-nav-user a:hover { text-decoration: underline; }
-.fossci-nav-brand { display: block; padding: 4px; margin-bottom: 8px; text-align: center; }
-.fossci-nav-brand img { width: 100%%; max-width: 40px; height: auto; display: block; margin: 0 auto; }
-.fossci-main { flex: 1; min-width: 0; }
+.platform-nav-user a { font-size: 0.75rem; color: var(--platform-accent, #4f46e5); text-decoration: none; font-weight: 600; }
+.platform-nav-user a:hover { text-decoration: underline; }
+.platform-nav-brand { display: block; padding: 4px; margin-bottom: 8px; text-align: center; }
+.platform-nav-brand img { width: 100%%; max-width: 40px; height: auto; display: block; margin: 0 auto; }
+.platform-main { flex: 1; min-width: 0; }
 %s
 </style>
 </head>
 <body>
-<nav class="fossci-nav">
+<nav class="platform-nav">
 %s
 %s
-<div class="fossci-nav-spacer"></div>
+<div class="platform-nav-spacer"></div>
 %s
 </nav>
-<div class="fossci-main">
+<div class="platform-main">
 %s
 </div>
 %s
 </body>
 </html>
-""", html.html_escape(title), nonce, page_context_json, root_css, fossci_chat_widget_css(), brand_html, table.concat(nav_links, ""), user_box, body,
+""", html.html_escape(title), nonce, page_context_json, root_css, platform_chat_widget_css(), brand_html, table.concat(nav_links, ""), user_box, body,
      chat_widget_html)
 end
 
@@ -524,34 +524,34 @@ function html.render(entity_type, layout_json, nonce, locked_fields)
 <div class="fossil-doc" data-title="Register %s">
     <style>
 %s
-        .fossci-header {
+        .platform-header {
             margin-bottom: 24px;
-            border-bottom: 1px solid var(--fossci-bg-2, #f1f5f9);
+            border-bottom: 1px solid var(--platform-bg-2, #f1f5f9);
             padding-bottom: 16px;
         }
-        .fossci-header h2 {
+        .platform-header h2 {
             margin: 0 0 6px 0;
             font-size: 1.6rem;
             font-weight: 700;
-            color: var(--fossci-heading, #0f172a);
+            color: var(--platform-heading, #0f172a);
             letter-spacing: -0.02em;
         }
-        .fossci-header p {
-            color: var(--fossci-muted, #64748b);
+        .platform-header p {
+            color: var(--platform-muted, #64748b);
             margin: 0;
             font-size: 0.95rem;
         }
-        .fossci-header span.req-dot {
+        .platform-header span.req-dot {
             color: #ef4444;
             font-weight: bold;
         }
-        .fossci-table-wrapper {
+        .platform-table-wrapper {
             overflow-x: auto;
             margin-bottom: 24px;
-            border: 1px solid var(--fossci-border, #e2e8f0);
-            border-radius: var(--fossci-radius-md, 12px);
+            border: 1px solid var(--platform-border, #e2e8f0);
+            border-radius: var(--platform-radius-md, 12px);
             box-shadow: inset 0 2px 4px 0 rgba(0,0,0,0.02);
-            background: var(--fossci-bg, #f8fafc);
+            background: var(--platform-bg, #f8fafc);
         }
         #registration-table {
             width: 100%%;
@@ -562,16 +562,16 @@ function html.render(entity_type, layout_json, nonce, locked_fields)
         #registration-table th, #registration-table td {
             padding: 14px 16px;
             text-align: left;
-            border-bottom: 1px solid var(--fossci-border, #e2e8f0);
+            border-bottom: 1px solid var(--platform-border, #e2e8f0);
         }
         #registration-table th {
-            background: var(--fossci-bg-2, #f1f5f9);
+            background: var(--platform-bg-2, #f1f5f9);
             font-weight: 600;
             font-size: 0.8rem;
-            color: var(--fossci-th-text, #475569);
+            color: var(--platform-th-text, #475569);
             text-transform: uppercase;
             letter-spacing: 0.06em;
-            border-top: 1px solid var(--fossci-border, #e2e8f0);
+            border-top: 1px solid var(--platform-border, #e2e8f0);
         }
         #registration-table th:first-child { border-top-left-radius: 10px; }
         #registration-table th:last-child  { border-top-right-radius: 10px; }
@@ -588,22 +588,22 @@ function html.render(entity_type, layout_json, nonce, locked_fields)
             display: inline-block;
             padding: 9px 12px;
             font-size: 0.9rem;
-            color: var(--fossci-muted, #64748b);
+            color: var(--platform-muted, #64748b);
             font-style: italic;
         }
         .cell-input {
             width: 100%%;
             padding: 9px 12px;
-            border: 1px solid var(--fossci-border-2, #cbd5e1);
-            border-radius: var(--fossci-radius-sm, 8px);
+            border: 1px solid var(--platform-border-2, #cbd5e1);
+            border-radius: var(--platform-radius-sm, 8px);
             font-size: 0.9rem;
             background: #ffffff;
             transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
             box-sizing: border-box;
-            color: var(--fossci-input-text, #1e293b);
+            color: var(--platform-input-text, #1e293b);
         }
         .cell-input:focus {
-            border-color: var(--fossci-accent-2, #6366f1);
+            border-color: var(--platform-accent-2, #6366f1);
             outline: none;
             box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
             background: #fff;
@@ -626,8 +626,8 @@ function html.render(entity_type, layout_json, nonce, locked_fields)
             left: 0;
             right: 0;
             background: #ffffff;
-            border: 1px solid var(--fossci-border, #e2e8f0);
-            border-radius: var(--fossci-radius-sm, 8px);
+            border: 1px solid var(--platform-border, #e2e8f0);
+            border-radius: var(--platform-radius-sm, 8px);
             max-height: 220px;
             overflow-y: auto;
             z-index: 1000;
@@ -640,10 +640,10 @@ function html.render(entity_type, layout_json, nonce, locked_fields)
             cursor: pointer;
             font-size: 0.85rem;
             transition: all 0.15s ease;
-            color: var(--fossci-text, #334155);
+            color: var(--platform-text, #334155);
         }
-        .autocomplete-item:hover { background: var(--fossci-bg-2, #f1f5f9); color: var(--fossci-heading, #0f172a); }
-        .fossci-actions {
+        .autocomplete-item:hover { background: var(--platform-bg-2, #f1f5f9); color: var(--platform-heading, #0f172a); }
+        .platform-actions {
             display: flex;
             gap: 14px;
             justify-content: flex-start;
@@ -653,7 +653,7 @@ function html.render(entity_type, layout_json, nonce, locked_fields)
         .status-msg {
             margin-top: 24px;
             padding: 14px 20px;
-            border-radius: var(--fossci-radius-sm, 8px);
+            border-radius: var(--platform-radius-sm, 8px);
             font-size: 0.95rem;
             display: none;
             font-weight: 500;
@@ -679,14 +679,14 @@ function html.render(entity_type, layout_json, nonce, locked_fields)
         }
     </style>
 
-    <div class="fossci-container">
-        <div class="fossci-header">
+    <div class="platform-container">
+        <div class="platform-header">
             <h2>Register %s</h2>
             <p>Fill out the sheet. Fields marked with <span class="req-dot">*</span> are required.</p>
             <p><a href="browse?type=%s">Browse existing %s entities &rarr;</a></p>
         </div>
 
-        <div class="fossci-table-wrapper">
+        <div class="platform-table-wrapper">
             <table id="registration-table">
                 <thead>
                     <tr id="table-headers">
@@ -699,7 +699,7 @@ function html.render(entity_type, layout_json, nonce, locked_fields)
             </table>
         </div>
 
-        <div class="fossci-actions">
+        <div class="platform-actions">
             <button type="button" class="btn btn-secondary" id="btn-add-row">+ Add Row</button>
             <button type="button" class="btn btn-primary"   id="btn-submit-batch">Submit Batch</button>
         </div>
@@ -823,7 +823,7 @@ function html.render(entity_type, layout_json, nonce, locked_fields)
                         // cycle past any sensible bound (e.g. past 5 on
                         // a 1-5 field) with zero feedback. Both optional
                         // -- a schema author declares them per-field
-                        // (see schema.md), fossci itself has no opinion
+                        // (see schema.md), platform itself has no opinion
                         // on what range makes sense for a given field.
                         if (field.min !== undefined && field.min !== null) { input.min = field.min; }
                         if (field.max !== undefined && field.max !== null) { input.max = field.max; }
@@ -1034,7 +1034,7 @@ function html.render(entity_type, layout_json, nonce, locked_fields)
         document.getElementById("btn-submit-batch").addEventListener("click", submitBatch);
     </script>
 </div>
-""", escaped_type, fossci_container_css(1200), fossci_button_css(), escaped_type, escaped_type, escaped_type, nonce, json_for_script(layout_json), js_string_literal(entity_type), json_for_script(locked_fields_json))
+""", escaped_type, platform_container_css(1200), platform_button_css(), escaped_type, escaped_type, escaped_type, nonce, json_for_script(layout_json), js_string_literal(entity_type), json_for_script(locked_fields_json))
 end
 
 -- Single-row edit form for an existing entity -- the generic-entity
@@ -1057,43 +1057,43 @@ function html.render_entity_edit(entity_type, layout_json, row_json, entity_id, 
     <style>
 %s
 %s
-        .fossci-header { margin-bottom: 24px; border-bottom: 1px solid var(--fossci-bg-2, #f1f5f9); padding-bottom: 16px; }
-        .fossci-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--fossci-heading, #0f172a); letter-spacing: -0.02em; }
-        .fossci-header a { color: var(--fossci-accent, #4f46e5); text-decoration: none; font-weight: 600; font-size: 0.9rem; }
-        .fossci-header a:hover { text-decoration: underline; }
-        .fossci-edit-fields { display: flex; flex-direction: column; gap: 14px; max-width: 640px; }
-        .fossci-edit-field label { display: block; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--fossci-muted, #64748b); font-weight: 600; margin-bottom: 6px; }
-        .fossci-edit-field label .req-dot { color: #ef4444; font-weight: bold; }
-        .fossci-edit-field { position: relative; }
+        .platform-header { margin-bottom: 24px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; }
+        .platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
+        .platform-header a { color: var(--platform-accent, #4f46e5); text-decoration: none; font-weight: 600; font-size: 0.9rem; }
+        .platform-header a:hover { text-decoration: underline; }
+        .platform-edit-fields { display: flex; flex-direction: column; gap: 14px; max-width: 640px; }
+        .platform-edit-field label { display: block; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--platform-muted, #64748b); font-weight: 600; margin-bottom: 6px; }
+        .platform-edit-field label .req-dot { color: #ef4444; font-weight: bold; }
+        .platform-edit-field { position: relative; }
         .cell-input {
-            width: 100%%; padding: 9px 12px; border: 1px solid var(--fossci-border-2, #cbd5e1);
-            border-radius: var(--fossci-radius-sm, 8px); font-size: 0.9rem; background: #ffffff;
-            box-sizing: border-box; color: var(--fossci-input-text, #1e293b);
+            width: 100%%; padding: 9px 12px; border: 1px solid var(--platform-border-2, #cbd5e1);
+            border-radius: var(--platform-radius-sm, 8px); font-size: 0.9rem; background: #ffffff;
+            box-sizing: border-box; color: var(--platform-input-text, #1e293b);
         }
         .cell-input.error { border-color: #f87171; background-color: #fef2f2; }
         .error-badge { color: #ef4444; font-size: 0.75rem; margin-top: 4px; display: block; font-weight: 500; }
         .autocomplete-results {
             position: absolute; top: 100%%; left: 0; right: 0; background: #ffffff;
-            border: 1px solid var(--fossci-border, #e2e8f0); border-radius: var(--fossci-radius-sm, 8px);
+            border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-sm, 8px);
             max-height: 220px; overflow-y: auto; z-index: 1000;
             box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05); margin-top: 6px;
         }
         .autocomplete-results div { padding: 8px 12px; cursor: pointer; font-size: 0.88rem; }
-        .autocomplete-results div:hover { background: var(--fossci-bg-2, #f1f5f9); }
-        .status-msg { display: none; padding: 12px 16px; border-radius: var(--fossci-radius-sm, 8px); font-size: 0.9rem; margin-top: 16px; max-width: 640px; }
+        .autocomplete-results div:hover { background: var(--platform-bg-2, #f1f5f9); }
+        .status-msg { display: none; padding: 12px 16px; border-radius: var(--platform-radius-sm, 8px); font-size: 0.9rem; margin-top: 16px; max-width: 640px; }
         .status-msg.success { display: block; background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
         .status-msg.error { display: block; background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
     </style>
 
-    <div class="fossci-container">
-        <div class="fossci-header">
+    <div class="platform-container">
+        <div class="platform-header">
             <h2>Edit %s #%s</h2>
             <a href="detail?type=%s&entity_id=%s">&larr; Back to detail</a>
         </div>
 
-        <div class="fossci-edit-fields" id="edit-fields"><!-- fields injected --></div>
+        <div class="platform-edit-fields" id="edit-fields"><!-- fields injected --></div>
 
-        <div class="fossci-actions" style="margin-top: 20px;">
+        <div class="platform-actions" style="margin-top: 20px;">
             <button type="button" class="btn btn-primary" id="btn-save">Save changes</button>
         </div>
 
@@ -1186,7 +1186,7 @@ function html.render_entity_edit(entity_type, layout_json, row_json, entity_id, 
             const container = document.getElementById("edit-fields");
             layout.fields.forEach(field => {
                 const wrapper = document.createElement("div");
-                wrapper.classList.add("fossci-edit-field");
+                wrapper.classList.add("platform-edit-field");
                 const label = document.createElement("label");
                 label.innerHTML = field.label + (field.required ? ' <span class="req-dot">*</span>' : '');
                 wrapper.appendChild(label);
@@ -1252,14 +1252,14 @@ function html.render_entity_edit(entity_type, layout_json, row_json, entity_id, 
             });
 
             const reasonWrapper = document.createElement("div");
-            reasonWrapper.classList.add("fossci-edit-field");
+            reasonWrapper.classList.add("platform-edit-field");
             const reasonLabel = document.createElement("label");
             reasonLabel.innerText = "Reason for this change (optional unless required)";
             reasonWrapper.appendChild(reasonLabel);
             const reasonInput = document.createElement("input");
             reasonInput.type = "text";
             reasonInput.classList.add("cell-input");
-            reasonInput.id = "fossci-edit-reason";
+            reasonInput.id = "platform-edit-reason";
             reasonInput.placeholder = "Why is this changing?";
             reasonWrapper.appendChild(reasonInput);
             container.appendChild(reasonWrapper);
@@ -1286,7 +1286,7 @@ function html.render_entity_edit(entity_type, layout_json, row_json, entity_id, 
             msg.innerText = "Saving...";
             msg.style.display = "block";
 
-            const reasonEl = document.getElementById("fossci-edit-reason");
+            const reasonEl = document.getElementById("platform-edit-reason");
             const reasonParam = reasonEl.value ? `&reason=${encodeURIComponent(reasonEl.value)}` : "";
             fetch(`${baseUrl}/api/update?type=${entityType}&entity_id=${entityId}${reasonParam}`, {
                 method: "POST",
@@ -1319,7 +1319,7 @@ function html.render_entity_edit(entity_type, layout_json, row_json, entity_id, 
         document.getElementById("btn-save").addEventListener("click", submitEdit);
     </script>
 </div>
-""", escaped_type, tostring(entity_id), fossci_container_css(1200), fossci_button_css(),
+""", escaped_type, tostring(entity_id), platform_container_css(1200), platform_button_css(),
      escaped_type, tostring(entity_id), escaped_type, tostring(entity_id),
      nonce, json_for_script(layout_json), json_for_script(row_json), js_string_literal(entity_type), tostring(entity_id))
 end
@@ -1347,7 +1347,7 @@ function display_value(value)
     return html.html_escape(value)
 end
 
--- Reference-type field values are a raw entity id -- fossci has no
+-- Reference-type field values are a raw entity id -- platform has no
 -- general "display name" concept for entities (confirmed directly:
 -- entity tables carry no "name" column at all, only whatever fields
 -- each schema declares; /browse and /detail already only ever show
@@ -1461,8 +1461,8 @@ function render_reference_value(db_path, ref_entity_type, value)
     -- precomputing every row's preview server-side would be wasteful.
     preview_src = "api/preview?type=" .. escaped_type .. "&entity_id=" .. escaped_id
     return "<a href=\"detail?type=" .. escaped_type .. "&entity_id=" .. escaped_id ..
-        "\" class=\"fossci-entity-ref fossci-popover-trigger\" data-fossci-popover-src=\"" .. preview_src ..
-        "\" tabindex=\"0\">" .. link_text .. "<span class=\"fossci-popover\"></span></a>"
+        "\" class=\"platform-entity-ref platform-popover-trigger\" data-platform-popover-src=\"" .. preview_src ..
+        "\" tabindex=\"0\">" .. link_text .. "<span class=\"platform-popover\"></span></a>"
 end
 
 -- Every linked entity in a multi_reference field's value, each rendered
@@ -1536,10 +1536,10 @@ function html.render_browse(db_path, entity_type, layout, rows, page, page_size,
         body_rows = body_rows .. "<tr>" .. cells .. "</tr>"
     end
 
-    table_or_empty = "<div class=\"fossci-table-wrapper\"><table id=\"browse-table\"><thead><tr>" ..
+    table_or_empty = "<div class=\"platform-table-wrapper\"><table id=\"browse-table\"><thead><tr>" ..
         header_cells .. "</tr></thead><tbody>" .. body_rows .. "</tbody></table></div>"
     if #rows == 0 then
-        table_or_empty = "<p class=\"fossci-empty\">No " .. escaped_type .. " entities registered yet.</p>"
+        table_or_empty = "<p class=\"platform-empty\">No " .. escaped_type .. " entities registered yet.</p>"
     end
 
     pager = ""
@@ -1547,10 +1547,10 @@ function html.render_browse(db_path, entity_type, layout, rows, page, page_size,
         last_page = math.ceil(total / page_size)
         range_start = ((page - 1) * page_size) + 1
         range_end = range_start + #rows - 1
-        pager = "<div class=\"fossci-pager\">"
+        pager = "<div class=\"platform-pager\">"
         pager = pager .. "<span>Showing " .. tostring(range_start) .. "-" .. tostring(range_end) ..
             " of " .. tostring(total) .. "</span>"
-        pager = pager .. "<span class=\"fossci-pager-links\">"
+        pager = pager .. "<span class=\"platform-pager-links\">"
         if page > 1 then
             pager = pager .. "<a href=\"browse?type=" .. escaped_type .. "&page=" .. tostring(page - 1) .. filter_query_suffix .. "\">&laquo; Prev</a>"
         end
@@ -1565,69 +1565,69 @@ function html.render_browse(db_path, entity_type, layout, rows, page, page_size,
 <div class="fossil-doc" data-title="Browse %s">
     <style>
 %s
-        .fossci-header {
+        .platform-header {
             margin-bottom: 24px;
-            border-bottom: 1px solid var(--fossci-bg-2, #f1f5f9);
+            border-bottom: 1px solid var(--platform-bg-2, #f1f5f9);
             padding-bottom: 16px;
             display: flex;
             justify-content: space-between;
             align-items: center;
         }
-        .fossci-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--fossci-heading, #0f172a); letter-spacing: -0.02em; }
-        .fossci-header p { color: var(--fossci-muted, #64748b); margin: 0; font-size: 0.95rem; }
-        .fossci-header a { color: var(--fossci-accent, #4f46e5); text-decoration: none; font-weight: 600; }
-        .fossci-header a:hover { text-decoration: underline; }
+        .platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
+        .platform-header p { color: var(--platform-muted, #64748b); margin: 0; font-size: 0.95rem; }
+        .platform-header a { color: var(--platform-accent, #4f46e5); text-decoration: none; font-weight: 600; }
+        .platform-header a:hover { text-decoration: underline; }
         %s
-        .fossci-table-wrapper {
+        .platform-table-wrapper {
             overflow-x: auto;
-            border: 1px solid var(--fossci-border, #e2e8f0);
-            border-radius: var(--fossci-radius-md, 12px);
-            background: var(--fossci-bg, #f8fafc);
+            border: 1px solid var(--platform-border, #e2e8f0);
+            border-radius: var(--platform-radius-md, 12px);
+            background: var(--platform-bg, #f8fafc);
         }
         #browse-table { width: 100%%; border-collapse: separate; border-spacing: 0; min-width: 600px; }
         #browse-table th, #browse-table td {
             padding: 12px 16px;
             text-align: left;
-            border-bottom: 1px solid var(--fossci-border, #e2e8f0);
+            border-bottom: 1px solid var(--platform-border, #e2e8f0);
             font-size: 0.9rem;
         }
         #browse-table th {
-            background: var(--fossci-bg-2, #f1f5f9);
+            background: var(--platform-bg-2, #f1f5f9);
             font-weight: 600;
             font-size: 0.78rem;
-            color: var(--fossci-th-text, #475569);
+            color: var(--platform-th-text, #475569);
             text-transform: uppercase;
             letter-spacing: 0.06em;
         }
         #browse-table td { background: #ffffff; }
-        #browse-table a { color: var(--fossci-accent, #4f46e5); text-decoration: none; font-weight: 600; }
+        #browse-table a { color: var(--platform-accent, #4f46e5); text-decoration: none; font-weight: 600; }
         #browse-table a:hover { text-decoration: underline; }
-        .fossci-empty {
+        .platform-empty {
             padding: 32px;
             text-align: center;
-            color: var(--fossci-muted, #64748b);
-            background: var(--fossci-bg, #f8fafc);
-            border: 1px dashed var(--fossci-border, #e2e8f0);
-            border-radius: var(--fossci-radius-md, 12px);
+            color: var(--platform-muted, #64748b);
+            background: var(--platform-bg, #f8fafc);
+            border: 1px dashed var(--platform-border, #e2e8f0);
+            border-radius: var(--platform-radius-md, 12px);
         }
-        .fossci-pager {
+        .platform-pager {
             display: flex;
             justify-content: space-between;
             align-items: center;
             margin-top: 16px;
             font-size: 0.85rem;
-            color: var(--fossci-muted, #64748b);
+            color: var(--platform-muted, #64748b);
         }
-        .fossci-pager-links { display: flex; gap: 14px; align-items: center; }
-        .fossci-pager-links a { color: var(--fossci-accent, #4f46e5); text-decoration: none; font-weight: 600; }
-        .fossci-pager-links a:hover { text-decoration: underline; }
-        .fossci-entity-ref { color: var(--fossci-accent, #4f46e5); text-decoration: none; font-weight: 600; }
-        .fossci-entity-ref::after { content: " \2197"; font-size: 0.85em; }
-        .fossci-entity-ref:hover { text-decoration: underline; }
+        .platform-pager-links { display: flex; gap: 14px; align-items: center; }
+        .platform-pager-links a { color: var(--platform-accent, #4f46e5); text-decoration: none; font-weight: 600; }
+        .platform-pager-links a:hover { text-decoration: underline; }
+        .platform-entity-ref { color: var(--platform-accent, #4f46e5); text-decoration: none; font-weight: 600; }
+        .platform-entity-ref::after { content: " \2197"; font-size: 0.85em; }
+        .platform-entity-ref:hover { text-decoration: underline; }
     </style>
     %s
-    <div class="fossci-container">
-        <div class="fossci-header">
+    <div class="platform-container">
+        <div class="platform-header">
             <div>
                 <h2>Browse %s</h2>
                 <p>%d registered</p>
@@ -1639,10 +1639,10 @@ function html.render_browse(db_path, entity_type, layout, rows, page, page_size,
     </div>
 </div>
 %s
-""", escaped_type, fossci_container_css(1200), fossci_button_css(), html.popover_css(), escaped_type, total, escaped_type, table_or_empty, pager, html.popover_js(nonce))
+""", escaped_type, platform_container_css(1200), platform_button_css(), html.popover_css(), escaped_type, total, escaped_type, table_or_empty, pager, html.popover_js(nonce))
 end
 
--- Real bug found while extracting fossci_container_css above, unrelated
+-- Real bug found while extracting platform_container_css above, unrelated
 -- to that refactor: the args list here previously started with
 -- `html.popover_css()` where the FIRST %s in the template
 -- (`data-title="Browse %s"`) actually is -- meaning every /browse page's
@@ -1707,80 +1707,80 @@ function html.render_detail(db_path, entity_type, layout, row, history, nonce, h
 <div class="fossil-doc" data-title="%s %s">
     <style>
 %s
-        .fossci-header { margin-bottom: 24px; border-bottom: 1px solid var(--fossci-bg-2, #f1f5f9); padding-bottom: 16px; }
-        .fossci-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--fossci-heading, #0f172a); letter-spacing: -0.02em; }
-        .fossci-header a { color: var(--fossci-accent, #4f46e5); text-decoration: none; font-weight: 600; font-size: 0.9rem; }
-        .fossci-header a:hover { text-decoration: underline; }
-        .fossci-subheading { font-size: 1.05rem; color: var(--fossci-heading, #0f172a); margin: 28px 0 14px 0; }
-        .fossci-detail-fields {
+        .platform-header { margin-bottom: 24px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; }
+        .platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
+        .platform-header a { color: var(--platform-accent, #4f46e5); text-decoration: none; font-weight: 600; font-size: 0.9rem; }
+        .platform-header a:hover { text-decoration: underline; }
+        .platform-subheading { font-size: 1.05rem; color: var(--platform-heading, #0f172a); margin: 28px 0 14px 0; }
+        .platform-detail-fields {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
             gap: 16px 24px;
             padding: 20px;
-            background: var(--fossci-bg, #f8fafc);
-            border: 1px solid var(--fossci-border, #e2e8f0);
-            border-radius: var(--fossci-radius-md, 12px);
+            background: var(--platform-bg, #f8fafc);
+            border: 1px solid var(--platform-border, #e2e8f0);
+            border-radius: var(--platform-radius-md, 12px);
         }
         .detail-row { display: flex; flex-direction: column; gap: 4px; }
-        .detail-label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--fossci-muted, #64748b); font-weight: 600; }
-        .detail-value { font-size: 0.95rem; color: var(--fossci-heading, #0f172a); word-break: break-word; }
-        .fossci-table-wrapper { overflow-x: auto; border: 1px solid var(--fossci-border, #e2e8f0); border-radius: var(--fossci-radius-md, 12px); background: var(--fossci-bg, #f8fafc); }
+        .detail-label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--platform-muted, #64748b); font-weight: 600; }
+        .detail-value { font-size: 0.95rem; color: var(--platform-heading, #0f172a); word-break: break-word; }
+        .platform-table-wrapper { overflow-x: auto; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); background: var(--platform-bg, #f8fafc); }
         #history-table { width: 100%%; border-collapse: separate; border-spacing: 0; min-width: 700px; }
         #history-table th, #history-table td {
             padding: 12px 16px;
             text-align: left;
-            border-bottom: 1px solid var(--fossci-border, #e2e8f0);
+            border-bottom: 1px solid var(--platform-border, #e2e8f0);
             font-size: 0.85rem;
             vertical-align: top;
         }
         #history-table th {
-            background: var(--fossci-bg-2, #f1f5f9);
+            background: var(--platform-bg-2, #f1f5f9);
             font-weight: 600;
             font-size: 0.75rem;
-            color: var(--fossci-th-text, #475569);
+            color: var(--platform-th-text, #475569);
             text-transform: uppercase;
             letter-spacing: 0.06em;
         }
         #history-table td { background: #ffffff; }
         .change-item { margin-bottom: 4px; }
         .change-item:last-child { margin-bottom: 0; }
-        .fossci-entity-ref { color: var(--fossci-accent, #4f46e5); text-decoration: none; font-weight: 600; }
-        .fossci-entity-ref::after { content: " \2197"; font-size: 0.85em; }
-        .fossci-entity-ref:hover { text-decoration: underline; }
-        .fossci-print-label { display: inline-flex; align-items: center; gap: 8px; margin-left: 16px; }
-        .fossci-print-label select { padding: 6px 10px; border-radius: var(--fossci-radius-sm, 8px); border: 1px solid var(--fossci-border, #e2e8f0); }
-        #fossci-print-label-status { font-size: 0.85rem; color: var(--fossci-muted, #64748b); }
-        #fossci-print-label-status.fossci-admin-message-error { color: #991b1b; }
-        .fossci-related { display: flex; flex-direction: column; gap: 16px; }
-        .fossci-related-group {
+        .platform-entity-ref { color: var(--platform-accent, #4f46e5); text-decoration: none; font-weight: 600; }
+        .platform-entity-ref::after { content: " \2197"; font-size: 0.85em; }
+        .platform-entity-ref:hover { text-decoration: underline; }
+        .platform-print-label { display: inline-flex; align-items: center; gap: 8px; margin-left: 16px; }
+        .platform-print-label select { padding: 6px 10px; border-radius: var(--platform-radius-sm, 8px); border: 1px solid var(--platform-border, #e2e8f0); }
+        #platform-print-label-status { font-size: 0.85rem; color: var(--platform-muted, #64748b); }
+        #platform-print-label-status.platform-admin-message-error { color: #991b1b; }
+        .platform-related { display: flex; flex-direction: column; gap: 16px; }
+        .platform-related-group {
             padding: 16px 20px;
-            background: var(--fossci-bg, #f8fafc);
-            border: 1px solid var(--fossci-border, #e2e8f0);
-            border-radius: var(--fossci-radius-md, 12px);
+            background: var(--platform-bg, #f8fafc);
+            border: 1px solid var(--platform-border, #e2e8f0);
+            border-radius: var(--platform-radius-md, 12px);
         }
-        .fossci-related-group h4 { margin: 0 0 10px 0; font-size: 0.95rem; color: var(--fossci-heading, #0f172a); }
-        .fossci-related-group ul { margin: 0 0 10px 0; padding-left: 20px; }
-        .fossci-related-group li { font-size: 0.9rem; margin-bottom: 4px; }
-        .fossci-related-actions { display: flex; gap: 16px; font-size: 0.85rem; }
-        .fossci-related-empty { color: var(--fossci-muted, #64748b); font-style: italic; font-size: 0.9rem; margin: 0 0 10px 0; }
+        .platform-related-group h4 { margin: 0 0 10px 0; font-size: 0.95rem; color: var(--platform-heading, #0f172a); }
+        .platform-related-group ul { margin: 0 0 10px 0; padding-left: 20px; }
+        .platform-related-group li { font-size: 0.9rem; margin-bottom: 4px; }
+        .platform-related-actions { display: flex; gap: 16px; font-size: 0.85rem; }
+        .platform-related-empty { color: var(--platform-muted, #64748b); font-style: italic; font-size: 0.9rem; margin: 0 0 10px 0; }
     </style>
     %s
-    <div class="fossci-container">
-        <div class="fossci-header">
+    <div class="platform-container">
+        <div class="platform-header">
             <h2>%s %s</h2>
             <a href="browse?type=%s">&larr; Back to browse</a>
             %s
             %s
         </div>
 
-        <div class="fossci-detail-fields">
+        <div class="platform-detail-fields">
             %s
         </div>
 
         %s
 
-        <h3 class="fossci-subheading">Ledger history</h3>
-        <div class="fossci-table-wrapper">
+        <h3 class="platform-subheading">Ledger history</h3>
+        <div class="platform-table-wrapper">
             <table id="history-table">
                 <thead><tr><th>Event</th><th>Type</th><th>Author</th><th>When</th><th>Changes</th></tr></thead>
                 <tbody>%s</tbody>
@@ -1790,7 +1790,7 @@ function html.render_detail(db_path, entity_type, layout, row, history, nonce, h
 </div>
 %s
 %s
-""", escaped_type, title_id_part, fossci_container_css(1200), html.popover_css(), escaped_type, title_id_part, escaped_type, edit_link, print_label_html, fields_html, related_html, history_rows, html.popover_js(nonce), print_label_js_block)
+""", escaped_type, title_id_part, platform_container_css(1200), html.popover_css(), escaped_type, title_id_part, escaped_type, edit_link, print_label_html, fields_html, related_html, history_rows, html.popover_js(nonce), print_label_js_block)
 end
 
 -- task #112: "Related records" -- every real, plain `reference` field
@@ -1819,7 +1819,7 @@ function related_records_html(db_path, related, entity_id)
             rows_html = rows_html .. "<li><a href=\"detail?type=" .. escaped_from .. "&entity_id=" .. tostring(r.id) .. "\">" .. link_text .. "</a></li>"
         end
         if rows_html == "" then
-            rows_html = "<p class=\"fossci-related-empty\">None yet.</p>"
+            rows_html = "<p class=\"platform-related-empty\">None yet.</p>"
         else
             rows_html = "<ul>" .. rows_html .. "</ul>"
         end
@@ -1832,11 +1832,11 @@ function related_records_html(db_path, related, entity_id)
         add_link = "<a href=\"register?type=" .. escaped_from .. "&lock_" .. escaped_field .. "=" .. tostring(entity_id) ..
             "\">+ Add " .. escaped_from .. "</a>"
 
-        groups_html = groups_html .. "<div class=\"fossci-related-group\"><h4>" .. escaped_from .. " (" ..
-            tostring(group.total) .. ")</h4>" .. rows_html .. "<div class=\"fossci-related-actions\">" ..
+        groups_html = groups_html .. "<div class=\"platform-related-group\"><h4>" .. escaped_from .. " (" ..
+            tostring(group.total) .. ")</h4>" .. rows_html .. "<div class=\"platform-related-actions\">" ..
             add_link .. view_all .. "</div></div>"
     end
-    return "<h3 class=\"fossci-subheading\">Related records</h3><div class=\"fossci-related\">" .. groups_html .. "</div>"
+    return "<h3 class=\"platform-subheading\">Related records</h3><div class=\"platform-related\">" .. groups_html .. "</div>"
 end
 
 -- task #73: markup for the print-label control, only ever emitted when
@@ -1844,10 +1844,10 @@ end
 -- computed by cgi.lua's /detail route -- see label.has_template).
 function label_print_button_html()
     return """
-<div class="fossci-print-label">
-    <select id="fossci-label-printer"></select>
-    <button type="button" id="fossci-print-label-btn" class="btn btn-secondary">Print Label</button>
-    <span id="fossci-print-label-status"></span>
+<div class="platform-print-label">
+    <select id="platform-label-printer"></select>
+    <button type="button" id="platform-print-label-btn" class="btn btn-secondary">Print Label</button>
+    <span id="platform-print-label-status"></span>
 </div>
 """
 end
@@ -1861,14 +1861,14 @@ function label_print_js(nonce, entity_type, entity_id)
     return string.format("""
 <script nonce="%s">
 (function(){
-    var select = document.getElementById('fossci-label-printer');
-    var btn = document.getElementById('fossci-print-label-btn');
-    var status = document.getElementById('fossci-print-label-status');
+    var select = document.getElementById('platform-label-printer');
+    var btn = document.getElementById('platform-print-label-btn');
+    var status = document.getElementById('platform-print-label-status');
     var devices = [];
 
     function showStatus(msg, isError){
         status.textContent = msg;
-        status.className = isError ? 'fossci-admin-message-error' : '';
+        status.className = isError ? 'platform-admin-message-error' : '';
     }
 
     if(typeof BrowserPrint === 'undefined'){
@@ -1948,9 +1948,9 @@ function html.render_view_table(view_def, rows)
     end
 
     if #rows == 0 then
-        return "<p class=\"fossci-empty\">No rows.</p>"
+        return "<p class=\"platform-empty\">No rows.</p>"
     end
-    return "<div class=\"fossci-table-wrapper\"><table class=\"fossci-view-table\"><thead><tr>" ..
+    return "<div class=\"platform-table-wrapper\"><table class=\"platform-view-table\"><thead><tr>" ..
         header_cells .. "</tr></thead><tbody>" .. body_rows .. "</tbody></table></div>"
 end
 
@@ -1988,32 +1988,32 @@ function html.render_view(view_def, rows, param_value)
 <div class="fossil-doc" data-title="%s">
     <style>
 %s
-        .fossci-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; border-bottom: 1px solid var(--fossci-bg-2, #f1f5f9); padding-bottom: 16px; }
-        .fossci-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--fossci-heading, #0f172a); letter-spacing: -0.02em; }
-        .fossci-header p { color: var(--fossci-muted, #64748b); margin: 0; font-size: 0.95rem; }
-        .fossci-table-wrapper { overflow-x: auto; border: 1px solid var(--fossci-border, #e2e8f0); border-radius: var(--fossci-radius-md, 12px); background: var(--fossci-bg, #f8fafc); }
-        .fossci-view-table { width: 100%%; border-collapse: separate; border-spacing: 0; min-width: 600px; }
-        .fossci-view-table th, .fossci-view-table td { padding: 12px 16px; text-align: left; border-bottom: 1px solid var(--fossci-border, #e2e8f0); font-size: 0.9rem; }
-        .fossci-view-table th {
-            background: var(--fossci-bg-2, #f1f5f9);
+        .platform-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; }
+        .platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
+        .platform-header p { color: var(--platform-muted, #64748b); margin: 0; font-size: 0.95rem; }
+        .platform-table-wrapper { overflow-x: auto; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); background: var(--platform-bg, #f8fafc); }
+        .platform-view-table { width: 100%%; border-collapse: separate; border-spacing: 0; min-width: 600px; }
+        .platform-view-table th, .platform-view-table td { padding: 12px 16px; text-align: left; border-bottom: 1px solid var(--platform-border, #e2e8f0); font-size: 0.9rem; }
+        .platform-view-table th {
+            background: var(--platform-bg-2, #f1f5f9);
             font-weight: 600;
             font-size: 0.78rem;
-            color: var(--fossci-th-text, #475569);
+            color: var(--platform-th-text, #475569);
             text-transform: uppercase;
             letter-spacing: 0.06em;
         }
-        .fossci-view-table td { background: #ffffff; }
-        .fossci-empty {
+        .platform-view-table td { background: #ffffff; }
+        .platform-empty {
             padding: 32px;
             text-align: center;
-            color: var(--fossci-muted, #64748b);
-            background: var(--fossci-bg, #f8fafc);
-            border: 1px dashed var(--fossci-border, #e2e8f0);
-            border-radius: var(--fossci-radius-md, 12px);
+            color: var(--platform-muted, #64748b);
+            background: var(--platform-bg, #f8fafc);
+            border: 1px dashed var(--platform-border, #e2e8f0);
+            border-radius: var(--platform-radius-md, 12px);
         }
     </style>
-    <div class="fossci-container">
-        <div class="fossci-header">
+    <div class="platform-container">
+        <div class="platform-header">
             <div>
                 <h2>%s</h2>
                 <p>%s</p>
@@ -2023,7 +2023,7 @@ function html.render_view(view_def, rows, param_value)
         %s
     </div>
 </div>
-""", escaped_title, fossci_container_css(1200), escaped_title, subtitle, register_link, table_or_empty)
+""", escaped_title, platform_container_css(1200), escaped_title, subtitle, register_link, table_or_empty)
 end
 
 -- Expands `{{view:view_name:123}}` markers in already-rendered document
@@ -2063,7 +2063,7 @@ function html.expand_inline_views(db_path, content)
         end
         rows, run_err = view.run(db_path, view_def, tonumber(param_value))
         if rows == nil then
-            return "<p class=\"fossci-empty\">Error running view '" .. html.html_escape(view_name) .. "'.</p>"
+            return "<p class=\"platform-empty\">Error running view '" .. html.html_escape(view_name) .. "'.</p>"
         end
         return html.render_view_table(view_def, rows)
     end))
@@ -2114,7 +2114,7 @@ end
 function html.render_relation_diagram(db_path, entity_types, edges)
     n = #entity_types
     if n == 0 then
-        return "<p class=\"fossci-empty\">No entity types registered yet.</p>"
+        return "<p class=\"platform-empty\">No entity types registered yet.</p>"
     end
 
     index_by_name = {}
@@ -2207,10 +2207,10 @@ function html.render_relation_diagram(db_path, entity_types, edges)
                     label_dx = -14
                 end
                 edges_svg = edges_svg .. string.format(
-                    "<g class=\"fossci-diagram-edge\" data-from=\"%s\" data-to=\"%s\">" ..
+                    "<g class=\"platform-diagram-edge\" data-from=\"%s\" data-to=\"%s\">" ..
                     "<line x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\"></line>" ..
-                    "<text class=\"fossci-diagram-card\" x=\"%.1f\" y=\"%.1f\">%s</text>" ..
-                    "<text class=\"fossci-diagram-card\" x=\"%.1f\" y=\"%.1f\">%s</text>" ..
+                    "<text class=\"platform-diagram-card\" x=\"%.1f\" y=\"%.1f\">%s</text>" ..
+                    "<text class=\"platform-diagram-card\" x=\"%.1f\" y=\"%.1f\">%s</text>" ..
                     "</g>",
                     html.html_escape(edge.from_type), html.html_escape(edge.to_type),
                     from_x, from_y, to_x, to_y,
@@ -2228,24 +2228,24 @@ function html.render_relation_diagram(db_path, entity_types, edges)
         rows_svg = ""
         for j, box_row in ipairs(box.rows) do
             row_y = box.y + DIAGRAM_HEADER_HEIGHT + (j - 1) * DIAGRAM_ROW_HEIGHT
-            name_class = "fossci-diagram-row-name"
+            name_class = "platform-diagram-row-name"
             if box_row.is_pk then
-                name_class = name_class .. " fossci-diagram-row-pk"
+                name_class = name_class .. " platform-diagram-row-pk"
             elseif box_row.required then
-                name_class = name_class .. " fossci-diagram-row-required"
+                name_class = name_class .. " platform-diagram-row-required"
             end
             rows_svg = rows_svg .. string.format(
                 "<text class=\"%s\" x=\"%.1f\" y=\"%.1f\">%s</text>" ..
-                "<text class=\"fossci-diagram-row-type\" x=\"%.1f\" y=\"%.1f\">%s</text>",
+                "<text class=\"platform-diagram-row-type\" x=\"%.1f\" y=\"%.1f\">%s</text>",
                 name_class, box.x + 8, row_y + DIAGRAM_ROW_HEIGHT - 5, html.html_escape(box_row.name),
                 box.x + box.width - 8, row_y + DIAGRAM_ROW_HEIGHT - 5, html.html_escape(box_row.type_label)
             )
         end
         boxes_svg = boxes_svg .. string.format(
-            "<g class=\"fossci-diagram-node\" data-entity-type=\"%s\" tabindex=\"0\">" ..
-            "<rect class=\"fossci-diagram-box\" x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\"></rect>" ..
-            "<rect class=\"fossci-diagram-box-header\" x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%d\"></rect>" ..
-            "<text class=\"fossci-diagram-box-title\" x=\"%.1f\" y=\"%.1f\">%s</text>" ..
+            "<g class=\"platform-diagram-node\" data-entity-type=\"%s\" tabindex=\"0\">" ..
+            "<rect class=\"platform-diagram-box\" x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\"></rect>" ..
+            "<rect class=\"platform-diagram-box-header\" x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%d\"></rect>" ..
+            "<text class=\"platform-diagram-box-title\" x=\"%.1f\" y=\"%.1f\">%s</text>" ..
             "%s" ..
             "</g>",
             escaped_name, box.x, box.y, box.width, box.height,
@@ -2256,9 +2256,9 @@ function html.render_relation_diagram(db_path, entity_types, edges)
     end
 
     return string.format("""
-<div class="fossci-diagram-hint">Hover an entity to see its relations; click its header to browse it.</div>
-<div class="fossci-diagram-scroll">
-<svg id="fossci-diagram-svg" viewBox="0 0 %d %d" width="%d" height="%d">
+<div class="platform-diagram-hint">Hover an entity to see its relations; click its header to browse it.</div>
+<div class="platform-diagram-scroll">
+<svg id="platform-diagram-svg" viewBox="0 0 %d %d" width="%d" height="%d">
     %s
     %s
 </svg>
@@ -2268,23 +2268,23 @@ end
 
 function html.relation_diagram_css()
     return """
-        .fossci-diagram-hint { color: var(--fossci-muted, #64748b); font-size: 0.85rem; margin-bottom: 10px; }
-        .fossci-diagram-scroll { overflow: auto; border: 1px solid var(--fossci-border, #e2e8f0); border-radius: var(--fossci-radius-md, 12px); background: var(--fossci-bg, #f8fafc); }
-        .fossci-diagram-edge line { stroke: var(--fossci-border, #cbd5e1); stroke-width: 1.5; transition: stroke 0.15s ease, opacity 0.15s ease; }
-        .fossci-diagram-edge.fossci-diagram-edge-active line { stroke: var(--fossci-accent, #4f46e5); stroke-width: 2.5; }
-        .fossci-diagram-edge.fossci-diagram-edge-dim { opacity: 0.15; }
-        .fossci-diagram-card { font-size: 11px; font-weight: 700; fill: var(--fossci-muted, #64748b); }
-        .fossci-diagram-edge.fossci-diagram-edge-active .fossci-diagram-card { fill: var(--fossci-accent, #4f46e5); }
-        .fossci-diagram-box { fill: var(--fossci-bg, #ffffff); stroke: var(--fossci-border, #cbd5e1); stroke-width: 1.5; transition: var(--fossci-transition, all 0.2s cubic-bezier(0.4, 0, 0.2, 1)); }
-        .fossci-diagram-box-header { fill: var(--fossci-accent, #4f46e5); }
-        .fossci-diagram-box-title { font-size: 12px; font-weight: 700; text-anchor: middle; fill: #ffffff; text-transform: capitalize; }
-        .fossci-diagram-row-name { font-size: 11px; fill: var(--fossci-text, #334155); }
-        .fossci-diagram-row-name.fossci-diagram-row-pk { font-weight: 700; text-decoration: underline; fill: var(--fossci-heading, #0f172a); }
-        .fossci-diagram-row-name.fossci-diagram-row-required { font-weight: 700; }
-        .fossci-diagram-row-type { font-size: 10px; fill: var(--fossci-muted, #94a3b8); text-anchor: end; }
-        .fossci-diagram-node { cursor: pointer; }
-        .fossci-diagram-node:hover .fossci-diagram-box, .fossci-diagram-node:focus .fossci-diagram-box { stroke: var(--fossci-accent, #4f46e5); stroke-width: 2.5; }
-        .fossci-diagram-node.fossci-diagram-node-dim { opacity: 0.25; }
+        .platform-diagram-hint { color: var(--platform-muted, #64748b); font-size: 0.85rem; margin-bottom: 10px; }
+        .platform-diagram-scroll { overflow: auto; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); background: var(--platform-bg, #f8fafc); }
+        .platform-diagram-edge line { stroke: var(--platform-border, #cbd5e1); stroke-width: 1.5; transition: stroke 0.15s ease, opacity 0.15s ease; }
+        .platform-diagram-edge.platform-diagram-edge-active line { stroke: var(--platform-accent, #4f46e5); stroke-width: 2.5; }
+        .platform-diagram-edge.platform-diagram-edge-dim { opacity: 0.15; }
+        .platform-diagram-card { font-size: 11px; font-weight: 700; fill: var(--platform-muted, #64748b); }
+        .platform-diagram-edge.platform-diagram-edge-active .platform-diagram-card { fill: var(--platform-accent, #4f46e5); }
+        .platform-diagram-box { fill: var(--platform-bg, #ffffff); stroke: var(--platform-border, #cbd5e1); stroke-width: 1.5; transition: var(--platform-transition, all 0.2s cubic-bezier(0.4, 0, 0.2, 1)); }
+        .platform-diagram-box-header { fill: var(--platform-accent, #4f46e5); }
+        .platform-diagram-box-title { font-size: 12px; font-weight: 700; text-anchor: middle; fill: #ffffff; text-transform: capitalize; }
+        .platform-diagram-row-name { font-size: 11px; fill: var(--platform-text, #334155); }
+        .platform-diagram-row-name.platform-diagram-row-pk { font-weight: 700; text-decoration: underline; fill: var(--platform-heading, #0f172a); }
+        .platform-diagram-row-name.platform-diagram-row-required { font-weight: 700; }
+        .platform-diagram-row-type { font-size: 10px; fill: var(--platform-muted, #94a3b8); text-anchor: end; }
+        .platform-diagram-node { cursor: pointer; }
+        .platform-diagram-node:hover .platform-diagram-box, .platform-diagram-node:focus .platform-diagram-box { stroke: var(--platform-accent, #4f46e5); stroke-width: 2.5; }
+        .platform-diagram-node.platform-diagram-node-dim { opacity: 0.25; }
 """
 end
 
@@ -2297,9 +2297,9 @@ function html.diagram_js(nonce)
     return string.format("""
 <script nonce="%s">
 (function(){
-    var toggle = document.getElementById('fossci-view-toggle');
-    var listView = document.getElementById('fossci-view-list');
-    var diagramView = document.getElementById('fossci-view-diagram');
+    var toggle = document.getElementById('platform-view-toggle');
+    var listView = document.getElementById('platform-view-list');
+    var diagramView = document.getElementById('platform-view-diagram');
     if(toggle && listView && diagramView){
         toggle.querySelectorAll('button').forEach(function(btn){
             btn.addEventListener('click', function(){
@@ -2307,13 +2307,13 @@ function html.diagram_js(nonce)
                 listView.style.display = (view === 'list') ? '' : 'none';
                 diagramView.style.display = (view === 'diagram') ? '' : 'none';
                 toggle.querySelectorAll('button').forEach(function(b){
-                    b.classList.toggle('fossci-view-active', b === btn);
+                    b.classList.toggle('platform-view-active', b === btn);
                 });
             });
         });
     }
 
-    var hideEmpty = document.getElementById('fossci-hide-empty');
+    var hideEmpty = document.getElementById('platform-hide-empty');
     if(hideEmpty && listView){
         hideEmpty.addEventListener('change', function(){
             listView.querySelectorAll('li[data-count]').forEach(function(li){
@@ -2323,10 +2323,10 @@ function html.diagram_js(nonce)
         });
     }
 
-    var svg = document.getElementById('fossci-diagram-svg');
+    var svg = document.getElementById('platform-diagram-svg');
     if(!svg) return;
-    var nodes = svg.querySelectorAll('.fossci-diagram-node');
-    var edges = svg.querySelectorAll('.fossci-diagram-edge');
+    var nodes = svg.querySelectorAll('.platform-diagram-node');
+    var edges = svg.querySelectorAll('.platform-diagram-edge');
     function related(a, b){
         var isRelated = false;
         edges.forEach(function(edge){
@@ -2340,21 +2340,21 @@ function html.diagram_js(nonce)
         function highlight(){
             edges.forEach(function(edge){
                 if(edge.getAttribute('data-from') === type || edge.getAttribute('data-to') === type){
-                    edge.classList.add('fossci-diagram-edge-active');
+                    edge.classList.add('platform-diagram-edge-active');
                 }else{
-                    edge.classList.add('fossci-diagram-edge-dim');
+                    edge.classList.add('platform-diagram-edge-dim');
                 }
             });
             nodes.forEach(function(other){
                 var otherType = other.getAttribute('data-entity-type');
                 if(otherType != type && !related(type, otherType)){
-                    other.classList.add('fossci-diagram-node-dim');
+                    other.classList.add('platform-diagram-node-dim');
                 }
             });
         }
         function clear(){
-            edges.forEach(function(edge){ edge.classList.remove('fossci-diagram-edge-active', 'fossci-diagram-edge-dim'); });
-            nodes.forEach(function(other){ other.classList.remove('fossci-diagram-node-dim'); });
+            edges.forEach(function(edge){ edge.classList.remove('platform-diagram-edge-active', 'platform-diagram-edge-dim'); });
+            nodes.forEach(function(other){ other.classList.remove('platform-diagram-node-dim'); });
         }
         node.addEventListener('mouseenter', highlight);
         node.addEventListener('focus', highlight);
@@ -2375,14 +2375,14 @@ function html.diagram_js(nonce)
 """, nonce)
 end
 
--- fossci's own landing page: every registered entity type, linking to
+-- platform's own landing page: every registered entity type, linking to
 -- its browse view, plus a toggle to an interactive entity-relation
 -- diagram (html.render_relation_diagram) built from the same reference
 -- fields entity.lua/schema.lua already track -- same page/URL, just a
 -- second view of the same data, per the "toggle next to the list"
 -- design call rather than a separate route. This is the page a
 -- deployment's Fossil "mainmenu" entry (see doc/deployment.md) should
--- point at, so there's a real entry point into fossci beyond knowing a
+-- point at, so there's a real entry point into platform beyond knowing a
 -- /browse?type=... URL by hand.
 -- Unauthenticated -- no popover/autocomplete JS needed, so unlike
 -- every other render_* page here, no nonce-gated <script> at all.
@@ -2394,7 +2394,7 @@ function html.render_login(error_message, nonce)
     error_html = ""
     if error_message != nil and error_message != "" then
         error_html = render_lib.render(
-            "<div class=\"fossci-login-error\">{{ error_message }}</div>",
+            "<div class=\"platform-login-error\">{{ error_message }}</div>",
             {error_message = error_message}
         )
     end
@@ -2404,17 +2404,17 @@ function html.render_login(error_message, nonce)
     <style>
 %s
 %s
-        .fossci-login-card { max-width: 360px; margin: 60px auto; padding: 28px; background: var(--fossci-bg, #f8fafc); border: 1px solid var(--fossci-border, #e2e8f0); border-radius: var(--fossci-radius-md, 12px); }
-        .fossci-login-card h2 { margin: 0 0 18px 0; font-size: 1.4rem; font-weight: 700; color: var(--fossci-heading, #0f172a); }
-        .fossci-login-card label { display: block; margin-bottom: 4px; font-size: 0.88rem; color: var(--fossci-muted, #64748b); }
-        .fossci-login-card input[type=text], .fossci-login-card input[type=password] {
+        .platform-login-card { max-width: 360px; margin: 60px auto; padding: 28px; background: var(--platform-bg, #f8fafc); border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); }
+        .platform-login-card h2 { margin: 0 0 18px 0; font-size: 1.4rem; font-weight: 700; color: var(--platform-heading, #0f172a); }
+        .platform-login-card label { display: block; margin-bottom: 4px; font-size: 0.88rem; color: var(--platform-muted, #64748b); }
+        .platform-login-card input[type=text], .platform-login-card input[type=password] {
             width: 100%%; box-sizing: border-box; padding: 8px 10px; margin-bottom: 14px;
-            border: 1px solid var(--fossci-border, #e2e8f0); border-radius: var(--fossci-radius-item, 10px); font-size: 0.95rem;
+            border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-item, 10px); font-size: 0.95rem;
         }
-        .fossci-login-error { color: #991b1b; background: #fef2f2; border: 1px solid #fecaca; border-radius: var(--fossci-radius-item, 10px); padding: 10px 12px; margin-bottom: 14px; font-size: 0.88rem; }
-        .fossci-login-card .btn { width: 100%%; }
+        .platform-login-error { color: #991b1b; background: #fef2f2; border: 1px solid #fecaca; border-radius: var(--platform-radius-item, 10px); padding: 10px 12px; margin-bottom: 14px; font-size: 0.88rem; }
+        .platform-login-card .btn { width: 100%%; }
     </style>
-    <form class="fossci-login-card" method="POST" action="/login">
+    <form class="platform-login-card" method="POST" action="/login">
         <h2>Log in</h2>
         %s
         <label for="login">Login</label>
@@ -2424,7 +2424,7 @@ function html.render_login(error_message, nonce)
         <button type="submit" class="btn btn-primary">Log in</button>
     </form>
 </div>
-""", fossci_container_css(800), fossci_button_css(), error_html)
+""", platform_container_css(800), platform_button_css(), error_html)
 end
 
 -- Minimal admin-only user management page -- Admin ("a") capability
@@ -2441,9 +2441,9 @@ function html.render_admin_users(users, csrf_token, message, is_error)
 
     message_html = ""
     if message != nil and message != "" then
-        css_class = "fossci-admin-message"
+        css_class = "platform-admin-message"
         if is_error == true then
-            css_class = "fossci-admin-message fossci-admin-message-error"
+            css_class = "platform-admin-message platform-admin-message-error"
         end
         message_html = "<div class=\"" .. css_class .. "\">" .. html.html_escape(message) .. "</div>"
     end
@@ -2466,7 +2466,7 @@ function html.render_admin_users(users, csrf_token, message, is_error)
         <tr>
             <td>%s</td>
             <td>
-                <form method="POST" action="admin-users-capabilities" class="fossci-admin-inline-form">
+                <form method="POST" action="admin-users-capabilities" class="platform-admin-inline-form">
                     <input type="hidden" name="csrf_token" value="%s">
                     <input type="hidden" name="login" value="%s">
                     <input type="text" name="cap" value="%s" size="6">
@@ -2475,13 +2475,13 @@ function html.render_admin_users(users, csrf_token, message, is_error)
             </td>
             <td>%s</td>
             <td>
-                <form method="POST" action="admin-users-password" class="fossci-admin-inline-form">
+                <form method="POST" action="admin-users-password" class="platform-admin-inline-form">
                     <input type="hidden" name="csrf_token" value="%s">
                     <input type="hidden" name="login" value="%s">
                     <input type="password" name="password" placeholder="new password" required>
                     <button type="submit" class="btn btn-secondary">Set</button>
                 </form>
-                <form method="POST" action="admin-users-%s" class="fossci-admin-inline-form">
+                <form method="POST" action="admin-users-%s" class="platform-admin-inline-form">
                     <input type="hidden" name="csrf_token" value="%s">
                     <input type="hidden" name="login" value="%s">
                     <button type="submit" class="btn btn-secondary">%s</button>
@@ -2497,34 +2497,34 @@ function html.render_admin_users(users, csrf_token, message, is_error)
     <style>
 %s
 %s
-        .fossci-header { margin-bottom: 20px; border-bottom: 1px solid var(--fossci-bg-2, #f1f5f9); padding-bottom: 16px; }
-        .fossci-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--fossci-heading, #0f172a); letter-spacing: -0.02em; }
-        .fossci-admin-message { padding: 10px 12px; margin-bottom: 16px; border-radius: var(--fossci-radius-item, 10px); background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; font-size: 0.9rem; }
-        .fossci-admin-message-error { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
-        .fossci-admin-create-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 24px; padding: 16px; background: var(--fossci-bg, #f8fafc); border: 1px solid var(--fossci-border, #e2e8f0); border-radius: var(--fossci-radius-md, 12px); }
-        .fossci-admin-create-form input[type=text], .fossci-admin-create-form input[type=password] {
-            padding: 8px 10px; border: 1px solid var(--fossci-border, #e2e8f0); border-radius: var(--fossci-radius-sm, 8px); font-size: 0.9rem;
+        .platform-header { margin-bottom: 20px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; }
+        .platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
+        .platform-admin-message { padding: 10px 12px; margin-bottom: 16px; border-radius: var(--platform-radius-item, 10px); background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; font-size: 0.9rem; }
+        .platform-admin-message-error { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
+        .platform-admin-create-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 24px; padding: 16px; background: var(--platform-bg, #f8fafc); border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); }
+        .platform-admin-create-form input[type=text], .platform-admin-create-form input[type=password] {
+            padding: 8px 10px; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-sm, 8px); font-size: 0.9rem;
         }
-        table.fossci-admin-users { width: 100%%; border-collapse: collapse; }
-        table.fossci-admin-users th, table.fossci-admin-users td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--fossci-border, #e2e8f0); font-size: 0.9rem; vertical-align: middle; }
-        .fossci-admin-inline-form { display: inline-flex; gap: 6px; align-items: center; margin-right: 8px; }
-        .fossci-admin-inline-form input[type=text], .fossci-admin-inline-form input[type=password] {
-            padding: 6px 8px; border: 1px solid var(--fossci-border, #e2e8f0); border-radius: var(--fossci-radius-sm, 8px); font-size: 0.85rem;
+        table.platform-admin-users { width: 100%%; border-collapse: collapse; }
+        table.platform-admin-users th, table.platform-admin-users td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--platform-border, #e2e8f0); font-size: 0.9rem; vertical-align: middle; }
+        .platform-admin-inline-form { display: inline-flex; gap: 6px; align-items: center; margin-right: 8px; }
+        .platform-admin-inline-form input[type=text], .platform-admin-inline-form input[type=password] {
+            padding: 6px 8px; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-sm, 8px); font-size: 0.85rem;
         }
     </style>
-    <div class="fossci-container">
-        <div class="fossci-header">
+    <div class="platform-container">
+        <div class="platform-header">
             <h2>Manage users</h2>
         </div>
         %s
-        <form method="POST" action="admin-users-create" class="fossci-admin-create-form">
+        <form method="POST" action="admin-users-create" class="platform-admin-create-form">
             <input type="hidden" name="csrf_token" value="%s">
             <input type="text" name="login" placeholder="login" required>
             <input type="password" name="password" placeholder="password" required>
             <input type="text" name="cap" placeholder="capabilities (e.g. i)" size="10">
             <button type="submit" class="btn btn-primary">Create user</button>
         </form>
-        <table class="fossci-admin-users">
+        <table class="platform-admin-users">
             <thead><tr><th>Login</th><th>Capabilities</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
 %s
@@ -2532,7 +2532,7 @@ function html.render_admin_users(users, csrf_token, message, is_error)
         </table>
     </div>
 </div>
-""", fossci_container_css(1000), fossci_button_css(), message_html, escaped_csrf, rows_html)
+""", platform_container_css(1000), platform_button_css(), message_html, escaped_csrf, rows_html)
 end
 
 -- Admin UI for task #114's api_key table, mirroring render_admin_users
@@ -2545,9 +2545,9 @@ function html.render_admin_api_keys(keys, csrf_token, message, is_error, new_raw
 
     message_html = ""
     if message != nil and message != "" then
-        css_class = "fossci-admin-message"
+        css_class = "platform-admin-message"
         if is_error == true then
-            css_class = "fossci-admin-message fossci-admin-message-error"
+            css_class = "platform-admin-message platform-admin-message-error"
         end
         message_html = "<div class=\"" .. css_class .. "\">" .. html.html_escape(message) .. "</div>"
     end
@@ -2555,7 +2555,7 @@ function html.render_admin_api_keys(keys, csrf_token, message, is_error, new_raw
     new_key_html = ""
     if new_raw_key != nil and new_raw_key != "" then
         new_key_html = string.format("""
-        <div class="fossci-admin-message fossci-admin-new-key">
+        <div class="platform-admin-message platform-admin-new-key">
             <strong>Save this key now -- it cannot be shown again:</strong>
             <code>%s</code>
         </div>
@@ -2580,7 +2580,7 @@ function html.render_admin_api_keys(keys, csrf_token, message, is_error, new_raw
         <tr>
             <td>%s</td>
             <td>
-                <form method="POST" action="admin-api-keys-capabilities" class="fossci-admin-inline-form">
+                <form method="POST" action="admin-api-keys-capabilities" class="platform-admin-inline-form">
                     <input type="hidden" name="csrf_token" value="%s">
                     <input type="hidden" name="label" value="%s">
                     <input type="text" name="cap" value="%s" size="6">
@@ -2589,7 +2589,7 @@ function html.render_admin_api_keys(keys, csrf_token, message, is_error, new_raw
             </td>
             <td>%s</td>
             <td>
-                <form method="POST" action="admin-api-keys-%s" class="fossci-admin-inline-form">
+                <form method="POST" action="admin-api-keys-%s" class="platform-admin-inline-form">
                     <input type="hidden" name="csrf_token" value="%s">
                     <input type="hidden" name="label" value="%s">
                     <button type="submit" class="btn btn-secondary">%s</button>
@@ -2605,35 +2605,35 @@ function html.render_admin_api_keys(keys, csrf_token, message, is_error, new_raw
     <style>
 %s
 %s
-        .fossci-header { margin-bottom: 20px; border-bottom: 1px solid var(--fossci-bg-2, #f1f5f9); padding-bottom: 16px; }
-        .fossci-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--fossci-heading, #0f172a); letter-spacing: -0.02em; }
-        .fossci-admin-message { padding: 10px 12px; margin-bottom: 16px; border-radius: var(--fossci-radius-item, 10px); background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; font-size: 0.9rem; }
-        .fossci-admin-message-error { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
-        .fossci-admin-new-key code { display: inline-block; margin-left: 8px; padding: 2px 8px; background: #fff; border: 1px solid #bbf7d0; border-radius: 6px; font-size: 0.9rem; }
-        .fossci-admin-create-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 24px; padding: 16px; background: var(--fossci-bg, #f8fafc); border: 1px solid var(--fossci-border, #e2e8f0); border-radius: var(--fossci-radius-md, 12px); }
-        .fossci-admin-create-form input[type=text] {
-            padding: 8px 10px; border: 1px solid var(--fossci-border, #e2e8f0); border-radius: var(--fossci-radius-sm, 8px); font-size: 0.9rem;
+        .platform-header { margin-bottom: 20px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; }
+        .platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
+        .platform-admin-message { padding: 10px 12px; margin-bottom: 16px; border-radius: var(--platform-radius-item, 10px); background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; font-size: 0.9rem; }
+        .platform-admin-message-error { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
+        .platform-admin-new-key code { display: inline-block; margin-left: 8px; padding: 2px 8px; background: #fff; border: 1px solid #bbf7d0; border-radius: 6px; font-size: 0.9rem; }
+        .platform-admin-create-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 24px; padding: 16px; background: var(--platform-bg, #f8fafc); border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); }
+        .platform-admin-create-form input[type=text] {
+            padding: 8px 10px; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-sm, 8px); font-size: 0.9rem;
         }
-        table.fossci-admin-users { width: 100%%; border-collapse: collapse; }
-        table.fossci-admin-users th, table.fossci-admin-users td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--fossci-border, #e2e8f0); font-size: 0.9rem; vertical-align: middle; }
-        .fossci-admin-inline-form { display: inline-flex; gap: 6px; align-items: center; margin-right: 8px; }
-        .fossci-admin-inline-form input[type=text] {
-            padding: 6px 8px; border: 1px solid var(--fossci-border, #e2e8f0); border-radius: var(--fossci-radius-sm, 8px); font-size: 0.85rem;
+        table.platform-admin-users { width: 100%%; border-collapse: collapse; }
+        table.platform-admin-users th, table.platform-admin-users td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--platform-border, #e2e8f0); font-size: 0.9rem; vertical-align: middle; }
+        .platform-admin-inline-form { display: inline-flex; gap: 6px; align-items: center; margin-right: 8px; }
+        .platform-admin-inline-form input[type=text] {
+            padding: 6px 8px; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-sm, 8px); font-size: 0.85rem;
         }
     </style>
-    <div class="fossci-container">
-        <div class="fossci-header">
+    <div class="platform-container">
+        <div class="platform-header">
             <h2>Manage API keys</h2>
         </div>
         %s
         %s
-        <form method="POST" action="admin-api-keys-create" class="fossci-admin-create-form">
+        <form method="POST" action="admin-api-keys-create" class="platform-admin-create-form">
             <input type="hidden" name="csrf_token" value="%s">
             <input type="text" name="label" placeholder="label (e.g. nightly sync job)" required>
             <input type="text" name="cap" placeholder="capabilities (e.g. i)" size="10">
             <button type="submit" class="btn btn-primary">Create key</button>
         </form>
-        <table class="fossci-admin-users">
+        <table class="platform-admin-users">
             <thead><tr><th>Label</th><th>Capabilities</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
 %s
@@ -2641,7 +2641,7 @@ function html.render_admin_api_keys(keys, csrf_token, message, is_error, new_raw
         </table>
     </div>
 </div>
-""", fossci_container_css(1000), fossci_button_css(), message_html, new_key_html, escaped_csrf, rows_html)
+""", platform_container_css(1000), platform_button_css(), message_html, new_key_html, escaped_csrf, rows_html)
 end
 
 -- Settings (task #89): a real UI for theme.json's own fields, instead
@@ -2657,9 +2657,9 @@ function html.render_settings(theme, csrf_token, message, is_error)
 
     message_html = ""
     if message != nil and message != "" then
-        css_class = "fossci-admin-message"
+        css_class = "platform-admin-message"
         if is_error == true then
-            css_class = "fossci-admin-message fossci-admin-message-error"
+            css_class = "platform-admin-message platform-admin-message-error"
         end
         message_html = "<div class=\"" .. css_class .. "\">" .. html.html_escape(message) .. "</div>"
     end
@@ -2682,7 +2682,7 @@ function html.render_settings(theme, csrf_token, message, is_error)
         end
         label = string.gsub(key, "_", " ")
         color_rows = color_rows .. string.format("""
-            <div class="fossci-settings-color">
+            <div class="platform-settings-color">
                 <label for="color_%s">%s</label>
                 <input type="text" id="color_%s" name="color_%s" value="%s" placeholder="e.g. #4f46e5" size="12">
             </div>
@@ -2699,43 +2699,43 @@ function html.render_settings(theme, csrf_token, message, is_error)
     <style>
 %s
 %s
-        .fossci-header { margin-bottom: 20px; border-bottom: 1px solid var(--fossci-bg-2, #f1f5f9); padding-bottom: 16px; }
-        .fossci-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--fossci-heading, #0f172a); letter-spacing: -0.02em; }
-        .fossci-admin-message { padding: 10px 12px; margin-bottom: 16px; border-radius: var(--fossci-radius-item, 10px); background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; font-size: 0.9rem; }
-        .fossci-admin-message-error { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
-        .fossci-settings-section { margin-bottom: 28px; padding: 16px; background: var(--fossci-bg, #f8fafc); border: 1px solid var(--fossci-border, #e2e8f0); border-radius: var(--fossci-radius-md, 12px); }
-        .fossci-settings-section h3 { margin: 0 0 12px 0; font-size: 1.05rem; }
-        .fossci-settings-section label { display: block; font-size: 0.85rem; color: var(--fossci-muted, #64748b); margin-bottom: 4px; }
-        .fossci-settings-section input[type=text], .fossci-settings-section textarea, .fossci-settings-section input[type=file] {
-            width: 100%%; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--fossci-border, #e2e8f0); border-radius: var(--fossci-radius-sm, 8px); font-size: 0.9rem; margin-bottom: 14px;
+        .platform-header { margin-bottom: 20px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; }
+        .platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
+        .platform-admin-message { padding: 10px 12px; margin-bottom: 16px; border-radius: var(--platform-radius-item, 10px); background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; font-size: 0.9rem; }
+        .platform-admin-message-error { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
+        .platform-settings-section { margin-bottom: 28px; padding: 16px; background: var(--platform-bg, #f8fafc); border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); }
+        .platform-settings-section h3 { margin: 0 0 12px 0; font-size: 1.05rem; }
+        .platform-settings-section label { display: block; font-size: 0.85rem; color: var(--platform-muted, #64748b); margin-bottom: 4px; }
+        .platform-settings-section input[type=text], .platform-settings-section textarea, .platform-settings-section input[type=file] {
+            width: 100%%; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-sm, 8px); font-size: 0.9rem; margin-bottom: 14px;
         }
-        .fossci-settings-section textarea { min-height: 90px; font-family: inherit; }
-        .fossci-settings-checkbox { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
-        .fossci-settings-checkbox label { margin-bottom: 0; }
-        .fossci-settings-colors { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px 16px; }
-        .fossci-settings-color label { text-transform: capitalize; }
-        .fossci-settings-color input { margin-bottom: 0; }
+        .platform-settings-section textarea { min-height: 90px; font-family: inherit; }
+        .platform-settings-checkbox { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+        .platform-settings-checkbox label { margin-bottom: 0; }
+        .platform-settings-colors { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px 16px; }
+        .platform-settings-color label { text-transform: capitalize; }
+        .platform-settings-color input { margin-bottom: 0; }
     </style>
-    <div class="fossci-container">
-        <div class="fossci-header"><h2>Settings</h2></div>
+    <div class="platform-container">
+        <div class="platform-header"><h2>Settings</h2></div>
         %s
         <form method="POST" action="settings-save" enctype="multipart/form-data">
             <input type="hidden" name="csrf_token" value="%s">
 
-            <div class="fossci-settings-section">
+            <div class="platform-settings-section">
                 <h3>Site</h3>
                 <label for="site_name">Site name</label>
                 <input type="text" id="site_name" name="site_name" value="%s" placeholder="Platform">
 
-                <div class="fossci-settings-checkbox">
+                <div class="platform-settings-checkbox">
                     <input type="checkbox" id="hide_home_heading" name="hide_home_heading" value="1"%s>
                     <label for="hide_home_heading">Hide the site name heading on Home (use when the logo already reads as a wordmark)</label>
                 </div>
             </div>
 
-            <div class="fossci-settings-section">
+            <div class="platform-settings-section">
                 <h3>Branding</h3>
-                <p style="margin-top:0;color:var(--fossci-muted,#64748b);font-size:0.9rem;">%s</p>
+                <p style="margin-top:0;color:var(--platform-muted,#64748b);font-size:0.9rem;">%s</p>
                 <label for="logo_file">Sidebar mark (square, theme-assets/logo.png)</label>
                 <input type="file" id="logo_file" name="logo_file" accept="image/png">
                 <label for="logo_full_file">Full wordmark shown on Home (theme-assets/logo-full.png)</label>
@@ -2744,15 +2744,15 @@ function html.render_settings(theme, csrf_token, message, is_error)
                 <input type="file" id="favicon_file" name="favicon_file" accept="image/png">
             </div>
 
-            <div class="fossci-settings-section">
+            <div class="platform-settings-section">
                 <h3>Colors</h3>
-                <p style="margin-top:0;color:var(--fossci-muted,#64748b);font-size:0.9rem;">Leave any field blank to use the default indigo/slate palette for that color.</p>
-                <div class="fossci-settings-colors">
+                <p style="margin-top:0;color:var(--platform-muted,#64748b);font-size:0.9rem;">Leave any field blank to use the default indigo/slate palette for that color.</p>
+                <div class="platform-settings-colors">
 %s
                 </div>
             </div>
 
-            <div class="fossci-settings-section">
+            <div class="platform-settings-section">
                 <h3>Chat assistant</h3>
                 <label for="system_prompt_extra">Extra system prompt instructions</label>
                 <textarea id="system_prompt_extra" name="system_prompt_extra" placeholder="e.g. This deployment tracks bioreactor runs -- always ask for the run ID before creating a sample.">%s</textarea>
@@ -2762,7 +2762,7 @@ function html.render_settings(theme, csrf_token, message, is_error)
         </form>
     </div>
 </div>
-""", fossci_container_css(900), fossci_button_css(), message_html, escaped_csrf,
+""", platform_container_css(900), platform_button_css(), message_html, escaped_csrf,
      html.html_escape(theme.site_name), hide_heading_checked, html.html_escape(logo_status),
      color_rows, html.html_escape(system_prompt_extra_value))
 end
@@ -2789,7 +2789,7 @@ function html.render_home(theme, show_sql, show_admin, has_tasks_view)
     logo_html = ""
     if has_logo then
         logo_html = string.format(
-            '<img class="fossci-home-logo" src="theme-asset?name=logo-full.png" alt="%s">',
+            '<img class="platform-home-logo" src="theme-asset?name=logo-full.png" alt="%s">',
             html.html_escape(site_name)
         )
     end
@@ -2822,24 +2822,24 @@ function html.render_home(theme, show_sql, show_admin, has_tasks_view)
 <div class="fossil-doc" data-title="Home">
     <style>
 %s
-        .fossci-header { margin-bottom: 20px; border-bottom: 1px solid var(--fossci-bg-2, #f1f5f9); padding-bottom: 16px; }
-        .fossci-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--fossci-heading, #0f172a); letter-spacing: -0.02em; }
-        .fossci-header p { color: var(--fossci-muted, #64748b); margin: 0; font-size: 0.95rem; }
-        .fossci-home-logo { display: block; max-width: 240px; height: auto; margin-bottom: 16px; }
-        .fossci-sitemap { list-style: none !important; margin: 16px 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
-        .fossci-sitemap li { list-style: none !important; background: var(--fossci-bg, #f8fafc); border: 1px solid var(--fossci-border, #e2e8f0); border-radius: var(--fossci-radius-item, 10px); padding: 16px 18px; transition: var(--fossci-transition, all 0.2s cubic-bezier(0.4, 0, 0.2, 1)); }
-        .fossci-sitemap li:hover { border-color: var(--fossci-accent, #4f46e5); box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
-        .fossci-sitemap a { font-weight: 700; color: var(--fossci-accent, #4f46e5); text-decoration: none; font-size: 1.05rem; }
-        .fossci-sitemap a:hover { text-decoration: underline; }
-        .fossci-sitemap p { margin: 6px 0 0 0; color: var(--fossci-muted, #64748b); font-size: 0.9rem; }
+        .platform-header { margin-bottom: 20px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; }
+        .platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
+        .platform-header p { color: var(--platform-muted, #64748b); margin: 0; font-size: 0.95rem; }
+        .platform-home-logo { display: block; max-width: 240px; height: auto; margin-bottom: 16px; }
+        .platform-sitemap { list-style: none !important; margin: 16px 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+        .platform-sitemap li { list-style: none !important; background: var(--platform-bg, #f8fafc); border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-item, 10px); padding: 16px 18px; transition: var(--platform-transition, all 0.2s cubic-bezier(0.4, 0, 0.2, 1)); }
+        .platform-sitemap li:hover { border-color: var(--platform-accent, #4f46e5); box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
+        .platform-sitemap a { font-weight: 700; color: var(--platform-accent, #4f46e5); text-decoration: none; font-size: 1.05rem; }
+        .platform-sitemap a:hover { text-decoration: underline; }
+        .platform-sitemap p { margin: 6px 0 0 0; color: var(--platform-muted, #64748b); font-size: 0.9rem; }
     </style>
-    <div class="fossci-container">
-        <div class="fossci-header">
+    <div class="platform-container">
+        <div class="platform-header">
             %s
             %s
             <p>Welcome back. Use the sidebar to get around, or jump in below.</p>
         </div>
-        <ul class="fossci-sitemap">
+        <ul class="platform-sitemap">
             <li><a href="document-edit">New Page</a><p>Write a new notebook page from scratch.</p></li>
             <li><a href="documents">Notebook</a><p>Browse all pages, organized as a tree.</p></li>
             <li><a href="data">Data</a><p>Registered entity types, row counts, and relations.</p></li>
@@ -2848,7 +2848,7 @@ function html.render_home(theme, show_sql, show_admin, has_tasks_view)
         </ul>
     </div>
 </div>
-""", fossci_container_css(1200), logo_html, heading_html, tasks_link, system_link)
+""", platform_container_css(1200), logo_html, heading_html, tasks_link, system_link)
 end
 
 -- Landing page for Setup/Admin-only tooling -- a single destination
@@ -2873,23 +2873,23 @@ function html.render_system(show_sql, show_admin)
 <div class="fossil-doc" data-title="System">
     <style>
 %s
-        .fossci-header { margin-bottom: 20px; border-bottom: 1px solid var(--fossci-bg-2, #f1f5f9); padding-bottom: 16px; }
-        .fossci-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--fossci-heading, #0f172a); letter-spacing: -0.02em; }
-        .fossci-sitemap { list-style: none !important; margin: 16px 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
-        .fossci-sitemap li { list-style: none !important; background: var(--fossci-bg, #f8fafc); border: 1px solid var(--fossci-border, #e2e8f0); border-radius: var(--fossci-radius-item, 10px); padding: 16px 18px; transition: var(--fossci-transition, all 0.2s cubic-bezier(0.4, 0, 0.2, 1)); }
-        .fossci-sitemap li:hover { border-color: var(--fossci-accent, #4f46e5); box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
-        .fossci-sitemap a { font-weight: 700; color: var(--fossci-accent, #4f46e5); text-decoration: none; font-size: 1.05rem; }
-        .fossci-sitemap a:hover { text-decoration: underline; }
-        .fossci-sitemap p { margin: 6px 0 0 0; color: var(--fossci-muted, #64748b); font-size: 0.9rem; }
+        .platform-header { margin-bottom: 20px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; }
+        .platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
+        .platform-sitemap { list-style: none !important; margin: 16px 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+        .platform-sitemap li { list-style: none !important; background: var(--platform-bg, #f8fafc); border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-item, 10px); padding: 16px 18px; transition: var(--platform-transition, all 0.2s cubic-bezier(0.4, 0, 0.2, 1)); }
+        .platform-sitemap li:hover { border-color: var(--platform-accent, #4f46e5); box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
+        .platform-sitemap a { font-weight: 700; color: var(--platform-accent, #4f46e5); text-decoration: none; font-size: 1.05rem; }
+        .platform-sitemap a:hover { text-decoration: underline; }
+        .platform-sitemap p { margin: 6px 0 0 0; color: var(--platform-muted, #64748b); font-size: 0.9rem; }
     </style>
-    <div class="fossci-container">
-        <div class="fossci-header"><h2>System</h2></div>
-        <ul class="fossci-sitemap">
+    <div class="platform-container">
+        <div class="platform-header"><h2>System</h2></div>
+        <ul class="platform-sitemap">
 %s
         </ul>
     </div>
 </div>
-""", fossci_container_css(1200), items)
+""", platform_container_css(1200), items)
 end
 
 KNOWLEDGE_TIER_LABELS = {
@@ -2907,7 +2907,7 @@ function html.render_knowledge_pool(stats, recent_retrievals)
     tier_tiles = ""
     for tier = 0, 3 do
         tier_tiles = tier_tiles .. string.format(
-            '<div class="fossci-knowledge-tier"><strong>%s</strong><span class="dimmed">%d note(s)</span></div>',
+            '<div class="platform-knowledge-tier"><strong>%s</strong><span class="dimmed">%d note(s)</span></div>',
             html.html_escape(KNOWLEDGE_TIER_LABELS[tier]), stats.tier_counts[tier]
         )
     end
@@ -2915,7 +2915,7 @@ function html.render_knowledge_pool(stats, recent_retrievals)
     retrieval_rows = ""
     for _, r in ipairs(recent_retrievals) do
         retrieval_rows = retrieval_rows .. string.format(
-            '<div class="fossci-knowledge-retrieval"><strong>#%s</strong> %s <span class="dimmed">[%s, %s hit(s)]</span></div>',
+            '<div class="platform-knowledge-retrieval"><strong>#%s</strong> %s <span class="dimmed">[%s, %s hit(s)]</span></div>',
             tostring(r.id), html.html_escape(r.query_text), html.html_escape(r.created_at), tostring(r.hit_count)
         )
     end
@@ -2927,54 +2927,54 @@ function html.render_knowledge_pool(stats, recent_retrievals)
 <div class="fossil-doc" data-title="Knowledge Pool">
     <style>
 %s
-        .fossci-header { margin-bottom: 20px; border-bottom: 1px solid var(--fossci-bg-2, #f1f5f9); padding-bottom: 16px; }
-        .fossci-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--fossci-heading, #0f172a); letter-spacing: -0.02em; }
-        .fossci-header p { color: var(--fossci-muted, #64748b); margin: 0; font-size: 0.95rem; }
-        .fossci-knowledge-stats { display: grid; grid-template-columns: repeat(4, minmax(10em, 1fr)); gap: 14px; margin-bottom: 20px; }
-        .fossci-knowledge-stats div { border: 1px solid var(--fossci-border, #e2e8f0); border-radius: var(--fossci-radius-item, 10px); padding: 14px 16px; background: var(--fossci-bg, #f8fafc); }
-        .fossci-knowledge-stats strong { display: block; font-size: 1.4rem; color: var(--fossci-heading, #0f172a); }
-        .fossci-knowledge-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; }
-        .fossci-knowledge-tiers { display: grid; grid-template-columns: repeat(2, minmax(14em, 1fr)); gap: 12px; }
-        .fossci-knowledge-tier { border: 1px solid var(--fossci-border, #e2e8f0); border-radius: var(--fossci-radius-item, 10px); padding: 12px 14px; background: var(--fossci-bg, #f8fafc); }
-        .fossci-knowledge-tier strong { display: block; margin-bottom: 4px; }
-        .fossci-knowledge-panel { border: 1px solid var(--fossci-border, #e2e8f0); border-radius: var(--fossci-radius-item, 10px); padding: 14px 16px; background: var(--fossci-bg, #f8fafc); margin-bottom: 14px; }
-        .fossci-knowledge-panel h4 { margin: 0 0 10px 0; font-size: 0.95rem; color: var(--fossci-muted, #64748b); }
-        .fossci-knowledge-retrieval { margin: 6px 0; font-size: 0.9rem; }
-        .dimmed { color: var(--fossci-muted, #64748b); font-size: 0.85rem; }
+        .platform-header { margin-bottom: 20px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; }
+        .platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
+        .platform-header p { color: var(--platform-muted, #64748b); margin: 0; font-size: 0.95rem; }
+        .platform-knowledge-stats { display: grid; grid-template-columns: repeat(4, minmax(10em, 1fr)); gap: 14px; margin-bottom: 20px; }
+        .platform-knowledge-stats div { border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-item, 10px); padding: 14px 16px; background: var(--platform-bg, #f8fafc); }
+        .platform-knowledge-stats strong { display: block; font-size: 1.4rem; color: var(--platform-heading, #0f172a); }
+        .platform-knowledge-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; }
+        .platform-knowledge-tiers { display: grid; grid-template-columns: repeat(2, minmax(14em, 1fr)); gap: 12px; }
+        .platform-knowledge-tier { border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-item, 10px); padding: 12px 14px; background: var(--platform-bg, #f8fafc); }
+        .platform-knowledge-tier strong { display: block; margin-bottom: 4px; }
+        .platform-knowledge-panel { border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-item, 10px); padding: 14px 16px; background: var(--platform-bg, #f8fafc); margin-bottom: 14px; }
+        .platform-knowledge-panel h4 { margin: 0 0 10px 0; font-size: 0.95rem; color: var(--platform-muted, #64748b); }
+        .platform-knowledge-retrieval { margin: 6px 0; font-size: 0.9rem; }
+        .dimmed { color: var(--platform-muted, #64748b); font-size: 0.85rem; }
     </style>
-    <div class="fossci-container">
-        <div class="fossci-header">
+    <div class="platform-container">
+        <div class="platform-header">
             <h2>Knowledge Pool</h2>
             <p>Notes promote through processing tiers as they're retrieved and reinforced; every retrieval is logged.</p>
         </div>
-        <div class="fossci-knowledge-stats">
+        <div class="platform-knowledge-stats">
             <div><strong>%d</strong><span class="dimmed">pool records</span></div>
             <div><strong>%d</strong><span class="dimmed">retrieval runs</span></div>
             <div><strong>%d</strong><span class="dimmed">reviewed notes</span></div>
             <div><strong>%d</strong><span class="dimmed">chat sessions</span></div>
         </div>
-        <div class="fossci-knowledge-grid">
+        <div class="platform-knowledge-grid">
             <div>
-                <div class="fossci-knowledge-panel">
+                <div class="platform-knowledge-panel">
                     <h4>Processing Tiers</h4>
-                    <div class="fossci-knowledge-tiers">
+                    <div class="platform-knowledge-tiers">
 %s
                     </div>
                 </div>
             </div>
             <div>
-                <div class="fossci-knowledge-panel">
+                <div class="platform-knowledge-panel">
                     <h4>Recent Retrievals</h4>
 %s
                 </div>
-                <div class="fossci-knowledge-panel">
+                <div class="platform-knowledge-panel">
                     <a href="chat">Browse chat sessions &rarr;</a>
                 </div>
             </div>
         </div>
     </div>
 </div>
-""", fossci_container_css(1200), stats.note_count, stats.retrieval_count, stats.reviewed_note_count,
+""", platform_container_css(1200), stats.note_count, stats.retrieval_count, stats.reviewed_note_count,
      stats.session_count, tier_tiles, retrieval_rows)
 end
 
@@ -2992,8 +2992,8 @@ function html.render_index(db_path, entity_types, edges, nonce)
             if row.count == 1 then
                 count_label = "1 row"
             end
-            trigger_class = "fossci-popover-trigger"
-            count_popover = "<span class=\"fossci-popover\">" .. count_label .. "</span>"
+            trigger_class = "platform-popover-trigger"
+            count_popover = "<span class=\"platform-popover\">" .. count_label .. "</span>"
         end
         row_count = 0
         if row.count != nil then
@@ -3003,9 +3003,9 @@ function html.render_index(db_path, entity_types, edges, nonce)
             count_popover .. "</a></li>"
     end
 
-    list_or_empty = "<ul class=\"fossci-index-list\">" .. items .. "</ul>"
+    list_or_empty = "<ul class=\"platform-index-list\">" .. items .. "</ul>"
     if #entity_types == 0 then
-        list_or_empty = "<p class=\"fossci-empty\">No entity types registered yet.</p>"
+        list_or_empty = "<p class=\"platform-empty\">No entity types registered yet.</p>"
     end
 
     diagram_html = html.render_relation_diagram(db_path, entity_types, edges)
@@ -3014,70 +3014,70 @@ function html.render_index(db_path, entity_types, edges, nonce)
 <div class="fossil-doc" data-title="Overview">
     <style>
 %s
-        .fossci-header { margin-bottom: 20px; border-bottom: 1px solid var(--fossci-bg-2, #f1f5f9); padding-bottom: 16px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-        .fossci-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--fossci-heading, #0f172a); letter-spacing: -0.02em; }
-        .fossci-header p { color: var(--fossci-muted, #64748b); margin: 0; font-size: 0.95rem; }
-        .fossci-view-toggle { display: flex; gap: 6px; flex-shrink: 0; }
-        .fossci-view-toggle button { padding: 6px 14px; border-radius: var(--fossci-radius-sm, 8px); border: 1px solid var(--fossci-border, #e2e8f0); background: var(--fossci-bg, #f8fafc); color: var(--fossci-text, #334155); font-weight: 600; font-size: 0.85rem; cursor: pointer; transition: var(--fossci-transition, all 0.2s cubic-bezier(0.4, 0, 0.2, 1)); }
-        .fossci-view-toggle button.fossci-view-active { background: var(--fossci-accent, #4f46e5); border-color: var(--fossci-accent, #4f46e5); color: #ffffff; }
-        .fossci-hide-empty-toggle { display: flex; align-items: center; gap: 6px; font-size: 0.85rem; color: var(--fossci-muted, #64748b); cursor: pointer; user-select: none; margin-right: 8px; }
-        .fossci-hide-empty-toggle input { cursor: pointer; }
-        .fossci-entity-search { position: relative; margin-bottom: 16px; max-width: 420px; }
-        .fossci-entity-search input {
-            width: 100%%; padding: 9px 12px; border: 1px solid var(--fossci-border-2, #cbd5e1);
-            border-radius: var(--fossci-radius-sm, 8px); font-size: 0.9rem; box-sizing: border-box;
+        .platform-header { margin-bottom: 20px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+        .platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
+        .platform-header p { color: var(--platform-muted, #64748b); margin: 0; font-size: 0.95rem; }
+        .platform-view-toggle { display: flex; gap: 6px; flex-shrink: 0; }
+        .platform-view-toggle button { padding: 6px 14px; border-radius: var(--platform-radius-sm, 8px); border: 1px solid var(--platform-border, #e2e8f0); background: var(--platform-bg, #f8fafc); color: var(--platform-text, #334155); font-weight: 600; font-size: 0.85rem; cursor: pointer; transition: var(--platform-transition, all 0.2s cubic-bezier(0.4, 0, 0.2, 1)); }
+        .platform-view-toggle button.platform-view-active { background: var(--platform-accent, #4f46e5); border-color: var(--platform-accent, #4f46e5); color: #ffffff; }
+        .platform-hide-empty-toggle { display: flex; align-items: center; gap: 6px; font-size: 0.85rem; color: var(--platform-muted, #64748b); cursor: pointer; user-select: none; margin-right: 8px; }
+        .platform-hide-empty-toggle input { cursor: pointer; }
+        .platform-entity-search { position: relative; margin-bottom: 16px; max-width: 420px; }
+        .platform-entity-search input {
+            width: 100%%; padding: 9px 12px; border: 1px solid var(--platform-border-2, #cbd5e1);
+            border-radius: var(--platform-radius-sm, 8px); font-size: 0.9rem; box-sizing: border-box;
         }
-        .fossci-entity-search-results {
+        .platform-entity-search-results {
             display: none; position: absolute; top: 100%%; left: 0; right: 0; margin-top: 6px;
-            background: #ffffff; border: 1px solid var(--fossci-border, #e2e8f0); border-radius: var(--fossci-radius-sm, 8px);
+            background: #ffffff; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-sm, 8px);
             max-height: 320px; overflow-y: auto; z-index: 1000;
             box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
         }
-        .fossci-entity-search-results.fossci-entity-search-open { display: block; }
-        .fossci-entity-search-results a { display: flex; justify-content: space-between; gap: 10px; padding: 8px 12px; font-size: 0.88rem; text-decoration: none; color: var(--fossci-text, #334155); }
-        .fossci-entity-search-results a:hover { background: var(--fossci-bg-2, #f1f5f9); }
-        .fossci-entity-search-results a span.fossci-entity-search-type { color: var(--fossci-muted, #64748b); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; }
-        .fossci-entity-search-empty { padding: 10px 12px; color: var(--fossci-muted, #64748b); font-size: 0.88rem; }
-        .fossci-index-list { list-style: none !important; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
-        .fossci-index-list li { list-style: none !important; background: var(--fossci-bg, #f8fafc); border: 1px solid var(--fossci-border, #e2e8f0); border-radius: var(--fossci-radius-item, 10px); display: flex; align-items: center; transition: var(--fossci-transition, all 0.2s cubic-bezier(0.4, 0, 0.2, 1)); }
-        .fossci-index-list li:hover { border-color: var(--fossci-accent, #4f46e5); box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
-        .fossci-index-list li::marker { content: ""; }
-        .fossci-index-list a { flex: 1; display: block; padding: 12px 16px; color: var(--fossci-accent, #4f46e5); text-decoration: none; font-weight: 600; text-transform: capitalize; }
-        .fossci-index-list a:hover { background: var(--fossci-bg-2, #f1f5f9); border-radius: var(--fossci-radius-item, 10px) 0 0 var(--fossci-radius-item, 10px); }
+        .platform-entity-search-results.platform-entity-search-open { display: block; }
+        .platform-entity-search-results a { display: flex; justify-content: space-between; gap: 10px; padding: 8px 12px; font-size: 0.88rem; text-decoration: none; color: var(--platform-text, #334155); }
+        .platform-entity-search-results a:hover { background: var(--platform-bg-2, #f1f5f9); }
+        .platform-entity-search-results a span.platform-entity-search-type { color: var(--platform-muted, #64748b); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; }
+        .platform-entity-search-empty { padding: 10px 12px; color: var(--platform-muted, #64748b); font-size: 0.88rem; }
+        .platform-index-list { list-style: none !important; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+        .platform-index-list li { list-style: none !important; background: var(--platform-bg, #f8fafc); border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-item, 10px); display: flex; align-items: center; transition: var(--platform-transition, all 0.2s cubic-bezier(0.4, 0, 0.2, 1)); }
+        .platform-index-list li:hover { border-color: var(--platform-accent, #4f46e5); box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
+        .platform-index-list li::marker { content: ""; }
+        .platform-index-list a { flex: 1; display: block; padding: 12px 16px; color: var(--platform-accent, #4f46e5); text-decoration: none; font-weight: 600; text-transform: capitalize; }
+        .platform-index-list a:hover { background: var(--platform-bg-2, #f1f5f9); border-radius: var(--platform-radius-item, 10px) 0 0 var(--platform-radius-item, 10px); }
 %s
-        .fossci-empty {
+        .platform-empty {
             padding: 32px;
             text-align: center;
-            color: var(--fossci-muted, #64748b);
-            background: var(--fossci-bg, #f8fafc);
-            border: 1px dashed var(--fossci-border, #e2e8f0);
-            border-radius: var(--fossci-radius-md, 12px);
+            color: var(--platform-muted, #64748b);
+            background: var(--platform-bg, #f8fafc);
+            border: 1px dashed var(--platform-border, #e2e8f0);
+            border-radius: var(--platform-radius-md, 12px);
         }
     </style>
     %s
-    <div class="fossci-container">
-        <div class="fossci-header">
+    <div class="platform-container">
+        <div class="platform-header">
             <div>
                 <h2>Entity types</h2>
                 <p>%d registered</p>
             </div>
-            <div class="fossci-view-toggle" id="fossci-view-toggle">
-                <label class="fossci-hide-empty-toggle"><input type="checkbox" id="fossci-hide-empty"> Hide empty types</label>
-                <button type="button" data-view="list" class="fossci-view-active">List</button>
+            <div class="platform-view-toggle" id="platform-view-toggle">
+                <label class="platform-hide-empty-toggle"><input type="checkbox" id="platform-hide-empty"> Hide empty types</label>
+                <button type="button" data-view="list" class="platform-view-active">List</button>
                 <button type="button" data-view="diagram">Diagram</button>
             </div>
         </div>
-        <div class="fossci-entity-search">
-            <input type="text" id="fossci-entity-search-input" placeholder="Search entities by name..." autocomplete="off">
-            <div class="fossci-entity-search-results" id="fossci-entity-search-results"></div>
+        <div class="platform-entity-search">
+            <input type="text" id="platform-entity-search-input" placeholder="Search entities by name..." autocomplete="off">
+            <div class="platform-entity-search-results" id="platform-entity-search-results"></div>
         </div>
-        <div id="fossci-view-list">%s</div>
-        <div id="fossci-view-diagram" style="display:none;">%s</div>
+        <div id="platform-view-list">%s</div>
+        <div id="platform-view-diagram" style="display:none;">%s</div>
     </div>
     <script nonce="%s">
     (function(){
-        var input = document.getElementById('fossci-entity-search-input');
-        var results = document.getElementById('fossci-entity-search-results');
+        var input = document.getElementById('platform-entity-search-input');
+        var results = document.getElementById('platform-entity-search-results');
         var debounceTimer;
 
         function escapeHtml(s) {
@@ -3086,20 +3086,20 @@ function html.render_index(db_path, entity_types, edges, nonce)
 
         function render(items) {
             if (items.length === 0) {
-                results.innerHTML = '<div class="fossci-entity-search-empty">No matching entities.</div>';
+                results.innerHTML = '<div class="platform-entity-search-empty">No matching entities.</div>';
             } else {
                 results.innerHTML = items.map(function(item){
                     return '<a href="detail?type=' + encodeURIComponent(item.entity_type) + '&entity_id=' + item.id + '">' +
-                        escapeHtml(item.label) + '<span class="fossci-entity-search-type">' + escapeHtml(item.entity_type) + '</span></a>';
+                        escapeHtml(item.label) + '<span class="platform-entity-search-type">' + escapeHtml(item.entity_type) + '</span></a>';
                 }).join('');
             }
-            results.classList.add('fossci-entity-search-open');
+            results.classList.add('platform-entity-search-open');
         }
 
         input.addEventListener('input', function(){
             clearTimeout(debounceTimer);
             var query = input.value.trim();
-            if (!query) { results.classList.remove('fossci-entity-search-open'); results.innerHTML = ''; return; }
+            if (!query) { results.classList.remove('platform-entity-search-open'); results.innerHTML = ''; return; }
             debounceTimer = setTimeout(function(){
                 fetch('api/entity-search?query=' + encodeURIComponent(query))
                     .then(function(res){ return res.json(); })
@@ -3108,17 +3108,17 @@ function html.render_index(db_path, entity_types, edges, nonce)
         });
         document.addEventListener('click', function(e){
             if (e.target !== input && !results.contains(e.target)) {
-                results.classList.remove('fossci-entity-search-open');
+                results.classList.remove('platform-entity-search-open');
             }
         });
         input.addEventListener('keydown', function(e){
-            if (e.key === 'Escape') { results.classList.remove('fossci-entity-search-open'); }
+            if (e.key === 'Escape') { results.classList.remove('platform-entity-search-open'); }
         });
     })();
     </script>
 </div>
 %s
-""", fossci_container_css(800), html.relation_diagram_css(), html.popover_css(), #entity_types,
+""", platform_container_css(800), html.relation_diagram_css(), html.popover_css(), #entity_types,
      list_or_empty, diagram_html, nonce, html.diagram_js(nonce))
 end
 
@@ -3129,7 +3129,7 @@ function html.render_templates_list(entries)
     for _, entry in ipairs(entries) do
         escaped_name = html.html_escape(entry.name)
         if entry.def == nil then
-            items = items .. "<li class=\"fossci-template-error\">" .. escaped_name ..
+            items = items .. "<li class=\"platform-template-error\">" .. escaped_name ..
                 " -- ERROR: " .. html.html_escape(entry.err) .. "</li>"
         else
             label = entry.def.label
@@ -3148,43 +3148,43 @@ function html.render_templates_list(entries)
         end
     end
 
-    list_or_empty = "<ul class=\"fossci-index-list\">" .. items .. "</ul>"
+    list_or_empty = "<ul class=\"platform-index-list\">" .. items .. "</ul>"
     if #entries == 0 then
-        list_or_empty = "<p class=\"fossci-empty\">No entry templates yet.</p>"
+        list_or_empty = "<p class=\"platform-empty\">No entry templates yet.</p>"
     end
 
     return string.format("""
 <div class="fossil-doc" data-title="Entry templates">
     <style>
 %s
-        .fossci-header { margin-bottom: 20px; border-bottom: 1px solid var(--fossci-bg-2, #f1f5f9); padding-bottom: 16px; }
-        .fossci-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--fossci-heading, #0f172a); letter-spacing: -0.02em; }
-        .fossci-header p { color: var(--fossci-muted, #64748b); margin: 0; font-size: 0.95rem; }
-        .fossci-index-list { list-style: none !important; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
-        .fossci-index-list li { list-style: none !important; background: var(--fossci-bg, #f8fafc); border: 1px solid var(--fossci-border, #e2e8f0); border-radius: var(--fossci-radius-item, 10px); padding: 14px 16px; }
-        .fossci-index-list li::marker { content: ""; }
-        .fossci-index-list a { font-weight: 700; color: var(--fossci-accent, #4f46e5); text-decoration: none; }
-        .fossci-index-list a:hover { text-decoration: underline; }
-        .fossci-index-list p { margin: 6px 0 0 0; color: var(--fossci-muted, #64748b); font-size: 0.88rem; }
-        .fossci-template-error { color: #991b1b; background: #fef2f2; border: 1px solid #fecaca; border-radius: var(--fossci-radius-item, 10px); padding: 14px 16px; }
-        .fossci-empty {
+        .platform-header { margin-bottom: 20px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; }
+        .platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
+        .platform-header p { color: var(--platform-muted, #64748b); margin: 0; font-size: 0.95rem; }
+        .platform-index-list { list-style: none !important; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+        .platform-index-list li { list-style: none !important; background: var(--platform-bg, #f8fafc); border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-item, 10px); padding: 14px 16px; }
+        .platform-index-list li::marker { content: ""; }
+        .platform-index-list a { font-weight: 700; color: var(--platform-accent, #4f46e5); text-decoration: none; }
+        .platform-index-list a:hover { text-decoration: underline; }
+        .platform-index-list p { margin: 6px 0 0 0; color: var(--platform-muted, #64748b); font-size: 0.88rem; }
+        .platform-template-error { color: #991b1b; background: #fef2f2; border: 1px solid #fecaca; border-radius: var(--platform-radius-item, 10px); padding: 14px 16px; }
+        .platform-empty {
             padding: 32px;
             text-align: center;
-            color: var(--fossci-muted, #64748b);
-            background: var(--fossci-bg, #f8fafc);
-            border: 1px dashed var(--fossci-border, #e2e8f0);
-            border-radius: var(--fossci-radius-md, 12px);
+            color: var(--platform-muted, #64748b);
+            background: var(--platform-bg, #f8fafc);
+            border: 1px dashed var(--platform-border, #e2e8f0);
+            border-radius: var(--platform-radius-md, 12px);
         }
     </style>
-    <div class="fossci-container">
-        <div class="fossci-header">
+    <div class="platform-container">
+        <div class="platform-header">
             <h2>Entry templates</h2>
             <p>Pick a template to see its rendered Markdown.</p>
         </div>
         %s
     </div>
 </div>
-""", fossci_container_css(800), list_or_empty)
+""", platform_container_css(800), list_or_empty)
 end
 
 -- The rendered Markdown snippet for one template, in a read-only
@@ -3212,26 +3212,26 @@ function html.render_template(def, rendered_markdown, nonce)
     <style>
 %s
 %s
-        .fossci-header { margin-bottom: 20px; border-bottom: 1px solid var(--fossci-bg-2, #f1f5f9); padding-bottom: 16px; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
-        .fossci-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--fossci-heading, #0f172a); letter-spacing: -0.02em; }
-        .fossci-header p { color: var(--fossci-muted, #64748b); margin: 0; font-size: 0.95rem; }
-        .fossci-header a { color: var(--fossci-accent, #4f46e5); text-decoration: none; font-weight: 600; }
-        .fossci-header a:hover { text-decoration: underline; }
-        .fossci-snippet {
+        .platform-header { margin-bottom: 20px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+        .platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
+        .platform-header p { color: var(--platform-muted, #64748b); margin: 0; font-size: 0.95rem; }
+        .platform-header a { color: var(--platform-accent, #4f46e5); text-decoration: none; font-weight: 600; }
+        .platform-header a:hover { text-decoration: underline; }
+        .platform-snippet {
             width: 100%%;
             min-height: 360px;
             box-sizing: border-box;
             font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
             font-size: 0.88rem;
             padding: 16px;
-            border: 1px solid var(--fossci-border, #e2e8f0);
-            border-radius: var(--fossci-radius-md, 12px);
-            background: var(--fossci-bg, #f8fafc);
-            color: var(--fossci-input-text, #1e293b);
+            border: 1px solid var(--platform-border, #e2e8f0);
+            border-radius: var(--platform-radius-md, 12px);
+            background: var(--platform-bg, #f8fafc);
+            color: var(--platform-input-text, #1e293b);
         }
     </style>
-    <div class="fossci-container">
-        <div class="fossci-header">
+    <div class="platform-container">
+        <div class="platform-header">
             <div>
                 <h2>%s</h2>
                 <p>%s</p>
@@ -3240,10 +3240,10 @@ function html.render_template(def, rendered_markdown, nonce)
             <a class="btn btn-primary" href="document-edit?from_template=%s">Create new page from this template</a>
         </div>
         <p>Or select-all and copy the rendered snippet below.</p>
-        <textarea class="fossci-snippet" id="fossci-template-content" readonly>%s</textarea>
+        <textarea class="platform-snippet" id="platform-template-content" readonly>%s</textarea>
     </div>
 </div>
-""", escaped_label, fossci_container_css(900), fossci_button_css(), escaped_label, escaped_desc, escaped_name, escaped_body)
+""", escaped_label, platform_container_css(900), platform_button_css(), escaped_label, escaped_desc, escaped_name, escaped_body)
 end
 
 -- Ad-hoc SQL console (Setup/Admin only -- see cgi.lua's /sql route):
@@ -3261,7 +3261,7 @@ function html.render_sql(db_path, sql_text, column_names, rows, err, ref_columns
     -- ?embed=1 renders this page for use inside a same-origin iframe
     -- (previously used by /data's own SQL widget, removed after a
     -- persistent styling problem -- see cgi.lua's own comment on
-    -- /data). Kept as a general capability: the .fossci-container
+    -- /data). Kept as a general capability: the .platform-container
     -- "card" look (padding/shadow/border/radius) is right for a
     -- standalone page, but reads as a window nested inside a window
     -- once sitting inside an iframe's own bordered box. cgi.lua knows
@@ -3272,11 +3272,11 @@ function html.render_sql(db_path, sql_text, column_names, rows, err, ref_columns
     -- would have to.
     embed_css = ""
     if embed == true then
-        embed_css = ".fossci-container { padding: 0; margin: 0; max-width: none; box-shadow: none; border: none; border-radius: 0; }"
+        embed_css = ".platform-container { padding: 0; margin: 0; max-width: none; box-shadow: none; border: none; border-radius: 0; }"
         -- The embedded case skips html.page_shell entirely (see above),
-        -- so it never otherwise gets the :root { --fossci-x: ...; }
+        -- so it never otherwise gets the :root { --platform-x: ...; }
         -- block a real theme compiles to -- without it, every
-        -- var(--fossci-*, fallback) below silently resolves to the
+        -- var(--platform-*, fallback) below silently resolves to the
         -- generic fallback color instead of the deployment's real
         -- palette. Confirmed live: the embedded widget on /data was
         -- rendering in the default indigo/slate, not Celleste's brown/gold.
@@ -3292,7 +3292,7 @@ function html.render_sql(db_path, sql_text, column_names, rows, err, ref_columns
 
     result_html = ""
     if err != nil then
-        result_html = "<div class=\"fossci-sql-error\">Error: " .. html.html_escape(err) .. "</div>"
+        result_html = "<div class=\"platform-sql-error\">Error: " .. html.html_escape(err) .. "</div>"
     elseif rows != nil then
         header_parts = {}
         for _, name in ipairs(column_names) do
@@ -3322,37 +3322,37 @@ function html.render_sql(db_path, sql_text, column_names, rows, err, ref_columns
         end
         body_rows = table.concat(body_row_parts)
         if #rows == 0 then
-            result_html = "<p class=\"fossci-empty\">No rows.</p>"
+            result_html = "<p class=\"platform-empty\">No rows.</p>"
         else
             count_message = tostring(#rows) .. " rows"
             if truncated == true then
                 count_message = "Showing first " .. tostring(#rows) .. " rows -- more may exist. Add your own LIMIT to see a different range."
             end
-            result_html = "<div class=\"fossci-table-wrapper\"><table id=\"sql-table\"><thead><tr>" ..
+            result_html = "<div class=\"platform-table-wrapper\"><table id=\"sql-table\"><thead><tr>" ..
                 header_cells .. "</tr></thead><tbody>" .. body_rows .. "</tbody></table></div>" ..
-                "<p class=\"fossci-sql-count\">" .. count_message .. "</p>"
+                "<p class=\"platform-sql-count\">" .. count_message .. "</p>"
         end
     elseif sql_text_or_empty == "" then
         -- Submitted with a genuinely empty box -- distinct from the
         -- pre-run, example-prefilled first-load case below, which
         -- needs no message at all (nothing has failed or been skipped).
-        result_html = "<p class=\"fossci-empty\">Enter a SQL query above, then click Run.</p>"
+        result_html = "<p class=\"platform-empty\">Enter a SQL query above, then click Run.</p>"
     end
 
     return string.format("""
 <div class="fossil-doc" data-title="Query">
     <style>
 %s
-        .fossci-header { margin-bottom: 20px; border-bottom: 1px solid var(--fossci-bg-2, #f1f5f9); padding-bottom: 16px; }
-        .fossci-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--fossci-heading, #0f172a); letter-spacing: -0.02em; }
-        .fossci-header p { color: var(--fossci-muted, #64748b); margin: 0; font-size: 0.95rem; }
-        .fossci-sql-input {
+        .platform-header { margin-bottom: 20px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; }
+        .platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
+        .platform-header p { color: var(--platform-muted, #64748b); margin: 0; font-size: 0.95rem; }
+        .platform-sql-input {
             width: 100%%;
             /* max-width explicit, not left to inherit: Fossil's own base
             ** CSS (src/default.css) has a bare "textarea { max-width:
             ** 95%% }" rule that otherwise wins over nothing here -- a
             ** real, confirmed-live gap between this box and the
-            ** .fossci-nlsql row above it (measured 1045px vs 1100px,
+            ** .platform-nlsql row above it (measured 1045px vs 1100px,
             ** exactly 95%% of the same 1100px parent). This class
             ** selector's higher specificity overrides it. */
             max-width: 100%%;
@@ -3361,63 +3361,63 @@ function html.render_sql(db_path, sql_text, column_names, rows, err, ref_columns
             font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
             font-size: 0.9rem;
             padding: 14px;
-            border: 1px solid var(--fossci-border, #e2e8f0);
-            border-radius: var(--fossci-radius-item, 10px);
-            background: var(--fossci-bg, #f8fafc);
-            color: var(--fossci-input-text, #1e293b);
+            border: 1px solid var(--platform-border, #e2e8f0);
+            border-radius: var(--platform-radius-item, 10px);
+            background: var(--platform-bg, #f8fafc);
+            color: var(--platform-input-text, #1e293b);
             margin-bottom: 12px;
         }
         %s
-        .fossci-sql-error {
+        .platform-sql-error {
             margin-top: 20px;
             padding: 14px 18px;
-            border-radius: var(--fossci-radius-item, 10px);
+            border-radius: var(--platform-radius-item, 10px);
             background: #fef2f2;
             border: 1px solid #fecaca;
             color: #991b1b;
         }
-        .fossci-sql-count { color: var(--fossci-muted, #64748b); font-size: 0.85rem; margin-top: 8px; }
-        .fossci-table-wrapper { overflow-x: auto; margin-top: 20px; border: 1px solid var(--fossci-border, #e2e8f0); border-radius: var(--fossci-radius-md, 12px); background: var(--fossci-bg, #f8fafc); }
+        .platform-sql-count { color: var(--platform-muted, #64748b); font-size: 0.85rem; margin-top: 8px; }
+        .platform-table-wrapper { overflow-x: auto; margin-top: 20px; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); background: var(--platform-bg, #f8fafc); }
         #sql-table { width: 100%%; border-collapse: separate; border-spacing: 0; min-width: 600px; }
-        #sql-table th, #sql-table td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--fossci-border, #e2e8f0); font-size: 0.85rem; }
-        #sql-table th { background: var(--fossci-bg-2, #f1f5f9); font-weight: 600; font-size: 0.75rem; color: var(--fossci-th-text, #475569); text-transform: uppercase; letter-spacing: 0.06em; }
+        #sql-table th, #sql-table td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--platform-border, #e2e8f0); font-size: 0.85rem; }
+        #sql-table th { background: var(--platform-bg-2, #f1f5f9); font-weight: 600; font-size: 0.75rem; color: var(--platform-th-text, #475569); text-transform: uppercase; letter-spacing: 0.06em; }
         #sql-table td { background: #ffffff; }
-        .fossci-empty { margin-top: 20px; padding: 24px; text-align: center; color: var(--fossci-muted, #64748b); background: var(--fossci-bg, #f8fafc); border: 1px dashed var(--fossci-border, #e2e8f0); border-radius: var(--fossci-radius-md, 12px); }
-        .fossci-entity-ref { color: var(--fossci-accent, #4f46e5); text-decoration: none; font-weight: 600; }
-        .fossci-entity-ref::after { content: " \2197"; font-size: 0.85em; }
-        .fossci-entity-ref:hover { text-decoration: underline; }
-        .fossci-nlsql { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
-        .fossci-nlsql input {
+        .platform-empty { margin-top: 20px; padding: 24px; text-align: center; color: var(--platform-muted, #64748b); background: var(--platform-bg, #f8fafc); border: 1px dashed var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); }
+        .platform-entity-ref { color: var(--platform-accent, #4f46e5); text-decoration: none; font-weight: 600; }
+        .platform-entity-ref::after { content: " \2197"; font-size: 0.85em; }
+        .platform-entity-ref:hover { text-decoration: underline; }
+        .platform-nlsql { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+        .platform-nlsql input {
             flex: 1;
             padding: 10px 14px;
-            border: 1px solid var(--fossci-border, #e2e8f0);
-            border-radius: var(--fossci-radius-sm, 8px);
-            background: var(--fossci-bg, #f8fafc);
-            color: var(--fossci-input-text, #1e293b);
+            border: 1px solid var(--platform-border, #e2e8f0);
+            border-radius: var(--platform-radius-sm, 8px);
+            background: var(--platform-bg, #f8fafc);
+            color: var(--platform-input-text, #1e293b);
             font-size: 0.9rem;
         }
-        .fossci-nlsql-status { font-size: 0.8rem; color: var(--fossci-muted, #64748b); white-space: nowrap; }
+        .platform-nlsql-status { font-size: 0.8rem; color: var(--platform-muted, #64748b); white-space: nowrap; }
         %s
     </style>
-    <div class="fossci-container">
-        <div class="fossci-header">
+    <div class="platform-container">
+        <div class="platform-header">
             <h2>Query</h2>
             <p>Read-only (SELECT only) queries against the entity store. Setup/Admin only.</p>
         </div>
-        <div class="fossci-nlsql" id="fossci-nlsql">
-            <input type="text" id="fossci-nlsql-input" placeholder="Ask the agent to write or update this query in plain English..." autocomplete="off" />
-            <button type="button" class="btn btn-secondary" id="fossci-nlsql-btn">Generate query</button>
-            <span class="fossci-nlsql-status" id="fossci-nlsql-status"></span>
+        <div class="platform-nlsql" id="platform-nlsql">
+            <input type="text" id="platform-nlsql-input" placeholder="Ask the agent to write or update this query in plain English..." autocomplete="off" />
+            <button type="button" class="btn btn-secondary" id="platform-nlsql-btn">Generate query</button>
+            <span class="platform-nlsql-status" id="platform-nlsql-status"></span>
         </div>
         <form method="get" action="sql">
-            <textarea class="fossci-sql-input" id="fossci-sql-query" name="q" placeholder="SELECT * FROM sample LIMIT 20;">%s</textarea>
+            <textarea class="platform-sql-input" id="platform-sql-query" name="q" placeholder="SELECT * FROM sample LIMIT 20;">%s</textarea>
             <button class="btn btn-primary" type="submit">Run</button>
         </form>
         %s
     </div>
 </div>
 %s
-""", fossci_container_css(1100), fossci_button_css(), html.popover_css() .. embed_css, escaped_sql, result_html, html.popover_js(nonce))
+""", platform_container_css(1100), platform_button_css(), html.popover_css() .. embed_css, escaped_sql, result_html, html.popover_js(nonce))
 end
 
 --------------------------------------------------------------------------
@@ -3466,7 +3466,7 @@ function render_document_tree_level(by_parent, key, depth)
         nested = render_document_tree_level(by_parent, child_key, depth + 1)
         link = "<a href=\"document?entity_id=" .. tostring(row.id) .. "\">" .. html.html_escape(row.title) .. "</a>"
         if nested == "" then
-            items = items .. "<li class=\"fossci-tree-leaf\">" .. link .. "</li>"
+            items = items .. "<li class=\"platform-tree-leaf\">" .. link .. "</li>"
         else
             -- Collapsed by default at every depth, including the top
             -- level (task: Ben's own explicit ask, prompted by the tree
@@ -3563,9 +3563,9 @@ end
 function html.render_document_tree(rows, can_create, nonce)
     by_parent = build_document_tree_index(rows)
     tree_items = render_document_tree_level(by_parent, "root", 0)
-    tree_html = "<ul class=\"fossci-document-tree\">" .. tree_items .. "</ul>"
+    tree_html = "<ul class=\"platform-document-tree\">" .. tree_items .. "</ul>"
     if tree_items == "" then
-        tree_html = "<p class=\"fossci-empty\">No pages yet.</p>"
+        tree_html = "<p class=\"platform-empty\">No pages yet.</p>"
     end
 
     new_page_link = ""
@@ -3579,55 +3579,55 @@ function html.render_document_tree(rows, can_create, nonce)
     <style>
 %s
 %s
-        .fossci-header { margin-bottom: 20px; border-bottom: 1px solid var(--fossci-bg-2, #f1f5f9); padding-bottom: 16px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-        .fossci-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--fossci-heading, #0f172a); letter-spacing: -0.02em; }
-        .fossci-document-search { position: relative; margin-bottom: 16px; }
-        .fossci-document-search input {
+        .platform-header { margin-bottom: 20px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+        .platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
+        .platform-document-search { position: relative; margin-bottom: 16px; }
+        .platform-document-search input {
             width: 100%%; padding: 10px 12px; box-sizing: border-box;
-            border: 1px solid var(--fossci-border, #e2e8f0); border-radius: var(--fossci-radius-sm, 8px); font-size: 0.92rem;
+            border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-sm, 8px); font-size: 0.92rem;
         }
-        .fossci-document-search-results {
+        .platform-document-search-results {
             position: absolute; left: 0; right: 0; top: calc(100%% + 4px); z-index: 30;
-            background: var(--fossci-bg, #ffffff); border: 1px solid var(--fossci-border, #e2e8f0);
-            border-radius: var(--fossci-radius-md, 12px); box-shadow: 0 6px 20px rgba(0,0,0,0.12);
+            background: var(--platform-bg, #ffffff); border: 1px solid var(--platform-border, #e2e8f0);
+            border-radius: var(--platform-radius-md, 12px); box-shadow: 0 6px 20px rgba(0,0,0,0.12);
             max-height: 320px; overflow-y: auto; display: none;
         }
-        .fossci-document-search-results.fossci-document-search-open { display: block; }
-        .fossci-document-search-results a {
-            display: block; padding: 8px 12px; color: var(--fossci-text, #334155); text-decoration: none; font-size: 0.9rem;
+        .platform-document-search-results.platform-document-search-open { display: block; }
+        .platform-document-search-results a {
+            display: block; padding: 8px 12px; color: var(--platform-text, #334155); text-decoration: none; font-size: 0.9rem;
         }
-        .fossci-document-search-results a:hover, .fossci-document-search-results a.fossci-search-active { background: var(--fossci-bg-2, #f1f5f9); }
-        .fossci-document-search-empty { padding: 10px 12px; color: var(--fossci-muted, #64748b); font-size: 0.88rem; }
-        .fossci-document-tree, .fossci-document-tree ul { list-style: none !important; margin: 0; padding-left: 20px; }
-        .fossci-document-tree { padding-left: 0; }
-        .fossci-document-tree li { margin: 4px 0; }
-        .fossci-document-tree a { color: var(--fossci-accent, #4f46e5); text-decoration: none; font-weight: 600; }
-        .fossci-document-tree a:hover { text-decoration: underline; }
-        .fossci-document-tree details > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 4px; padding: 2px 0; }
-        .fossci-document-tree details > summary::-webkit-details-marker { display: none; }
-        .fossci-document-tree details > summary::before {
-            content: "▸"; display: inline-block; color: var(--fossci-muted, #94a3b8);
+        .platform-document-search-results a:hover, .platform-document-search-results a.platform-search-active { background: var(--platform-bg-2, #f1f5f9); }
+        .platform-document-search-empty { padding: 10px 12px; color: var(--platform-muted, #64748b); font-size: 0.88rem; }
+        .platform-document-tree, .platform-document-tree ul { list-style: none !important; margin: 0; padding-left: 20px; }
+        .platform-document-tree { padding-left: 0; }
+        .platform-document-tree li { margin: 4px 0; }
+        .platform-document-tree a { color: var(--platform-accent, #4f46e5); text-decoration: none; font-weight: 600; }
+        .platform-document-tree a:hover { text-decoration: underline; }
+        .platform-document-tree details > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 4px; padding: 2px 0; }
+        .platform-document-tree details > summary::-webkit-details-marker { display: none; }
+        .platform-document-tree details > summary::before {
+            content: "▸"; display: inline-block; color: var(--platform-muted, #94a3b8);
             font-size: 0.75rem; width: 12px; transition: transform 0.15s ease;
         }
-        .fossci-document-tree details[open] > summary::before { transform: rotate(90deg); }
-        .fossci-tree-leaf { padding: 2px 0 2px 16px; }
+        .platform-document-tree details[open] > summary::before { transform: rotate(90deg); }
+        .platform-tree-leaf { padding: 2px 0 2px 16px; }
     </style>
-    <div class="fossci-container">
-        <div class="fossci-header">
+    <div class="platform-container">
+        <div class="platform-header">
             <h2>Pages</h2>
             %s
         </div>
-        <div class="fossci-document-search">
-            <input type="text" id="fossci-document-search-input" placeholder="Fuzzy search page titles..." autocomplete="off">
-            <div class="fossci-document-search-results" id="fossci-document-search-results"></div>
+        <div class="platform-document-search">
+            <input type="text" id="platform-document-search-input" placeholder="Fuzzy search page titles..." autocomplete="off">
+            <div class="platform-document-search-results" id="platform-document-search-results"></div>
         </div>
         %s
     </div>
     <script nonce="%s">
     (function(){
         var index = %s;
-        var input = document.getElementById('fossci-document-search-input');
-        var results = document.getElementById('fossci-document-search-results');
+        var input = document.getElementById('platform-document-search-input');
+        var results = document.getElementById('platform-document-search-results');
 
         // Simple ordered-subsequence fuzzy match: every character of
         // the query must appear in the title, in order (not
@@ -3648,7 +3648,7 @@ function html.render_document_tree(rows, can_create, nonce)
         }
 
         function renderResults(query) {
-            if (!query) { results.classList.remove('fossci-document-search-open'); results.innerHTML = ''; return; }
+            if (!query) { results.classList.remove('platform-document-search-open'); results.innerHTML = ''; return; }
             var scored = [];
             index.forEach(function(item){
                 var score = fuzzyScore(query, item.title);
@@ -3657,21 +3657,21 @@ function html.render_document_tree(rows, can_create, nonce)
             scored.sort(function(a, b){ return b.score - a.score; });
             scored = scored.slice(0, 15);
             if (scored.length === 0) {
-                results.innerHTML = '<div class="fossci-document-search-empty">No matching pages.</div>';
+                results.innerHTML = '<div class="platform-document-search-empty">No matching pages.</div>';
             } else {
                 results.innerHTML = scored.map(function(s){
                     var title = s.item.title.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
                     return '<a href="document?entity_id=' + s.item.id + '">' + title + '</a>';
                 }).join('');
             }
-            results.classList.add('fossci-document-search-open');
+            results.classList.add('platform-document-search-open');
         }
 
         input.addEventListener('input', function(){ renderResults(input.value); });
         input.addEventListener('focus', function(){ if (input.value) renderResults(input.value); });
         document.addEventListener('click', function(e){
             if (e.target !== input && !results.contains(e.target)) {
-                results.classList.remove('fossci-document-search-open');
+                results.classList.remove('platform-document-search-open');
             }
         });
         input.addEventListener('keydown', function(e){
@@ -3679,13 +3679,13 @@ function html.render_document_tree(rows, can_create, nonce)
                 var first = results.querySelector('a');
                 if (first) { window.location.href = first.getAttribute('href'); }
             } else if (e.key === 'Escape') {
-                results.classList.remove('fossci-document-search-open');
+                results.classList.remove('platform-document-search-open');
             }
         });
     })();
     </script>
 </div>
-""", fossci_container_css(900), fossci_button_css(), new_page_link, tree_html,
+""", platform_container_css(900), platform_button_css(), new_page_link, tree_html,
      nonce, document_search_index_json(rows))
 end
 
@@ -3717,7 +3717,7 @@ function html.render_document(doc, rendered_html, breadcrumbs, children, backlin
     end
     children_block = ""
     if children_html != "" then
-        children_block = "<div class=\"fossci-document-children\"><h4>Sub-pages</h4><ul>" .. children_html .. "</ul></div>"
+        children_block = "<div class=\"platform-document-children\"><h4>Sub-pages</h4><ul>" .. children_html .. "</ul></div>"
     end
 
     backlinks_html = ""
@@ -3727,7 +3727,7 @@ function html.render_document(doc, rendered_html, breadcrumbs, children, backlin
     end
     backlinks_block = ""
     if backlinks_html != "" then
-        backlinks_block = "<div class=\"fossci-document-backlinks\"><h4>Linked from</h4><ul>" .. backlinks_html .. "</ul></div>"
+        backlinks_block = "<div class=\"platform-document-backlinks\"><h4>Linked from</h4><ul>" .. backlinks_html .. "</ul></div>"
     end
 
     edit_link = ""
@@ -3740,28 +3740,28 @@ function html.render_document(doc, rendered_html, breadcrumbs, children, backlin
     <style>
 %s
 %s
-        .fossci-document-breadcrumbs { margin-bottom: 12px; font-size: 0.88rem; color: var(--fossci-muted, #64748b); }
-        .fossci-document-breadcrumbs a { color: var(--fossci-accent, #4f46e5); text-decoration: none; }
-        .fossci-document-breadcrumbs a:hover { text-decoration: underline; }
-        .fossci-document-content { line-height: 1.6; }
-        .fossci-document-content h1, .fossci-document-content h2, .fossci-document-content h3 { margin-top: 1.2em; }
-        .fossci-document-children, .fossci-document-backlinks { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--fossci-border, #e2e8f0); }
-        .fossci-document-children h4, .fossci-document-backlinks h4 { margin: 0 0 8px 0; font-size: 0.95rem; color: var(--fossci-muted, #64748b); }
+        .platform-document-breadcrumbs { margin-bottom: 12px; font-size: 0.88rem; color: var(--platform-muted, #64748b); }
+        .platform-document-breadcrumbs a { color: var(--platform-accent, #4f46e5); text-decoration: none; }
+        .platform-document-breadcrumbs a:hover { text-decoration: underline; }
+        .platform-document-content { line-height: 1.6; }
+        .platform-document-content h1, .platform-document-content h2, .platform-document-content h3 { margin-top: 1.2em; }
+        .platform-document-children, .platform-document-backlinks { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--platform-border, #e2e8f0); }
+        .platform-document-children h4, .platform-document-backlinks h4 { margin: 0 0 8px 0; font-size: 0.95rem; color: var(--platform-muted, #64748b); }
     </style>
-    <div class="fossci-container">
-        <div class="fossci-document-breadcrumbs">%s <a href="documents">(all pages)</a></div>
-        <div class="fossci-header">
+    <div class="platform-container">
+        <div class="platform-document-breadcrumbs">%s <a href="documents">(all pages)</a></div>
+        <div class="platform-header">
             <h2>%s</h2>
             %s
         </div>
-        <div class="fossci-document-content">
+        <div class="platform-document-content">
 %s
         </div>
         %s
         %s
     </div>
 </div>
-""", html.html_escape(doc.title), fossci_container_css(900), fossci_button_css(),
+""", html.html_escape(doc.title), platform_container_css(900), platform_button_css(),
      breadcrumb_html, html.html_escape(doc.title), edit_link, rendered_html, children_block, backlinks_block)
 end
 
@@ -3799,7 +3799,7 @@ function html.render_document_edit(doc, parent_options_html, csrf_token, error_m
 
     error_html = ""
     if error_message != nil and error_message != "" then
-        error_html = "<div class=\"fossci-login-error\">" .. html.html_escape(error_message) .. "</div>"
+        error_html = "<div class=\"platform-login-error\">" .. html.html_escape(error_message) .. "</div>"
     end
 
     return string.format("""
@@ -3808,24 +3808,24 @@ function html.render_document_edit(doc, parent_options_html, csrf_token, error_m
     <style>
 %s
 %s
-        .fossci-login-error { color: #991b1b; background: #fef2f2; border: 1px solid #fecaca; border-radius: var(--fossci-radius-item, 10px); padding: 10px 12px; margin-bottom: 14px; font-size: 0.88rem; }
-        .fossci-document-edit-fields { display: flex; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
-        .fossci-document-edit-fields input[type=text], .fossci-document-edit-fields select {
-            padding: 8px 10px; border: 1px solid var(--fossci-border, #e2e8f0); border-radius: var(--fossci-radius-sm, 8px); font-size: 0.9rem;
+        .platform-login-error { color: #991b1b; background: #fef2f2; border: 1px solid #fecaca; border-radius: var(--platform-radius-item, 10px); padding: 10px 12px; margin-bottom: 14px; font-size: 0.88rem; }
+        .platform-document-edit-fields { display: flex; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+        .platform-document-edit-fields input[type=text], .platform-document-edit-fields select {
+            padding: 8px 10px; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-sm, 8px); font-size: 0.9rem;
         }
-        .fossci-wikilink {
-            color: var(--fossci-accent, #4f46e5); background: var(--fossci-bg-2, #f1f5f9);
+        .platform-wikilink {
+            color: var(--platform-accent, #4f46e5); background: var(--platform-bg-2, #f1f5f9);
             border-radius: 4px; padding: 0 4px; font-weight: 600;
         }
     </style>
-    <div class="fossci-container">
-        <div class="fossci-header"><h2>%s</h2></div>
+    <div class="platform-container">
+        <div class="platform-header"><h2>%s</h2></div>
         %s
-        <form method="POST" action="document-save" id="fossci-document-edit-form">
+        <form method="POST" action="document-save" id="platform-document-edit-form">
             <input type="hidden" name="csrf_token" value="%s">
             <input type="hidden" name="entity_id" value="%s">
-            <input type="hidden" name="content" id="fossci-document-content-hidden">
-            <div class="fossci-document-edit-fields">
+            <input type="hidden" name="content" id="platform-document-content-hidden">
+            <div class="platform-document-edit-fields">
                 <input type="text" name="title" value="%s" placeholder="Title" required>
                 <select name="parent_id">
                     <option value="">(top level)</option>
@@ -3833,7 +3833,7 @@ function html.render_document_edit(doc, parent_options_html, csrf_token, error_m
                 </select>
                 <button type="submit" class="btn btn-primary">Save</button>
             </div>
-            <div id="fossci-toastui-editor"></div>
+            <div id="platform-toastui-editor"></div>
         </form>
     </div>
     <script src="vendor?name=toastui-editor-all.min.js" nonce="%s"></script>
@@ -3848,7 +3848,7 @@ function html.render_document_edit(doc, parent_options_html, csrf_token, error_m
         // schema.lua/document.lua/cmark downstream never know the
         // editor changed.
         var editor = new toastui.Editor({
-            el: document.querySelector('#fossci-toastui-editor'),
+            el: document.querySelector('#platform-toastui-editor'),
             height: '460px',
             initialEditType: 'markdown',
             previewStyle: 'vertical',
@@ -3865,21 +3865,21 @@ function html.render_document_edit(doc, parent_options_html, csrf_token, error_m
                 toDOM: function(text) {
                     var matched = text.match(/\[\[([^\]]+)\]\]/);
                     var span = document.createElement('span');
-                    span.className = 'fossci-wikilink';
+                    span.className = 'platform-wikilink';
                     span.textContent = '[[' + matched[1] + ']]';
                     return span;
                 }
             }]
         });
-        var form = document.getElementById('fossci-document-edit-form');
-        var hiddenContent = document.getElementById('fossci-document-content-hidden');
+        var form = document.getElementById('platform-document-edit-form');
+        var hiddenContent = document.getElementById('platform-document-content-hidden');
         form.addEventListener('submit', function(){
             hiddenContent.value = editor.getMarkdown();
         });
     })();
     </script>
 </div>
-""", heading, fossci_container_css(1200), fossci_button_css(), heading, error_html,
+""", heading, platform_container_css(1200), platform_button_css(), heading, error_html,
      html.html_escape(csrf_token), entity_id_value, title_value, parent_options_html,
      nonce, nonce, js_string_literal(content_value_raw))
 end
@@ -3900,23 +3900,23 @@ CHAT_ROLE_LABELS = {
 -- compaction (dimmed, not hidden) -- transparency about what the model
 -- can/can't currently see, matching this system's own "nothing is ever
 -- hidden, only marked" stance elsewhere (archived_at, in_context).
--- Shared `.fossci-chat-*` thread rules -- used by both html.render_chat
+-- Shared `.platform-chat-*` thread rules -- used by both html.render_chat
 -- and the inline "Edit with AI" panel on a document page (see
 -- html.render_document_ai_panel below), same de-duplication reasoning
--- as fossci_container_css/fossci_button_css above.
-function fossci_chat_thread_css()
+-- as platform_container_css/platform_button_css above.
+function platform_chat_thread_css()
     return """
-        .fossci-chat-messages { max-height: 55vh; overflow-y: auto; margin-bottom: 16px; padding: 12px; border: 1px solid var(--fossci-border, #e2e8f0); border-radius: var(--fossci-radius-md, 12px); background: var(--fossci-bg, #f8fafc); }
-        .fossci-chat-msg { margin-bottom: 10px; padding: 8px 10px; border-radius: var(--fossci-radius-sm, 8px); background: #fff; border: 1px solid var(--fossci-border, #e2e8f0); }
-        .fossci-chat-user { background: #eef2ff; }
-        .fossci-chat-tool_result { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85rem; }
-        .fossci-chat-compaction_summary { font-style: italic; color: var(--fossci-muted, #64748b); }
-        .fossci-chat-self_check { font-style: italic; color: var(--fossci-muted, #64748b); border-left: 3px solid #fbbf24; }
-        .fossci-chat-out-of-context { opacity: 0.45; }
-        .fossci-chat-input-form { display: flex; gap: 8px; }
-        .fossci-chat-input-form input[type=text] { flex: 1; padding: 8px 10px; border: 1px solid var(--fossci-border, #e2e8f0); border-radius: var(--fossci-radius-sm, 8px); }
-        .fossci-chat-pending { padding: 14px; border: 1px solid #fde68a; background: #fffbeb; border-radius: var(--fossci-radius-md, 12px); }
-        .fossci-chat-pending-form { display: inline-block; margin-right: 8px; margin-top: 8px; }
+        .platform-chat-messages { max-height: 55vh; overflow-y: auto; margin-bottom: 16px; padding: 12px; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); background: var(--platform-bg, #f8fafc); }
+        .platform-chat-msg { margin-bottom: 10px; padding: 8px 10px; border-radius: var(--platform-radius-sm, 8px); background: #fff; border: 1px solid var(--platform-border, #e2e8f0); }
+        .platform-chat-user { background: #eef2ff; }
+        .platform-chat-tool_result { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85rem; }
+        .platform-chat-compaction_summary { font-style: italic; color: var(--platform-muted, #64748b); }
+        .platform-chat-self_check { font-style: italic; color: var(--platform-muted, #64748b); border-left: 3px solid #fbbf24; }
+        .platform-chat-out-of-context { opacity: 0.45; }
+        .platform-chat-input-form { display: flex; gap: 8px; }
+        .platform-chat-input-form input[type=text] { flex: 1; padding: 8px 10px; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-sm, 8px); }
+        .platform-chat-pending { padding: 14px; border: 1px solid #fde68a; background: #fffbeb; border-radius: var(--platform-radius-md, 12px); }
+        .platform-chat-pending-form { display: inline-block; margin-right: 8px; margin-top: 8px; }
 """
 end
 
@@ -3925,9 +3925,9 @@ function render_chat_message(msg)
     if label == nil then
         label = msg.role
     end
-    css_class = "fossci-chat-msg fossci-chat-" .. msg.role
+    css_class = "platform-chat-msg platform-chat-" .. msg.role
     if tonumber(msg.in_context) == 0 then
-        css_class = css_class .. " fossci-chat-out-of-context"
+        css_class = css_class .. " platform-chat-out-of-context"
     end
     return "<div class=\"" .. css_class .. "\"><strong>" .. html.html_escape(label) .. ":</strong> " ..
         html.html_escape(msg.content) .. "</div>"
@@ -3938,7 +3938,7 @@ function render_chat_sessions_list(sessions, current_session_id)
     for _, s in ipairs(sessions) do
         css_class = ""
         if current_session_id != nil and s.id == current_session_id then
-            css_class = " class=\"fossci-chat-session-active\""
+            css_class = " class=\"platform-chat-session-active\""
         end
         label = s.title
         if label == nil or label == "" then
@@ -3946,15 +3946,15 @@ function render_chat_sessions_list(sessions, current_session_id)
         end
         started_at = ""
         if s.created_at != nil then
-            started_at = "<span class=\"fossci-chat-session-started\">" .. html.html_escape(s.created_at) .. "</span>"
+            started_at = "<span class=\"platform-chat-session-started\">" .. html.html_escape(s.created_at) .. "</span>"
         end
         items = items .. "<li" .. css_class .. "><a href=\"chat?session_id=" .. s.id .. "\">" ..
             html.html_escape(label) .. "</a>" .. started_at .. "</li>"
     end
     if items == "" then
-        return "<p class=\"fossci-empty\">No chats yet.</p>"
+        return "<p class=\"platform-empty\">No chats yet.</p>"
     end
-    return "<ul class=\"fossci-chat-sessions\">" .. items .. "</ul>"
+    return "<ul class=\"platform-chat-sessions\">" .. items .. "</ul>"
 end
 
 -- `pending`, if not nil, blocks the plain message input and shows an
@@ -3972,16 +3972,16 @@ function render_chat_pending(pending, csrf_token)
     end
 
     return string.format("""
-    <div class="fossci-chat-pending">
+    <div class="platform-chat-pending">
         <p><strong>The assistant wants to run:</strong> %s.%s</p>
         %s
-        <form method="POST" action="chat-approve" class="fossci-chat-pending-form">
+        <form method="POST" action="chat-approve" class="platform-chat-pending-form">
             <input type="hidden" name="csrf_token" value="%s">
             <input type="hidden" name="pending_id" value="%s">
             <input type="hidden" name="session_id" value="%s">
             <button type="submit" class="btn btn-primary">Approve</button>
         </form>
-        <form method="POST" action="chat-deny" class="fossci-chat-pending-form">
+        <form method="POST" action="chat-deny" class="platform-chat-pending-form">
             <input type="hidden" name="csrf_token" value="%s">
             <input type="hidden" name="pending_id" value="%s">
             <input type="hidden" name="session_id" value="%s">
@@ -4000,14 +4000,14 @@ function html.render_chat(sessions, session, messages, pending, csrf_token, nonc
     end
     sessions_html = render_chat_sessions_list(sessions, current_session_id)
 
-    main_html = "<p class=\"fossci-empty\">Start a new chat, or pick one from the list.</p>"
+    main_html = "<p class=\"platform-empty\">Start a new chat, or pick one from the list.</p>"
     if session != nil then
         messages_html = ""
         for _, msg in ipairs(messages) do
             messages_html = messages_html .. render_chat_message(msg)
         end
         if messages_html == "" then
-            messages_html = "<p class=\"fossci-empty\">No messages yet -- say something below.</p>"
+            messages_html = "<p class=\"platform-empty\">No messages yet -- say something below.</p>"
         end
 
         input_html = ""
@@ -4015,7 +4015,7 @@ function html.render_chat(sessions, session, messages, pending, csrf_token, nonc
             input_html = render_chat_pending(pending, csrf_token)
         else
             input_html = string.format("""
-        <form method="POST" action="chat-message" class="fossci-chat-input-form">
+        <form method="POST" action="chat-message" class="platform-chat-input-form">
             <input type="hidden" name="csrf_token" value="%s">
             <input type="hidden" name="session_id" value="%s">
             <input type="text" name="message" placeholder="Ask something, or ask the assistant to search or create a page..." required autofocus>
@@ -4024,7 +4024,7 @@ function html.render_chat(sessions, session, messages, pending, csrf_token, nonc
 """, html.html_escape(csrf_token), html.html_escape(session.id))
         end
 
-        main_html = "<div class=\"fossci-chat-messages\">" .. messages_html .. "</div>" .. input_html
+        main_html = "<div class=\"platform-chat-messages\">" .. messages_html .. "</div>" .. input_html
     end
 
     return string.format("""
@@ -4032,32 +4032,32 @@ function html.render_chat(sessions, session, messages, pending, csrf_token, nonc
     <style>
 %s
 %s
-        .fossci-header { margin-bottom: 20px; border-bottom: 1px solid var(--fossci-bg-2, #f1f5f9); padding-bottom: 16px; }
-        .fossci-chat-layout { display: grid; grid-template-columns: 220px 1fr; gap: 20px; }
-        .fossci-chat-sessions { list-style: none !important; margin: 0; padding: 0; }
-        .fossci-chat-sessions li { margin: 4px 0; display: flex; flex-direction: column; }
-        .fossci-chat-sessions a { color: var(--fossci-accent, #4f46e5); text-decoration: none; font-weight: 600; }
-        .fossci-chat-session-active a { text-decoration: underline; }
-        .fossci-chat-session-started { font-size: 0.75rem; color: var(--fossci-muted, #64748b); }
-        .fossci-chat-new-form { display: flex; gap: 6px; margin-bottom: 16px; }
-        .fossci-chat-new-form input[type=text] { flex: 1; padding: 6px 8px; border: 1px solid var(--fossci-border, #e2e8f0); border-radius: var(--fossci-radius-sm, 8px); }
-        .fossci-chat-messages { max-height: 55vh; overflow-y: auto; margin-bottom: 16px; padding: 12px; border: 1px solid var(--fossci-border, #e2e8f0); border-radius: var(--fossci-radius-md, 12px); background: var(--fossci-bg, #f8fafc); }
-        .fossci-chat-msg { margin-bottom: 10px; padding: 8px 10px; border-radius: var(--fossci-radius-sm, 8px); background: #fff; border: 1px solid var(--fossci-border, #e2e8f0); }
-        .fossci-chat-user { background: #eef2ff; }
-        .fossci-chat-tool_result { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85rem; }
-        .fossci-chat-compaction_summary { font-style: italic; color: var(--fossci-muted, #64748b); }
-        .fossci-chat-self_check { font-style: italic; color: var(--fossci-muted, #64748b); border-left: 3px solid #fbbf24; }
-        .fossci-chat-out-of-context { opacity: 0.45; }
-        .fossci-chat-input-form { display: flex; gap: 8px; }
-        .fossci-chat-input-form input[type=text] { flex: 1; padding: 8px 10px; border: 1px solid var(--fossci-border, #e2e8f0); border-radius: var(--fossci-radius-sm, 8px); }
-        .fossci-chat-pending { padding: 14px; border: 1px solid #fde68a; background: #fffbeb; border-radius: var(--fossci-radius-md, 12px); }
-        .fossci-chat-pending-form { display: inline-block; margin-right: 8px; margin-top: 8px; }
+        .platform-header { margin-bottom: 20px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; }
+        .platform-chat-layout { display: grid; grid-template-columns: 220px 1fr; gap: 20px; }
+        .platform-chat-sessions { list-style: none !important; margin: 0; padding: 0; }
+        .platform-chat-sessions li { margin: 4px 0; display: flex; flex-direction: column; }
+        .platform-chat-sessions a { color: var(--platform-accent, #4f46e5); text-decoration: none; font-weight: 600; }
+        .platform-chat-session-active a { text-decoration: underline; }
+        .platform-chat-session-started { font-size: 0.75rem; color: var(--platform-muted, #64748b); }
+        .platform-chat-new-form { display: flex; gap: 6px; margin-bottom: 16px; }
+        .platform-chat-new-form input[type=text] { flex: 1; padding: 6px 8px; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-sm, 8px); }
+        .platform-chat-messages { max-height: 55vh; overflow-y: auto; margin-bottom: 16px; padding: 12px; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); background: var(--platform-bg, #f8fafc); }
+        .platform-chat-msg { margin-bottom: 10px; padding: 8px 10px; border-radius: var(--platform-radius-sm, 8px); background: #fff; border: 1px solid var(--platform-border, #e2e8f0); }
+        .platform-chat-user { background: #eef2ff; }
+        .platform-chat-tool_result { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85rem; }
+        .platform-chat-compaction_summary { font-style: italic; color: var(--platform-muted, #64748b); }
+        .platform-chat-self_check { font-style: italic; color: var(--platform-muted, #64748b); border-left: 3px solid #fbbf24; }
+        .platform-chat-out-of-context { opacity: 0.45; }
+        .platform-chat-input-form { display: flex; gap: 8px; }
+        .platform-chat-input-form input[type=text] { flex: 1; padding: 8px 10px; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-sm, 8px); }
+        .platform-chat-pending { padding: 14px; border: 1px solid #fde68a; background: #fffbeb; border-radius: var(--platform-radius-md, 12px); }
+        .platform-chat-pending-form { display: inline-block; margin-right: 8px; margin-top: 8px; }
     </style>
-    <div class="fossci-container">
-        <div class="fossci-header"><h2>Chat</h2></div>
-        <div class="fossci-chat-layout">
+    <div class="platform-container">
+        <div class="platform-header"><h2>Chat</h2></div>
+        <div class="platform-chat-layout">
             <div>
-                <form method="POST" action="chat-start" class="fossci-chat-new-form">
+                <form method="POST" action="chat-start" class="platform-chat-new-form">
                     <input type="hidden" name="csrf_token" value="%s">
                     <input type="text" name="title" placeholder="New chat title">
                     <button type="submit" class="btn btn-secondary">+</button>
@@ -4070,7 +4070,7 @@ function html.render_chat(sessions, session, messages, pending, csrf_token, nonc
         </div>
     </div>
 </div>
-""", fossci_container_css(1200), fossci_button_css(), html.html_escape(csrf_token), sessions_html, main_html)
+""", platform_container_css(1200), platform_button_css(), html.html_escape(csrf_token), sessions_html, main_html)
 end
 
 --------------------------------------------------------------------------
@@ -4081,25 +4081,25 @@ end
 -- the browser's localStorage (not server-rendered state), so it
 -- survives a normal, full-page navigation between one platform page
 -- and the next the same way it would if this were a true SPA.
-function fossci_chat_widget_css()
+function platform_chat_widget_css()
     return """
-.fossci-chat-widget { position: fixed; right: 20px; bottom: 20px; z-index: 1000; font-family: inherit; }
-.fossci-chat-widget-toggle {
+.platform-chat-widget { position: fixed; right: 20px; bottom: 20px; z-index: 1000; font-family: inherit; }
+.platform-chat-widget-toggle {
     width: 56px; height: 56px; border-radius: 50%;
-    background: var(--fossci-accent, #4f46e5); color: #ffffff; border: none;
+    background: var(--platform-accent, #4f46e5); color: #ffffff; border: none;
     box-shadow: 0 4px 14px rgba(0,0,0,0.2); cursor: pointer;
     display: flex; align-items: center; justify-content: center;
-    transition: var(--fossci-transition, all 0.15s ease);
+    transition: var(--platform-transition, all 0.15s ease);
 }
-.fossci-chat-widget-toggle:hover { filter: brightness(1.08); }
-.fossci-chat-widget-panel {
+.platform-chat-widget-toggle:hover { filter: brightness(1.08); }
+.platform-chat-widget-panel {
     position: absolute; right: 0; bottom: 64px; width: 320px; height: 440px;
     min-width: 280px; min-height: 320px; max-width: 90vw; max-height: 80vh;
-    background: var(--fossci-bg, #ffffff); border: 1px solid var(--fossci-border, #e2e8f0);
-    border-radius: var(--fossci-radius-md, 12px); box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+    background: var(--platform-bg, #ffffff); border: 1px solid var(--platform-border, #e2e8f0);
+    border-radius: var(--platform-radius-md, 12px); box-shadow: 0 10px 30px rgba(0,0,0,0.2);
     display: none; flex-direction: column; overflow: hidden;
 }
-.fossci-chat-widget.fossci-chat-widget-open .fossci-chat-widget-panel { display: flex; }
+.platform-chat-widget.platform-chat-widget-open .platform-chat-widget-panel { display: flex; }
 /* Native CSS `resize: both` always draws its drag handle at the
    element's own bottom-right corner -- wrong here, since this panel
    is anchored bottom-right (right:0; bottom:64px) and grows up and to
@@ -4107,73 +4107,73 @@ function fossci_chat_widget_css()
    the bottom-right (which sits jammed against the toggle button and
    screen edge). `resize` has no way to relocate its handle to another
    corner, so this is a small custom drag handle + JS instead. */
-.fossci-chat-widget-resize-handle {
+.platform-chat-widget-resize-handle {
     position: absolute; top: 0; left: 0; width: 16px; height: 16px;
     cursor: nwse-resize; z-index: 1;
 }
-.fossci-chat-widget-resize-handle::before {
+.platform-chat-widget-resize-handle::before {
     content: ""; position: absolute; top: 5px; left: 5px; width: 7px; height: 7px;
-    border-top: 2px solid var(--fossci-border-2, #cbd5e1);
-    border-left: 2px solid var(--fossci-border-2, #cbd5e1);
+    border-top: 2px solid var(--platform-border-2, #cbd5e1);
+    border-left: 2px solid var(--platform-border-2, #cbd5e1);
 }
-.fossci-chat-widget-header {
-    padding: 12px 14px; border-bottom: 1px solid var(--fossci-border, #e2e8f0);
-    font-weight: 700; color: var(--fossci-heading, #0f172a); font-size: 0.95rem;
+.platform-chat-widget-header {
+    padding: 12px 14px; border-bottom: 1px solid var(--platform-border, #e2e8f0);
+    font-weight: 700; color: var(--platform-heading, #0f172a); font-size: 0.95rem;
     display: flex; align-items: center; justify-content: space-between;
 }
-.fossci-chat-widget-new {
-    background: none; border: 1px solid var(--fossci-border, #e2e8f0); border-radius: var(--fossci-radius-sm, 8px);
-    color: var(--fossci-accent, #4f46e5); font-size: 0.75rem; font-weight: 600; padding: 3px 8px; cursor: pointer;
+.platform-chat-widget-new {
+    background: none; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-sm, 8px);
+    color: var(--platform-accent, #4f46e5); font-size: 0.75rem; font-weight: 600; padding: 3px 8px; cursor: pointer;
 }
-.fossci-chat-widget-new:hover { background: var(--fossci-bg-2, #f1f5f9); }
-.fossci-chat-widget-messages { flex: 1; overflow-y: auto; padding: 10px; }
-.fossci-chat-widget-messages .fossci-chat-msg { font-size: 0.85rem; }
-.fossci-chat-widget-input {
-    display: flex; gap: 6px; padding: 10px; border-top: 1px solid var(--fossci-border, #e2e8f0);
+.platform-chat-widget-new:hover { background: var(--platform-bg-2, #f1f5f9); }
+.platform-chat-widget-messages { flex: 1; overflow-y: auto; padding: 10px; }
+.platform-chat-widget-messages .platform-chat-msg { font-size: 0.85rem; }
+.platform-chat-widget-input {
+    display: flex; gap: 6px; padding: 10px; border-top: 1px solid var(--platform-border, #e2e8f0);
 }
-.fossci-chat-widget-input input[type=text] {
-    flex: 1; padding: 8px 10px; border: 1px solid var(--fossci-border, #e2e8f0);
-    border-radius: var(--fossci-radius-sm, 8px); font-size: 0.85rem;
+.platform-chat-widget-input input[type=text] {
+    flex: 1; padding: 8px 10px; border: 1px solid var(--platform-border, #e2e8f0);
+    border-radius: var(--platform-radius-sm, 8px); font-size: 0.85rem;
 }
-.fossci-chat-widget-empty { padding: 20px; text-align: center; color: var(--fossci-muted, #64748b); font-size: 0.85rem; }
-.fossci-chat-widget-thinking { padding: 8px 10px; color: var(--fossci-muted, #64748b); font-size: 0.85rem; font-style: italic; }
-.fossci-chat-widget-error { padding: 8px 10px; color: #991b1b; background: #fef2f2; border: 1px solid #fecaca; border-radius: var(--fossci-radius-sm, 8px); font-size: 0.85rem; margin: 4px 0; }
-.fossci-chat-feedback { display: flex; gap: 4px; margin: 2px 0 8px 0; }
-.fossci-chat-feedback button {
-    background: none; border: 1px solid transparent; border-radius: var(--fossci-radius-sm, 8px);
+.platform-chat-widget-empty { padding: 20px; text-align: center; color: var(--platform-muted, #64748b); font-size: 0.85rem; }
+.platform-chat-widget-thinking { padding: 8px 10px; color: var(--platform-muted, #64748b); font-size: 0.85rem; font-style: italic; }
+.platform-chat-widget-error { padding: 8px 10px; color: #991b1b; background: #fef2f2; border: 1px solid #fecaca; border-radius: var(--platform-radius-sm, 8px); font-size: 0.85rem; margin: 4px 0; }
+.platform-chat-feedback { display: flex; gap: 4px; margin: 2px 0 8px 0; }
+.platform-chat-feedback button {
+    background: none; border: 1px solid transparent; border-radius: var(--platform-radius-sm, 8px);
     font-size: 0.85rem; padding: 1px 5px; cursor: pointer; line-height: 1.4; opacity: 0.6;
 }
-.fossci-chat-feedback button:hover { opacity: 1; border-color: var(--fossci-border, #e2e8f0); background: var(--fossci-bg-2, #f1f5f9); }
-.fossci-chat-feedback button.fossci-feedback-pressed { opacity: 1; border-color: var(--fossci-border, #e2e8f0); background: var(--fossci-bg-2, #f1f5f9); }
-.fossci-chat-feedback button:disabled { cursor: default; }
-.fossci-chat-feedback-error { color: #991b1b; font-size: 0.85rem; }
+.platform-chat-feedback button:hover { opacity: 1; border-color: var(--platform-border, #e2e8f0); background: var(--platform-bg-2, #f1f5f9); }
+.platform-chat-feedback button.platform-feedback-pressed { opacity: 1; border-color: var(--platform-border, #e2e8f0); background: var(--platform-bg-2, #f1f5f9); }
+.platform-chat-feedback button:disabled { cursor: default; }
+.platform-chat-feedback-error { color: #991b1b; font-size: 0.85rem; }
 """
 end
 
 function html.render_chat_widget(nonce)
     return string.format("""
-<div class="fossci-chat-widget" id="fossci-chat-widget">
-    <div class="fossci-chat-widget-panel">
-        <div class="fossci-chat-widget-resize-handle" id="fossci-chat-widget-resize-handle"></div>
-        <div class="fossci-chat-widget-header">Chat<button type="button" class="fossci-chat-widget-new" id="fossci-chat-widget-new" title="Start a new chat">+ New</button></div>
-        <div class="fossci-chat-widget-messages" id="fossci-chat-widget-messages">
-            <p class="fossci-chat-widget-empty">Ask something, or ask the assistant to search or create a page...</p>
+<div class="platform-chat-widget" id="platform-chat-widget">
+    <div class="platform-chat-widget-panel">
+        <div class="platform-chat-widget-resize-handle" id="platform-chat-widget-resize-handle"></div>
+        <div class="platform-chat-widget-header">Chat<button type="button" class="platform-chat-widget-new" id="platform-chat-widget-new" title="Start a new chat">+ New</button></div>
+        <div class="platform-chat-widget-messages" id="platform-chat-widget-messages">
+            <p class="platform-chat-widget-empty">Ask something, or ask the assistant to search or create a page...</p>
         </div>
-        <form class="fossci-chat-widget-input" id="fossci-chat-widget-form">
-            <input type="text" id="fossci-chat-widget-text" placeholder="Message" required autofocus>
+        <form class="platform-chat-widget-input" id="platform-chat-widget-form">
+            <input type="text" id="platform-chat-widget-text" placeholder="Message" required autofocus>
             <button type="submit" class="btn btn-primary">Send</button>
         </form>
     </div>
-    <button type="button" class="fossci-chat-widget-toggle" id="fossci-chat-widget-toggle" aria-label="Chat">%s</button>
+    <button type="button" class="platform-chat-widget-toggle" id="platform-chat-widget-toggle" aria-label="Chat">%s</button>
 </div>
 <script nonce="%s">
 (function(){
     var STORAGE_KEY = 'platform_chat_widget_session';
-    var root = document.getElementById('fossci-chat-widget');
-    var toggle = document.getElementById('fossci-chat-widget-toggle');
-    var messagesEl = document.getElementById('fossci-chat-widget-messages');
-    var form = document.getElementById('fossci-chat-widget-form');
-    var input = document.getElementById('fossci-chat-widget-text');
+    var root = document.getElementById('platform-chat-widget');
+    var toggle = document.getElementById('platform-chat-widget-toggle');
+    var messagesEl = document.getElementById('platform-chat-widget-messages');
+    var form = document.getElementById('platform-chat-widget-form');
+    var input = document.getElementById('platform-chat-widget-text');
 
     function getCsrfToken() {
         var match = document.cookie.match(/(?:^|;\\s*)csrf=([^;]*)/);
@@ -4204,18 +4204,18 @@ function html.render_chat_widget(nonce)
     }
     function render(state) {
         if (!state || !state.messages || state.messages.length === 0) {
-            messagesEl.innerHTML = '<p class="fossci-chat-widget-empty">Ask something, or ask the assistant to search or create a page...</p>';
+            messagesEl.innerHTML = '<p class="platform-chat-widget-empty">Ask something, or ask the assistant to search or create a page...</p>';
         } else {
             var html = '';
             state.messages.forEach(function(msg){
                 var label = ROLE_LABELS[msg.role] || msg.role;
-                html += '<div class="fossci-chat-msg fossci-chat-' + msg.role + '"><strong>' + escapeHtml(label) + ':</strong> ' + escapeHtml(msg.content) + '</div>';
+                html += '<div class="platform-chat-msg platform-chat-' + msg.role + '"><strong>' + escapeHtml(label) + ':</strong> ' + escapeHtml(msg.content) + '</div>';
                 // task #87: feedback only makes sense on a real answer --
                 // not on the user's own message, a tool result, or a
                 // compaction summary the user never actually sees as a
                 // "reply".
                 if (msg.role === 'assistant') {
-                    html += '<div class="fossci-chat-feedback" data-feedback-for="' + msg.id + '">' +
+                    html += '<div class="platform-chat-feedback" data-feedback-for="' + msg.id + '">' +
                         '<button type="button" data-feedback-message="' + msg.id + '" data-feedback="up" title="Helpful">👍</button>' +
                         '<button type="button" data-feedback-message="' + msg.id + '" data-feedback="down" title="Not helpful">👎</button>' +
                         '</div>';
@@ -4226,7 +4226,7 @@ function html.render_chat_widget(nonce)
         if (state && state.pending) {
             var argsLines = '';
             for (var k in state.pending.args) { argsLines += '<div>' + escapeHtml(k) + ' = ' + escapeHtml(state.pending.args[k]) + '</div>'; }
-            messagesEl.innerHTML += '<div class="fossci-chat-pending"><p><strong>Run:</strong> ' + escapeHtml(state.pending.tool) + '.' + escapeHtml(state.pending.method) + '</p>' + argsLines +
+            messagesEl.innerHTML += '<div class="platform-chat-pending"><p><strong>Run:</strong> ' + escapeHtml(state.pending.tool) + '.' + escapeHtml(state.pending.method) + '</p>' + argsLines +
                 '<button type="button" class="btn btn-primary" data-approve="' + state.pending.id + '">Approve</button> ' +
                 '<button type="button" class="btn btn-secondary" data-deny="' + state.pending.id + '">Deny</button></div>';
             form.style.display = 'none';
@@ -4255,14 +4255,14 @@ function html.render_chat_widget(nonce)
 
     var OPEN_KEY = 'platform_chat_widget_open';
     var SIZE_KEY = 'platform_chat_widget_size';
-    var panel = root.querySelector('.fossci-chat-widget-panel');
+    var panel = root.querySelector('.platform-chat-widget-panel');
 
     // A full page load (not a SPA route change) re-renders this whole
     // widget from scratch every navigation, so "is the panel open"
     // needs its own persisted flag -- same reasoning as the session id
     // itself, just for UI state instead of conversation state.
     if (localStorage.getItem(OPEN_KEY) === '1') {
-        root.classList.add('fossci-chat-widget-open');
+        root.classList.add('platform-chat-widget-open');
     }
     var savedSize = localStorage.getItem(SIZE_KEY);
     if (savedSize) {
@@ -4282,7 +4282,7 @@ function html.render_chat_widget(nonce)
         }).observe(panel);
     }
 
-    var resizeHandle = document.getElementById('fossci-chat-widget-resize-handle');
+    var resizeHandle = document.getElementById('platform-chat-widget-resize-handle');
     resizeHandle.addEventListener('mousedown', function(e){
         e.preventDefault();
         var startX = e.clientX, startY = e.clientY;
@@ -4306,18 +4306,18 @@ function html.render_chat_widget(nonce)
     });
 
     toggle.addEventListener('click', function(){
-        var isOpen = root.classList.toggle('fossci-chat-widget-open');
+        var isOpen = root.classList.toggle('platform-chat-widget-open');
         localStorage.setItem(OPEN_KEY, isOpen ? '1' : '0');
     });
 
-    document.getElementById('fossci-chat-widget-new').addEventListener('click', function(){
+    document.getElementById('platform-chat-widget-new').addEventListener('click', function(){
         localStorage.removeItem(STORAGE_KEY);
         render(null);
     });
 
     function showThinking() {
         var el = document.createElement('div');
-        el.className = 'fossci-chat-widget-thinking';
+        el.className = 'platform-chat-widget-thinking';
         el.textContent = 'Thinking...';
         messagesEl.appendChild(el);
         messagesEl.scrollTop = messagesEl.scrollHeight;
@@ -4336,7 +4336,7 @@ function html.render_chat_widget(nonce)
     // to be a client-side-only message instead.
     function showFetchError() {
         var el = document.createElement('div');
-        el.className = 'fossci-chat-widget-error';
+        el.className = 'platform-chat-widget-error';
         el.textContent = 'Something went wrong sending that -- please try again.';
         messagesEl.appendChild(el);
         messagesEl.scrollTop = messagesEl.scrollHeight;
@@ -4380,7 +4380,7 @@ function html.render_chat_widget(nonce)
         } else if (e.target.hasAttribute('data-feedback')) {
             var messageId = e.target.getAttribute('data-feedback-message');
             var feedback = e.target.getAttribute('data-feedback');
-            var container = e.target.closest('.fossci-chat-feedback');
+            var container = e.target.closest('.platform-chat-feedback');
             // task #115: mark the clicked button as pressed and disable
             // both immediately, before the request even resolves --
             // previously nothing happened visually until (and unless)
@@ -4388,10 +4388,10 @@ function html.render_chat_widget(nonce)
             // "the button does nothing" even when it was working.
             if (container) {
                 container.querySelectorAll('button').forEach(function(b){ b.disabled = true; });
-                e.target.classList.add('fossci-feedback-pressed');
+                e.target.classList.add('platform-feedback-pressed');
             }
             function showFeedbackError() {
-                if (container) { container.innerHTML = '<span class="fossci-chat-feedback-error">Couldn\'t record feedback.</span>'; }
+                if (container) { container.innerHTML = '<span class="platform-chat-feedback-error">Couldn\'t record feedback.</span>'; }
             }
             post('api/chat-widget-feedback', {message_id: messageId, feedback: feedback}).then(function(result){
                 if (!container) return;

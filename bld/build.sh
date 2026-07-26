@@ -64,9 +64,8 @@ if [ ! -f "$LUAM_LIB" ]; then
     exit 1
 fi
 
-# Entry point filename -- placeholder "main.lua" until the project has
-# a real name (see doc/backend-migration-plan.md in the fossci repo).
-# Rename this + the ENTRY var below together when that's decided.
+# Entry point filename -- a conventional "main.lua", independent of
+# the project's own name (BIN_NAME below); no reason to couple the two.
 ENTRY="main.lua"
 ENTRY_STEM="${ENTRY%.lua}"
 BIN_NAME="platform"
@@ -130,8 +129,7 @@ else
     echo "libmariadb-dev not found -- building without MariaDB support (SQLite only)"
 fi
 
-# Inject lsqlite3, lfs, bcrypt, and hmac preload -- same reasoning as
-# fossci's own build.sh for the first two (schemas/views/templates are
+# Inject lsqlite3, lfs, bcrypt, and hmac preload (schemas/views/templates are
 # plain Luam table files, no YAML/JSON parser needed; lfs is a native C
 # extension that must be compiled and preload-injected rather than
 # copied as a .lua file). bcrypt (luam/lib/bcrypt/bcrypt.c) and hmac

@@ -5,7 +5,7 @@ set -euo pipefail
 # standalone scripts that exit non-zero on failure) plus bats
 # integration/CGI tests (tst/integration/*.bats, exercising the real
 # built binary end to end -- see tst/integration/test_helper.bash).
-# Mirrors fossci/luametry/brain-ex's own bld/test.sh + tst/*.bats
+# Mirrors luametry/brain-ex's own bld/test.sh + tst/*.bats
 # conventions.
 #
 # Requires `bats` on PATH (apt install bats / brew install bats-core) and
