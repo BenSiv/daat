@@ -435,6 +435,116 @@ EOF
     [ "$output" -eq 1 ]
 }
 
+@test "research.investigate runs its own isolated multi-step lookup and returns a synthesized finding" {
+    write_task_schema
+    write_task_note_schema
+    "$BIN" entity create task title="Ship it" status=open >/dev/null
+    task_id=$(sqlite3 "$TEST_DIR/.store/store.db" "SELECT id FROM task WHERE title = 'Ship it';")
+    "$BIN" entity create task_note body="first note" task="$task_id" >/dev/null
+    "$BIN" entity create task_note body="second note" task="$task_id" >/dev/null
+
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    sql="SELECT COUNT(*) AS note_count FROM task_note JOIN task ON task_note.task = task.id WHERE task.title = 'Ship it'"
+    scripted="$(tool_call_response "research.investigate" '{"question":"how many task_notes reference the Ship it task"}')"$'\1'"$(tool_call_response "entity.query" "$(printf '{"sql":"%s"}' "$sql")")"$'\1'"$(done_response "Found note_count=2 via a join on task_note.task = task.id.")"$'\1'"$(done_response "The Ship it task has 2 notes.")"
+    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=dig+into+how+many+notes+the+Ship+it+task+has" "$COOKIE" "$scripted" >/dev/null
+
+    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    [[ "$output" =~ "The Ship it task has 2 notes." ]]
+    [[ "$output" =~ "Found note_count=2" ]]
+
+    # The sub-loop's own entity.query call never becomes a separate,
+    # real tool_result row in this session -- only research.investigate's
+    # own synthesized finding does (its noise stays isolated).
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM agent_message WHERE session_id = '${session_id}' AND role = 'tool_result';"
+    [ "$output" -eq 1 ]
+}
+
+@test "research.investigate refuses a destructive action even if the sub-loop tries one, and cannot recurse into itself" {
+    write_task_schema
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(tool_call_response "research.investigate" '{"question":"create a task"}')"$'\1'"$(tool_call_response "entity.create" '{"entity_type":"task","title":"Sneaky","status":"open"}')"$'\1'"$(done_response "I could not create anything -- research is read-only.")"$'\1'"$(done_response "Research reported it cannot write data.")"
+    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=try+to+sneak+in+a+write+via+research" "$COOKIE" "$scripted" >/dev/null
+
+    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    [[ "$output" =~ "Research reported it cannot write data." ]]
+
+    # Never actually created, and never even paused for approval -- the
+    # destructive call inside the sub-loop was refused outright.
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM task;"
+    [ "$output" -eq 0 ]
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM agent_pending_action;"
+    [ "$output" -eq 0 ]
+}
+
+@test "research.investigate stops after its own bounded turn budget instead of hanging indefinitely" {
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(tool_call_response "research.investigate" '{"question":"loop forever"}')"
+    for i in 1 2 3 4 5 6; do
+        scripted="${scripted}"$'\1'"$(tool_call_response "entity.list_types" '{}')"
+    done
+    scripted="${scripted}"$'\1'"$(done_response "Giving up after the budget ran out.")"
+    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=keep+digging+forever" "$COOKIE" "$scripted" >/dev/null
+
+    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    [[ "$output" =~ "exceeded its turn budget" ]]
+}
+
+@test "clarify.ask ends the turn with the real question visible, no self-check, and the conversation continues normally afterward" {
+    write_task_schema
+    "$BIN" entity create task title="Ship it" status=open >/dev/null
+    "$BIN" entity create task title="Draft plan" status=open >/dev/null
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(tool_call_response "clarify.ask" '{"question":"There are two open tasks -- did you mean Ship it or Draft plan?"}')"
+    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=archive+the+task" "$COOKIE" "$scripted" >/dev/null
+
+    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    [[ "$output" =~ "did you mean" ]]
+    [[ "$output" =~ "Ship it" ]]
+    [[ "$output" =~ "Draft plan" ]]
+    # The real question is shown directly, not the generic tool-call line.
+    [[ ! "$output" =~ "clarify.ask(...)" ]]
+
+    # No self-check ran -- there's no answer yet to critique.
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM agent_message WHERE session_id = '${session_id}' AND role = 'self_check';"
+    [ "$output" -eq 0 ]
+
+    # The user's own next message is the answer -- an ordinary
+    # /chat-message continues this same session with no special resume
+    # endpoint, unlike a destructive pending action.
+    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=Ship+it" "$COOKIE" "$(done_response "Archived Ship it.")" >/dev/null
+    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    [[ "$output" =~ "Archived Ship it." ]]
+}
+
+@test "clarify.ask takes priority over a destructive call proposed in the same turn -- asks first, never pauses the write" {
+    write_task_schema
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(multi_tool_call_response \
+        "clarify.ask" '{"question":"What status should the new task have?"}' \
+        "entity.create" '{"entity_type":"task","title":"Ambiguous","status":"open"}')"
+    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=create+a+task" "$COOKIE" "$scripted" >/dev/null
+
+    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    [[ "$output" =~ "What status should the new task have?" ]]
+
+    # Never created, and never even queued as a pending approval -- the
+    # question takes priority over the write proposed in the same turn.
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM task;"
+    [ "$output" -eq 0 ]
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM agent_pending_action;"
+    [ "$output" -eq 0 ]
+}
+
 @test "entity.list and entity.get read real rows (non-destructive, auto-executes)" {
     write_task_schema
     "$BIN" entity create task title="Ship it" status=open >/dev/null
@@ -451,6 +561,63 @@ EOF
     raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=show+task+1" "$COOKIE" "$scripted2" >/dev/null
     run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
     [[ "$output" =~ "status=open" ]]
+}
+
+@test "entity.validate reports real issues for an invalid create, without writing or queuing anything" {
+    write_task_schema
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(tool_call_response "entity.validate" '{"entity_type":"task","status":"bogus"}')"$'\1'"$(done_response "Checked.")"
+    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=would+this+be+valid" "$COOKIE" "$scripted" >/dev/null
+
+    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    [[ "$output" =~ "title: required field is missing" ]]
+    [[ "$output" =~ "status: must be one of the declared values" ]]
+
+    # A pure check -- never actually created, and never even queued for
+    # human approval the way a real entity.create attempt would be.
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM task;"
+    [ "$output" -eq 0 ]
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM agent_pending_action;"
+    [ "$output" -eq 0 ]
+}
+
+@test "entity.validate reports Valid for good values, and still writes nothing" {
+    write_task_schema
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(tool_call_response "entity.validate" '{"entity_type":"task","title":"Ship it","status":"open"}')"$'\1'"$(done_response "That would be valid.")"
+    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=would+this+be+valid" "$COOKIE" "$scripted" >/dev/null
+
+    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    [[ "$output" =~ "Valid" ]]
+
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM task;"
+    [ "$output" -eq 0 ]
+}
+
+@test "entity.validate with entity_id checks the merged row (update-mode), not a fresh create" {
+    write_task_schema
+    "$BIN" entity create task title="Ship it" status=open >/dev/null
+    task_id=$(sqlite3 "$TEST_DIR/.store/store.db" "SELECT id FROM task WHERE title = 'Ship it';")
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    # Only status is given -- a fresh-create validation would flag title
+    # as missing, but an update against the existing row should not,
+    # since the current row's own title fills in the merge.
+    scripted="$(tool_call_response "entity.validate" "$(printf '{"entity_type":"task","entity_id":%s,"status":"done"}' "$task_id")")"$'\1'"$(done_response "That update would be valid.")"
+    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=would+marking+it+done+be+valid" "$COOKIE" "$scripted" >/dev/null
+
+    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    [[ "$output" =~ "Valid" ]]
+    [[ ! "$output" =~ "title: required field is missing" ]]
+
+    # Still just a check -- the real row is untouched.
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT status FROM task WHERE id = ${task_id};"
+    [ "$output" = "open" ]
 }
 
 @test "entity.create is destructive: pauses for approval, then really creates the row once approved" {

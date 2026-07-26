@@ -272,6 +272,13 @@ end
 -- clean final answer, not the model's own reasoning inline; the
 -- reasoning itself is split out into a separate Knowledge Pool
 -- document instead (see run_turn's own reasoning_document_id handling).
+--
+-- clarify.ask is the one toolCall rendered as its real payload instead
+-- of "-> name(...)" -- its argument IS the message meant for the user
+-- (the question to answer), not internal plumbing they don't need to
+-- see; showing "-> clarify.ask(...)" instead of the actual question
+-- would leave the person reading the transcript with nothing to
+-- actually respond to.
 function display_blocks(blocks)
     if blocks == nil then
         return ""
@@ -280,6 +287,15 @@ function display_blocks(blocks)
     for _, block in ipairs(blocks) do
         if block.type == "text" and block.text != nil then
             table.insert(parts, block.text)
+        elseif block.type == "toolCall" and block.name == "clarify.ask" then
+            question = nil
+            if block.arguments != nil then
+                question = block.arguments.question
+            end
+            if question == nil then
+                question = "(no question given)"
+            end
+            table.insert(parts, question)
         elseif block.type == "toolCall" then
             table.insert(parts, "-> " .. tostring(block.name) .. "(...)")
         end
@@ -615,6 +631,28 @@ AGENT_TOOLS = {
                 required = {"entity_type", "entity_id"},
             },
         },
+        -- Grounded, real feedback for a write BEFORE it's ever proposed --
+        -- runs the exact same schema-driven check (required/type/reference/
+        -- reason-on-update rules) entity.create/entity.update themselves
+        -- run first, via the same underlying entity.validate function,
+        -- but never writes anything. Exists because a destructive call
+        -- only actually runs after a human approves it (agent.
+        -- create_pending_action) -- without this, an invalid create/update
+        -- wastes a whole human-approval round-trip just to fail, instead
+        -- of the model catching it itself beforehand.
+        validate = {
+            destructive = false,
+            description = "Check whether values are valid for an entity type, without writing anything -- runs the same validation entity.create/entity.update would apply (required fields, types, valid references, reason-required-on-update rules). Pass entity_type plus one property per field, same as entity.create; also pass entity_id to validate as an UPDATE against that row's current values instead of a fresh create. Use this before entity.create/entity.update on anything non-obvious, so an invalid write is caught here instead of failing only after a human approves it.",
+            parameters = {
+                type = "OBJECT",
+                properties = {
+                    entity_type = {type = "STRING"},
+                    entity_id = {type = "INTEGER", description = "optional: validate as an update against this existing row instead of a fresh create"},
+                },
+                required = {"entity_type"},
+                additionalProperties = true,
+            },
+        },
         create = {
             destructive = true,
             description = "Create a new entity row. Pass entity_type plus one property per field the entity type actually has (call entity.fields first if unsure).",
@@ -715,6 +753,50 @@ AGENT_TOOLS = {
                     source_document_id = {type = "INTEGER", description = "optional: the existing document this was distilled from"},
                 },
                 required = {"title", "content"},
+            },
+        },
+    },
+    -- A general-purpose sub-agent primitive, not another named point-fix
+    -- tool: delegates one focused sub-question to an isolated,
+    -- read-only tool-calling loop (see run_research_loop) that can dig
+    -- in from multiple angles -- checking entity.relationships for a
+    -- join path, retrying entity.query a different way -- before
+    -- concluding an answer, the same structural idea Claude Code's own
+    -- Task/Explore sub-agents use to isolate exploratory noise from the
+    -- main conversation. Exists because the main turn loop's own budget
+    -- (MAX_TURNS) and context (everything the eventual self-check judges
+    -- the final answer against) both get spent by trial-and-error
+    -- digging otherwise -- this gives the model somewhere to do that
+    -- digging without either cost.
+    research = {
+        investigate = {
+            destructive = false,
+            description = "Delegate a focused sub-question to an isolated research pass that can run its own series of read-only lookups (entity.fields/entity.relationships/entity.query/entity.list/entity.get, document.search, knowledge.list/stats) before answering. Use this instead of a single direct lookup when a question genuinely needs digging -- a count/aggregate, a relationship you haven't already confirmed, anything where a first attempt coming up empty shouldn't be trusted without a different angle tried. Returns a synthesized, grounded finding, not raw rows -- the queries it runs along the way are not added to this conversation.",
+            parameters = {
+                type = "OBJECT",
+                properties = {question = {type = "STRING", description = "the specific sub-question to research"}},
+                required = {"question"},
+            },
+        },
+    },
+    -- A structural escape hatch for genuine ambiguity/missing information,
+    -- so "ask instead of guessing" is a real, code-recognized outcome
+    -- (agent.run_turn's own clarify_call handling below) rather than the
+    -- model just writing a question as ordinary final text -- which reads
+    -- to the turn loop (and self-check) exactly like any other answer,
+    -- with nothing distinguishing "I'm done" from "I'm stuck and asking."
+    -- Ends the turn immediately, before self-check runs (there's no
+    -- answer yet to critique) -- the user's own next message is the
+    -- reply, handled by the normal /chat-message flow, no separate
+    -- approve/deny step the way a destructive pending action needs.
+    clarify = {
+        ask = {
+            destructive = false,
+            description = "Ask the user one clarifying question instead of guessing or giving up, when the request genuinely has more than one reasonable interpretation that would lead to a different answer or action, or is missing information you can't reasonably infer yourself or find with a tool. Try looking it up first -- don't ask for something a tool call could answer. Ends this turn; the user's next message is the answer.",
+            parameters = {
+                type = "OBJECT",
+                properties = {question = {type = "STRING", description = "the specific question to ask the user"}},
+                required = {"question"},
             },
         },
     },
@@ -1030,6 +1112,57 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
         return row_summary(row)
     end
 
+    if tool_name == "entity" and method_name == "validate" then
+        if args.entity_type == nil then
+            return nil, "validate requires entity_type"
+        end
+        values = {}
+        for k, v in pairs(args) do
+            if k != "entity_type" and k != "entity_id" then
+                values[k] = v
+            end
+        end
+        target_id = tonumber(args.entity_id)
+        issues = nil
+        if target_id != nil then
+            current = entity.get(db_path, args.entity_type, target_id)
+            if current == nil then
+                return nil, "no such " .. tostring(args.entity_type) .. " #" .. tostring(target_id)
+            end
+            merged = {}
+            for k, v in pairs(current) do
+                merged[k] = v
+            end
+            for k, v in pairs(values) do
+                merged[k] = v
+            end
+            issues = entity.validate(db_path, args.entity_type, merged, current)
+        else
+            issues = entity.validate(db_path, args.entity_type, values)
+        end
+
+        blocking = false
+        lines = {}
+        for _, issue in ipairs(issues) do
+            field = issue.field
+            if field == nil then
+                field = "(general)"
+            end
+            table.insert(lines, string.format("[%s] %s: %s", tostring(issue.severity), field, tostring(issue.message)))
+            if issue.severity == "error" then
+                blocking = true
+            end
+        end
+        if #lines == 0 then
+            return "Valid -- entity.create/entity.update would succeed as given."
+        end
+        result = table.concat(lines, "\n")
+        if blocking == false then
+            result = result .. "\n\n(no blocking errors -- entity.create/entity.update would still succeed)"
+        end
+        return result
+    end
+
     if tool_name == "entity" and method_name == "create" then
         if args.entity_type == nil then
             return nil, "create requires entity_type"
@@ -1191,6 +1324,23 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
             return nil, tostring(err)
         end
         return "Distilled document #" .. tostring(document_id) .. " (source #" .. tostring(args.source_document_id) .. ")"
+    end
+
+    -- agent.default_model() here, not a model threaded through this
+    -- whole call chain -- every real call site (cgi.lua's chat routes,
+    -- main.lua's knowledge distillation) already resolves `model` the
+    -- exact same way before ever calling agent.run_turn, so this is the
+    -- same model the outer turn is already using in every real case,
+    -- without widening agent.execute_tool's own signature for it.
+    if tool_name == "research" and method_name == "investigate" then
+        if args.question == nil then
+            return nil, "investigate requires question"
+        end
+        finding, err = run_research_loop(db_path, author, session_id, agent.default_model(), args.question)
+        if finding == nil then
+            return nil, tostring(err)
+        end
+        return finding
     end
 
     return nil, "unknown tool: " .. tostring(tool_name) .. "." .. tostring(method_name)
@@ -1377,8 +1527,8 @@ When creating or updating a record, fill in optional fields you can
 reasonably infer from the request instead of leaving them blank (e.g. a
 concise subject/title summarizing what was asked, a sensible due date if one
 is clearly implied) -- the same judgment call a person filling out the same
-form by hand would make. If a field is genuinely ambiguous, ask rather than
-guessing.
+form by hand would make. If a field is genuinely ambiguous, use clarify.ask
+rather than guessing.
 
 When asked to write a Markdown table with specific rows and/or columns,
 actually include every named row as a real data row, not just a header --
@@ -1389,10 +1539,10 @@ incomplete answer, not a done one.
 
 If your first attempt at something (a search, a lookup) doesn't find what
 you need, try again a different way (different search terms, a broader or
-narrower query, a different tool) before giving up or asking the user for
-help. You have room for several tool calls in a single turn -- use them
-when the question genuinely calls for it, rather than answering from a
-single attempt that came up empty or ambiguous.
+narrower query, a different tool) before giving up or using clarify.ask.
+You have room for several tool calls in a single turn -- use them when the
+question genuinely calls for it, rather than answering from a single
+attempt that came up empty or ambiguous.
 
 Multiple records can genuinely share the same title (e.g. several
 Benchling-synced pages all named after the same experiment number) --
@@ -1406,6 +1556,16 @@ about Z -- which do you mean?").
 
 If you don't already know an entity type's fields, call entity.fields first
 rather than guessing field names.
+
+Tools are only for reaching data you don't already have -- looking things
+up, changing them. They are not a gate on what you're allowed to do with
+data once you have it. Summarizing, categorizing, comparing, ranking, or
+otherwise synthesizing information you've already retrieved is your own
+reasoning at work, not a separate capability that needs its own tool. If a
+tool call gets you the raw material for something like "categorize these"
+or "what's the common theme here", do that analysis yourself in your
+reply -- never tell the user you can't, or hand back the raw data
+unprocessed, just because no tool is literally named for it.
 """ .. extra
 end
 
@@ -1457,6 +1617,7 @@ Before this reply is sent to the user, check it against the conversation and too
 - Is every factual claim directly supported by a tool result you actually gathered, not assumed or guessed?
 - If your answer concludes zero, none, or "not found", did you verify the underlying values genuinely don't exist (e.g. a broader search, or checking the value exists at all independent of the specific query/filter you used) rather than trusting a single query or lookup that could itself have been wrong?
 - Is there an obvious next check you skipped that would meaningfully change or confirm the answer?
+- Was the original request genuinely ambiguous, or missing information you couldn't reasonably infer or look up yourself -- and if so, should this have been a clarify.ask instead of a guess?
 
 If the reply holds up, respond with EXACTLY: CONFIRM
 Otherwise, do not repeat the reply -- just say what to check next, as if continuing your own investigation.
@@ -1519,6 +1680,131 @@ function run_self_check(db_path, session_id, system_prompt, model, active_messag
     message_id = agent.add_message(db_path, session_id, "self_check", critique_text, true)
     knowledge.record_context(db_path, session_id, message_id, audit_prompt, model, nil, usage)
     return false
+end
+
+RESEARCH_MAX_TURNS = 6
+
+RESEARCH_SYSTEM_PROMPT = """
+You are a focused research sub-agent helping answer one specific sub-question
+using this deployment's own data. You have read-only tools only. Explore from
+more than one angle before concluding something doesn't exist -- check
+entity.relationships for a join path, not just a direct field, when a value
+isn't where you first expected it; retry entity.query a different way before
+trusting an empty result. When you're done, reply with a concise, grounded
+finding -- the specific answer plus enough of what you found (counts, ids,
+values) that someone could verify it -- not a raw dump of every row. If real
+exploration genuinely turns up nothing, say that plainly along with what you
+tried, rather than guessing.
+"""
+
+-- research.investigate's own tool list: every non-destructive AGENT_TOOLS
+-- entry except research itself -- excluded so a research sub-agent can't
+-- recursively delegate to another one and spend turns/cost with no
+-- bound the outer MAX_TURNS-style budget accounts for -- and except
+-- clarify, since "ask the user a question" is a whole-turn decision that
+-- belongs to the outer loop, not something a bounded sub-investigation
+-- should be able to trigger on its own; a sub-investigation that can't
+-- find something just reports that in its own finding instead. Destructive
+-- tools are never declared here at all (rather than declared-then-refused)
+-- so the model isn't even told they exist from inside a pass that's meant
+-- to be read-only investigation, not a place a write could plausibly
+-- come from.
+function research_tool_declarations()
+    declarations = {}
+    for tool_name, methods in pairs(AGENT_TOOLS) do
+        if tool_name != "research" and tool_name != "clarify" then
+            for method_name, spec in pairs(methods) do
+                if spec.destructive == false then
+                    table.insert(declarations, {
+                        name = tool_name .. "." .. method_name,
+                        description = spec.description,
+                        parameters = spec.parameters,
+                    })
+                end
+            end
+        end
+    end
+    return declarations
+end
+
+-- A disposable, isolated tool-calling loop for one focused sub-question
+-- -- the actual "research" tool implementation (see AGENT_TOOLS.research
+-- .investigate). Deliberately keeps its own in-memory message list
+-- rather than writing anything to agent_message: the wrong-turn/
+-- wrong-query noise a real investigation produces along the way is
+-- exactly what shouldn't count against the main conversation's own
+-- self-check (which judges the final answer against what's actually in
+-- its context) or its compaction budget -- only the synthesized finding
+-- returned below ever becomes part of the real session, as this tool
+-- call's own tool_result message.
+function run_research_loop(db_path, author, session_id, model, question)
+    messages = {{role = "user", content = question}}
+    tools = research_tool_declarations()
+    last_text = nil
+
+    for turn = 1, RESEARCH_MAX_TURNS do
+        response, err, usage = agent_provider.converse(model, RESEARCH_SYSTEM_PROMPT, messages, tools)
+        if response == nil then
+            if last_text != nil then
+                return "(research stopped early: " .. tostring(err) .. ") " .. last_text
+            end
+            return nil, "research failed: " .. tostring(err)
+        end
+        if response.stopReason == "error" or response.stopReason == "aborted" then
+            error_message = response.errorMessage
+            if error_message == nil then
+                error_message = "model call failed (stopReason: " .. tostring(response.stopReason) .. ")"
+            end
+            if last_text != nil then
+                return "(research stopped early: " .. tostring(error_message) .. ") " .. last_text
+            end
+            return nil, "research failed: " .. tostring(error_message)
+        end
+
+        content_blocks = response.content
+        if content_blocks == nil then
+            content_blocks = {}
+        end
+        table.insert(messages, {role = "assistant", content = content_blocks})
+        last_text = display_blocks(content_blocks)
+
+        tool_calls = all_tool_calls(content_blocks)
+        if #tool_calls == 0 then
+            return last_text
+        end
+
+        for _, tool_call in ipairs(tool_calls) do
+            if tool_call.arguments == nil then
+                tool_call.arguments = {}
+            end
+            tool_name, method_name = split_tool_name(tool_call.name)
+            result_text = nil
+            is_error = false
+            if tool_name == nil or not agent.is_known_tool(tool_name, method_name) then
+                result_text = "ERROR: unknown tool " .. tostring(tool_call.name)
+                is_error = true
+            elseif agent.is_destructive(tool_name, method_name) or tool_name == "research" or tool_name == "clarify" then
+                result_text = "ERROR: research is read-only and can't ask the user directly -- cannot perform destructive actions, delegate further, or ask a clarifying question; report what you've found (including any real ambiguity) instead"
+                is_error = true
+            else
+                tool_result, tool_err = agent.execute_tool(db_path, author, session_id, tool_name, method_name, tool_call.arguments)
+                result_text = tostring(tool_result)
+                if tool_err != nil then
+                    result_text = "ERROR: " .. tostring(tool_err)
+                    is_error = true
+                end
+            end
+            table.insert(messages, {
+                role = "toolResult", toolCallId = tool_call.id, toolName = tool_call.name,
+                content = {{type = "text", text = result_text}}, isError = is_error,
+            })
+        end
+    end
+
+    if last_text == nil then
+        return "(research exceeded its turn budget with no finding)"
+    end
+    return "(research exceeded its turn budget -- last, possibly incomplete, finding) " .. last_text
 end
 
 -- Runs the turn loop starting from the session's current active-message
@@ -1655,7 +1941,13 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
             -- destructive call after it gets an explicit "skipped" result
             -- instead of being silently dropped, so every call the model
             -- made still gets a real, visible outcome to react to.
+            -- clarify.ask is handled the same "first one wins" way, but
+            -- checked ahead of pending_call below: asking the user
+            -- something is the safer default over auto-pausing a write
+            -- proposed in the same breath, on the rare turn that proposes
+            -- both.
             pending_call = nil
+            clarify_call = nil
             for _, tool_call in ipairs(tool_calls) do
                 if tool_call.arguments == nil then
                     tool_call.arguments = {}
@@ -1664,6 +1956,15 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
                 if tool_name == nil or not agent.is_known_tool(tool_name, method_name) then
                     agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name,
                         "ERROR: unknown tool " .. tostring(tool_call.name), true)
+                elseif tool_name == "clarify" and method_name == "ask" then
+                    if clarify_call == nil then
+                        clarify_call = tool_call
+                        agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name,
+                            "Waiting for the user's answer before continuing.", false)
+                    else
+                        agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name,
+                            "ERROR: skipped -- only one clarifying question can be asked per turn", true)
+                    end
                 elseif agent.is_destructive(tool_name, method_name) then
                     if pending_call == nil then
                         pending_call = {tool_call = tool_call, tool_name = tool_name, method_name = method_name}
@@ -1681,6 +1982,22 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
                     end
                     agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name, summary, is_error)
                 end
+            end
+
+            if clarify_call != nil then
+                -- No self-check here (there's no answer yet to critique)
+                -- and no agent_pending_action row -- unlike a destructive
+                -- call, there's nothing to later approve/deny; the user's
+                -- own next chat message is the answer, and the ordinary
+                -- /chat-message flow already continues this same turn
+                -- loop from active_messages, no special resume path
+                -- needed.
+                question = nil
+                if clarify_call.arguments != nil then
+                    question = clarify_call.arguments.question
+                end
+                sync_session_document(db_path, login, session_id)
+                return {status = "needs_clarification", message = question}
             end
 
             if pending_call != nil then
