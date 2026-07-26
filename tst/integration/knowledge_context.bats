@@ -91,7 +91,7 @@ send_message() {
     [[ "$output" =~ "Chat reasoning" ]]
 }
 
-@test "a real Gemini thinking block creates a reasoning document, and its content stays out of the visible chat reply" {
+@test "a real Gemini thinking block creates a reasoning document, and its content is also shown inline in the chat transcript" {
     read session csrf < <(session_for admin secret123)
     chat_session=$(start_chat "$session" "$csrf" "Test")
     send_message "$session" "$csrf" "$chat_session" "hi" \
@@ -104,11 +104,15 @@ send_message() {
     run sqlite3 .store/store.db "SELECT content FROM document WHERE source_type='reasoning';"
     [[ "$output" =~ "the user said hi" ]]
 
-    # ...while the chat transcript only ever shows the clean final answer.
+    # ...and the live chat transcript shows both the reasoning and the
+    # final answer (only tool calls/raw tool results are filtered out of
+    # the human-facing view -- see display_blocks' own comment; thinking
+    # is real, useful reasoning a person reading the conversation wants
+    # to see, not plumbing).
     run env GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/chat" \
         QUERY_STRING="session_id=${chat_session}" HTTP_COOKIE="session=${session}; csrf=${csrf}" "$BIN"
     [[ "$output" =~ "Hello there!" ]]
-    [[ ! "$output" =~ "the user said hi" ]]
+    [[ "$output" =~ "the user said hi" ]]
 }
 
 @test "a provider failure still records knowledge_context/knowledge_chat_eval as an error, never reaching a real model call" {

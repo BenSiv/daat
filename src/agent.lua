@@ -286,28 +286,40 @@ end
 -- Renders a structured assistant reply (a decoded {blocks = [...]}
 -- content value -- see build_history_messages' own comment for the
 -- storage shape) into human-readable text: a text block reads as
--- itself, a toolCall block as a short "-> what ran" line instead of
--- the raw {name, arguments} structure. Deliberately silent on
--- "thinking" blocks (Gemini 2.5's own thought-summary output, see
--- extract_thinking_text below) -- the chat transcript should show the
--- clean final answer, not the model's own reasoning inline; the
--- reasoning itself is split out into a separate Knowledge Pool
--- document instead (see run_turn's own reasoning_document_id handling).
+-- itself, a thinking block (Gemini 2.5's own thought-summary output,
+-- see extract_thinking_text below) as its own reasoning text -- shown
+-- here, not just split out to a separate Knowledge Pool document (see
+-- run_turn's own reasoning_document_id handling, which still happens in
+-- parallel for search/tiering purposes; this is about what a human
+-- reading the conversation sees inline).
 --
--- clarify.ask is the one toolCall rendered as its real payload instead
--- of "-> name(...)" -- its argument IS the message meant for the user
--- (the question to answer), not internal plumbing they don't need to
--- see; showing "-> clarify.ask(...)" instead of the actual question
--- would leave the person reading the transcript with nothing to
--- actually respond to.
-function display_blocks(blocks)
+-- `include_tool_calls` (default true when nil) controls a toolCall
+-- block: a short "-> what ran" line when true, dropped entirely when
+-- false. The false case is what agent.all_messages passes for the
+-- live-facing chat view (cgi.lua's /chat and the floating widget) --
+-- a tool call and its raw result are working detail the model needed,
+-- not something a human reading the conversation needs inline; the
+-- full record (every tool call, every raw result) is untouched in
+-- agent_message and in the complete session document
+-- sync_session_document keeps synced (always called with the default,
+-- true). clarify.ask is the one toolCall rendered as its real payload
+-- regardless of include_tool_calls -- its argument IS a real message
+-- meant for the user (the question to answer), not internal plumbing;
+-- showing "-> clarify.ask(...)" instead of the actual question would
+-- leave the person reading the transcript with nothing to respond to.
+function display_blocks(blocks, include_tool_calls)
     if blocks == nil then
         return ""
+    end
+    if include_tool_calls == nil then
+        include_tool_calls = true
     end
     parts = {}
     for _, block in ipairs(blocks) do
         if block.type == "text" and block.text != nil then
             table.insert(parts, block.text)
+        elseif block.type == "thinking" and block.thinking != nil then
+            table.insert(parts, block.thinking)
         elseif block.type == "toolCall" and block.name == "clarify.ask" then
             question = nil
             if block.arguments != nil then
@@ -317,7 +329,7 @@ function display_blocks(blocks)
                 question = "(no question given)"
             end
             table.insert(parts, question)
-        elseif block.type == "toolCall" then
+        elseif block.type == "toolCall" and include_tool_calls == true then
             table.insert(parts, "-> " .. tostring(block.name) .. "(...)")
         end
     end
@@ -368,7 +380,7 @@ end
 -- expected shape and falls through to the legacy tag-parsing/plain-text
 -- path below, so old sessions keep rendering correctly with no
 -- separate migration step needed.
-function agent.display_content(content, role)
+function agent.display_content(content, role, include_tool_calls)
     if content == nil then
         return content
     end
@@ -378,7 +390,7 @@ function agent.display_content(content, role)
     if role == "assistant" then
         decoded, _, _ = json.decode(content)
         if decoded != nil and decoded.blocks != nil then
-            return display_blocks(decoded.blocks)
+            return display_blocks(decoded.blocks, include_tool_calls)
         end
     elseif role == "tool_result" then
         decoded, _, _ = json.decode(content)
@@ -419,7 +431,22 @@ function agent.message_session_id(db_path, message_id)
     return rows[1].session_id
 end
 
-function agent.all_messages(db_path, session_id)
+-- `include_tool_calls` (default true when nil) is the same switch
+-- display_blocks takes, plus one more consequence at this level: a
+-- 'tool_result' row (raw tool output) is dropped from the result
+-- entirely when false, and an 'assistant' row that turns out to have no
+-- visible content left after filtering (a turn that was pure tool
+-- calls, nothing else) is dropped too, rather than rendering as an
+-- empty bubble. Pass false for a live, human-facing view (cgi.lua's
+-- /chat and the floating widget); the default (true) is the complete,
+-- unfiltered record -- every row, always -- used by
+-- sync_session_document's own full session-document sync. Nothing is
+-- ever deleted from agent_message either way; this only changes what a
+-- given caller gets back.
+function agent.all_messages(db_path, session_id, include_tool_calls)
+    if include_tool_calls == nil then
+        include_tool_calls = true
+    end
     rows = db.query(db_path, string.format(
         "SELECT * FROM agent_message WHERE session_id = %s ORDER BY id ASC;",
         db.quote(session_id)
@@ -427,10 +454,21 @@ function agent.all_messages(db_path, session_id)
     if rows == nil then
         return {}
     end
+    result = {}
     for _, row in ipairs(rows) do
-        row.content = agent.display_content(row.content, row.role)
+        if include_tool_calls == false and row.role == "tool_result" then
+            -- skip: raw tool output, not for a human reading the live
+            -- transcript -- see this function's own comment.
+        else
+            row.content = agent.display_content(row.content, row.role, include_tool_calls)
+            skip_empty_assistant = include_tool_calls == false and row.role == "assistant" and
+                (row.content == nil or string.gsub(row.content, "%s", "") == "")
+            if skip_empty_assistant == false then
+                table.insert(result, row)
+            end
+        end
     end
-    return rows
+    return result
 end
 
 --------------------------------------------------------------------------

@@ -157,9 +157,18 @@ EOF
     run raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=find+bioreactor+pages" "$COOKIE" "$scripted"
     [[ "$output" =~ "302 Found" ]]
 
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
-    [[ "$output" =~ "Tool result" ]]
+    # The real tool result is recorded in full (see agent_message
+    # directly)...
+    run latest_tool_result "$session_id"
     [[ "$output" =~ "Bioreactor Notes" ]]
+
+    # ...but the live chat view filters raw tool output out entirely --
+    # only the final answer shows. (Not checking for the absence of the
+    # literal string "Tool result" here -- the floating widget's own
+    # static ROLE_LABELS JS on every page defines that label regardless
+    # of whether anything actually uses it.)
+    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    [[ ! "$output" =~ "Bioreactor Notes" ]]
     [[ "$output" =~ "Found it." ]]
 
     # Auto-executed and done -- no pending approval left behind.
@@ -280,7 +289,7 @@ EOF
     run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM document WHERE title = 'Denied Page';"
     [ "$output" -eq 0 ]
 
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    run latest_tool_result "$session_id"
     [[ "$output" =~ "denied" ]]
 }
 
@@ -319,10 +328,11 @@ EOF
     scripted="$(multi_tool_call_response "entity.list_types" "{}" "entity.fields" '{"entity_type":"task"}')"$'\1'"$(done_response "Got both.")"
     raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=what+types+and+fields+does+task+have" "$COOKIE" "$scripted" >/dev/null
 
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT content FROM agent_message WHERE session_id = '${session_id}' AND role = 'tool_result' ORDER BY id ASC;"
     [[ "$output" =~ "document" ]]
     [[ "$output" =~ "task" ]]
     [[ "$output" =~ "title (text, required)" ]]
+    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
     [[ "$output" =~ "Got both." ]]
 }
 
@@ -338,6 +348,7 @@ EOF
 
     run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
     [[ "$output" =~ "wants to run" ]]
+    run latest_tool_result "$session_id"
     [[ "$output" =~ "skipped" ]]
 
     # Only the pending one is a real, resolvable action -- the skipped
@@ -354,7 +365,7 @@ EOF
     scripted="$(tool_call_response "entity.fields" '{"entity_type":"task"}')"$'\1'"$(done_response "Listed.")"
     raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=what+fields+does+task+have" "$COOKIE" "$scripted" >/dev/null
 
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    run latest_tool_result "$session_id"
     [[ "$output" =~ "title (text, required)" ]]
     [[ "$output" =~ "status (select, required)" ]]
 }
@@ -382,8 +393,8 @@ EOF
     scripted="$(tool_call_response "entity.relationships" '{}')"$'\1'"$(done_response "Listed.")"
     raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=what+references+what" "$COOKIE" "$scripted" >/dev/null
 
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
-    [[ "$output" =~ "task_note.task -&gt; task (reference)" ]]
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "task_note.task -> task (reference)" ]]
 }
 
 @test "entity.query answers a real join+aggregate question entity.list's own single-table filter can't express" {
@@ -401,7 +412,7 @@ EOF
     scripted="$(tool_call_response "entity.query" "$(printf '{"sql":"%s"}' "$sql")")"$'\1'"$(done_response "Counted.")"
     raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=how+many+notes+per+task" "$COOKIE" "$scripted" >/dev/null
 
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    run latest_tool_result "$session_id"
     [[ "$output" =~ "Ship it" ]]
     [[ "$output" =~ "note_count" ]]
     [[ "$output" =~ "| 2" ]]
@@ -414,7 +425,7 @@ EOF
     scripted="$(tool_call_response "entity.query" '{"sql":"SELECT * FROM agent_message"}')"
     raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=show+me+internal+messages" "$COOKIE" "$scripted" >/dev/null
 
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    run latest_tool_result "$session_id"
     [[ "$output" =~ "not a registered entity type" ]]
 }
 
@@ -427,7 +438,7 @@ EOF
     scripted="$(tool_call_response "entity.query" '{"sql":"DELETE FROM task"}')"
     raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=delete+all+tasks" "$COOKIE" "$scripted" >/dev/null
 
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    run latest_tool_result "$session_id"
     [[ "$output" =~ "not a plain SELECT" ]]
 
     # Never actually ran -- refused before it ever reached db.query.
@@ -452,6 +463,7 @@ EOF
 
     run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
     [[ "$output" =~ "The Ship it task has 2 notes." ]]
+    run latest_tool_result "$session_id"
     [[ "$output" =~ "Found note_count=2" ]]
 
     # The sub-loop's own entity.query call never becomes a separate,
@@ -491,7 +503,7 @@ EOF
     scripted="${scripted}"$'\1'"$(done_response "Giving up after the budget ran out.")"
     raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=keep+digging+forever" "$COOKIE" "$scripted" >/dev/null
 
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    run latest_tool_result "$session_id"
     [[ "$output" =~ "exceeded its turn budget" ]]
 }
 
@@ -559,8 +571,9 @@ EOF
     scripted="$(tool_call_response "background.start" '{"question":"how many task_notes reference the Ship it task"}')"$'\1'"$(done_response "I will dig into that and let you know.")"
     raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=dig+deeper+on+this+one" "$COOKIE" "$scripted" >/dev/null
 
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    run latest_tool_result "$session_id"
     [[ "$output" =~ "Started background task" ]]
+    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
     [[ "$output" =~ "I will dig into that and let you know." ]]
 
     # Enqueued, not executed inline -- the turn already returned.
@@ -594,14 +607,14 @@ EOF
 
     scripted="$(tool_call_response "background.status" "$(printf '{"task_id":%s}' "$task_id")")"$'\1'"$(done_response "Still working on it.")"
     raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=any+update" "$COOKIE" "$scripted" >/dev/null
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    run latest_tool_result "$session_id"
     [[ "$output" =~ "is still pending" ]]
 
     AGENT_PROVIDER=test AGENT_TEST_RESPONSES="$(done_response "Nothing unusual found.")" run "$BIN" agent run-pending-background
 
     scripted2="$(tool_call_response "background.status" "$(printf '{"task_id":%s}' "$task_id")")"$'\1'"$(done_response "Here it is.")"
     raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=any+update+now" "$COOKIE" "$scripted2" >/dev/null
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    run latest_tool_result "$session_id"
     [[ "$output" =~ "(done): Nothing unusual found." ]]
 }
 
@@ -619,7 +632,7 @@ EOF
     scripted="$(tool_call_response "background.status" "$(printf '{"task_id":%s}' "$other_task_id")")"$'\1'"$(done_response "Couldn't find it.")"
     raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=check+task" "$COOKIE" "$scripted" >/dev/null
 
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    run latest_tool_result "$session_id"
     [[ "$output" =~ "no such background task" ]]
 }
 
@@ -631,13 +644,14 @@ EOF
 
     scripted="$(tool_call_response "entity.list" '{"entity_type":"task"}')"$'\1'"$(done_response "Found tasks.")"
     raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=list+tasks" "$COOKIE" "$scripted" >/dev/null
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    run latest_tool_result "$session_id"
     [[ "$output" =~ "Ship it" ]]
+    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
     [[ ! "$output" =~ "wants to run" ]]
 
     scripted2="$(tool_call_response "entity.get" '{"entity_type":"task","entity_id":1}')"$'\1'"$(done_response "Here it is.")"
     raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=show+task+1" "$COOKIE" "$scripted2" >/dev/null
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    run latest_tool_result "$session_id"
     [[ "$output" =~ "status=open" ]]
 }
 
@@ -649,7 +663,7 @@ EOF
     scripted="$(tool_call_response "entity.validate" '{"entity_type":"task","status":"bogus"}')"$'\1'"$(done_response "Checked.")"
     raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=would+this+be+valid" "$COOKIE" "$scripted" >/dev/null
 
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    run latest_tool_result "$session_id"
     [[ "$output" =~ "title: required field is missing" ]]
     [[ "$output" =~ "status: must be one of the declared values" ]]
 
@@ -669,7 +683,7 @@ EOF
     scripted="$(tool_call_response "entity.validate" '{"entity_type":"task","title":"Ship it","status":"open"}')"$'\1'"$(done_response "That would be valid.")"
     raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=would+this+be+valid" "$COOKIE" "$scripted" >/dev/null
 
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    run latest_tool_result "$session_id"
     [[ "$output" =~ "Valid" ]]
 
     run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM task;"
@@ -689,7 +703,7 @@ EOF
     scripted="$(tool_call_response "entity.validate" "$(printf '{"entity_type":"task","entity_id":%s,"status":"done"}' "$task_id")")"$'\1'"$(done_response "That update would be valid.")"
     raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=would+marking+it+done+be+valid" "$COOKIE" "$scripted" >/dev/null
 
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    run latest_tool_result "$session_id"
     [[ "$output" =~ "Valid" ]]
     [[ ! "$output" =~ "title: required field is missing" ]]
 
@@ -931,7 +945,7 @@ EOF
     scripted="$(tool_call_response "template.list" '{}')"$'\1'"$(done_response "Listed.")"
     raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=what+templates+exist" "$COOKIE" "$scripted" >/dev/null
 
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    run latest_tool_result "$session_id"
     [[ "$output" =~ "standard_experiment" ]]
     [[ "$output" =~ "Standard Experiment" ]]
 }
@@ -944,7 +958,7 @@ EOF
     scripted="$(tool_call_response "template.get" '{"name":"standard_experiment"}')"$'\1'"$(done_response "Got it.")"
     raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=get+the+standard+experiment+template" "$COOKIE" "$scripted" >/dev/null
 
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    run latest_tool_result "$session_id"
     [[ "$output" =~ "## Objective" ]]
     [[ "$output" =~ "register?type=experiment" ]]
     [[ "$output" =~ "Notebook/Standard Experiment" ]]
@@ -1001,7 +1015,7 @@ EOF
     scripted="$(tool_call_response "entity.list" '{"entity_type":"task","filter_field":"status","filter_value":"open"}')"$'\1'"$(done_response "Listed.")"
     raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=list+open+tasks" "$COOKIE" "$scripted" >/dev/null
 
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    run latest_tool_result "$session_id"
     [[ "$output" =~ "First" ]]
     [[ "$output" =~ "Third" ]]
     [[ ! "$output" =~ "Second" ]]
@@ -1028,7 +1042,7 @@ EOF
 
     run "$BIN" entity list secret_report
     [[ "$output" == "" ]]
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    run latest_tool_result "$session_id"
     [[ "$output" =~ "Forbidden" ]]
 }
 

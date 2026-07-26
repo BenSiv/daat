@@ -18,6 +18,21 @@ setup_test_env() {
     cd "$TEST_DIR"
 }
 
+# Raw content of the most recent tool_result message for a session --
+# tool_result rows (and toolCall lines within an assistant message) are
+# deliberately filtered out of the live /chat page and the floating
+# widget (agent.all_messages' include_tool_calls=false), so a test
+# asserting on what a tool call actually returned needs to check
+# agent_message directly instead of scraping rendered HTML. The row's
+# content is JSON ({tool_call_id, tool_name, text, is_error}), but a
+# plain substring match against the raw JSON blob works fine for these
+# tests' purposes -- no need to actually decode it.
+latest_tool_result() {
+    local session_id="$1"
+    sqlite3 "$TEST_DIR/.store/store.db" \
+        "SELECT content FROM agent_message WHERE session_id = '${session_id}' AND role = 'tool_result' ORDER BY id DESC LIMIT 1;"
+}
+
 cleanup_test_env() {
     cd "$PROJECT_ROOT"
     rm -rf "$TEST_DIR"

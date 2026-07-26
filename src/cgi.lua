@@ -64,7 +64,11 @@ end
 -- below, all of which end by returning "here's the state now" so the
 -- floating widget (see html.page_shell) never has to separately poll.
 function chat_widget_state(db_path, session_id)
-    messages = agent.all_messages(db_path, session_id)
+    -- false: the widget is a human-facing view -- tool calls/raw tool
+    -- results are filtered out (see agent.all_messages' own comment);
+    -- the complete record is untouched in agent_message and in the
+    -- synced session document.
+    messages = agent.all_messages(db_path, session_id, false)
     pending = agent.latest_pending(db_path, session_id)
     pending_out = nil
     if pending != nil then
@@ -1306,7 +1310,9 @@ function cgi.handle_request()
             if session == nil then
                 return print_response("404 Not Found", "text/html", "<h3>Error: no such chat session</h3>")
             end
-            messages = agent.all_messages(db_path, session_id)
+            -- false: same human-facing filtering as chat_widget_state --
+            -- tool calls/raw results dropped, thinking kept.
+            messages = agent.all_messages(db_path, session_id, false)
             pending = agent.latest_pending(db_path, session_id)
         end
         body = html.render_chat(sessions, session, messages, pending, default_value(cookies.csrf, ""), nonce)
