@@ -324,6 +324,33 @@ EOF
     [[ "$output" =~ "status (select, required)" ]]
 }
 
+write_task_note_schema() {
+    mkdir -p schemas
+    cat > schemas/task_note.lua <<'EOF'
+return {
+  name = "task_note",
+  fields = {
+    {name = "body", type = "text", required = true},
+    {name = "task", type = "reference", required = false, entity_type = "task"},
+  },
+}
+EOF
+    "$BIN" schema add schemas/task_note.lua >/dev/null
+}
+
+@test "entity.relationships lists every reference edge between entity types, for discovering where a field actually lives" {
+    write_task_schema
+    write_task_note_schema
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(tool_call_response "entity.relationships" '{}')"$'\1'"$(done_response "Listed.")"
+    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=what+references+what" "$COOKIE" "$scripted" >/dev/null
+
+    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    [[ "$output" =~ "task_note.task -&gt; task (reference)" ]]
+}
+
 @test "entity.list and entity.get read real rows (non-destructive, auto-executes)" {
     write_task_schema
     "$BIN" entity create task title="Ship it" status=open >/dev/null

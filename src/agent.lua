@@ -576,6 +576,11 @@ AGENT_TOOLS = {
                 required = {"entity_type"},
             },
         },
+        relationships = {
+            destructive = false,
+            description = "List every reference relationship between registered entity types (which type's field points at which other type -- e.g. 'sample.experiment -> experiment'). Call this when a value you're looking for isn't a field on the entity type you expected -- it's often a field on a DIFFERENT type that references the one you started from (e.g. a 'variety' filter for experiments actually lives on the samples that reference each experiment, not on the experiment itself). No args -- always returns the full relationship graph, small enough to read in one call.",
+            parameters = EMPTY_OBJECT_SCHEMA,
+        },
         list = {
             destructive = false,
             description = "List rows of an entity type, optionally filtered to rows where one field equals a value.",
@@ -933,6 +938,19 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
             end
             table.insert(lines, string.format("%s (%s%s)", f.name, f.type, required))
         end
+        return table.concat(lines, "\n")
+    end
+
+    if tool_name == "entity" and method_name == "relationships" then
+        edges = schema.relationships(db_path)
+        if #edges == 0 then
+            return "No reference relationships registered between any entity types."
+        end
+        lines = {}
+        for _, edge in ipairs(edges) do
+            table.insert(lines, string.format("%s.%s -> %s (%s)", edge.from_type, edge.field_name, edge.to_type, edge.field_type))
+        end
+        table.sort(lines)
         return table.concat(lines, "\n")
     end
 
