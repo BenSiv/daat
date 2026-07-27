@@ -69,6 +69,15 @@ function chat_widget_state(db_path, session_id)
     -- the complete record is untouched in agent_message and in the
     -- synced session document.
     messages = agent.all_messages(db_path, session_id, false)
+    -- Same Markdown rendering render_chat_message (html.lua) applies for
+    -- the full /chat page -- the widget's own JS trusts and embeds this
+    -- directly (see html.page_shell's render()), rather than re-escaping
+    -- already-rendered HTML or re-implementing Markdown rendering in JS.
+    for _, msg in ipairs(messages) do
+        if html.CHAT_MARKDOWN_ROLES[msg.role] == true then
+            msg.content = document.render_markdown(msg.content)
+        end
+    end
     pending = agent.latest_pending(db_path, session_id)
     pending_out = nil
     if pending != nil then

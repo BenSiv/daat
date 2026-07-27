@@ -360,6 +360,24 @@ function display_blocks(blocks, include_tool_calls)
     return table.concat(parts, "\n")
 end
 
+-- Just the real "text" blocks -- no thinking, no toolCall lines. Used
+-- specifically where a caller needs to judge the model's actual answer
+-- (run_self_check's own CONFIRM check), as opposed to display_blocks'
+-- own job of rendering something a human should read, which rightly
+-- includes thinking.
+function text_only_blocks(blocks)
+    if blocks == nil then
+        return ""
+    end
+    parts = {}
+    for _, block in ipairs(blocks) do
+        if block.type == "text" and block.text != nil then
+            table.insert(parts, block.text)
+        end
+    end
+    return table.concat(parts, "\n")
+end
+
 -- Pulls out Gemini 2.5's own thought-summary blocks (requested via the
 -- bridge's own thinking config -- see agent_provider_pi.lua/bridge/
 -- pi-bridge.mjs), a real structural signal, not text-pattern matching.
@@ -1815,7 +1833,22 @@ function run_self_check(db_path, session_id, system_prompt, model, active_messag
         content_blocks = {}
     end
     critique_text = display_blocks(content_blocks)
-    trimmed = string.gsub(critique_text, "^%s+", "")
+    -- Real regression, caught live in production: once display_blocks
+    -- started always including thinking text (so a human reading a
+    -- self-check's own critique can see its reasoning, not just its
+    -- verdict), a self-check call that dutifully replied with exactly
+    -- "CONFIRM" as its real answer still got treated as a rejection --
+    -- its own thinking text, narrated first, meant the combined string
+    -- no longer started with "confirm", so the anchor check below never
+    -- matched. Self-check silently stopped ever confirming at all,
+    -- looping every single turn out to the full MAX_TURNS budget
+    -- regardless of whether the answer was actually fine. The verdict
+    -- has to be judged from the model's real answer alone -- text_only_
+    -- blocks strips thinking back out for this one check, while
+    -- critique_text (thinking included) is still what actually gets
+    -- stored/shown when a self-check finds something worth saying.
+    answer_text = text_only_blocks(content_blocks)
+    trimmed = string.gsub(answer_text, "^%s+", "")
 
     if string.find(string.lower(trimmed), "^confirm") != nil then
         -- Deliberately not audited via knowledge.record_context here --

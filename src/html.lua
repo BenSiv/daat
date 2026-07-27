@@ -2,6 +2,7 @@ db = require("db")
 schema = require("schema")
 view = require("view")
 config = require("config")
+document = require("document")
 
 html = {}
 
@@ -3920,6 +3921,25 @@ function platform_chat_thread_css()
 """
 end
 
+-- Roles whose content is real model output (often Markdown -- headings,
+-- bold, lists) rather than plain human-typed text -- found live: a
+-- real reply came back with **bold** section headers and the chat page
+-- just showed the literal asterisks, since everything was plain
+-- html-escaped text before this. Rendered through the exact same
+-- cmark-gfm pipeline document pages already use (document.render_markdown),
+-- not a separate one -- its own non-`--unsafe` mode already strips raw
+-- HTML/scripts, so this is exactly as safe to embed unescaped as any
+-- other rendered-Markdown HTML this codebase already trusts.
+-- A field on the `html` table, not a bare global -- cgi.lua's own
+-- chat_widget_state (a different required module, its own separate
+-- environment in this runtime) needs this same set too, and only
+-- values actually returned by require() (table fields like this one,
+-- not bare globals) cross that boundary. Confirmed live: a bare global
+-- here crashed cgi.lua outright ("attempt to index global
+-- 'CHAT_MARKDOWN_ROLES' (a nil value)") the moment a route that isn't
+-- html.lua's own tried to read it.
+html.CHAT_MARKDOWN_ROLES = {assistant = true, self_check = true, compaction_summary = true}
+
 function render_chat_message(msg)
     label = CHAT_ROLE_LABELS[msg.role]
     if label == nil then
@@ -3929,8 +3949,12 @@ function render_chat_message(msg)
     if tonumber(msg.in_context) == 0 then
         css_class = css_class .. " platform-chat-out-of-context"
     end
+    body = html.html_escape(msg.content)
+    if html.CHAT_MARKDOWN_ROLES[msg.role] == true then
+        body = document.render_markdown(msg.content)
+    end
     return "<div class=\"" .. css_class .. "\"><strong>" .. html.html_escape(label) .. ":</strong> " ..
-        html.html_escape(msg.content) .. "</div>"
+        body .. "</div>"
 end
 
 function render_chat_sessions_list(sessions, current_session_id)
@@ -4199,6 +4223,13 @@ function html.render_chat_widget(nonce)
     }
 
     var ROLE_LABELS = {user: 'You', assistant: 'Assistant', tool_result: 'Tool result', compaction_summary: 'Compacted summary', self_check: 'Self-check'};
+    // Same roles as html.lua's own CHAT_MARKDOWN_ROLES -- the server
+    // (chat_widget_state, cgi.lua) already rendered these through
+    // cmark-gfm before this JSON ever reached the browser, so this JS
+    // trusts and embeds that HTML directly rather than re-escaping it
+    // (which would just show the literal tags) or re-implementing
+    // Markdown rendering client-side.
+    var MARKDOWN_ROLES = {assistant: true, self_check: true, compaction_summary: true};
     function escapeHtml(s) {
         return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
@@ -4209,7 +4240,8 @@ function html.render_chat_widget(nonce)
             var html = '';
             state.messages.forEach(function(msg){
                 var label = ROLE_LABELS[msg.role] || msg.role;
-                html += '<div class="platform-chat-msg platform-chat-' + msg.role + '"><strong>' + escapeHtml(label) + ':</strong> ' + escapeHtml(msg.content) + '</div>';
+                var body = MARKDOWN_ROLES[msg.role] ? msg.content : escapeHtml(msg.content);
+                html += '<div class="platform-chat-msg platform-chat-' + msg.role + '"><strong>' + escapeHtml(label) + ':</strong> ' + body + '</div>';
                 // task #87: feedback only makes sense on a real answer --
                 // not on the user's own message, a tool result, or a
                 // compaction summary the user never actually sees as a

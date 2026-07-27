@@ -841,6 +841,49 @@ EOF
     [ "$output" -eq 0 ]
 }
 
+@test "self-check: a CONFIRM answer with thinking attached is still recognized as confirmed (regression)" {
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    # Real production regression: once display_blocks started always
+    # including thinking text (so a human can see a self-check's own
+    # reasoning), a self-check reply that dutifully answered exactly
+    # "CONFIRM" as its real text block still got rejected, because the
+    # combined (thinking-first) string no longer started with "confirm"
+    # -- self-check silently stopped ever confirming, looping every
+    # turn out to the full turn budget regardless of whether the answer
+    # was fine. text_only_blocks has to be what's actually checked.
+    printf 'csrf_token=%s&session_id=%s&message=hi' "$CSRF" "$session_id" | \
+        AGENT_PROVIDER=test AGENT_TEST_RESPONSES="$(done_response "Hello!")" \
+        AGENT_TEST_SELF_CHECK_RESPONSE="$(thinking_response "Let me review this answer carefully..." "CONFIRM")" \
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/chat-message" QUERY_STRING="" \
+        HTTP_COOKIE="$COOKIE" "$BIN" >/dev/null
+
+    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    [[ "$output" =~ "Hello!" ]]
+    [[ ! "$output" =~ 'class="platform-chat-msg platform-chat-self_check"' ]]
+
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM agent_message WHERE role = 'self_check';"
+    [ "$output" -eq 0 ]
+}
+
+@test "assistant replies with Markdown formatting are actually rendered, not shown as literal asterisks" {
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=hi" "$COOKIE" "$(done_response "This is **bold** text.")" >/dev/null
+
+    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    [[ "$output" =~ "<strong>bold</strong>" ]]
+    [[ ! "$output" =~ "**bold**" ]]
+
+    # Same rendering reaches the floating widget's own JSON state, not
+    # just the full /chat page.
+    run env GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/api/chat-widget-history" \
+        QUERY_STRING="session_id=${session_id}" HTTP_COOKIE="$COOKIE" "$BIN"
+    [[ "$output" =~ "<strong>bold</strong>" ]]
+}
+
 @test "AGENT_MAX_TURNS is configurable -- a lower limit ends the loop sooner than the default" {
     resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
     session_id=$(extract_query_param "$resp" "session_id")
