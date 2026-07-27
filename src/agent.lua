@@ -24,44 +24,25 @@ view = require("view")
 
 agent = {}
 
-DEFAULT_COMPACTION_THRESHOLD = 4000
-DEFAULT_MAX_TURNS = 10
-DEFAULT_MODEL = "gemini-2.5-flash"
-DEFAULT_RESEARCH_MAX_TURNS = 6
-DEFAULT_BACKGROUND_MAX_TURNS = 20
-DEFAULT_BACKGROUND_MAX_ATTEMPTS = 3
-DEFAULT_SEARCH_EXCERPT_LENGTH = 1200
-
 -- The right value for any of this file's own turn-budget/size
 -- constants genuinely depends on things a deployer chooses, not this
 -- codebase -- which AGENT_MODEL is configured, that provider's own
 -- latency, how much data a given deployment actually holds -- so none
--- of them stay bare hardcoded literals; each has a real env var
--- override, read fresh every time (not resolved once at load), same
--- as agent.default_model()/agent.compact_if_needed()'s own established
--- pattern. Confirmed live why this matters: a self-check loop needing
--- 6 rounds on a real production turn took long enough to exceed the
--- load balancer's own (separately configurable) timeout -- MAX_TURNS
--- and friends are the same class of "depends on your model/hardware,
--- not on this code" setting.
-function env_number(name, fallback)
-    value = tonumber(os.getenv(name))
-    if value == nil then
-        return fallback
-    end
-    return value
-end
+-- of them stay bare hardcoded literals; each is read fresh from
+-- config.platform_config() every time (not resolved once at load).
+-- Confirmed live why this matters: a self-check loop needing 6 rounds
+-- on a real production turn took long enough to exceed the load
+-- balancer's own (separately configurable) timeout -- MAX_TURNS and
+-- friends are the same class of "depends on your model/hardware, not
+-- on this code" setting.
 
--- Same default cgi.lua's own chat routes already use (AGENT_MODEL env
--- var, not hardcoded, since a real model name is a deployment choice)
--- -- exposed here too so main.lua's CLI dispatch (task #87's `platform
--- knowledge review`) doesn't need its own copy of the fallback.
+-- Same default cgi.lua's own chat routes already use (AGENT_MODEL,
+-- config.platform_config() -- a real model name is a deployment
+-- choice, never hardcoded) -- exposed here too so main.lua's CLI
+-- dispatch (task #87's `platform knowledge review`) doesn't need its
+-- own copy of the fallback.
 function agent.default_model()
-    model = os.getenv("AGENT_MODEL")
-    if model == nil or model == "" then
-        model = DEFAULT_MODEL
-    end
-    return model
+    return config.platform_config().agent_model
 end
 
 AGENT_SCHEMA = """
@@ -541,11 +522,7 @@ end
 function agent.compact_if_needed(db_path, session_id, system_prompt, model)
     active = agent.active_messages(db_path, session_id)
 
-    threshold = DEFAULT_COMPACTION_THRESHOLD
-    env_threshold = tonumber(os.getenv("AGENT_COMPACTION_THRESHOLD"))
-    if env_threshold != nil then
-        threshold = env_threshold
-    end
+    threshold = config.platform_config().agent_compaction_threshold
 
     keep_last = 4
     if #active <= keep_last then
@@ -1099,7 +1076,7 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
                 header = header .. " [one of " .. tostring(title_counts[r.title]) ..
                     " pages titled '" .. r.title .. "' -- distinguish by date/external_id/content above, never by asking the user for the id]"
             end
-            table.insert(lines, header .. "\n" .. excerpt(r.content, env_number("AGENT_SEARCH_EXCERPT_LENGTH", DEFAULT_SEARCH_EXCERPT_LENGTH)))
+            table.insert(lines, header .. "\n" .. excerpt(r.content, config.platform_config().agent_search_excerpt_length))
         end
         return table.concat(lines, "\n\n")
     end
@@ -1927,15 +1904,15 @@ end
 -- returned below ever becomes part of the real session, as this tool
 -- call's own tool_result message.
 --
--- `max_turns` defaults to the AGENT_RESEARCH_MAX_TURNS-configurable
+-- `max_turns` defaults to the agent_research_max_turns-configurable
 -- bound (the interactive research.investigate tool's own budget) when
 -- nil -- the background worker (agent.run_pending_background_tasks)
 -- reuses this same loop with a looser, separately-configurable
--- AGENT_BACKGROUND_MAX_TURNS budget instead, since it isn't bound to
+-- agent_background_max_turns budget instead, since it isn't bound to
 -- one HTTP request's lifetime the way an inline tool call is.
 function run_research_loop(db_path, author, session_id, model, question, max_turns)
     if max_turns == nil then
-        max_turns = env_number("AGENT_RESEARCH_MAX_TURNS", DEFAULT_RESEARCH_MAX_TURNS)
+        max_turns = config.platform_config().agent_research_max_turns
     end
     messages = {{role = "user", content = question}}
     tools = research_tool_declarations()
@@ -2047,7 +2024,7 @@ function agent.pending_background_tasks(db_path, limit)
     end
     rows = db.query(db_path, string.format(
         "SELECT * FROM agent_background_task WHERE status = 'pending' AND attempts < %d ORDER BY id ASC LIMIT %d;",
-        env_number("AGENT_BACKGROUND_MAX_ATTEMPTS", DEFAULT_BACKGROUND_MAX_ATTEMPTS), limit
+        config.platform_config().agent_background_max_attempts, limit
     ))
     if rows == nil then
         return {}
@@ -2063,13 +2040,13 @@ function agent.mark_background_task_done(db_path, task, result)
 end
 
 -- Same retry convention as extension.mark_job_failed: stays 'pending'
--- (so it's retried) until it has failed AGENT_BACKGROUND_MAX_ATTEMPTS
+-- (so it's retried) until it has failed agent_background_max_attempts
 -- times, at which point it moves to 'failed' and is no longer picked
 -- up -- one broken task never blocks or affects any other.
 function agent.mark_background_task_failed(db_path, task, message)
     attempts = tonumber(task.attempts) + 1
     status = "pending"
-    if attempts >= env_number("AGENT_BACKGROUND_MAX_ATTEMPTS", DEFAULT_BACKGROUND_MAX_ATTEMPTS) then
+    if attempts >= config.platform_config().agent_background_max_attempts then
         status = "failed"
     end
     db.exec(db_path, string.format(
@@ -2118,7 +2095,7 @@ function agent.run_pending_background_tasks(db_path, model, limit)
             failed = failed + 1
         else
             finding, err = run_research_loop(db_path, login, task.session_id, model, task.question,
-                env_number("AGENT_BACKGROUND_MAX_TURNS", DEFAULT_BACKGROUND_MAX_TURNS))
+                config.platform_config().agent_background_max_turns)
             if finding == nil then
                 agent.mark_background_task_failed(db_path, task, tostring(err))
                 failed = failed + 1
@@ -2145,8 +2122,8 @@ end
 --   {status = "turn_limit", message = "..."}
 --   {status = "error", message = "..."}
 --
--- Each call gets its own fresh turn budget (AGENT_MAX_TURNS, see
--- env_number above), even a resume after a pause -- deliberate, not an
+-- Each call gets its own fresh turn budget (agent_max_turns, see
+-- config.platform_config()), even a resume after a pause -- deliberate, not an
 -- oversight: the approval pause is itself a human circuit breaker, so
 -- restarting the budget on resume doesn't reopen an unbounded-loop risk
 -- the way it would in a fully autonomous run with no pauses at all.
@@ -2162,7 +2139,7 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
 
     agent.compact_if_needed(db_path, session_id, system_prompt, model)
 
-    max_turns = env_number("AGENT_MAX_TURNS", DEFAULT_MAX_TURNS)
+    max_turns = config.platform_config().agent_max_turns
     for turn = 1, max_turns do
         active = agent.active_messages(db_path, session_id)
         history_messages = build_history_messages(active)

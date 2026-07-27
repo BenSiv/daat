@@ -55,8 +55,8 @@ gap as the old SQLite plan, just smaller in scope now):
 
 ### Phase 1 -- SQLite dev/from-source installs only (Cloud SQL already covers prod)
 
-If running from source against SQLite (no `PLATFORM_DB_BACKEND=mariadb`
-set), the original plan still applies: switch to WAL mode
+If running from source against SQLite (no `db_backend: "mariadb"` in
+`platform.json`), the original plan still applies: switch to WAL mode
 (`PRAGMA journal_mode=WAL;`) and either run
 [Litestream](https://litestream.io/) or a systemd timer doing
 `sqlite3 store.db ".backup /tmp/backup.db"` + upload on an interval.
@@ -90,7 +90,7 @@ Write the actual steps taken down in this section once run for real.
 
 ## Critical files
 - `/root/software/infra/gcp/lims/main.tf` -- `google_sql_database_instance.platform`, its `backup_configuration` block, instance tier/zone
-- `/root/software/infra/gcp/lims/module/platform_compute/templates/startup-platform.sh.tpl` -- where the app's DB connection is configured (`PLATFORM_DB_BACKEND`, Cloud SQL Auth Proxy sidecar)
+- `/root/software/infra/gcp/lims/module/platform_compute/templates/startup-platform.sh.tpl` -- where the app's DB connection is configured (seeds `platform.json`'s `db_backend`, Cloud SQL Auth Proxy sidecar)
 - `/root/projects/platform-wip/src/db.lua` -- backend dispatch (`is_mariadb()`); where a `PRAGMA journal_mode=WAL` call would be added for the SQLite dev path
 - `/root/projects/platform-wip/doc/mariadb-migration.md` -- the full cutover history/rationale
 - `/root/projects/platform-wip/doc/architecture.md` -- "Storage" section, current dual-backend picture

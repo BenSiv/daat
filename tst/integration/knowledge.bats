@@ -23,7 +23,7 @@ raw_post() {
     local body="$2"
     local cookie="$3"
     local test_responses="$4"
-    printf '%s' "$body" | AGENT_PROVIDER=test AGENT_TEST_RESPONSES="$test_responses" \
+    printf '%s' "$body" | AGENT_TEST_RESPONSES="$test_responses" \
         GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="$path_info" QUERY_STRING="" \
         HTTP_COOKIE="$cookie" "$BIN"
 }

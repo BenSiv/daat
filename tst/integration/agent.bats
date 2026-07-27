@@ -48,8 +48,10 @@ raw_post() {
     local cookie="$3"
     local test_responses="$4"
     local compaction_threshold="${5:-}"
-    printf '%s' "$body" | AGENT_PROVIDER=test AGENT_TEST_RESPONSES="$test_responses" \
-        AGENT_COMPACTION_THRESHOLD="$compaction_threshold" \
+    if [ -n "$compaction_threshold" ]; then
+        write_platform_config ",\"agent_compaction_threshold\":${compaction_threshold}"
+    fi
+    printf '%s' "$body" | AGENT_TEST_RESPONSES="$test_responses" \
         GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="$path_info" QUERY_STRING="" \
         HTTP_COOKIE="$cookie" "$BIN"
 }
@@ -114,7 +116,7 @@ EOF
 
     capture_file="$TEST_DIR/captured_system_prompt.txt"
     printf 'csrf_token=%s&session_id=%s&message=hello' "$CSRF" "$session_id" | \
-        AGENT_PROVIDER=test AGENT_TEST_RESPONSES="$(done_response "Hi.")" \
+        AGENT_TEST_RESPONSES="$(done_response "Hi.")" \
         AGENT_TEST_CAPTURE_SYSTEM_PROMPT="$capture_file" \
         GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/chat-message" QUERY_STRING="" \
         HTTP_COOKIE="$COOKIE" "$BIN" > /dev/null
@@ -583,7 +585,7 @@ EOF
     # Drain it via the real CLI worker, exactly as a systemd timer would.
     sql="SELECT COUNT(*) AS note_count FROM task_note JOIN task ON task_note.task = task.id WHERE task.title = 'Ship it'"
     worker_scripted="$(tool_call_response "entity.query" "$(printf '{"sql":"%s"}' "$sql")")"$'\1'"$(done_response "There are 2 notes on the Ship it task.")"
-    AGENT_PROVIDER=test AGENT_TEST_RESPONSES="$worker_scripted" run "$BIN" agent run-pending-background
+    AGENT_TEST_RESPONSES="$worker_scripted" run "$BIN" agent run-pending-background
     [[ "$output" =~ "Ran 1, failed 0" ]]
 
     run sqlite3 "$TEST_DIR/.store/store.db" "SELECT status FROM agent_background_task;"
@@ -610,7 +612,7 @@ EOF
     run latest_tool_result "$session_id"
     [[ "$output" =~ "is still pending" ]]
 
-    AGENT_PROVIDER=test AGENT_TEST_RESPONSES="$(done_response "Nothing unusual found.")" run "$BIN" agent run-pending-background
+    AGENT_TEST_RESPONSES="$(done_response "Nothing unusual found.")" run "$BIN" agent run-pending-background
 
     scripted2="$(tool_call_response "background.status" "$(printf '{"task_id":%s}' "$task_id")")"$'\1'"$(done_response "Here it is.")"
     raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=any+update+now" "$COOKIE" "$scripted2" >/dev/null
@@ -789,7 +791,7 @@ EOF
 
     scripted="$(done_response "There are 0.")"$'\1'"$(done_response "Actually there are 5, I checked again.")"
     printf 'csrf_token=%s&session_id=%s&message=how+many' "$CSRF" "$session_id" | \
-        AGENT_PROVIDER=test AGENT_TEST_RESPONSES="$scripted" \
+        AGENT_TEST_RESPONSES="$scripted" \
         AGENT_TEST_SELF_CHECK_RESPONSE="$(done_response "Did you verify that? Check again.")" \
         GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/chat-message" QUERY_STRING="" \
         HTTP_COOKIE="$COOKIE" "$BIN" >/dev/null
@@ -808,7 +810,7 @@ EOF
     capture_file="$TEST_DIR/captured_messages.json"
     scripted="$(done_response "There are 0.")"$'\1'"$(done_response "Actually there are 5, I checked again.")"
     printf 'csrf_token=%s&session_id=%s&message=how+many' "$CSRF" "$session_id" | \
-        AGENT_PROVIDER=test AGENT_TEST_RESPONSES="$scripted" \
+        AGENT_TEST_RESPONSES="$scripted" \
         AGENT_TEST_SELF_CHECK_RESPONSE="$(done_response "Did you verify that? Check again.")" \
         AGENT_TEST_CAPTURE_MESSAGES="$capture_file" \
         GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/chat-message" QUERY_STRING="" \
@@ -854,7 +856,7 @@ EOF
     # turn out to the full turn budget regardless of whether the answer
     # was fine. text_only_blocks has to be what's actually checked.
     printf 'csrf_token=%s&session_id=%s&message=hi' "$CSRF" "$session_id" | \
-        AGENT_PROVIDER=test AGENT_TEST_RESPONSES="$(done_response "Hello!")" \
+        AGENT_TEST_RESPONSES="$(done_response "Hello!")" \
         AGENT_TEST_SELF_CHECK_RESPONSE="$(thinking_response "Let me review this answer carefully..." "CONFIRM")" \
         GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/chat-message" QUERY_STRING="" \
         HTTP_COOKIE="$COOKIE" "$BIN" >/dev/null
@@ -884,19 +886,19 @@ EOF
     [[ "$output" =~ "<strong>bold</strong>" ]]
 }
 
-@test "AGENT_MAX_TURNS is configurable -- a lower limit ends the loop sooner than the default" {
+@test "agent_max_turns (platform.json) is configurable -- a lower limit ends the loop sooner than the default" {
     resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
     session_id=$(extract_query_param "$resp" "session_id")
 
     # A self-check that never confirms would run all the way to the
     # default 10-turn budget (9 rejections, 10 assistant rows) -- with
-    # AGENT_MAX_TURNS=2, it should stop at exactly 2: the second turn's
+    # agent_max_turns=2, it should stop at exactly 2: the second turn's
     # answer returns immediately since there's no budget left to act on
     # a critique (turn == max_turns skips self-check entirely).
+    write_platform_config ',"agent_max_turns":2'
     printf 'csrf_token=%s&session_id=%s&message=how+many' "$CSRF" "$session_id" | \
-        AGENT_PROVIDER=test AGENT_TEST_RESPONSES="$(done_response "An answer.")" \
+        AGENT_TEST_RESPONSES="$(done_response "An answer.")" \
         AGENT_TEST_SELF_CHECK_RESPONSE="$(done_response "Not confirmed, check again.")" \
-        AGENT_MAX_TURNS=2 \
         GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/chat-message" QUERY_STRING="" \
         HTTP_COOKIE="$COOKIE" "$BIN" >/dev/null
 
@@ -906,7 +908,7 @@ EOF
     [ "$output" -eq 1 ]
 }
 
-@test "AGENT_QUERY_ROW_CAP is configurable -- entity.query truncates at the configured cap, not just the 200 default" {
+@test "agent_query_row_cap (platform.json) is configurable -- entity.query truncates at the configured cap, not just the 200 default" {
     write_task_schema
     "$BIN" entity create task title="First" status=open >/dev/null
     "$BIN" entity create task title="Second" status=open >/dev/null
@@ -915,8 +917,9 @@ EOF
     session_id=$(extract_query_param "$resp" "session_id")
 
     scripted="$(tool_call_response "entity.query" '{"sql":"SELECT title FROM task"}')"$'\1'"$(done_response "Here.")"
+    write_platform_config ',"agent_query_row_cap":1'
     printf 'csrf_token=%s&session_id=%s&message=list+tasks' "$CSRF" "$session_id" | \
-        AGENT_PROVIDER=test AGENT_TEST_RESPONSES="$scripted" AGENT_QUERY_ROW_CAP=1 \
+        AGENT_TEST_RESPONSES="$scripted" \
         GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/chat-message" QUERY_STRING="" \
         HTTP_COOKIE="$COOKIE" "$BIN" >/dev/null
 
@@ -963,20 +966,24 @@ EOF
     # Explicitly pinned to the vertex provider (also the default) --
     # this confirms agent_provider_vertex.lua's own direct REST call
     # still works on its own, independent of which provider
-    # AGENT_PROVIDER happens to default to. Still a real, live module:
-    # document.lua's embeddings call always delegates to it regardless
-    # of AGENT_PROVIDER, since agent_provider_vertex.lua is the only
-    # provider with embeddings support.
+    # platform.json's agent_provider happens to default to. Still a
+    # real, live module: document.lua's embeddings call always
+    # delegates to it regardless of agent_provider, since
+    # agent_provider_vertex.lua is the only provider with embeddings
+    # support.
     cat > "${TEST_DIR}/vertex_check.lua" <<EOF
 package.path = "${PROJECT_ROOT}/src/?.lua;" .. package.path
 agent_provider = require("agent_provider")
 result, err = agent_provider.generate("gemini-2.5-flash", "Reply in exactly one word, uppercase.", "What sound does a cow make?")
 print("RESULT:", result, "ERR:", err)
 EOF
+    cat > "${TEST_DIR}/platform.json" <<EOF
+{"agent_provider":"vertex","vertex_project":"${VERTEX_PROJECT}","vertex_region":"${VERTEX_REGION:-us-central1}"}
+EOF
     if [ -z "${LUAM_DIR:-}" ]; then
         LUAM_DIR=$(cd "${PROJECT_ROOT}/../luam" && pwd)
     fi
-    run env AGENT_PROVIDER=vertex LUA_PATH="${PROJECT_ROOT}/src/?.lua;${LUAM_DIR}/lib/?.lua;${LUAM_DIR}/lib/?/init.lua;;" \
+    run env LUA_PATH="${PROJECT_ROOT}/src/?.lua;${LUAM_DIR}/lib/?.lua;${LUAM_DIR}/lib/?/init.lua;;" \
         LUA_CPATH="${LUAM_DIR}/bin/?.so;${LUAM_DIR}/lib/lfs/?.so;;" \
         "${LUAM_DIR}/bin/luam" "${TEST_DIR}/vertex_check.lua"
     [ "$status" -eq 0 ]
@@ -1003,11 +1010,13 @@ if response != nil then
 end
 print("STOP:", stop, "ERR:", err)
 EOF
+    cat > "${TEST_DIR}/platform.json" <<EOF
+{"agent_provider":"vertex","vertex_project":"${VERTEX_PROJECT}","vertex_region":"${VERTEX_REGION:-us-central1}"}
+EOF
     if [ -z "${LUAM_DIR:-}" ]; then
         LUAM_DIR=$(cd "${PROJECT_ROOT}/../luam" && pwd)
     fi
-    run env AGENT_PROVIDER=vertex VERTEX_PROJECT="${VERTEX_PROJECT}" \
-        LUA_PATH="${PROJECT_ROOT}/src/?.lua;${LUAM_DIR}/lib/?.lua;${LUAM_DIR}/lib/?/init.lua;;" \
+    run env LUA_PATH="${PROJECT_ROOT}/src/?.lua;${LUAM_DIR}/lib/?.lua;${LUAM_DIR}/lib/?/init.lua;;" \
         LUA_CPATH="${LUAM_DIR}/bin/?.so;${LUAM_DIR}/lib/lfs/?.so;;" \
         "${LUAM_DIR}/bin/luam" "${TEST_DIR}/vertex_converse_check.lua"
     [ "$status" -eq 0 ]
@@ -1093,11 +1102,13 @@ if response2 != nil then
 end
 print("FINAL:", final_text)
 EOF
+    cat > "${TEST_DIR}/platform.json" <<EOF
+{"agent_provider":"vertex","vertex_project":"${VERTEX_PROJECT}","vertex_region":"${VERTEX_REGION:-us-central1}"}
+EOF
     if [ -z "${LUAM_DIR:-}" ]; then
         LUAM_DIR=$(cd "${PROJECT_ROOT}/../luam" && pwd)
     fi
-    run env AGENT_PROVIDER=vertex VERTEX_PROJECT="${VERTEX_PROJECT}" \
-        LUA_PATH="${PROJECT_ROOT}/src/?.lua;${LUAM_DIR}/lib/?.lua;${LUAM_DIR}/lib/?/init.lua;;" \
+    run env LUA_PATH="${PROJECT_ROOT}/src/?.lua;${LUAM_DIR}/lib/?.lua;${LUAM_DIR}/lib/?/init.lua;;" \
         LUA_CPATH="${LUAM_DIR}/bin/?.so;${LUAM_DIR}/lib/lfs/?.so;;" \
         "${LUAM_DIR}/bin/luam" "${TEST_DIR}/vertex_tool_check.lua"
     [ "$status" -eq 0 ]

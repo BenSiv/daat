@@ -16,6 +16,25 @@ setup_test_env() {
     resolve_bin
     export TEST_DIR="$(mktemp -d)"
     cd "$TEST_DIR"
+    write_platform_config
+}
+
+# Writes platform.json into TEST_DIR (config.platform_config() resolves
+# it relative to DOCUMENT_ROOT, which falls back to "." -- the real
+# CGI/CLI cwd every raw_get/raw_post/"$BIN" call in these tests already
+# runs from). Called once with no overrides from setup_test_env, so
+# every test gets the deterministic test provider by default without
+# needing its own AGENT_PROVIDER=test env var -- and again, with
+# `extra_json_fields` (a comma-prefixed JSON fragment, e.g.
+# ',"agent_max_turns":2'), by any individual test that needs to
+# override one specific knob. Each "$BIN" invocation is its own fresh
+# process, so overwriting this file between two calls in the same test
+# is always safe -- there's no stale in-process cache to worry about.
+write_platform_config() {
+    local extra_json_fields="${1:-}"
+    cat > "$TEST_DIR/platform.json" <<EOF
+{"agent_provider":"test"${extra_json_fields}}
+EOF
 }
 
 # Raw content of the most recent tool_result message for a session --
@@ -80,12 +99,13 @@ run_cgi() {
 
 # Builds one scripted structured-tool-call turn for AGENT_TEST_RESPONSES
 # (agent_provider_test.converse expects each "\1"-delimited entry to be
-# a JSON object mirroring the pi-ai bridge's own AssistantMessage shape
-# -- see agent_provider_pi.lua/bridge/pi-bridge.mjs) -- replaces the old
-# <tool>/<method>/<args> tag-text scripting since the pi-ai migration.
-# `dotted_name` is "tool.method" (e.g. "document.search"); `args_json`
-# is a raw JSON object literal -- build it by hand, test args here are
-# always simple key/value pairs that never need escaping.
+# a JSON object matching agent_provider's own canonical
+# {content, stopReason} shape -- see agent_provider_test.lua's own
+# header) -- replaces the old <tool>/<method>/<args> tag-text scripting
+# since the pi-ai migration. `dotted_name` is "tool.method" (e.g.
+# "document.search"); `args_json` is a raw JSON object literal -- build
+# it by hand, test args here are always simple key/value pairs that
+# never need escaping.
 tool_call_response() {
     local dotted_name="$1"
     local args_json="$2"
@@ -128,11 +148,10 @@ done_response() {
 
 # Builds one scripted final-answer turn carrying a real Gemini 2.5
 # thought-summary block alongside the final text (task: chat agent
-# thinking visibility) -- mirrors what the pi-ai bridge itself returns
-# when thinking is enabled (see agent_provider_pi.lua/bridge/
-# pi-bridge.mjs and agent.lua's own extract_thinking_text). Both
-# `thinking_text`/`answer_text` are JSON-escaped the same way
-# done_response's own `text` is.
+# thinking visibility) -- mirrors what agent_provider_vertex.lua itself
+# returns when thinking is enabled (see agent.lua's own
+# extract_thinking_text). Both `thinking_text`/`answer_text` are
+# JSON-escaped the same way done_response's own `text` is.
 thinking_response() {
     local thinking_text="$1"
     local answer_text="$2"

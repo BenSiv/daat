@@ -486,28 +486,21 @@ end
 -- "exactly N rows" apart from "N rows, and more exist" for the UI's
 -- own truncation notice -- a second COUNT(*) query would double the
 -- real cost this exists to avoid.
-DEFAULT_ADHOC_ROW_CAP = 1000
-
+--
 -- How much a deployment's own admin/agent-facing row caps below should
 -- actually be depends on things this code doesn't know -- how much data
 -- a given deployment holds, how big a table a human reasonably wants to
 -- browse at once, how much context budget the configured AGENT_MODEL
--- has -- so neither is a bare hardcoded literal; each has a real env
--- var override, read fresh per call (not resolved once at load).
-function view_env_number(name, fallback)
-    value = tonumber(os.getenv(name))
-    if value == nil then
-        return fallback
-    end
-    return value
-end
+-- has -- so neither is a bare hardcoded literal; each is read fresh
+-- from config.platform_config() per call (not resolved once at load).
 
 function view.run_adhoc(db_path, sql_text)
     if view.is_select_only(sql_text) == false then
         return nil, nil, "refusing to run: not a plain SELECT"
     end
 
-    row_cap = view_env_number("PLATFORM_ADHOC_ROW_CAP", DEFAULT_ADHOC_ROW_CAP)
+    config = require("config")
+    row_cap = config.platform_config().platform_adhoc_row_cap
     query_text = sql_text
     body = string.gsub(sql_text, "%s+$", "")
     if string.sub(body, -1) == ";" then
@@ -564,14 +557,6 @@ end
 -- schema_sync_state, or any other internal table entity.list/get
 -- could never expose either).
 
--- A separate, smaller default cap than ADHOC_ROW_CAP -- that one is
--- sized for a human reading an HTML table in a browser; this result
--- goes straight into the model's own prompt/context, where 1000 rows
--- would be wasteful at best and a real token-cost problem at worst
--- (and the right number here depends on the configured AGENT_MODEL's
--- own context budget, not just this code).
-DEFAULT_AGENT_QUERY_ROW_CAP = 200
-
 -- Collects every identifier immediately following `keyword` (word-
 -- boundary matched, same convention as FORBIDDEN_SQL_WORDS -- so a
 -- column literally named e.g. "from_date" is never mistaken for a
@@ -618,12 +603,19 @@ function referenced_table_names(sql_text)
     return names
 end
 
+-- A separate, smaller default cap than platform_adhoc_row_cap -- that
+-- one is sized for a human reading an HTML table in a browser; this
+-- result goes straight into the model's own prompt/context, where 1000
+-- rows would be wasteful at best and a real token-cost problem at
+-- worst (and the right number here depends on the configured
+-- AGENT_MODEL's own context budget, not just this code).
 function view.run_agent_query(db_path, sql_text)
     if view.is_select_only(sql_text) == false then
         return nil, nil, "refusing to run: not a plain SELECT"
     end
 
-    row_cap = view_env_number("AGENT_QUERY_ROW_CAP", DEFAULT_AGENT_QUERY_ROW_CAP)
+    config = require("config")
+    row_cap = config.platform_config().agent_query_row_cap
     referenced = referenced_table_names(sql_text)
     if #referenced == 0 then
         return nil, nil, "refusing to run: no FROM/JOIN table found"

@@ -294,31 +294,28 @@ EOF
     [[ "$output" =~ "No pages yet" ]]
 }
 
-save_document_as() {
-    local provider="$1" body="$2"
-    printf '%s' "$body" | AGENT_PROVIDER="$provider" \
-        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/document-save" QUERY_STRING="" \
-        HTTP_COOKIE="$COOKIE" "$BIN"
-}
-
 @test "creating and updating a page auto-computes its embedding (task #105)" {
-    save_document_as "test" "csrf_token=${CSRF}&title=Home&parent_id=&content=hello" >/dev/null
+    save_document "csrf_token=${CSRF}&title=Home&parent_id=&content=hello" >/dev/null
     run bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db 'SELECT COUNT(*) FROM document_embedding;'"
     [ "$output" = "1" ]
 
     # Updating recomputes it too, not just create -- still exactly one
     # row (REPLACE INTO document_embedding, keyed on document_id), not a
     # second stale one left behind.
-    save_document_as "test" "csrf_token=${CSRF}&entity_id=1&title=Home&parent_id=&content=updated content" >/dev/null
+    save_document "csrf_token=${CSRF}&entity_id=1&title=Home&parent_id=&content=updated content" >/dev/null
     run bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db 'SELECT COUNT(*) FROM document_embedding;'"
     [ "$output" = "1" ]
 }
 
 @test "an unconfigured/failing embedding provider never fails the page save itself (best-effort)" {
-    # No AGENT_PROVIDER set -> defaults to vertex -> VERTEX_PROJECT is
-    # unset in this test environment -> agent_provider_vertex.embeddings
-    # returns nil, err gracefully (never throws) -- document.
-    # create_page must still succeed and never propagate that failure.
+    # Explicitly pinned to vertex with no vertex_project configured
+    # (platform.json's own default field, see config.platform_config())
+    # -- agent_provider_vertex.embeddings returns nil, err gracefully
+    # (never throws) -- document.create_page must still succeed and
+    # never propagate that failure.
+    cat > "${TEST_DIR}/platform.json" <<'EOF'
+{"agent_provider":"vertex"}
+EOF
     run save_document "csrf_token=${CSRF}&title=Home&parent_id=&content=hello"
     [[ "$output" =~ "302 Found" ]]
 
@@ -334,7 +331,7 @@ save_document_as() {
     # import task surfaced this: pages existed but were unfindable by
     # semantic search and had no backlinks, silently).
     payload='[{"title": "Source Page", "content": "hello"}, {"title": "Linking Page", "content": "See [[Source Page]] for details"}]'
-    run bash -c "printf '%s' '$payload' | AGENT_PROVIDER=test '$BIN' document create-json"
+    run bash -c "printf '%s' '$payload' | '$BIN' document create-json"
     [[ "$output" =~ '"created_ids":[1,2]' ]] || [[ "$output" =~ '"created_ids":[' ]]
     [[ "$output" =~ '"failed":[]' ]]
 
@@ -358,7 +355,7 @@ save_document_as() {
     # generic entity create-json/create_batch's own all-or-nothing
     # validate-everything-first gate.
     payload='[{"title": "Good Page 1", "content": "ok"}, {"content": "no title here"}, {"title": "Good Page 2", "content": "ok"}]'
-    run bash -c "printf '%s' '$payload' | AGENT_PROVIDER=test '$BIN' document create-json"
+    run bash -c "printf '%s' '$payload' | '$BIN' document create-json"
     [[ "$output" =~ '"row_index":2' ]]
 
     run "$BIN" entity list document
@@ -369,15 +366,22 @@ save_document_as() {
 }
 
 @test "document reindex-embeddings CLI still exists, for bulk backfill after a save-time provider failure" {
+    # Pinned to vertex with no vertex_project configured (see the
+    # previous test) so the save below never gets an embedding --
+    # reindex-embeddings is how a store backfills those after the
+    # fact, or after a provider outage silently dropped some
+    # best-effort saves.
+    cat > "${TEST_DIR}/platform.json" <<'EOF'
+{"agent_provider":"vertex"}
+EOF
     save_document "csrf_token=${CSRF}&title=Home&parent_id=&content=hello" >/dev/null
-    # The save above ran with no configured provider, so it never got
-    # an embedding (see the previous test) -- reindex-embeddings is how
-    # a store backfills those after the fact, or after a provider
-    # outage silently dropped some best-effort saves.
     run bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db 'SELECT COUNT(*) FROM document_embedding;'"
     [ "$output" = "0" ]
 
-    AGENT_PROVIDER=test run "$BIN" document reindex-embeddings
+    # Back to the (working) test provider -- as if the deployment fixed
+    # its Vertex configuration before running the backfill.
+    write_platform_config
+    run "$BIN" document reindex-embeddings
     [[ "$output" =~ "Reindexed 1 page(s), 0 failed" ]]
 
     run bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db 'SELECT COUNT(*) FROM document_embedding;'"

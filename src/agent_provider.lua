@@ -9,13 +9,15 @@
 --     {content: [...blocks...], stopReason, errorMessage} reply --
 --     real native tool-calling, not a hand-rolled text tag protocol.
 --   embeddings(model, text) -> (vector, err), optional.
--- Loaded dynamically by name (AGENT_PROVIDER env var, default "vertex"
--- -- agent_provider_vertex.lua's own native structured tool-calling,
--- direct Vertex REST calls, no separate Node/pi-ai bridge process)
--- rather than required directly, so swapping providers -- or, just as
--- importantly, swapping in the deterministic test provider for
+-- Loaded dynamically by name (config.platform_config().agent_provider,
+-- default "vertex" -- agent_provider_vertex.lua's own native structured
+-- tool-calling, direct Vertex REST calls, no separate Node/pi-ai bridge
+-- process) rather than required directly, so swapping providers -- or,
+-- just as importantly, swapping in the deterministic test provider for
 -- repeatable, cost-free test runs -- is a config change, not a code
 -- change.
+
+config = require("config")
 
 agent_provider = {}
 
@@ -24,11 +26,7 @@ agent_provider = {}
 -- recording, e.g.) doesn't need to load/require the actual provider
 -- module to get it.
 function agent_provider.name()
-    name = os.getenv("AGENT_PROVIDER")
-    if name == nil or name == "" then
-        name = "vertex"
-    end
-    return name
+    return config.platform_config().agent_provider
 end
 
 function agent_provider.load()

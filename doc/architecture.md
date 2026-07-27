@@ -56,16 +56,16 @@ tst/        tst/unit/*.lua (plain Luam scripts, no DB) and
 
 `src/agent_provider_test.lua` is the one file in `src/` that looks like
 it belongs in `tst/` instead -- it's the deterministic stub LLM backend
-`AGENT_PROVIDER=test` selects (see "Chat"). It has to live in `src/`
-on purpose: `bld/build.sh` bundles every `src/*.lua` file into the one
-compiled binary tests run against, and the whole point is that tests
-exercise that real binary, not a separate test-only build. The
-tradeoff this creates: nothing today stops `AGENT_PROVIDER=test` from
-being set in a real deployment by mistake (a stray env var, a
-copy-pasted `.env`) -- the app would silently serve canned responses
-with no error and no visible difference except the content itself. Not
-fixed as of this writing; worth a safeguard if it ever becomes a real
-concern.
+`platform.json`'s `agent_provider: "test"` selects (see "Chat"). It has
+to live in `src/` on purpose: `bld/build.sh` bundles every `src/*.lua`
+file into the one compiled binary tests run against, and the whole
+point is that tests exercise that real binary, not a separate test-only
+build. The tradeoff this creates: nothing today stops `agent_provider:
+"test"` from ending up in a real deployment's `platform.json` by
+mistake (a stray edit, a copy-pasted seed file) -- the app would
+silently serve canned responses with no error and no visible difference
+except the content itself. Not fixed as of this writing; worth a
+safeguard if it ever becomes a real concern.
 
 ## History as the source of truth, not a side effect
 
@@ -362,27 +362,35 @@ and a small, explicit tool registry the model can act through.
   feature; confirmed directly that this project's SQLite binding
   doesn't have it compiled in, so search instead scores every active
   page directly, an acceptable tradeoff at the scale this is built for.
-- **Turn budgets, row caps, and retry counts are env-var-configurable,
-  not hardcoded** -- the right value for any of these genuinely depends
-  on things a deployment chooses (which model `AGENT_MODEL` names, that
-  provider's own latency, how much data this deployment actually holds),
-  not on this code. Read fresh per call, not resolved once at process
-  start, same pattern `AGENT_MODEL`/`AGENT_COMPACTION_THRESHOLD` already
-  established. Confirmed live why this matters: a self-check loop
-  needing several rounds to converge on a real production turn took long
-  enough to exceed the load balancer's own (separately configurable)
-  timeout.
-  | Env var | Default | Controls |
+- **Turn budgets, row caps, and retry counts are configurable via
+  platform.json, not hardcoded** -- the right value for any of these
+  genuinely depends on things a deployment chooses (which model
+  `agent_model` names, that provider's own latency, how much data this
+  deployment actually holds), not on this code. Read fresh per call via
+  `config.platform_config()` (memoized per-process, not resolved once
+  at load) -- see `theme.json`'s own precedent for the file-shaped
+  config pattern this follows. Confirmed live why this matters: a
+  self-check loop needing several rounds to converge on a real
+  production turn took long enough to exceed the load balancer's own
+  (separately configurable) timeout.
+  | `platform.json` field | Default | Controls |
   |---|---|---|
-  | `AGENT_MAX_TURNS` | 10 | Main tool-calling turn loop's own budget (`agent.run_turn`) |
-  | `AGENT_RESEARCH_MAX_TURNS` | 6 | `research.investigate`'s isolated sub-loop budget |
-  | `AGENT_BACKGROUND_MAX_TURNS` | 20 | `background.start`'s worker-drained task budget -- looser than the interactive ones since it isn't bound to one HTTP request |
-  | `AGENT_BACKGROUND_MAX_ATTEMPTS` | 3 | Retries before a background task is marked permanently `failed` |
-  | `AGENT_SEARCH_EXCERPT_LENGTH` | 1200 | Per-result excerpt length `document.search`'s tool result feeds into the model's own prompt |
-  | `AGENT_QUERY_ROW_CAP` | 200 | Row cap on `entity.query` results (goes straight into the model's prompt/context, so much lower than the admin console's own cap) |
-  | `PLATFORM_ADHOC_ROW_CAP` | 1000 | Row cap on the admin-only `/sql` ad-hoc console (a human reading an HTML table, not a model's context budget) |
-  | `EXTENSION_MAX_JOB_ATTEMPTS` | 5 | Retries before an `extension_job` (after-hook write queue) is marked permanently `failed` |
-  | `PLATFORM_HEAT_DECAY_HALF_LIFE_DAYS` | 14 | Knowledge Pool document "relevance heat" decay half-life -- plausibly tracks a deployment's own real usage cadence |
+  | `agent_provider` | `"vertex"` | Which named backend `agent_provider.lua` loads (`"vertex"`, or `"test"` for the deterministic stub) |
+  | `agent_model` | `"gemini-2.5-flash"` | The real model name passed to every `generate`/`converse`/`embeddings` call |
+  | `vertex_project` | none (required) | GCP project `agent_provider_vertex.lua`'s REST calls bill against -- never hardcoded |
+  | `vertex_region` | `"us-central1"` | Vertex AI region |
+  | `agent_max_turns` | 10 | Main tool-calling turn loop's own budget (`agent.run_turn`) |
+  | `agent_research_max_turns` | 6 | `research.investigate`'s isolated sub-loop budget |
+  | `agent_background_max_turns` | 20 | `background.start`'s worker-drained task budget -- looser than the interactive ones since it isn't bound to one HTTP request |
+  | `agent_background_max_attempts` | 3 | Retries before a background task is marked permanently `failed` |
+  | `agent_search_excerpt_length` | 1200 | Per-result excerpt length `document.search`'s tool result feeds into the model's own prompt |
+  | `agent_query_row_cap` | 200 | Row cap on `entity.query` results (goes straight into the model's prompt/context, so much lower than the admin console's own cap) |
+  | `agent_compaction_threshold` | 4000 | Estimated-token threshold that triggers context-window compaction |
+  | `platform_adhoc_row_cap` | 1000 | Row cap on the admin-only `/sql` ad-hoc console (a human reading an HTML table, not a model's context budget) |
+  | `extension_max_job_attempts` | 5 | Retries before an `extension_job` (after-hook write queue) is marked permanently `failed` |
+  | `platform_heat_decay_half_life_days` | 14 | Knowledge Pool document "relevance heat" decay half-life -- plausibly tracks a deployment's own real usage cadence |
+  | `db_backend` | `"sqlite"` | `"sqlite"` or `"mariadb"` -- see doc/mariadb-migration.md |
+  | `mariadb_host`/`mariadb_port`/`mariadb_user`/`mariadb_database` | `"127.0.0.1"`/`3306`/none/none | MariaDB connection descriptor -- the password is the one field here that stays a plain `PLATFORM_MARIADB_PASSWORD` env var, never written to a file this repo tracks |
 
 ## Knowledge pool
 

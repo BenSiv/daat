@@ -1302,12 +1302,6 @@ function cgi.handle_request()
         return print_response("302 Found", "text/plain", "", {"Location: settings"})
     end
 
-    -- Chat/agent (src/agent.lua). AGENT_MODEL is configurable the same
-    -- way VERTEX_PROJECT/VERTEX_REGION/AGENT_PROVIDER are -- an env
-    -- var, not hardcoded, since a real model name is a deployment
-    -- choice, not something this generic platform should assume.
-    AGENT_DEFAULT_MODEL = "gemini-2.5-flash"
-
     if path_info == "/chat" then
         session_id = params.session_id
         sessions = agent.list_sessions(db_path, author)
@@ -1350,7 +1344,7 @@ function cgi.handle_request()
         if session == nil then
             return print_response("404 Not Found", "text/html", "<h3>Error: no such chat session</h3>")
         end
-        model = default_value(os.getenv("AGENT_MODEL"), AGENT_DEFAULT_MODEL)
+        model = config.platform_config().agent_model
         agent.run_turn(db_path, form.session_id, author, nil, model, form.message)
         return print_response("302 Found", "text/plain", "", {"Location: chat?session_id=" .. form.session_id})
     end
@@ -1360,7 +1354,7 @@ function cgi.handle_request()
         if not require_csrf(cookies, form.csrf_token) then
             return print_response("403 Forbidden", "text/html", "<h3>Forbidden: CSRF check failed</h3>")
         end
-        model = default_value(os.getenv("AGENT_MODEL"), AGENT_DEFAULT_MODEL)
+        model = config.platform_config().agent_model
         agent.approve_pending(db_path, tonumber(form.pending_id), author, nil, model)
         return print_response("302 Found", "text/plain", "", {"Location: chat?session_id=" .. form.session_id})
     end
@@ -1370,7 +1364,7 @@ function cgi.handle_request()
         if not require_csrf(cookies, form.csrf_token) then
             return print_response("403 Forbidden", "text/html", "<h3>Forbidden: CSRF check failed</h3>")
         end
-        model = default_value(os.getenv("AGENT_MODEL"), AGENT_DEFAULT_MODEL)
+        model = config.platform_config().agent_model
         agent.deny_pending(db_path, tonumber(form.pending_id), author, nil, model)
         return print_response("302 Found", "text/plain", "", {"Location: chat?session_id=" .. form.session_id})
     end
@@ -1410,7 +1404,7 @@ function cgi.handle_request()
         if session == nil then
             return print_response("404 Not Found", "application/json", json.encode({error = "no such chat session"}))
         end
-        model = default_value(os.getenv("AGENT_MODEL"), AGENT_DEFAULT_MODEL)
+        model = config.platform_config().agent_model
         agent.run_turn(db_path, body_data.session_id, author, nil, model, body_data.message)
         return print_response("200 OK", "application/json", json.encode(chat_widget_state(db_path, body_data.session_id)))
     end
@@ -1424,7 +1418,7 @@ function cgi.handle_request()
         if body_data == nil then
             return print_response("400 Bad Request", "application/json", json.encode({error = "Invalid JSON: " .. tostring(err)}))
         end
-        model = default_value(os.getenv("AGENT_MODEL"), AGENT_DEFAULT_MODEL)
+        model = config.platform_config().agent_model
         agent.approve_pending(db_path, tonumber(body_data.pending_id), author, nil, model)
         return print_response("200 OK", "application/json", json.encode(chat_widget_state(db_path, body_data.session_id)))
     end
@@ -1461,7 +1455,7 @@ function cgi.handle_request()
         if body_data == nil then
             return print_response("400 Bad Request", "application/json", json.encode({error = "Invalid JSON: " .. tostring(err)}))
         end
-        model = default_value(os.getenv("AGENT_MODEL"), AGENT_DEFAULT_MODEL)
+        model = config.platform_config().agent_model
         agent.deny_pending(db_path, tonumber(body_data.pending_id), author, nil, model)
         return print_response("200 OK", "application/json", json.encode(chat_widget_state(db_path, body_data.session_id)))
     end

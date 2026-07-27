@@ -230,12 +230,17 @@ exist for the MariaDB work (task #57 territory again).
   containing `\n` coming back as an actual newline). Verified directly
   against a live server that a value containing a literal backslash
   round-trips correctly with plain doubling once that flag is set.
-- `config.lua` gains `config.db_backend()` (`PLATFORM_DB_BACKEND` env
-  var, default `sqlite`) and `config.mariadb_descriptor()` (host/port/
-  user/password/database from `PLATFORM_MARIADB_*` env vars, matching
-  `PLATFORM_VENDOR_DIR`'s convention). `config.db_path(root)` returns
-  either shape depending on the active backend. `config.is_initialized`
-  and `init.lua`'s "already initialized" message needed their own
+- `config.lua` gains `config.db_backend()` (`db_backend` field, default
+  `sqlite`) and `config.mariadb_descriptor()` (host/port/user/database
+  from `platform.json`, password from the `PLATFORM_MARIADB_PASSWORD`
+  env var -- the one secret in the whole descriptor). Originally these
+  read `PLATFORM_DB_BACKEND`/`PLATFORM_MARIADB_*` env vars directly,
+  matching `PLATFORM_VENDOR_DIR`'s convention at the time; both moved
+  onto `config.platform_config()` (see doc/architecture.md's "Chat"
+  section) once deployment config broadly moved from env vars to a
+  structured file. `config.db_path(root)` returns either shape
+  depending on the active backend. `config.is_initialized` and
+  `init.lua`'s "already initialized" message needed their own
   shape-awareness too (a file-exists check and a bare `..` string
   concat both assumed `db_path` was always a string).
 - Hit one real, Luam-specific language quirk while writing this: a

@@ -6,7 +6,7 @@
 -- still a fully opaque value to every one of those ~150 call sites,
 -- it's just either a SQLite file path (a string, from config.db_path)
 -- or a MariaDB connection descriptor (a table, same function, once a
--- deployment sets PLATFORM_DB_BACKEND=mariadb). Dispatch below is by
+-- deployment sets db_backend="mariadb" in platform.json). Dispatch below is by
 -- db_path's own shape (type(db_path) == "table"), not a config lookup
 -- from inside this file -- config.lua requiring db.lua back would be
 -- circular, and every caller already has db_path in scope regardless.

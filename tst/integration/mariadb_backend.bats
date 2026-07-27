@@ -15,12 +15,18 @@ setup() {
     export PROJECT_ROOT="$(cd "$BATS_TEST_DIRNAME/../.." && pwd)"
     resolve_bin
 
-    export PLATFORM_DB_BACKEND=mariadb
-    export PLATFORM_MARIADB_HOST="${MARIADB_TEST_HOST:-127.0.0.1}"
-    export PLATFORM_MARIADB_PORT="${MARIADB_TEST_PORT:-3306}"
-    export PLATFORM_MARIADB_USER="${MARIADB_TEST_USER:-platform_test}"
+    # host/port/user/database are real, version-controlled deployment
+    # content now (platform.json, written below) -- only the password
+    # stays a plain env var (config.mariadb_descriptor's own
+    # PLATFORM_MARIADB_PASSWORD read), same secrets-stay-external split
+    # production uses. Still plain bash variables here (not exported)
+    # since the `mariadb` CLI calls throughout this file need them for
+    # string interpolation regardless of how the app itself reads them.
+    PLATFORM_MARIADB_HOST="${MARIADB_TEST_HOST:-127.0.0.1}"
+    PLATFORM_MARIADB_PORT="${MARIADB_TEST_PORT:-3306}"
+    PLATFORM_MARIADB_USER="${MARIADB_TEST_USER:-platform_test}"
     export PLATFORM_MARIADB_PASSWORD="${MARIADB_TEST_PASSWORD:-platform_test_pw}"
-    export PLATFORM_MARIADB_DATABASE="${MARIADB_TEST_DATABASE:-platform_bats_test}"
+    PLATFORM_MARIADB_DATABASE="${MARIADB_TEST_DATABASE:-platform_bats_test}"
 
     if ! command -v mariadb >/dev/null 2>&1; then
         skip "mariadb CLI not available -- skipping MariaDB backend coverage"
@@ -39,6 +45,9 @@ setup() {
 
     export TEST_DIR="$(mktemp -d)"
     cd "$TEST_DIR"
+    cat > platform.json <<EOF
+{"db_backend":"mariadb","mariadb_host":"${PLATFORM_MARIADB_HOST}","mariadb_port":${PLATFORM_MARIADB_PORT},"mariadb_user":"${PLATFORM_MARIADB_USER}","mariadb_database":"${PLATFORM_MARIADB_DATABASE}"}
+EOF
 }
 
 teardown() {

@@ -32,6 +32,8 @@ STORE_DIR = ".store"
 DB_FILE = "store.db"
 SESSION_SECRET_FILE = "session_secret"
 THEME_FILE = "theme.json"
+PLATFORM_CONFIG_FILE = "platform.json"
+PLATFORM_CONFIG_CACHE = nil
 
 -- The CSS custom-property names a theme.json may override -- matches
 -- html.lua's own var(--platform-*, <fallback>) usage sites exactly, so a
@@ -58,42 +60,29 @@ function config.store_dir(root)
 end
 
 -- "sqlite" (default) or "mariadb" -- see doc/mariadb-migration.md.
--- Read fresh on every call rather than cached: cheap (one os.getenv),
--- and CGI-per-request means each process only ever asks once anyway,
--- so there's no real cost to keeping this stateless like every other
--- config.* resolver here.
+-- Sourced from platform.json (config.platform_config()) now, not a raw
+-- env var directly -- see that function's own header for why.
 function config.db_backend()
-    backend = os.getenv("PLATFORM_DB_BACKEND")
-    if backend == "mariadb" then
-        return "mariadb"
-    end
-    return "sqlite"
+    return config.platform_config().db_backend
 end
 
--- Connection descriptor for the mariadb backend, resolved from env
--- vars -- same convention as PLATFORM_VENDOR_DIR. host/port default to
--- MariaDB's own usual localhost/3306; user/database have no sensible
--- guess and are left nil if unset rather than silently defaulting to
--- something that would connect to the wrong place.
+-- Connection descriptor for the mariadb backend. host/port/user/
+-- database come from platform.json -- real, version-controlled
+-- deployment content, not secrets. The password is the one field here
+-- that stays a plain env var (PLATFORM_MARIADB_PASSWORD, never written
+-- to a file this repo tracks) -- see config.platform_config()'s header.
 function config.mariadb_descriptor()
-    port = tonumber(os.getenv("PLATFORM_MARIADB_PORT"))
-    if port == nil then
-        port = 3306
-    end
-    host = os.getenv("PLATFORM_MARIADB_HOST")
-    if host == nil or host == "" then
-        host = "127.0.0.1"
-    end
+    conf = config.platform_config()
     password = os.getenv("PLATFORM_MARIADB_PASSWORD")
     if password == nil then
         password = ""
     end
     return {
-        host = host,
-        port = port,
-        user = os.getenv("PLATFORM_MARIADB_USER"),
+        host = conf.mariadb_host,
+        port = conf.mariadb_port,
+        user = conf.mariadb_user,
         password = password,
-        database = os.getenv("PLATFORM_MARIADB_DATABASE"),
+        database = conf.mariadb_database,
     }
 end
 
@@ -219,6 +208,143 @@ function config.vendor_assets_dir()
         return dir
     end
     return "./vnd"
+end
+
+function config.platform_config_path(root)
+    if root == nil then
+        root = config.find_root()
+    end
+    return paths.joinpath(root, PLATFORM_CONFIG_FILE)
+end
+
+-- Every deployment-tunable setting that ISN'T a secret: which
+-- agent_provider/agent_model to call, the chat agent's own turn/row/
+-- retry budgets (doc/architecture.md's own table), and the MariaDB
+-- connection's host/port/user/database. All of it is real,
+-- version-controlled deployment content -- meant to be committed
+-- (see lims/platform.json, seeded into the image/store exactly like
+-- theme.json already is), not something only an operator's shell
+-- environment happens to know. The one field in this whole area that
+-- IS a secret, the MariaDB password, deliberately stays out of this
+-- file and out of version control entirely -- see
+-- config.mariadb_descriptor's own PLATFORM_MARIADB_PASSWORD env var
+-- read.
+--
+-- Same generic-hook contract as load_theme below: absent or malformed
+-- platform.json, every field just falls back to its default rather
+-- than erroring -- a deployment that wants none of this can skip the
+-- file entirely. Memoized per-process (PLATFORM_CONFIG_CACHE) since a
+-- single turn loop reads several of these fields across several calls
+-- -- safe to cache because CGI/CLI both start a fresh Lua process per
+-- request/invocation, so there's never a stale value left over from
+-- an earlier one.
+function config.platform_config()
+    if PLATFORM_CONFIG_CACHE != nil then
+        return PLATFORM_CONFIG_CACHE
+    end
+
+    conf = {
+        agent_provider = "vertex",
+        agent_model = "gemini-2.5-flash",
+        vertex_project = nil,
+        vertex_region = nil,
+        agent_max_turns = 10,
+        agent_research_max_turns = 6,
+        agent_background_max_turns = 20,
+        agent_background_max_attempts = 3,
+        agent_search_excerpt_length = 1200,
+        agent_query_row_cap = 200,
+        agent_compaction_threshold = 4000,
+        platform_adhoc_row_cap = 1000,
+        extension_max_job_attempts = 5,
+        platform_heat_decay_half_life_days = 14,
+        db_backend = "sqlite",
+        mariadb_host = "127.0.0.1",
+        mariadb_port = 3306,
+        mariadb_user = nil,
+        mariadb_database = nil,
+    }
+
+    path = config.platform_config_path()
+    file = io.open(path, "r")
+    if file == nil then
+        PLATFORM_CONFIG_CACHE = conf
+        return conf
+    end
+    contents = io.read(file, "*all")
+    io.close(file)
+
+    -- Required here, not at module top level -- same reason
+    -- load_theme's own comment gives (config.lua loads earlier than
+    -- dkjson.lua in the build's bundle order; a top-level require
+    -- broke an unrelated CLI code path last time this was tried).
+    json = require("dkjson")
+    parsed, _, err = json.decode(contents)
+    if err != nil or type(parsed) != "table" then
+        PLATFORM_CONFIG_CACHE = conf
+        return conf
+    end
+
+    if type(parsed.agent_provider) == "string" and parsed.agent_provider != "" then
+        conf.agent_provider = parsed.agent_provider
+    end
+    if type(parsed.agent_model) == "string" and parsed.agent_model != "" then
+        conf.agent_model = parsed.agent_model
+    end
+    if type(parsed.vertex_project) == "string" and parsed.vertex_project != "" then
+        conf.vertex_project = parsed.vertex_project
+    end
+    if type(parsed.vertex_region) == "string" and parsed.vertex_region != "" then
+        conf.vertex_region = parsed.vertex_region
+    end
+    if type(parsed.agent_max_turns) == "number" then
+        conf.agent_max_turns = parsed.agent_max_turns
+    end
+    if type(parsed.agent_research_max_turns) == "number" then
+        conf.agent_research_max_turns = parsed.agent_research_max_turns
+    end
+    if type(parsed.agent_background_max_turns) == "number" then
+        conf.agent_background_max_turns = parsed.agent_background_max_turns
+    end
+    if type(parsed.agent_background_max_attempts) == "number" then
+        conf.agent_background_max_attempts = parsed.agent_background_max_attempts
+    end
+    if type(parsed.agent_search_excerpt_length) == "number" then
+        conf.agent_search_excerpt_length = parsed.agent_search_excerpt_length
+    end
+    if type(parsed.agent_query_row_cap) == "number" then
+        conf.agent_query_row_cap = parsed.agent_query_row_cap
+    end
+    if type(parsed.agent_compaction_threshold) == "number" then
+        conf.agent_compaction_threshold = parsed.agent_compaction_threshold
+    end
+    if type(parsed.platform_adhoc_row_cap) == "number" then
+        conf.platform_adhoc_row_cap = parsed.platform_adhoc_row_cap
+    end
+    if type(parsed.extension_max_job_attempts) == "number" then
+        conf.extension_max_job_attempts = parsed.extension_max_job_attempts
+    end
+    if type(parsed.platform_heat_decay_half_life_days) == "number" then
+        conf.platform_heat_decay_half_life_days = parsed.platform_heat_decay_half_life_days
+    end
+    if parsed.db_backend == "mariadb" then
+        conf.db_backend = "mariadb"
+    end
+    if type(parsed.mariadb_host) == "string" and parsed.mariadb_host != "" then
+        conf.mariadb_host = parsed.mariadb_host
+    end
+    if type(parsed.mariadb_port) == "number" then
+        conf.mariadb_port = parsed.mariadb_port
+    end
+    if type(parsed.mariadb_user) == "string" and parsed.mariadb_user != "" then
+        conf.mariadb_user = parsed.mariadb_user
+    end
+    if type(parsed.mariadb_database) == "string" and parsed.mariadb_database != "" then
+        conf.mariadb_database = parsed.mariadb_database
+    end
+
+    PLATFORM_CONFIG_CACHE = conf
+    return conf
 end
 
 -- Deliberately generic here: platform itself ships no brand identity,

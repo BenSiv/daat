@@ -38,14 +38,14 @@ start_chat() {
     local session="$1" csrf="$2" title="$3"
     printf 'csrf_token=%s&title=%s' "$csrf" "$title" | \
         GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/chat-start" QUERY_STRING="" \
-        HTTP_COOKIE="session=${session}; csrf=${csrf}" AGENT_PROVIDER=test "$BIN" \
+        HTTP_COOKIE="session=${session}; csrf=${csrf}" "$BIN" \
         | grep -o 'session_id=[a-f0-9]*' | head -1 | sed 's/session_id=//'
 }
 
 send_message() {
     local session="$1" csrf="$2" chat_session_id="$3" message="$4" scripted="$5"
     printf 'csrf_token=%s&session_id=%s&message=%s' "$csrf" "$chat_session_id" "$message" | \
-        AGENT_PROVIDER=test AGENT_TEST_RESPONSES="$scripted" \
+        AGENT_TEST_RESPONSES="$scripted" \
         GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/chat-message" QUERY_STRING="" \
         HTTP_COOKIE="session=${session}; csrf=${csrf}" "$BIN"
 }
@@ -118,8 +118,10 @@ send_message() {
 @test "a provider failure still records knowledge_context/knowledge_chat_eval as an error, never reaching a real model call" {
     read session csrf < <(session_for admin secret123)
     chat_session=$(start_chat "$session" "$csrf" "Test")
+    cat > "${TEST_DIR}/platform.json" <<'EOF'
+{"agent_provider":"nonexistent-provider"}
+EOF
     printf 'csrf_token=%s&session_id=%s&message=hi' "$csrf" "$chat_session" | \
-        AGENT_PROVIDER=nonexistent-provider \
         GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/chat-message" QUERY_STRING="" \
         HTTP_COOKIE="session=${session}; csrf=${csrf}" "$BIN" > /dev/null
 
@@ -148,7 +150,7 @@ send_message() {
 
     pending_id=$(sqlite3 .store/store.db "SELECT id FROM agent_pending_action;")
     printf 'csrf_token=%s&pending_id=%s&session_id=%s' "$csrf" "$pending_id" "$chat_session" | \
-        AGENT_PROVIDER=test AGENT_TEST_RESPONSES="$(done_response "Distilled.")" \
+        AGENT_TEST_RESPONSES="$(done_response "Distilled.")" \
         GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/chat-approve" QUERY_STRING="" \
         HTTP_COOKIE="session=${session}; csrf=${csrf}" "$BIN" > /dev/null
 
@@ -168,7 +170,7 @@ send_message() {
     "$BIN" entity create document title="Sprawling page" content="Long unfocused content."
     source_id=$(sqlite3 .store/store.db "SELECT id FROM document WHERE title = 'Sprawling page';")
 
-    USER=admin AGENT_PROVIDER=test \
+    USER=admin \
         AGENT_TEST_RESPONSES="$(tool_call_response "knowledge.distill" "{\"title\":\"Core idea\",\"content\":\"The one core idea, distilled.\",\"source_document_id\":${source_id}}")" \
         run "$BIN" knowledge distill
     [[ "$output" =~ "Status: pending_approval" ]]
@@ -190,7 +192,7 @@ send_message() {
 
     output=$(printf '{"message_id":%s,"feedback":"up"}' "$message_id" | \
         GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/chat-widget-feedback" QUERY_STRING="" \
-        HTTP_COOKIE="session=${session}; csrf=${csrf}" HTTP_X_CSRF_TOKEN="${csrf}" AGENT_PROVIDER=test "$BIN")
+        HTTP_COOKIE="session=${session}; csrf=${csrf}" HTTP_X_CSRF_TOKEN="${csrf}" "$BIN")
     [[ "$output" =~ '"ok":true' ]]
     run sqlite3 .store/store.db "SELECT user_feedback FROM knowledge_chat_eval WHERE message_id = ${message_id};"
     [[ "$output" == "up" ]]
@@ -198,7 +200,7 @@ send_message() {
     read alice_session alice_csrf < <(session_for alice secret123)
     output=$(printf '{"message_id":%s,"feedback":"down"}' "$message_id" | \
         GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/chat-widget-feedback" QUERY_STRING="" \
-        HTTP_COOKIE="session=${alice_session}; csrf=${alice_csrf}" HTTP_X_CSRF_TOKEN="${alice_csrf}" AGENT_PROVIDER=test "$BIN")
+        HTTP_COOKIE="session=${alice_session}; csrf=${alice_csrf}" HTTP_X_CSRF_TOKEN="${alice_csrf}" "$BIN")
     [[ "$output" =~ "404 Not Found" ]]
     run sqlite3 .store/store.db "SELECT user_feedback FROM knowledge_chat_eval WHERE message_id = ${message_id};"
     [[ "$output" == "up" ]]

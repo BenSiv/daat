@@ -37,12 +37,13 @@
 -- from finishReason alone.
 --
 -- Requires `gcloud` on PATH, already authenticated (`gcloud auth
--- application-default login`), and two env vars: VERTEX_PROJECT
--- (required, no default -- this is a real, potentially billed GCP
--- project, never hardcoded here) and VERTEX_REGION (optional, defaults
--- to us-central1).
+-- application-default login`), and two platform.json fields (see
+-- config.platform_config()): vertex_project (required, no default --
+-- this is a real, potentially billed GCP project, never hardcoded
+-- here) and vertex_region (optional, defaults to us-central1).
 
 json = require("dkjson")
+config = require("config")
 
 agent_provider_vertex = {}
 
@@ -53,11 +54,12 @@ function shell_quote(s)
 end
 
 function vertex_config()
-    project = os.getenv("VERTEX_PROJECT")
+    conf = config.platform_config()
+    project = conf.vertex_project
     if project == nil or project == "" then
-        return nil, nil, "VERTEX_PROJECT env var is not set"
+        return nil, nil, "vertex_project is not set in platform.json"
     end
-    region = os.getenv("VERTEX_REGION")
+    region = conf.vertex_region
     if region == nil or region == "" then
         region = DEFAULT_REGION
     end
