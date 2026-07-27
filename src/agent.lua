@@ -25,8 +25,32 @@ view = require("view")
 agent = {}
 
 DEFAULT_COMPACTION_THRESHOLD = 4000
-MAX_TURNS = 10
+DEFAULT_MAX_TURNS = 10
 DEFAULT_MODEL = "gemini-2.5-flash"
+DEFAULT_RESEARCH_MAX_TURNS = 6
+DEFAULT_BACKGROUND_MAX_TURNS = 20
+DEFAULT_BACKGROUND_MAX_ATTEMPTS = 3
+DEFAULT_SEARCH_EXCERPT_LENGTH = 1200
+
+-- The right value for any of this file's own turn-budget/size
+-- constants genuinely depends on things a deployer chooses, not this
+-- codebase -- which AGENT_MODEL is configured, that provider's own
+-- latency, how much data a given deployment actually holds -- so none
+-- of them stay bare hardcoded literals; each has a real env var
+-- override, read fresh every time (not resolved once at load), same
+-- as agent.default_model()/agent.compact_if_needed()'s own established
+-- pattern. Confirmed live why this matters: a self-check loop needing
+-- 6 rounds on a real production turn took long enough to exceed the
+-- load balancer's own (separately configurable) timeout -- MAX_TURNS
+-- and friends are the same class of "depends on your model/hardware,
+-- not on this code" setting.
+function env_number(name, fallback)
+    value = tonumber(os.getenv(name))
+    if value == nil then
+        return fallback
+    end
+    return value
+end
 
 -- Same default cgi.lua's own chat routes already use (AGENT_MODEL env
 -- var, not hardcoded, since a real model name is a deployment choice)
@@ -659,7 +683,7 @@ AGENT_TOOLS = {
         },
         query = {
             destructive = false,
-            description = "Run a read-only SQL SELECT against registered entity tables, for anything entity.list's own single-table exact-match filter can't express: joins across related types (call entity.relationships first to find the join path), counts, aggregates, grouping. Table and column names are this deployment's real registered entity type/field names -- call entity.list_types/entity.fields/entity.relationships first if unsure, don't guess. Must be a single plain SELECT statement (no semicolons, no INSERT/UPDATE/DELETE/DDL) referencing only registered entity tables -- anything else is refused. Results capped at 200 rows.",
+            description = "Run a read-only SQL SELECT against registered entity tables, for anything entity.list's own single-table exact-match filter can't express: joins across related types (call entity.relationships first to find the join path), counts, aggregates, grouping. Table and column names are this deployment's real registered entity type/field names -- call entity.list_types/entity.fields/entity.relationships first if unsure, don't guess. Must be a single plain SELECT statement (no semicolons, no INSERT/UPDATE/DELETE/DDL) referencing only registered entity tables -- anything else is refused. Results are row-capped (this deployment's own configured limit) -- add your own LIMIT or narrow the query if a result comes back truncated.",
             parameters = {
                 type = "OBJECT",
                 properties = {sql = {type = "STRING", description = "a single SELECT statement"}},
@@ -950,8 +974,6 @@ end
 -- so a search that matches several long pages doesn't balloon every
 -- turn's prompt/token cost -- trimmed to the last whole word rather
 -- than cutting mid-word.
-SEARCH_EXCERPT_LENGTH = 1200
-
 function excerpt(text, max_length)
     if text == nil or text == "" then
         return ""
@@ -1056,7 +1078,7 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
                 header = header .. " [one of " .. tostring(title_counts[r.title]) ..
                     " pages titled '" .. r.title .. "' -- distinguish by date/external_id/content above, never by asking the user for the id]"
             end
-            table.insert(lines, header .. "\n" .. excerpt(r.content, SEARCH_EXCERPT_LENGTH))
+            table.insert(lines, header .. "\n" .. excerpt(r.content, env_number("AGENT_SEARCH_EXCERPT_LENGTH", DEFAULT_SEARCH_EXCERPT_LENGTH)))
         end
         return table.concat(lines, "\n\n")
     end
@@ -1155,7 +1177,7 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
         end
         result = table.concat(lines, "\n")
         if truncated == true then
-            result = result .. "\n\n(truncated at 200 rows -- add your own LIMIT or narrow the query for a complete result)"
+            result = result .. "\n\n(truncated at " .. tostring(#rows) .. " rows -- add your own LIMIT or narrow the query for a complete result)"
         end
         return result
     end
@@ -1812,8 +1834,6 @@ function run_self_check(db_path, session_id, system_prompt, model, active_messag
     return false
 end
 
-RESEARCH_MAX_TURNS = 6
-
 RESEARCH_SYSTEM_PROMPT = """
 You are a focused research sub-agent helping answer one specific sub-question
 using this deployment's own data. You have read-only tools only. Explore from
@@ -1870,15 +1890,15 @@ end
 -- returned below ever becomes part of the real session, as this tool
 -- call's own tool_result message.
 --
--- `max_turns` defaults to RESEARCH_MAX_TURNS (the interactive
--- research.investigate tool's own bound) when nil -- the background
--- worker (agent.run_pending_background_tasks) reuses this same loop
--- with a looser AGENT_BACKGROUND_MAX_TURNS budget instead, since it
--- isn't bound to one HTTP request's lifetime the way an inline tool
--- call is.
+-- `max_turns` defaults to the AGENT_RESEARCH_MAX_TURNS-configurable
+-- bound (the interactive research.investigate tool's own budget) when
+-- nil -- the background worker (agent.run_pending_background_tasks)
+-- reuses this same loop with a looser, separately-configurable
+-- AGENT_BACKGROUND_MAX_TURNS budget instead, since it isn't bound to
+-- one HTTP request's lifetime the way an inline tool call is.
 function run_research_loop(db_path, author, session_id, model, question, max_turns)
     if max_turns == nil then
-        max_turns = RESEARCH_MAX_TURNS
+        max_turns = env_number("AGENT_RESEARCH_MAX_TURNS", DEFAULT_RESEARCH_MAX_TURNS)
     end
     messages = {{role = "user", content = question}}
     tools = research_tool_declarations()
@@ -1959,9 +1979,6 @@ end
 -- for a human to approve here, just a question that needs more turns
 -- than one HTTP request affords.
 
-AGENT_BACKGROUND_MAX_ATTEMPTS = 3
-AGENT_BACKGROUND_MAX_TURNS = 20
-
 function agent.enqueue_background_task(db_path, session_id, question)
     db.exec(db_path, string.format(
         "INSERT INTO agent_background_task (session_id, question) VALUES (%s, %s);",
@@ -1993,7 +2010,7 @@ function agent.pending_background_tasks(db_path, limit)
     end
     rows = db.query(db_path, string.format(
         "SELECT * FROM agent_background_task WHERE status = 'pending' AND attempts < %d ORDER BY id ASC LIMIT %d;",
-        AGENT_BACKGROUND_MAX_ATTEMPTS, limit
+        env_number("AGENT_BACKGROUND_MAX_ATTEMPTS", DEFAULT_BACKGROUND_MAX_ATTEMPTS), limit
     ))
     if rows == nil then
         return {}
@@ -2015,7 +2032,7 @@ end
 function agent.mark_background_task_failed(db_path, task, message)
     attempts = tonumber(task.attempts) + 1
     status = "pending"
-    if attempts >= AGENT_BACKGROUND_MAX_ATTEMPTS then
+    if attempts >= env_number("AGENT_BACKGROUND_MAX_ATTEMPTS", DEFAULT_BACKGROUND_MAX_ATTEMPTS) then
         status = "failed"
     end
     db.exec(db_path, string.format(
@@ -2063,7 +2080,8 @@ function agent.run_pending_background_tasks(db_path, model, limit)
             agent.mark_background_task_failed(db_path, task, "session no longer exists")
             failed = failed + 1
         else
-            finding, err = run_research_loop(db_path, login, task.session_id, model, task.question, AGENT_BACKGROUND_MAX_TURNS)
+            finding, err = run_research_loop(db_path, login, task.session_id, model, task.question,
+                env_number("AGENT_BACKGROUND_MAX_TURNS", DEFAULT_BACKGROUND_MAX_TURNS))
             if finding == nil then
                 agent.mark_background_task_failed(db_path, task, tostring(err))
                 failed = failed + 1
@@ -2090,11 +2108,11 @@ end
 --   {status = "turn_limit", message = "..."}
 --   {status = "error", message = "..."}
 --
--- Each call gets its own fresh MAX_TURNS budget, even a resume after a
--- pause -- deliberate, not an oversight: the approval pause is itself
--- a human circuit breaker, so restarting the budget on resume doesn't
--- reopen an unbounded-loop risk the way it would in a fully autonomous
--- run with no pauses at all.
+-- Each call gets its own fresh turn budget (AGENT_MAX_TURNS, see
+-- env_number above), even a resume after a pause -- deliberate, not an
+-- oversight: the approval pause is itself a human circuit breaker, so
+-- restarting the budget on resume doesn't reopen an unbounded-loop risk
+-- the way it would in a fully autonomous run with no pauses at all.
 function agent.run_turn(db_path, session_id, login, system_prompt, model, user_message)
     if system_prompt == nil or system_prompt == "" then
         system_prompt = agent.default_system_prompt()
@@ -2107,7 +2125,8 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
 
     agent.compact_if_needed(db_path, session_id, system_prompt, model)
 
-    for turn = 1, MAX_TURNS do
+    max_turns = env_number("AGENT_MAX_TURNS", DEFAULT_MAX_TURNS)
+    for turn = 1, max_turns do
         active = agent.active_messages(db_path, session_id)
         history_messages = build_history_messages(active)
         audit_prompt = json.encode(history_messages)
@@ -2195,7 +2214,7 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
             -- to act on a critique anyway, so a real answer shouldn't
             -- be downgraded into a generic turn-limit failure instead.
             confirmed = true
-            if turn < MAX_TURNS then
+            if turn < max_turns then
                 active_after_answer = agent.active_messages(db_path, session_id)
                 confirmed = run_self_check(db_path, session_id, system_prompt, model, active_after_answer)
             end
@@ -2284,7 +2303,7 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
     end
 
     sync_session_document(db_path, login, session_id)
-    return {status = "turn_limit", message = "Unable to complete tool-assisted run in " .. tostring(MAX_TURNS) .. " turns."}
+    return {status = "turn_limit", message = "Unable to complete tool-assisted run in " .. tostring(max_turns) .. " turns."}
 end
 
 -- task #107: the agent-driven distillation pass -- unlike knowledge.

@@ -15,7 +15,19 @@ sandbox = require("sandbox")
 
 extension = {}
 
-MAX_JOB_ATTEMPTS = 5
+DEFAULT_MAX_JOB_ATTEMPTS = 5
+
+-- How many retries make sense before giving up on a job plausibly
+-- depends on how flaky a given deployment's own extensions/network are
+-- -- not a bare hardcoded literal; real env var override, read fresh
+-- per call rather than resolved once at load.
+function extension_env_number(name, fallback)
+    value = tonumber(os.getenv(name))
+    if value == nil then
+        return fallback
+    end
+    return value
+end
 
 extension.SCHEMA = """
 -- VARCHAR(255), not TEXT -- MariaDB/InnoDB refuses a bare TEXT column
@@ -334,7 +346,7 @@ function extension.pending_jobs(db_path, limit)
     if limit == nil then limit = 50 end
     rows = db.query(db_path, string.format(
         "SELECT * FROM extension_job WHERE status = 'pending' AND attempts < %d ORDER BY job_id ASC LIMIT %d;",
-        MAX_JOB_ATTEMPTS, limit
+        extension_env_number("EXTENSION_MAX_JOB_ATTEMPTS", DEFAULT_MAX_JOB_ATTEMPTS), limit
     ))
     if rows == nil then
         return {}
@@ -350,13 +362,13 @@ function extension.mark_job_done(db_path, job)
 end
 
 -- A job keeps status='pending' (so it's retried) until it has failed
--- MAX_JOB_ATTEMPTS times, at which point it moves to 'failed' and is no
--- longer picked up -- one broken extension's job retries forever inside
--- its own row, never blocking or affecting any other job.
+-- EXTENSION_MAX_JOB_ATTEMPTS times, at which point it moves to 'failed'
+-- and is no longer picked up -- one broken extension's job retries
+-- forever inside its own row, never blocking or affecting any other job.
 function extension.mark_job_failed(db_path, job, message)
     attempts = tonumber(job.attempts) + 1
     status = "pending"
-    if attempts >= MAX_JOB_ATTEMPTS then
+    if attempts >= extension_env_number("EXTENSION_MAX_JOB_ATTEMPTS", DEFAULT_MAX_JOB_ATTEMPTS) then
         status = "failed"
     end
     db.exec(db_path, string.format(

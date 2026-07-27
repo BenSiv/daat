@@ -362,6 +362,27 @@ and a small, explicit tool registry the model can act through.
   feature; confirmed directly that this project's SQLite binding
   doesn't have it compiled in, so search instead scores every active
   page directly, an acceptable tradeoff at the scale this is built for.
+- **Turn budgets, row caps, and retry counts are env-var-configurable,
+  not hardcoded** -- the right value for any of these genuinely depends
+  on things a deployment chooses (which model `AGENT_MODEL` names, that
+  provider's own latency, how much data this deployment actually holds),
+  not on this code. Read fresh per call, not resolved once at process
+  start, same pattern `AGENT_MODEL`/`AGENT_COMPACTION_THRESHOLD` already
+  established. Confirmed live why this matters: a self-check loop
+  needing several rounds to converge on a real production turn took long
+  enough to exceed the load balancer's own (separately configurable)
+  timeout.
+  | Env var | Default | Controls |
+  |---|---|---|
+  | `AGENT_MAX_TURNS` | 10 | Main tool-calling turn loop's own budget (`agent.run_turn`) |
+  | `AGENT_RESEARCH_MAX_TURNS` | 6 | `research.investigate`'s isolated sub-loop budget |
+  | `AGENT_BACKGROUND_MAX_TURNS` | 20 | `background.start`'s worker-drained task budget -- looser than the interactive ones since it isn't bound to one HTTP request |
+  | `AGENT_BACKGROUND_MAX_ATTEMPTS` | 3 | Retries before a background task is marked permanently `failed` |
+  | `AGENT_SEARCH_EXCERPT_LENGTH` | 1200 | Per-result excerpt length `document.search`'s tool result feeds into the model's own prompt |
+  | `AGENT_QUERY_ROW_CAP` | 200 | Row cap on `entity.query` results (goes straight into the model's prompt/context, so much lower than the admin console's own cap) |
+  | `PLATFORM_ADHOC_ROW_CAP` | 1000 | Row cap on the admin-only `/sql` ad-hoc console (a human reading an HTML table, not a model's context budget) |
+  | `EXTENSION_MAX_JOB_ATTEMPTS` | 5 | Retries before an `extension_job` (after-hook write queue) is marked permanently `failed` |
+  | `PLATFORM_HEAT_DECAY_HALF_LIFE_DAYS` | 14 | Knowledge Pool document "relevance heat" decay half-life -- plausibly tracks a deployment's own real usage cadence |
 
 ## Knowledge pool
 

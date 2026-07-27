@@ -569,7 +569,19 @@ end
 -- in-app background scheduler exists at all). The stored `heat` column
 -- is left untouched -- it's the raw, monotonic reinforcement total;
 -- effective_heat is the read-time view of it.
-HEAT_DECAY_HALF_LIFE_DAYS = 14
+DEFAULT_HEAT_DECAY_HALF_LIFE_DAYS = 14
+
+-- How fast "relevance heat" should decay plausibly tracks a
+-- deployment's own real usage cadence (touched hourly vs. weekly) --
+-- not a bare hardcoded literal; real env var override, read fresh per
+-- call rather than resolved once at load.
+function document_env_number(name, fallback)
+    value = tonumber(os.getenv(name))
+    if value == nil then
+        return fallback
+    end
+    return value
+end
 
 -- Days between `timestamp_str` (this codebase's "YYYY-MM-DD HH:MM:SS"
 -- convention, whatever db.now_expr's own DEFAULT produced) and now.
@@ -601,7 +613,8 @@ function document.effective_heat(heat, last_retrieved_at)
     if days == nil or days <= 0 then
         return heat
     end
-    return heat * (0.5 ^ (days / HEAT_DECAY_HALF_LIFE_DAYS))
+    half_life = document_env_number("PLATFORM_HEAT_DECAY_HALF_LIFE_DAYS", DEFAULT_HEAT_DECAY_HALF_LIFE_DAYS)
+    return heat * (0.5 ^ (days / half_life))
 end
 
 -- Adapted from ai_promotion_target_tier, bidirectional: recomputed from

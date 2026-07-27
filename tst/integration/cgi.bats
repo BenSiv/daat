@@ -375,6 +375,20 @@ print('\n'.join(lines))
     [[ "$output" =~ "Showing first 1000 rows" ]]
 }
 
+@test "/sql's row cap is configurable via PLATFORM_ADHOC_ROW_CAP, not fixed at 1000" {
+    for i in $(seq 1 5); do
+        "$BIN" entity create person full_name="Extra $i"
+    done
+    # setup()'s own Dr. Cohen makes 6 total -- override the cap well
+    # below that, cheaply, instead of the default test's 1010-row bulk
+    # insert (which exercises the *default* value specifically).
+    run env PLATFORM_ADHOC_ROW_CAP=3 GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/sql" \
+        QUERY_STRING="q=SELECT+id+FROM+person%3B" \
+        HTTP_COOKIE="session=${ADMIN_SESSION_COOKIE}; csrf=${ADMIN_CSRF_TOKEN}" \
+        HTTP_X_CSRF_TOKEN="${ADMIN_CSRF_TOKEN}" "$BIN"
+    [[ "$output" =~ "Showing first 3 rows" ]]
+}
+
 @test "/view renders a canned view's rows" {
     cat > views/samples.lua <<'EOF'
 return {

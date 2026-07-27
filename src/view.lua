@@ -486,13 +486,28 @@ end
 -- "exactly N rows" apart from "N rows, and more exist" for the UI's
 -- own truncation notice -- a second COUNT(*) query would double the
 -- real cost this exists to avoid.
-ADHOC_ROW_CAP = 1000
+DEFAULT_ADHOC_ROW_CAP = 1000
+
+-- How much a deployment's own admin/agent-facing row caps below should
+-- actually be depends on things this code doesn't know -- how much data
+-- a given deployment holds, how big a table a human reasonably wants to
+-- browse at once, how much context budget the configured AGENT_MODEL
+-- has -- so neither is a bare hardcoded literal; each has a real env
+-- var override, read fresh per call (not resolved once at load).
+function view_env_number(name, fallback)
+    value = tonumber(os.getenv(name))
+    if value == nil then
+        return fallback
+    end
+    return value
+end
 
 function view.run_adhoc(db_path, sql_text)
     if view.is_select_only(sql_text) == false then
         return nil, nil, "refusing to run: not a plain SELECT"
     end
 
+    row_cap = view_env_number("PLATFORM_ADHOC_ROW_CAP", DEFAULT_ADHOC_ROW_CAP)
     query_text = sql_text
     body = string.gsub(sql_text, "%s+$", "")
     if string.sub(body, -1) == ";" then
@@ -501,7 +516,7 @@ function view.run_adhoc(db_path, sql_text)
     has_own_limit = string.find(string.lower(body), "%f[%a]limit%f[%A]") != nil
     capped = false
     if has_own_limit == false then
-        query_text = body .. string.format(" LIMIT %d;", ADHOC_ROW_CAP + 1)
+        query_text = body .. string.format(" LIMIT %d;", row_cap + 1)
         capped = true
     end
 
@@ -516,10 +531,10 @@ function view.run_adhoc(db_path, sql_text)
         column_names = {}
     end
     truncated = false
-    if capped == true and #rows > ADHOC_ROW_CAP then
+    if capped == true and #rows > row_cap then
         truncated = true
         capped_rows = {}
-        for i = 1, ADHOC_ROW_CAP do
+        for i = 1, row_cap do
             table.insert(capped_rows, rows[i])
         end
         rows = capped_rows
@@ -549,11 +564,13 @@ end
 -- schema_sync_state, or any other internal table entity.list/get
 -- could never expose either).
 
--- A separate, smaller cap than ADHOC_ROW_CAP -- that one is sized for
--- a human reading an HTML table in a browser; this result goes
--- straight into the model's own prompt/context, where 1000 rows would
--- be wasteful at best and a real token-cost problem at worst.
-AGENT_QUERY_ROW_CAP = 200
+-- A separate, smaller default cap than ADHOC_ROW_CAP -- that one is
+-- sized for a human reading an HTML table in a browser; this result
+-- goes straight into the model's own prompt/context, where 1000 rows
+-- would be wasteful at best and a real token-cost problem at worst
+-- (and the right number here depends on the configured AGENT_MODEL's
+-- own context budget, not just this code).
+DEFAULT_AGENT_QUERY_ROW_CAP = 200
 
 -- Collects every identifier immediately following `keyword` (word-
 -- boundary matched, same convention as FORBIDDEN_SQL_WORDS -- so a
@@ -606,6 +623,7 @@ function view.run_agent_query(db_path, sql_text)
         return nil, nil, "refusing to run: not a plain SELECT"
     end
 
+    row_cap = view_env_number("AGENT_QUERY_ROW_CAP", DEFAULT_AGENT_QUERY_ROW_CAP)
     referenced = referenced_table_names(sql_text)
     if #referenced == 0 then
         return nil, nil, "refusing to run: no FROM/JOIN table found"
@@ -629,7 +647,7 @@ function view.run_agent_query(db_path, sql_text)
     has_own_limit = string.find(string.lower(body), "%f[%a]limit%f[%A]") != nil
     capped = false
     if has_own_limit == false then
-        query_text = body .. string.format(" LIMIT %d;", AGENT_QUERY_ROW_CAP + 1)
+        query_text = body .. string.format(" LIMIT %d;", row_cap + 1)
         capped = true
     end
 
@@ -644,10 +662,10 @@ function view.run_agent_query(db_path, sql_text)
         column_names = {}
     end
     truncated = false
-    if capped == true and #rows > AGENT_QUERY_ROW_CAP then
+    if capped == true and #rows > row_cap then
         truncated = true
         capped_rows = {}
-        for i = 1, AGENT_QUERY_ROW_CAP do
+        for i = 1, row_cap do
             table.insert(capped_rows, rows[i])
         end
         rows = capped_rows

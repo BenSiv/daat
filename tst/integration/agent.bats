@@ -841,6 +841,46 @@ EOF
     [ "$output" -eq 0 ]
 }
 
+@test "AGENT_MAX_TURNS is configurable -- a lower limit ends the loop sooner than the default" {
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    # A self-check that never confirms would run all the way to the
+    # default 10-turn budget (9 rejections, 10 assistant rows) -- with
+    # AGENT_MAX_TURNS=2, it should stop at exactly 2: the second turn's
+    # answer returns immediately since there's no budget left to act on
+    # a critique (turn == max_turns skips self-check entirely).
+    printf 'csrf_token=%s&session_id=%s&message=how+many' "$CSRF" "$session_id" | \
+        AGENT_PROVIDER=test AGENT_TEST_RESPONSES="$(done_response "An answer.")" \
+        AGENT_TEST_SELF_CHECK_RESPONSE="$(done_response "Not confirmed, check again.")" \
+        AGENT_MAX_TURNS=2 \
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/chat-message" QUERY_STRING="" \
+        HTTP_COOKIE="$COOKIE" "$BIN" >/dev/null
+
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM agent_message WHERE session_id = '${session_id}' AND role = 'assistant';"
+    [ "$output" -eq 2 ]
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM agent_message WHERE session_id = '${session_id}' AND role = 'self_check';"
+    [ "$output" -eq 1 ]
+}
+
+@test "AGENT_QUERY_ROW_CAP is configurable -- entity.query truncates at the configured cap, not just the 200 default" {
+    write_task_schema
+    "$BIN" entity create task title="First" status=open >/dev/null
+    "$BIN" entity create task title="Second" status=open >/dev/null
+    "$BIN" entity create task title="Third" status=open >/dev/null
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(tool_call_response "entity.query" '{"sql":"SELECT title FROM task"}')"$'\1'"$(done_response "Here.")"
+    printf 'csrf_token=%s&session_id=%s&message=list+tasks' "$CSRF" "$session_id" | \
+        AGENT_PROVIDER=test AGENT_TEST_RESPONSES="$scripted" AGENT_QUERY_ROW_CAP=1 \
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/chat-message" QUERY_STRING="" \
+        HTTP_COOKIE="$COOKIE" "$BIN" >/dev/null
+
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "truncated at 1 rows" ]]
+}
+
 @test "compaction marks old turns out of context (dimmed) but never deletes them" {
     resp=$(start_chat "$COOKIE" "$CSRF" "Long chat")
     session_id=$(extract_query_param "$resp" "session_id")
