@@ -97,6 +97,21 @@ function agent_provider_test.converse(model, system_prompt, messages, tools)
         end
     end
 
+    -- Same idea as AGENT_TEST_CAPTURE_SYSTEM_PROMPT, but for the actual
+    -- message list this specific call received -- lets a test assert on
+    -- exactly what the model would see on a given turn (e.g. that a
+    -- replayed self_check row carries its own real "not the real user"
+    -- framing, not just that the turn loop's own behavior looks right
+    -- from the outside).
+    messages_capture_path = os.getenv("AGENT_TEST_CAPTURE_MESSAGES")
+    if messages_capture_path != nil and messages_capture_path != "" then
+        messages_capture_file = io.open(messages_capture_path, "w")
+        if messages_capture_file != nil then
+            io.write(messages_capture_file, json.encode(messages))
+            io.close(messages_capture_file)
+        end
+    end
+
     -- A real tool-calling turn always passes a non-empty tools list
     -- (agent.tool_declarations() is never empty) -- an empty/nil tools
     -- list is a structural signal this is a no-tools call instead (in

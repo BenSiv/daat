@@ -1561,11 +1561,22 @@ function build_history_messages(messages)
                 table.insert(result, {role = "user", content = "[Prior tool result]: " .. tostring(msg.content)})
             end
         elseif msg.role == "self_check" then
-            -- Fed back as a plain user turn -- see run_self_check's own
-            -- comment for why this role exists at all; the model just
-            -- sees it as the next thing to respond to, same as a real
-            -- user message would be.
-            table.insert(result, {role = "user", content = msg.content})
+            -- Fed back as a user turn (Gemini's own wire protocol
+            -- strictly alternates user/model turns -- there's no third
+            -- "aside" role to inject mid-conversation), but explicitly
+            -- marked as automated, not the real person. Confirmed live
+            -- this genuinely matters, not just theoretical: without the
+            -- marker, a model facing several of these in a row (a
+            -- slow-to-converge self-check loop) started reading its own
+            -- prior critiques as if the real user kept repeating things
+            -- back to it ("I'm stuck in a loop, the user keeps
+            -- confirming..."), spiraling into confused, self-referential
+            -- reasoning about a back-and-forth that never actually
+            -- happened -- which made the loop take *longer* to
+            -- converge, not shorter, on a real production turn that
+            -- needed 6 rounds and ran past the load balancer's own
+            -- timeout as a direct result.
+            table.insert(result, {role = "user", content = "[Automated self-check, not the real user -- your own prior reply was just reviewed against the conversation and found lacking. The note below is that review, not new information from the person you're talking to; read it as your own continued investigation, then act on it.]\n\n" .. msg.content})
         end
     end
     return result
@@ -1732,7 +1743,7 @@ function sync_session_document(db_path, login, session_id)
 end
 
 SELF_CHECK_PROMPT = """
-Before this reply is sent to the user, check it against the conversation and tool results above:
+[Automated self-check, not the real user.] Before this reply is sent to the user, check it against the conversation and tool results above:
 - Is every factual claim directly supported by a tool result you actually gathered, not assumed or guessed?
 - If your answer concludes zero, none, or "not found", did you verify the underlying values genuinely don't exist (e.g. a broader search, or checking the value exists at all independent of the specific query/filter you used) rather than trusting a single query or lookup that could itself have been wrong?
 - Is there an obvious next check you skipped that would meaningfully change or confirm the answer?

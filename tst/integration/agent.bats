@@ -801,6 +801,32 @@ EOF
     [[ "$output" =~ "Actually there are 5" ]]
 }
 
+@test "self-check: its own critique is replayed to the model clearly marked as automated, not the real user" {
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    capture_file="$TEST_DIR/captured_messages.json"
+    scripted="$(done_response "There are 0.")"$'\1'"$(done_response "Actually there are 5, I checked again.")"
+    printf 'csrf_token=%s&session_id=%s&message=how+many' "$CSRF" "$session_id" | \
+        AGENT_PROVIDER=test AGENT_TEST_RESPONSES="$scripted" \
+        AGENT_TEST_SELF_CHECK_RESPONSE="$(done_response "Did you verify that? Check again.")" \
+        AGENT_TEST_CAPTURE_MESSAGES="$capture_file" \
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/chat-message" QUERY_STRING="" \
+        HTTP_COOKIE="$COOKIE" "$BIN" >/dev/null
+
+    # Whatever the last converse() call of the run actually received --
+    # once the first self-check rejection happens, every later call
+    # replays it (and every following one) back into history; this
+    # confirms the replayed row carries the disambiguating marker, not
+    # the model's own raw critique text passed off as if the real user
+    # said it (the bug that caused a real production self-check loop to
+    # spiral in confusion -- see agent.lua's build_history_messages).
+    [ -f "$capture_file" ]
+    run cat "$capture_file"
+    [[ "$output" =~ "Automated self-check, not the real user" ]]
+    [[ "$output" =~ "Did you verify that? Check again." ]]
+}
+
 @test "self-check: a confirmed answer returns normally, in exactly one turn -- no self-check message stored" {
     resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
     session_id=$(extract_query_param "$resp" "session_id")
