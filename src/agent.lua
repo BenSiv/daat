@@ -132,10 +132,13 @@ function agent_schema_sql(db_path)
     )
 end
 
--- tool_call_id: the model's own id for the toolCall block that produced
--- this pending action -- needed to correlate the eventual approved/
--- denied result back to it via a real Gemini/pi-ai toolResult message
--- (the wire protocol requires the exact id the model itself issued).
+-- tool_call_id: the id for the toolCall block that produced this
+-- pending action -- needed to correlate the eventual approved/denied
+-- result back to it via a real toolResult message. This codebase's own
+-- bookkeeping, not something Vertex's real wire protocol requires or
+-- even has a concept of (confirmed live: functionCall/functionResponse
+-- carry no id at all, correlation there is by name) -- each provider
+-- synthesizes one fresh per response purely so this correlation works.
 -- Added via migration, not AGENT_SCHEMA, so an existing production
 -- agent_pending_action table gets it without a destructive rebuild --
 -- same pattern as document.lua's ensure_document_knowledge_columns.
@@ -290,7 +293,7 @@ end
 -- -- JSON-encoded the same way an assistant row is (see
 -- build_history_messages), carrying the tool_call_id/tool_name needed
 -- to correlate it back to the model's own toolCall block via a real
--- Gemini/pi-ai toolResult message on the next turn.
+-- toolResult message on the next turn.
 function agent.add_tool_result_message(db_path, session_id, tool_call_id, tool_name, text, is_error)
     content = json.encode({tool_call_id = tool_call_id, tool_name = tool_name, text = text, is_error = is_error == true})
     return agent.add_message(db_path, session_id, "tool_result", content, true)
@@ -379,8 +382,8 @@ function text_only_blocks(blocks)
 end
 
 -- Pulls out Gemini 2.5's own thought-summary blocks (requested via the
--- bridge's own thinking config -- see agent_provider_pi.lua/bridge/
--- pi-bridge.mjs), a real structural signal, not text-pattern matching.
+-- provider's own thinking config -- see agent_provider_vertex.lua's own
+-- .converse()), a real structural signal, not text-pattern matching.
 -- Returns nil (not "") when there's nothing to pull, so callers can
 -- tell "no thinking this turn" apart from "thinking was an empty
 -- string" and fall back to the legacy text-based
@@ -947,9 +950,9 @@ function agent.is_destructive(tool_name, method_name)
     return group[method_name].destructive == true
 end
 
--- Flattens AGENT_TOOLS into the function-declaration list the pi-ai
--- bridge (and so Vertex/Gemini's own function-calling API) expects --
--- one entry per method, named "toolname.methodname" (dots are valid in
+-- Flattens AGENT_TOOLS into the function-declaration list the real
+-- Vertex/Gemini function-calling API expects -- one entry per method,
+-- named "toolname.methodname" (dots are valid in
 -- a Gemini function name, verified live) so agent.execute_tool's own
 -- tool_name/method_name split-on-dot dispatch needs no remapping table
 -- at all in either direction.
@@ -1554,12 +1557,13 @@ end
 --------------------------------------------------------------------------
 
 -- Builds the real, structured message list agent_provider.converse
--- sends to the model (a near-direct rendering of pi-ai's own
--- Context.messages -- see agent_provider_pi.lua/bridge/pi-bridge.mjs)
--- from this session's agent_message rows, replacing the old
--- build_history_prompt's single flattened text blob. This is the
--- actual fix for both bugs that motivated the pi-ai migration: no text
--- protocol to mis-parse means no multi-line-content truncation and no
+-- sends to the model (this codebase's own canonical shape -- see
+-- agent_provider_vertex.lua's own header for how a provider translates
+-- it to/from its real wire format) from this session's agent_message
+-- rows, replacing the old build_history_prompt's single flattened text
+-- blob. This is the actual fix for both bugs that motivated moving to
+-- real structured tool-calling in the first place: no text protocol to
+-- mis-parse means no multi-line-content truncation and no
 -- tool-name-splitting confusion, structurally.
 --
 -- assistant/tool_result rows store JSON (see agent.add_message's
@@ -2180,14 +2184,15 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
             return {status = "error", message = tostring(err)}
         end
 
-        -- A bridge-level infrastructure failure (nil response, handled
-        -- above) is distinct from the LLM call itself failing (auth,
-        -- rate limit, a malformed request) -- pi-ai/the bridge surface
-        -- the latter as a real, structured reply with stopReason
-        -- "error"/"aborted" rather than an exception (see
-        -- agent_provider_pi.lua's own comment); treated the same way as
-        -- a bridge failure from run_turn's own perspective, since
-        -- either way there's no usable reply to act on this turn.
+        -- A connectivity-level infrastructure failure (nil response,
+        -- handled above) is distinct from the LLM call itself failing
+        -- (auth, rate limit, a malformed request) -- the provider
+        -- surfaces the latter as a real, structured reply with
+        -- stopReason "error"/"aborted" rather than an exception (see
+        -- agent_provider_vertex.lua's own .converse() comment); treated
+        -- the same way as a connectivity failure from run_turn's own
+        -- perspective, since either way there's no usable reply to act
+        -- on this turn.
         if response.stopReason == "error" or response.stopReason == "aborted" then
             error_message = response.errorMessage
             if error_message == nil then
@@ -2236,7 +2241,7 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
         tool_calls = all_tool_calls(content_blocks)
         if #tool_calls == 0 then
             -- A plain reply (stopReason "stop"/"length") is a PROPOSED
-            -- final answer -- pi-ai's own stopReason already
+            -- final answer -- the provider's own stopReason already
             -- distinguishes "the model wants to call a tool" (toolUse)
             -- from "the model is finished" (stop/length), which is
             -- what native function-calling gets for free over the old

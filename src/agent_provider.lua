@@ -9,8 +9,9 @@
 --     {content: [...blocks...], stopReason, errorMessage} reply --
 --     real native tool-calling, not a hand-rolled text tag protocol.
 --   embeddings(model, text) -> (vector, err), optional.
--- Loaded dynamically by name (AGENT_PROVIDER env var, default "pi" --
--- the pi-ai bridge, real multi-provider structured tool-calling)
+-- Loaded dynamically by name (AGENT_PROVIDER env var, default "vertex"
+-- -- agent_provider_vertex.lua's own native structured tool-calling,
+-- direct Vertex REST calls, no separate Node/pi-ai bridge process)
 -- rather than required directly, so swapping providers -- or, just as
 -- importantly, swapping in the deterministic test provider for
 -- repeatable, cost-free test runs -- is a config change, not a code
@@ -25,7 +26,7 @@ agent_provider = {}
 function agent_provider.name()
     name = os.getenv("AGENT_PROVIDER")
     if name == nil or name == "" then
-        name = "pi"
+        name = "vertex"
     end
     return name
 end

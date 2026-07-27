@@ -19,8 +19,9 @@
 --
 -- generate() returns whatever scripted text as-is (no parsing -- its
 -- callers just want plain text). converse() JSON-decodes each scripted
--- entry into the same {content, stopReason} shape agent_provider_pi's
--- real bridge returns -- e.g.
+-- entry into this codebase's own canonical {content, stopReason} shape
+-- (agent_provider_vertex.lua's real .converse() returns the same shape,
+-- translated from Vertex's actual wire format) -- e.g.
 -- '{"content":[{"type":"text","text":"hi"}],"stopReason":"stop"}' or
 -- '{"content":[{"type":"toolCall","id":"call_1","name":"document.search","arguments":{"query":"x"}}],"stopReason":"toolUse"}'
 -- -- so the turn loop exercises the exact same structured dispatch

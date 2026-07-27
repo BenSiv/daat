@@ -1,8 +1,6 @@
 # Build outputs
 bin/
 obj/
-bridge/node_modules/
-bridge/dist/
 
 # Local dev data
 .store/

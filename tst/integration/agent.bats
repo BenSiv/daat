@@ -960,12 +960,13 @@ EOF
         skip "no usable gcloud application-default credentials"
     fi
 
-    # Explicitly pinned to the vertex provider, not the (now default)
-    # pi bridge -- this confirms agent_provider_vertex.lua's own direct
-    # REST call still works on its own, independent of which provider
+    # Explicitly pinned to the vertex provider (also the default) --
+    # this confirms agent_provider_vertex.lua's own direct REST call
+    # still works on its own, independent of which provider
     # AGENT_PROVIDER happens to default to. Still a real, live module:
     # document.lua's embeddings call always delegates to it regardless
-    # of AGENT_PROVIDER (see agent_provider_pi.embeddings' own comment).
+    # of AGENT_PROVIDER, since agent_provider_vertex.lua is the only
+    # provider with embeddings support.
     cat > "${TEST_DIR}/vertex_check.lua" <<EOF
 package.path = "${PROJECT_ROOT}/src/?.lua;" .. package.path
 agent_provider = require("agent_provider")
@@ -983,38 +984,129 @@ EOF
     [[ ! "$output" =~ "RESULT:	nil" ]]
 }
 
-@test "real Vertex AI via the pi-ai bridge: agent_provider.converse returns a real structured reply" {
+@test "real Vertex AI (native Luam, no Node/pi-ai bridge): agent_provider.converse returns a real structured reply" {
     if [ -z "${VERTEX_PROJECT:-}" ]; then
         skip "VERTEX_PROJECT not set in this environment"
     fi
     if ! gcloud auth application-default print-access-token >/dev/null 2>&1; then
         skip "no usable gcloud application-default credentials"
     fi
-    if ! command -v node >/dev/null 2>&1; then
-        skip "node not available in this environment"
-    fi
-    bridge_path="${PROJECT_ROOT}/bridge/dist/pi-bridge.cjs"
-    if [ ! -f "$bridge_path" ]; then
-        skip "bridge not built -- run 'npm run build' in bridge/ first"
-    fi
 
-    cat > "${TEST_DIR}/pi_check.lua" <<EOF
+    cat > "${TEST_DIR}/vertex_converse_check.lua" <<EOF
 package.path = "${PROJECT_ROOT}/src/?.lua;" .. package.path
 agent_provider = require("agent_provider")
 response, err = agent_provider.converse("gemini-2.5-flash", "Reply in exactly one word, uppercase.",
     {{role = "user", content = "What sound does a cow make?"}}, {})
-print("STOP:", response and response.stopReason, "ERR:", err)
+stop = nil
+if response != nil then
+    stop = response.stopReason
+end
+print("STOP:", stop, "ERR:", err)
 EOF
     if [ -z "${LUAM_DIR:-}" ]; then
         LUAM_DIR=$(cd "${PROJECT_ROOT}/../luam" && pwd)
     fi
-    run env AGENT_PROVIDER=pi PI_BRIDGE_PATH="$bridge_path" VERTEX_PROJECT="${VERTEX_PROJECT}" \
+    run env AGENT_PROVIDER=vertex VERTEX_PROJECT="${VERTEX_PROJECT}" \
         LUA_PATH="${PROJECT_ROOT}/src/?.lua;${LUAM_DIR}/lib/?.lua;${LUAM_DIR}/lib/?/init.lua;;" \
         LUA_CPATH="${LUAM_DIR}/bin/?.so;${LUAM_DIR}/lib/lfs/?.so;;" \
-        "${LUAM_DIR}/bin/luam" "${TEST_DIR}/pi_check.lua"
+        "${LUAM_DIR}/bin/luam" "${TEST_DIR}/vertex_converse_check.lua"
     [ "$status" -eq 0 ]
     [[ "$output" =~ "ERR:	nil" ]]
     [[ "$output" =~ "STOP:	stop" ]]
+}
+
+@test "real Vertex AI (native Luam): a real tool-calling round trip works end to end, with thinking" {
+    if [ -z "${VERTEX_PROJECT:-}" ]; then
+        skip "VERTEX_PROJECT not set in this environment"
+    fi
+    if ! gcloud auth application-default print-access-token >/dev/null 2>&1; then
+        skip "no usable gcloud application-default credentials"
+    fi
+
+    # Exercises the actual translation logic end to end -- a real
+    # functionCall out, parsed into our own toolCall block; that block
+    # re-encoded as assistant history; a toolResult sent back as a real
+    # functionResponse; and a real final answer -- everything manually
+    # verified via curl while scoping this, now locked in through the
+    # real Lua implementation instead.
+    cat > "${TEST_DIR}/vertex_tool_check.lua" <<EOF
+package.path = "${PROJECT_ROOT}/src/?.lua;" .. package.path
+agent_provider = require("agent_provider")
+
+tools = {
+    {name = "add", description = "Add two numbers", parameters = {
+        type = "OBJECT",
+        properties = {a = {type = "NUMBER"}, b = {type = "NUMBER"}},
+        required = {"a", "b"},
+    }},
+}
+
+response, err = agent_provider.converse("gemini-2.5-flash",
+    "You must use the add tool to answer arithmetic questions -- never compute it yourself.",
+    {{role = "user", content = "What is 15 plus 27? Use the add tool."}}, tools)
+stop1 = nil
+if response != nil then
+    stop1 = response.stopReason
+end
+print("STOP1:", stop1, "ERR1:", err)
+
+tool_call = nil
+if response != nil then
+    for _, block in ipairs(response.content) do
+        if block.type == "toolCall" then tool_call = block end
+        if block.type == "thinking" then print("HAS_THINKING: true") end
+    end
+end
+tool_name, tool_a, tool_b = nil, nil, nil
+if tool_call != nil then
+    tool_name = tool_call.name
+    tool_a = tool_call.arguments.a
+    tool_b = tool_call.arguments.b
+end
+print("TOOL_NAME:", tool_name)
+print("TOOL_ARGS_A:", tool_a)
+print("TOOL_ARGS_B:", tool_b)
+
+response2, err2 = nil, nil
+if tool_call != nil then
+    history = {
+        {role = "user", content = "What is 15 plus 27? Use the add tool."},
+        {role = "assistant", content = {tool_call}},
+        {role = "toolResult", toolCallId = tool_call.id, toolName = tool_call.name,
+            content = {{type = "text", text = "42"}}, isError = false},
+    }
+    response2, err2 = agent_provider.converse("gemini-2.5-flash",
+        "You must use the add tool to answer arithmetic questions -- never compute it yourself.",
+        history, tools)
+end
+stop2 = nil
+if response2 != nil then
+    stop2 = response2.stopReason
+end
+print("STOP2:", stop2, "ERR2:", err2)
+
+final_text = ""
+if response2 != nil then
+    for _, block in ipairs(response2.content) do
+        if block.type == "text" then final_text = final_text .. block.text end
+    end
+end
+print("FINAL:", final_text)
+EOF
+    if [ -z "${LUAM_DIR:-}" ]; then
+        LUAM_DIR=$(cd "${PROJECT_ROOT}/../luam" && pwd)
+    fi
+    run env AGENT_PROVIDER=vertex VERTEX_PROJECT="${VERTEX_PROJECT}" \
+        LUA_PATH="${PROJECT_ROOT}/src/?.lua;${LUAM_DIR}/lib/?.lua;${LUAM_DIR}/lib/?/init.lua;;" \
+        LUA_CPATH="${LUAM_DIR}/bin/?.so;${LUAM_DIR}/lib/lfs/?.so;;" \
+        "${LUAM_DIR}/bin/luam" "${TEST_DIR}/vertex_tool_check.lua"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "STOP1:	toolUse" ]]
+    [[ "$output" =~ "TOOL_NAME:	add" ]]
+    [[ "$output" =~ "TOOL_ARGS_A:	15" ]]
+    [[ "$output" =~ "TOOL_ARGS_B:	27" ]]
+    [[ "$output" =~ "STOP2:	stop" ]]
+    [[ "$output" =~ "42" ]]
 }
 
 write_admin_schema() {

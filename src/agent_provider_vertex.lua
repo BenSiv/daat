@@ -1,12 +1,40 @@
--- Google Vertex AI backend for agent_provider's generate/embeddings
--- interface. Calls Vertex's REST API directly (generateContent for
--- text, predict for embeddings) via a curl shell-out authenticated
--- with a fresh Application Default Credentials access token -- not a
--- vendored HTTP/TLS client or a Google client library, matching the
--- "bind to an existing, battle-tested tool" stance already used for
--- bcrypt/HMAC/cmark. Verified directly against a real project (not
--- assumed): gemini-2.5-flash for generation, text-embedding-005 for
--- embeddings, both in us-central1.
+-- Google Vertex AI backend for agent_provider's generate/converse/
+-- embeddings interface. Calls Vertex's REST API directly
+-- (generateContent for text and structured tool-calling, predict for
+-- embeddings) via a curl shell-out authenticated with a fresh
+-- Application Default Credentials access token -- not a vendored
+-- HTTP/TLS client or a Google client library, matching the "bind to an
+-- existing, battle-tested tool" stance already used for bcrypt/HMAC/
+-- cmark. Verified directly against a real project (not assumed):
+-- gemini-2.5-flash for generation, text-embedding-005 for embeddings,
+-- both in us-central1.
+--
+-- .converse() (native structured tool-calling, replacing the pi-ai
+-- Node bridge that used to do this same job as a separate subprocess)
+-- translates agent.lua's own provider-agnostic canonical shape (see
+-- agent_provider.lua's own header -- roles user/assistant/toolResult,
+-- block types text/toolCall/thinking) into Vertex's real wire shapes and
+-- back. All of that translation is contained in this one file --
+-- vertex_contents_from_messages/vertex_blocks_from_parts below -- agent.lua
+-- itself never changes and never learns anything Vertex-specific, the
+-- same way it already doesn't need to know anything pi-ai-specific.
+-- Real wire shapes here are verified live against the actual API, not
+-- assumed: functionCall/functionResponse parts carry no id of their own
+-- on the wire at all (correlation is by name, not id -- confirmed via a
+-- real multi-turn round trip with no id echoed back), thinking parts are
+-- {text, thought=true}, a tool-call part's thoughtSignature (Gemini
+-- 2.5's own reasoning-continuity token, that exact camelCase name since
+-- it's Vertex's own wire field, not this codebase's choice) is confirmed
+-- optional for correctness but preserved anyway on our own toolCall
+-- block as a plain snake_case thinking_signature -- self-contained
+-- round-trip plumbing between this file's own vertex_blocks_from_parts/
+-- vertex_contents_from_messages, not part of the pre-existing
+-- stopReason/toolCallId-style canonical contract agent.lua actually
+-- reads, so it follows this codebase's own Lua naming, not pi-ai's
+-- TypeScript-flavored one. finishReason is "STOP" identically whether a
+-- turn ends in a tool call or a final answer -- stopReason has to be
+-- derived from whether a functionCall part is actually present, not
+-- from finishReason alone.
 --
 -- Requires `gcloud` on PATH, already authenticated (`gcloud auth
 -- application-default login`), and two env vars: VERTEX_PROJECT
@@ -126,6 +154,149 @@ function usage_from_response(response)
         completion_tokens = meta.candidatesTokenCount,
         total_tokens = meta.totalTokenCount,
     }
+end
+
+-- Maps agent.lua's own canonical message-history shape (build_history_
+-- messages: role user/assistant/toolResult, assistant content is
+-- always a block array, toolResult content is always a single-block
+-- array) into Vertex's real generateContent `contents[]` shape.
+-- compaction_summary/self_check rows already arrive here pre-flattened
+-- to role "user" by build_history_messages itself, so no separate case
+-- is needed for them.
+function vertex_contents_from_messages(messages)
+    contents = {}
+    if messages == nil then
+        return contents
+    end
+    for _, msg in ipairs(messages) do
+        if msg.role == "user" then
+            table.insert(contents, {role = "user", parts = {{text = tostring(msg.content)}}})
+        elseif msg.role == "assistant" then
+            parts = {}
+            for _, block in ipairs(msg.content) do
+                if block.type == "text" and block.text != nil then
+                    table.insert(parts, {text = block.text})
+                elseif block.type == "thinking" and block.thinking != nil then
+                    table.insert(parts, {text = block.thinking, thought = true})
+                elseif block.type == "toolCall" then
+                    part = {functionCall = {name = block.name, args = block.arguments}}
+                    if block.thinking_signature != nil then
+                        part.thoughtSignature = block.thinking_signature
+                    end
+                    table.insert(parts, part)
+                end
+            end
+            if #parts > 0 then
+                table.insert(contents, {role = "model", parts = parts})
+            end
+        elseif msg.role == "toolResult" then
+            text = ""
+            if msg.content != nil and msg.content[1] != nil then
+                text = tostring(msg.content[1].text)
+            end
+            table.insert(contents, {role = "user", parts = {
+                {functionResponse = {name = msg.toolName, response = {content = text}}},
+            }})
+        end
+    end
+    return contents
+end
+
+-- The reverse direction: a real generateContent response's
+-- candidates[1].content.parts into the canonical block shape, plus
+-- whether any part was a tool call (stopReason has to be derived from
+-- this, not from finishReason alone -- see this file's own header).
+-- Tool-call ids are synthesized here, fresh per response -- Vertex's
+-- own wire protocol has no id concept for function calls at all
+-- (confirmed live), so these only ever need to be unique within this
+-- one turn, for agent.lua's own tool_result correlation.
+function vertex_blocks_from_parts(parts)
+    blocks = {}
+    has_tool_call = false
+    call_index = 0
+    for _, part in ipairs(parts) do
+        if part.functionCall != nil then
+            has_tool_call = true
+            call_index = call_index + 1
+            block = {
+                type = "toolCall",
+                id = "call_" .. tostring(call_index),
+                name = part.functionCall.name,
+                arguments = part.functionCall.args,
+            }
+            if part.thoughtSignature != nil then
+                block.thinking_signature = part.thoughtSignature
+            end
+            table.insert(blocks, block)
+        elseif part.thought == true and part.text != nil then
+            table.insert(blocks, {type = "thinking", thinking = part.text})
+        elseif part.text != nil then
+            table.insert(blocks, {type = "text", text = part.text})
+        end
+    end
+    return blocks, has_tool_call
+end
+
+-- agent_provider_vertex.converse(model, system_prompt, messages, tools)
+--   -> (response, err, usage)
+--
+-- Same contract every agent_provider implementation shares (see
+-- agent_provider.lua's own header) -- `response` (on
+-- success) is {content = [...blocks...], stopReason = ...,
+-- errorMessage = ...}, returned even when stopReason is "error" (a real
+-- HTTP response came back, just an unusable one -- no candidates, or a
+-- finishReason like SAFETY/RECITATION that means the model refused/was
+-- blocked) since that's still real, structured information the caller
+-- should record and act on. `nil, err` is reserved for a genuine
+-- connectivity/auth-level failure (vertex_post's own existing
+-- behavior, unchanged, shared with .generate()/.embeddings() below) --
+-- the bridge/network call itself couldn't be completed at all, nothing
+-- structured to return.
+function agent_provider_vertex.converse(model, system_prompt, messages, tools)
+    payload = {contents = vertex_contents_from_messages(messages)}
+    if system_prompt != nil and system_prompt != "" then
+        payload.systemInstruction = {parts = {{text = system_prompt}}}
+    end
+    if tools != nil and #tools > 0 then
+        payload.tools = {{functionDeclarations = tools}}
+    end
+    -- Gemini 2.5's own thought-summary feature -- unconditional, same as
+    -- the old pi-ai bridge did for every call; response content then
+    -- includes real {type:"thinking",...} blocks alongside text/toolCall
+    -- ones, same as before (agent.lua's own extract_thinking_text/
+    -- display_blocks are unchanged either way).
+    payload.generationConfig = {thinkingConfig = {includeThoughts = true}}
+
+    response, err = vertex_post(model .. ":generateContent", payload)
+    if response == nil then
+        return nil, err
+    end
+    usage = usage_from_response(response)
+
+    if response.candidates == nil or response.candidates[1] == nil then
+        return {content = {}, stopReason = "error", errorMessage = "no candidates in Vertex AI response"}, nil, usage
+    end
+    candidate = response.candidates[1]
+    if candidate.content == nil or candidate.content.parts == nil or #candidate.content.parts == 0 then
+        return {content = {}, stopReason = "error",
+            errorMessage = "empty response (finishReason: " .. tostring(candidate.finishReason) .. ")"}, nil, usage
+    end
+
+    blocks, has_tool_call = vertex_blocks_from_parts(candidate.content.parts)
+
+    if has_tool_call == true then
+        return {content = blocks, stopReason = "toolUse"}, nil, usage
+    end
+    if candidate.finishReason == "MAX_TOKENS" then
+        return {content = blocks, stopReason = "length"}, nil, usage
+    end
+    if candidate.finishReason != nil and candidate.finishReason != "STOP" then
+        -- SAFETY, RECITATION, OTHER, etc. -- a real response, just not
+        -- one that reflects a genuine completed answer.
+        return {content = {}, stopReason = "error",
+            errorMessage = "Vertex AI stopped generating (finishReason: " .. tostring(candidate.finishReason) .. ")"}, nil, usage
+    end
+    return {content = blocks, stopReason = "stop"}, nil, usage
 end
 
 function agent_provider_vertex.generate(model, system_prompt, prompt)
