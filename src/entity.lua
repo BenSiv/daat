@@ -67,7 +67,7 @@ function build_ctx(db_path, manifest)
         if rows == nil then
             return {}
         end
-        return rows
+        return entity.apply_computed_field_overrides(db_path, target_type, rows)
     end
 
     function ctx.create_entity(target_type, values)
@@ -593,6 +593,34 @@ function entity.create_batch(db_path, entity_type, rows_values, author, source)
     return created_ids, batch_issues
 end
 
+-- Overrides a multi_reference/polymorphic_reference field's raw column
+-- value with its real value, read from the companion multi_value/
+-- entity_source table instead -- every raw "SELECT * FROM <entity_type>"
+-- reader needs this, not just entity.get. multi_reference fields never
+-- have a column at all, so a raw row simply lacks the key (harmless);
+-- polymorphic_reference fields are different when a field *converts* to
+-- one from a plain column type (e.g. sample.source: text ->
+-- polymorphic_reference) -- schema sync is additive-only and never
+-- drops the old column, so a raw row still carries that column's old,
+-- stale value under the same key. Confirmed live: /browse crashed
+-- rendering sample.source ("bad argument #1 to 'ipairs' (table
+-- expected, got string)") because entity.list's rows were never run
+-- through this override the way entity.get's already were -- only
+-- entity.get had it, so /detail worked and /browse didn't.
+function entity.apply_computed_field_overrides(db_path, entity_type, rows)
+    multi_fields = schema.multi_fields_by_name(db_path, entity_type)
+    polymorphic_fields = schema.polymorphic_fields_by_name(db_path, entity_type)
+    for _, row in ipairs(rows) do
+        for name, field in pairs(multi_fields) do
+            row[name] = schema.read_multi_field(db_path, entity_type, row.id, field)
+        end
+        for name, field in pairs(polymorphic_fields) do
+            row[name] = schema.read_polymorphic_field(db_path, entity_type, row.id, field)
+        end
+    end
+    return rows
+end
+
 -- Attaches every multivalue field's current set to the returned row
 -- (task #84) -- one extra schema.fields lookup plus one query per
 -- multivalue field on this entity type, on every single call, including
@@ -612,16 +640,8 @@ function entity.get(db_path, entity_type, entity_id)
     if rows == nil then
         return nil
     end
-    row = rows[1]
-    if row != nil then
-        for name, field in pairs(schema.multi_fields_by_name(db_path, entity_type)) do
-            row[name] = schema.read_multi_field(db_path, entity_type, entity_id, field)
-        end
-        for name, field in pairs(schema.polymorphic_fields_by_name(db_path, entity_type)) do
-            row[name] = schema.read_polymorphic_field(db_path, entity_type, entity_id, field)
-        end
-    end
-    return row
+    entity.apply_computed_field_overrides(db_path, entity_type, rows)
+    return rows[1]
 end
 
 -- `limit`/`offset` are both optional; omit either (or both) for the
@@ -652,7 +672,7 @@ function entity.list(db_path, entity_type, limit, offset, include_archived)
     if rows == nil then
         return {}
     end
-    return rows
+    return entity.apply_computed_field_overrides(db_path, entity_type, rows)
 end
 
 function entity.count(db_path, entity_type, include_archived)
@@ -693,7 +713,7 @@ function entity.list_by_field(db_path, entity_type, field_name, value, limit, of
     if rows == nil then
         return {}
     end
-    return rows
+    return entity.apply_computed_field_overrides(db_path, entity_type, rows)
 end
 
 function entity.count_by_field(db_path, entity_type, field_name, value, include_archived)

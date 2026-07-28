@@ -138,6 +138,47 @@ EOF
     [[ "$output" =~ "source               [sample:2]" ]]
 }
 
+@test "/browse doesn't crash on a polymorphic_reference field that used to be a plain column" {
+    # Real production regression: sample.source started as a plain
+    # `text` field (a real column, with real data), then got converted
+    # to polymorphic_reference. Schema sync is additive-only and never
+    # drops the old column, so a raw "SELECT * FROM sample" row
+    # (entity.list's own query, which /browse uses) still carries the
+    # *old* column's stale string value under the same "source" key.
+    # Confirmed live: /browse crashed with "bad argument #1 to 'ipairs'
+    # (table expected, got string)" because entity.list never got the
+    # same raw-row override entity.get already had -- see entity.lua's
+    # apply_computed_field_overrides.
+    write_plant_schema
+    mkdir -p schemas
+    cat > schemas/sample.lua <<'EOF'
+return {name = "sample", fields = {
+  {name = "label", type = "text", required = true, display = true},
+  {name = "source", type = "text", required = false},
+}}
+EOF
+    "$BIN" schema sync
+    "$BIN" entity create plant label="Cocoa" >/dev/null
+    "$BIN" entity create sample label="S1" source="some old free text" >/dev/null
+
+    cat > schemas/sample.lua <<'EOF'
+return {name = "sample", fields = {
+  {name = "label", type = "text", required = true, display = true},
+  {name = "source", type = "polymorphic_reference", required = false,
+    allowed_entity_types = {"plant", "sample"}},
+}}
+EOF
+    "$BIN" schema sync
+
+    read TEST_SESSION_COOKIE TEST_CSRF_TOKEN < <(login_test_user "testuser" "i")
+    export TEST_SESSION_COOKIE TEST_CSRF_TOKEN
+    run_cgi "/browse" "type=sample"
+    [ "$status" -eq 0 ]
+    [[ ! "$output" =~ "Internal Server Error" ]]
+    [[ ! "$output" =~ "bad argument" ]]
+    [[ "$output" =~ "S1" ]]
+}
+
 @test "multi_polymorphic_reference stores several sources of different real types" {
     setup_full_schema
     "$BIN" entity create plant label="Cocoa" >/dev/null

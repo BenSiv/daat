@@ -387,6 +387,13 @@ function handle_preview(db_path, params)
     if rows == nil or rows[1] == nil then
         return print_response("200 OK", "application/json", json.encode({html = "Not found."}))
     end
+    -- Same raw-row override entity.list/entity.get need (see entity.lua's
+    -- apply_computed_field_overrides) -- without it this preview would
+    -- silently show a stale leftover column's old value instead of a
+    -- polymorphic_reference field's real current link (doesn't crash
+    -- here, unlike /browse, since this just tostring()s the value below
+    -- rather than iterating it -- but it'd be showing the wrong thing).
+    entity.apply_computed_field_overrides(db_path, entity_type, rows)
     row = rows[1]
 
     title = html.own_row_label(db_path, entity_type, row)
