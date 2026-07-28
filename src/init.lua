@@ -31,8 +31,9 @@ end
 -- fixed -- no seed content forced on every deployment. This is the
 -- opt-in alternative: one small, realistic, working example of each
 -- config-as-code kind (schemas/extensions/views/templates) plus an
--- example theme.json, so a new user has something real to read and
--- copy instead of an empty directory. Safe to pass again later, even
+-- example theme.lua and a documented, fully commented-out platform.lua
+-- reference, so a new user has something real to read and copy instead
+-- of an empty directory. Safe to pass again later, even
 -- against an already-initialized store (e.g. after deleting one
 -- example to see it regenerate) -- examples.write_all skips any
 -- destination that already exists rather than overwriting it.

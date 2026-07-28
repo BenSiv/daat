@@ -12,30 +12,29 @@
 -- now, matching the single-SQLite-file storage consolidation this
 -- migration is also doing.
 
--- No `json = require("dkjson")` here, unlike most other modules in
--- this codebase -- config.load_theme below is only ever reached via
--- cgi.lua's own request handling, which already requires dkjson as
--- `json` before dispatching to any handler; adding a second top-level
--- require of the same module here (this file loads earlier in the
--- build's bundle order than dkjson.lua itself) was confirmed, via a
--- real failing test (tst/integration/entity.bats "ledger records full
--- history"), to leave `json` broken for unrelated code later in the
--- same process -- CLI invocations of `ledger history` decoded
--- field_changes to nil instead of a table. Removing the duplicate
--- require fixed it; config.lua has no JSON needs of its own that
--- aren't already covered by relying on the shared global.
 paths = require("paths")
+sandbox = require("sandbox")
 
 config = {}
 
 STORE_DIR = ".store"
 DB_FILE = "store.db"
 SESSION_SECRET_FILE = "session_secret"
-THEME_FILE = "theme.json"
-PLATFORM_CONFIG_FILE = "platform.json"
+-- theme.lua/platform.lua, not .json -- one config format across the
+-- whole platform (schemas/dropdowns/views/templates/extension
+-- manifests are all the same sandboxed-Lua-table convention already;
+-- see doc/schema.md). Loaded via sandbox.run(source, path,
+-- sandbox.data_env()) exactly like those -- a data-only sandbox (no
+-- io/os/require/loadstring/network, just pairs/ipairs/string/table/
+-- math, see sandbox.lua's own header), not "arbitrary code execution":
+-- the only thing a loaded file can do is construct and return a table,
+-- which still goes through the same field-by-field validation below
+-- either way.
+THEME_FILE = "theme.lua"
+PLATFORM_CONFIG_FILE = "platform.lua"
 PLATFORM_CONFIG_CACHE = nil
 
--- The CSS custom-property names a theme.json may override -- matches
+-- The CSS custom-property names a theme.lua may override -- matches
 -- html.lua's own var(--platform-*, <fallback>) usage sites exactly, so a
 -- deployment can only override colors/tokens the app already exposes
 -- as a hook, never introduce a new one by typo.
@@ -60,14 +59,14 @@ function config.store_dir(root)
 end
 
 -- "sqlite" (default) or "mariadb" -- see doc/mariadb-migration.md.
--- Sourced from platform.json (config.platform_config()) now, not a raw
+-- Sourced from platform.lua (config.platform_config()) now, not a raw
 -- env var directly -- see that function's own header for why.
 function config.db_backend()
     return config.platform_config().db_backend
 end
 
 -- Connection descriptor for the mariadb backend. host/port/user/
--- database come from platform.json -- real, version-controlled
+-- database come from platform.lua -- real, version-controlled
 -- deployment content, not secrets. The password is the one field here
 -- that stays a plain env var (PLATFORM_MARIADB_PASSWORD, never written
 -- to a file this repo tracks) -- see config.platform_config()'s header.
@@ -184,9 +183,9 @@ function config.theme_path(root)
     return paths.joinpath(root, THEME_FILE)
 end
 
--- Optional binary assets (favicon/logo) a deployment's theme.json can
+-- Optional binary assets (favicon/logo) a deployment's theme.lua can
 -- reference -- same "generic hook, real files seeded by whoever wants
--- them" split as theme.json itself.
+-- them" split as theme.lua itself.
 function config.theme_assets_dir(root)
     if root == nil then
         root = config.find_root()
@@ -222,8 +221,8 @@ end
 -- retry budgets (doc/architecture.md's own table), and the MariaDB
 -- connection's host/port/user/database. All of it is real,
 -- version-controlled deployment content -- meant to be committed
--- (see lims/platform.json, seeded into the image/store exactly like
--- theme.json already is), not something only an operator's shell
+-- (see lims/platform.lua, seeded into the image/store exactly like
+-- theme.lua already is), not something only an operator's shell
 -- environment happens to know. The one field in this whole area that
 -- IS a secret, the MariaDB password, deliberately stays out of this
 -- file and out of version control entirely -- see
@@ -231,7 +230,7 @@ end
 -- read.
 --
 -- Same generic-hook contract as load_theme below: absent or malformed
--- platform.json, every field just falls back to its default rather
+-- platform.lua, every field just falls back to its default rather
 -- than erroring -- a deployment that wants none of this can skip the
 -- file entirely. Memoized per-process (PLATFORM_CONFIG_CACHE) since a
 -- single turn loop reads several of these fields across several calls
@@ -274,13 +273,8 @@ function config.platform_config()
     contents = io.read(file, "*all")
     io.close(file)
 
-    -- Required here, not at module top level -- same reason
-    -- load_theme's own comment gives (config.lua loads earlier than
-    -- dkjson.lua in the build's bundle order; a top-level require
-    -- broke an unrelated CLI code path last time this was tried).
-    json = require("dkjson")
-    parsed, _, err = json.decode(contents)
-    if err != nil or type(parsed) != "table" then
+    ok, parsed = sandbox.run(contents, path, sandbox.data_env())
+    if ok == false or type(parsed) != "table" then
         PLATFORM_CONFIG_CACHE = conf
         return conf
     end
@@ -349,7 +343,7 @@ end
 
 -- Deliberately generic here: platform itself ships no brand identity,
 -- just a hook. A deployment that wants one drops an optional
--- theme.json at the store root (e.g. seeded by its own deploy tooling,
+-- theme.lua at the store root (e.g. seeded by its own deploy tooling,
 -- outside this repo) -- absent or malformed, every value below falls
 -- back to nil, which leaves html.lua's existing var(--platform-*,
 -- <fallback>) defaults (its current indigo/slate palette) untouched.
@@ -364,19 +358,8 @@ function config.load_theme(root)
     contents = io.read(file, "*all")
     io.close(file)
 
-    -- Required here, not at module top level -- matches html.lua/
-    -- schema.lua/agent.lua's own per-function require("dkjson") calls
-    -- rather than ledger.lua/cgi.lua's top-level ones. A top-level
-    -- `json = require("dkjson")` added here once broke an unrelated
-    -- CLI code path (tst/integration/entity.bats "ledger records full
-    -- history" started failing: field_changes decoded to nil) --
-    -- this file loads earlier than dkjson.lua in the build's bundle
-    -- order, and re-requiring it there evidently isn't safe the way
-    -- it is inside a function called well after the whole bundle has
-    -- finished loading.
-    json = require("dkjson")
-    parsed, _, err = json.decode(contents)
-    if err != nil or type(parsed) != "table" then
+    ok, parsed = sandbox.run(contents, path, sandbox.data_env())
+    if ok == false or type(parsed) != "table" then
         return theme
     end
 
@@ -398,7 +381,7 @@ function config.load_theme(root)
     -- system prompt (task #70) -- e.g. domain vocabulary, house style,
     -- or reminders specific to this deployment's use case, without
     -- editing platform-wip's own source. A generic hook (any deployment
-    -- can set it), same split as every other theme.json field here.
+    -- can set it), same split as every other theme.lua field here.
     if type(parsed.system_prompt_extra) == "string" and parsed.system_prompt_extra != "" then
         theme.system_prompt_extra = parsed.system_prompt_extra
     end
@@ -413,44 +396,67 @@ function config.load_theme(root)
     return theme
 end
 
--- Writes theme.json back out -- the settings UI's save path (task
--- #89), symmetric to load_theme above rather than a one-off ad hoc
--- writer. `theme` is the same shape load_theme returns; only
--- non-empty/non-default values are actually written, so a field left
--- blank in the settings form round-trips back to "absent from
--- theme.json" (load_theme's own generic fallback) instead of being
--- persisted as an explicit empty string.
+-- A theme.lua field value is about to become part of a real Lua source
+-- file that sandbox.run will later execute -- unlike dkjson.encode
+-- (which handled this automatically), writing a string literal by hand
+-- means backslashes/quotes/newlines in an admin-supplied value (site_name,
+-- system_prompt_extra) must be escaped correctly, or they'd either break
+-- the file's own syntax or (worse) let a crafted value close the string
+-- early and inject extra table fields. Order matters: backslashes must
+-- be escaped first, before quotes/newlines, so the backslashes this
+-- function itself inserts are never re-escaped by a later step.
+function lua_string_literal(s)
+    escaped = string.gsub(s, "\\", "\\\\")
+    escaped = string.gsub(escaped, "\"", "\\\"")
+    escaped = string.gsub(escaped, "\n", "\\n")
+    escaped = string.gsub(escaped, "\r", "\\r")
+    return "\"" .. escaped .. "\""
+end
+
+-- Writes theme.lua back out -- the settings UI's save path (task #89),
+-- symmetric to load_theme above rather than a one-off ad hoc writer.
+-- `theme` is the same shape load_theme returns; only non-empty/
+-- non-default values are actually written, so a field left blank in
+-- the settings form round-trips back to "absent from theme.lua"
+-- (load_theme's own generic fallback) instead of being persisted as an
+-- explicit empty string.
 function config.save_theme(root, theme)
-    json = require("dkjson")
-    out = {}
+    lines = {"return {"}
     if theme.site_name != nil and theme.site_name != "" and theme.site_name != "Platform" then
-        out.site_name = theme.site_name
+        table.insert(lines, "    site_name = " .. lua_string_literal(theme.site_name) .. ",")
     end
     if theme.has_logo == true then
-        out.has_logo = true
+        table.insert(lines, "    has_logo = true,")
     end
     if theme.hide_home_heading == true then
-        out.hide_home_heading = true
+        table.insert(lines, "    hide_home_heading = true,")
     end
     if theme.system_prompt_extra != nil and theme.system_prompt_extra != "" then
-        out.system_prompt_extra = theme.system_prompt_extra
+        table.insert(lines, "    system_prompt_extra = " .. lua_string_literal(theme.system_prompt_extra) .. ",")
     end
-    out.colors = {}
+
+    color_lines = {}
     if theme.colors != nil then
         for _, key in ipairs(THEME_COLOR_KEYS) do
             value = theme.colors[key]
             if type(value) == "string" and value != "" then
-                out.colors[key] = value
+                table.insert(color_lines, "        " .. key .. " = " .. lua_string_literal(value) .. ",")
             end
         end
     end
+    table.insert(lines, "    colors = {")
+    for _, color_line in ipairs(color_lines) do
+        table.insert(lines, color_line)
+    end
+    table.insert(lines, "    },")
+    table.insert(lines, "}")
 
     path = config.theme_path(root)
     file, err = io.open(path, "w")
     if file == nil then
         return nil, err
     end
-    io.write(file, json.encode(out, {indent = true}))
+    io.write(file, table.concat(lines, "\n") .. "\n")
     io.close(file)
     return true
 end

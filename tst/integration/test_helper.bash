@@ -19,21 +19,21 @@ setup_test_env() {
     write_platform_config
 }
 
-# Writes platform.json into TEST_DIR (config.platform_config() resolves
+# Writes platform.lua into TEST_DIR (config.platform_config() resolves
 # it relative to DOCUMENT_ROOT, which falls back to "." -- the real
 # CGI/CLI cwd every raw_get/raw_post/"$BIN" call in these tests already
 # runs from). Called once with no overrides from setup_test_env, so
 # every test gets the deterministic test provider by default without
 # needing its own AGENT_PROVIDER=test env var -- and again, with
-# `extra_json_fields` (a comma-prefixed JSON fragment, e.g.
-# ',"agent_max_turns":2'), by any individual test that needs to
+# `extra_lua_fields` (a comma-prefixed Lua table fragment, e.g.
+# ', agent_max_turns = 2'), by any individual test that needs to
 # override one specific knob. Each "$BIN" invocation is its own fresh
 # process, so overwriting this file between two calls in the same test
 # is always safe -- there's no stale in-process cache to worry about.
 write_platform_config() {
-    local extra_json_fields="${1:-}"
-    cat > "$TEST_DIR/platform.json" <<EOF
-{"agent_provider":"test"${extra_json_fields}}
+    local extra_lua_fields="${1:-}"
+    cat > "$TEST_DIR/platform.lua" <<EOF
+return {agent_provider = "test"${extra_lua_fields}}
 EOF
 }
 

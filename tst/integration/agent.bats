@@ -49,7 +49,7 @@ raw_post() {
     local test_responses="$4"
     local compaction_threshold="${5:-}"
     if [ -n "$compaction_threshold" ]; then
-        write_platform_config ",\"agent_compaction_threshold\":${compaction_threshold}"
+        write_platform_config ", agent_compaction_threshold = ${compaction_threshold}"
     fi
     printf '%s' "$body" | AGENT_TEST_RESPONSES="$test_responses" \
         GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="$path_info" QUERY_STRING="" \
@@ -107,9 +107,9 @@ start_chat() {
     [[ ! "$output" =~ "Untitled chat" ]]
 }
 
-@test "a deployment's theme.json system_prompt_extra is appended to the agent's system prompt (task #70)" {
-    cat > theme.json <<'EOF'
-{"system_prompt_extra": "This deployment tracks bioreactor runs -- always ask for the run ID before creating a sample."}
+@test "a deployment's theme.lua system_prompt_extra is appended to the agent's system prompt (task #70)" {
+    cat > theme.lua <<'EOF'
+return {system_prompt_extra = "This deployment tracks bioreactor runs -- always ask for the run ID before creating a sample."}
 EOF
     resp=$(start_chat "$COOKIE" "$CSRF" "Prompt extra test")
     session_id=$(extract_query_param "$resp" "session_id")
@@ -886,7 +886,7 @@ EOF
     [[ "$output" =~ "<strong>bold</strong>" ]]
 }
 
-@test "agent_max_turns (platform.json) is configurable -- a lower limit ends the loop sooner than the default" {
+@test "agent_max_turns (platform.lua) is configurable -- a lower limit ends the loop sooner than the default" {
     resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
     session_id=$(extract_query_param "$resp" "session_id")
 
@@ -895,7 +895,7 @@ EOF
     # agent_max_turns=2, it should stop at exactly 2: the second turn's
     # answer returns immediately since there's no budget left to act on
     # a critique (turn == max_turns skips self-check entirely).
-    write_platform_config ',"agent_max_turns":2'
+    write_platform_config ', agent_max_turns = 2'
     printf 'csrf_token=%s&session_id=%s&message=how+many' "$CSRF" "$session_id" | \
         AGENT_TEST_RESPONSES="$(done_response "An answer.")" \
         AGENT_TEST_SELF_CHECK_RESPONSE="$(done_response "Not confirmed, check again.")" \
@@ -908,7 +908,7 @@ EOF
     [ "$output" -eq 1 ]
 }
 
-@test "agent_query_row_cap (platform.json) is configurable -- entity.query truncates at the configured cap, not just the 200 default" {
+@test "agent_query_row_cap (platform.lua) is configurable -- entity.query truncates at the configured cap, not just the 200 default" {
     write_task_schema
     "$BIN" entity create task title="First" status=open >/dev/null
     "$BIN" entity create task title="Second" status=open >/dev/null
@@ -917,7 +917,7 @@ EOF
     session_id=$(extract_query_param "$resp" "session_id")
 
     scripted="$(tool_call_response "entity.query" '{"sql":"SELECT title FROM task"}')"$'\1'"$(done_response "Here.")"
-    write_platform_config ',"agent_query_row_cap":1'
+    write_platform_config ', agent_query_row_cap = 1'
     printf 'csrf_token=%s&session_id=%s&message=list+tasks' "$CSRF" "$session_id" | \
         AGENT_TEST_RESPONSES="$scripted" \
         GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/chat-message" QUERY_STRING="" \
@@ -966,7 +966,7 @@ EOF
     # Explicitly pinned to the vertex provider (also the default) --
     # this confirms agent_provider_vertex.lua's own direct REST call
     # still works on its own, independent of which provider
-    # platform.json's agent_provider happens to default to. Still a
+    # platform.lua's agent_provider happens to default to. Still a
     # real, live module: document.lua's embeddings call always
     # delegates to it regardless of agent_provider, since
     # agent_provider_vertex.lua is the only provider with embeddings
@@ -977,8 +977,8 @@ agent_provider = require("agent_provider")
 result, err = agent_provider.generate("gemini-2.5-flash", "Reply in exactly one word, uppercase.", "What sound does a cow make?")
 print("RESULT:", result, "ERR:", err)
 EOF
-    cat > "${TEST_DIR}/platform.json" <<EOF
-{"agent_provider":"vertex","vertex_project":"${VERTEX_PROJECT}","vertex_region":"${VERTEX_REGION:-us-central1}"}
+    cat > "${TEST_DIR}/platform.lua" <<EOF
+return {agent_provider = "vertex", vertex_project = "${VERTEX_PROJECT}", vertex_region = "${VERTEX_REGION:-us-central1}"}
 EOF
     if [ -z "${LUAM_DIR:-}" ]; then
         LUAM_DIR=$(cd "${PROJECT_ROOT}/../luam" && pwd)
@@ -1010,8 +1010,8 @@ if response != nil then
 end
 print("STOP:", stop, "ERR:", err)
 EOF
-    cat > "${TEST_DIR}/platform.json" <<EOF
-{"agent_provider":"vertex","vertex_project":"${VERTEX_PROJECT}","vertex_region":"${VERTEX_REGION:-us-central1}"}
+    cat > "${TEST_DIR}/platform.lua" <<EOF
+return {agent_provider = "vertex", vertex_project = "${VERTEX_PROJECT}", vertex_region = "${VERTEX_REGION:-us-central1}"}
 EOF
     if [ -z "${LUAM_DIR:-}" ]; then
         LUAM_DIR=$(cd "${PROJECT_ROOT}/../luam" && pwd)
@@ -1102,8 +1102,8 @@ if response2 != nil then
 end
 print("FINAL:", final_text)
 EOF
-    cat > "${TEST_DIR}/platform.json" <<EOF
-{"agent_provider":"vertex","vertex_project":"${VERTEX_PROJECT}","vertex_region":"${VERTEX_REGION:-us-central1}"}
+    cat > "${TEST_DIR}/platform.lua" <<EOF
+return {agent_provider = "vertex", vertex_project = "${VERTEX_PROJECT}", vertex_region = "${VERTEX_REGION:-us-central1}"}
 EOF
     if [ -z "${LUAM_DIR:-}" ]; then
         LUAM_DIR=$(cd "${PROJECT_ROOT}/../luam" && pwd)

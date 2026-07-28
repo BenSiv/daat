@@ -43,7 +43,7 @@ into the binary; Pages rendering shells out to it.
 Chat/assistant features additionally need `curl` and `gcloud` on `PATH`
 at runtime (the built-in provider calls Google Vertex AI's REST API,
 authenticated via `gcloud auth application-default login`), plus a
-`vertex_project` field in `platform.json` naming a real GCP project --
+`vertex_project` field in `platform.lua` naming a real GCP project --
 there's no default, since that's always a real, potentially billed
 deployment choice, never something to hardcode. See "Chat" below.
 
@@ -159,7 +159,7 @@ automatic side effect of saving a page, since it costs a real API
 call per page.
 
 The LLM backend is pluggable (`src/agent_provider*.lua`, selected by
-`platform.json`'s `agent_provider` field) -- ships with a real Google
+`platform.lua`'s `agent_provider` field) -- ships with a real Google
 Vertex AI backend and a deterministic backend used by this project's
 own test suite so routine test runs don't repeatedly hit a paid API.
 

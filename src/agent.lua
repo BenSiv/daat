@@ -1645,7 +1645,7 @@ end
 -- call one and returns a real structured toolCall block, no tag
 -- protocol for the model to get right or for this code to parse.
 --
--- Appends theme.json's own system_prompt_extra, if a deployment set
+-- Appends theme.lua's own system_prompt_extra, if a deployment set
 -- one (task #70) -- deployment-specific instructions (domain
 -- vocabulary, house style, use-case reminders) without editing
 -- platform-wip's own source. Every real call site (run_turn's own

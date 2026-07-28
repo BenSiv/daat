@@ -37,7 +37,7 @@
 -- from finishReason alone.
 --
 -- Requires `gcloud` on PATH, already authenticated (`gcloud auth
--- application-default login`), and two platform.json fields (see
+-- application-default login`), and two platform.lua fields (see
 -- config.platform_config()): vertex_project (required, no default --
 -- this is a real, potentially billed GCP project, never hardcoded
 -- here) and vertex_region (optional, defaults to us-central1).
@@ -57,7 +57,7 @@ function vertex_config()
     conf = config.platform_config()
     project = conf.vertex_project
     if project == nil or project == "" then
-        return nil, nil, "vertex_project is not set in platform.json"
+        return nil, nil, "vertex_project is not set in platform.lua"
     end
     region = conf.vertex_region
     if region == nil or region == "" then

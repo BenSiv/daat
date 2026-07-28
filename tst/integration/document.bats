@@ -309,12 +309,12 @@ EOF
 
 @test "an unconfigured/failing embedding provider never fails the page save itself (best-effort)" {
     # Explicitly pinned to vertex with no vertex_project configured
-    # (platform.json's own default field, see config.platform_config())
+    # (platform.lua's own default field, see config.platform_config())
     # -- agent_provider_vertex.embeddings returns nil, err gracefully
     # (never throws) -- document.create_page must still succeed and
     # never propagate that failure.
-    cat > "${TEST_DIR}/platform.json" <<'EOF'
-{"agent_provider":"vertex"}
+    cat > "${TEST_DIR}/platform.lua" <<'EOF'
+return {agent_provider = "vertex"}
 EOF
     run save_document "csrf_token=${CSRF}&title=Home&parent_id=&content=hello"
     [[ "$output" =~ "302 Found" ]]
@@ -371,8 +371,8 @@ EOF
     # reindex-embeddings is how a store backfills those after the
     # fact, or after a provider outage silently dropped some
     # best-effort saves.
-    cat > "${TEST_DIR}/platform.json" <<'EOF'
-{"agent_provider":"vertex"}
+    cat > "${TEST_DIR}/platform.lua" <<'EOF'
+return {agent_provider = "vertex"}
 EOF
     save_document "csrf_token=${CSRF}&title=Home&parent_id=&content=hello" >/dev/null
     run bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db 'SELECT COUNT(*) FROM document_embedding;'"

@@ -16,7 +16,7 @@ setup() {
     resolve_bin
 
     # host/port/user/database are real, version-controlled deployment
-    # content now (platform.json, written below) -- only the password
+    # content now (platform.lua, written below) -- only the password
     # stays a plain env var (config.mariadb_descriptor's own
     # PLATFORM_MARIADB_PASSWORD read), same secrets-stay-external split
     # production uses. Still plain bash variables here (not exported)
@@ -45,8 +45,8 @@ setup() {
 
     export TEST_DIR="$(mktemp -d)"
     cd "$TEST_DIR"
-    cat > platform.json <<EOF
-{"db_backend":"mariadb","mariadb_host":"${PLATFORM_MARIADB_HOST}","mariadb_port":${PLATFORM_MARIADB_PORT},"mariadb_user":"${PLATFORM_MARIADB_USER}","mariadb_database":"${PLATFORM_MARIADB_DATABASE}"}
+    cat > platform.lua <<EOF
+return {db_backend = "mariadb", mariadb_host = "${PLATFORM_MARIADB_HOST}", mariadb_port = ${PLATFORM_MARIADB_PORT}, mariadb_user = "${PLATFORM_MARIADB_USER}", mariadb_database = "${PLATFORM_MARIADB_DATABASE}"}
 EOF
 }
 

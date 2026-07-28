@@ -1,7 +1,7 @@
 -- A deterministic, cost-free provider for tests -- not a mock bolted
 -- onto agent.lua, just another named backend behind agent_provider's
 -- own dynamic-loading facade, selected the same way Vertex is
--- (platform.json's agent_provider field, see config.platform_config()).
+-- (platform.lua's agent_provider field, see config.platform_config()).
 -- Running the real turn loop/compaction logic
 -- against real Vertex AI on every test run would make the test suite
 -- slow, flaky (network), and genuinely cost money on every invocation

@@ -62,7 +62,7 @@ raw_admin_action() {
 @test "the login page itself is wrapped in the real page shell, not a bare content fragment" {
     # task #89 regression: /login used to print html.render_login's raw
     # fragment directly, with no <head>/favicon <link>/theme :root{}
-    # block at all -- a deployment's theme.json colors/site name never
+    # block at all -- a deployment's theme.lua colors/site name never
     # applied to the one page every user sees before authenticating,
     # and the browser tab fell back to whatever favicon it had cached
     # from a previous origin.

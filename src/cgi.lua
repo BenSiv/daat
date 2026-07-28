@@ -441,7 +441,7 @@ end
 -- <head>/<title>/favicon <link>/theme :root{} block at all (every
 -- other route already went through page_shell for exactly this).
 -- Visible live: the login page never picked up a deployment's
--- theme.json colors/site name, and the browser tab fell back to
+-- theme.lua colors/site name, and the browser tab fell back to
 -- whatever favicon it had cached from a previous origin instead of
 -- this deployment's own theme-assets/favicon.png. show_sql/show_admin
 -- are always false here (nobody is authenticated yet, so no

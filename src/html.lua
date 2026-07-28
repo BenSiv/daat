@@ -280,7 +280,7 @@ ICON_SYSTEM = "<svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none
 ICON_CHAT_BUBBLE = "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z\"/></svg>"
 
 -- The `:root { --platform-x: value; ... }` block a deployment's real
--- theme.json colors compile down to -- shared by html.page_shell (the
+-- theme.lua colors compile down to -- shared by html.page_shell (the
 -- normal full-page case) and by /sql?embed=1's iframe fragment (cgi.lua),
 -- which skips page_shell entirely (see its own comment on why) but still
 -- needs these variables defined somewhere in its own document, or every
@@ -360,7 +360,7 @@ function html.page_shell(title, active, body, nonce, show_sql, show_admin, has_t
         end
     end
 
-    -- Only rendered when the deployment's own theme.json sets
+    -- Only rendered when the deployment's own theme.lua sets
     -- has_logo = true (a real logo.png is seeded at theme-assets/) --
     -- generic/unconfigured deployments get no logo slot at all rather
     -- than a broken-image icon.
@@ -2645,7 +2645,7 @@ function html.render_admin_api_keys(keys, csrf_token, message, is_error, new_raw
 """, platform_container_css(1000), platform_button_css(), message_html, new_key_html, escaped_csrf, rows_html)
 end
 
--- Settings (task #89): a real UI for theme.json's own fields, instead
+-- Settings (task #89): a real UI for theme.lua's own fields, instead
 -- of hand-editing the file and redeploying. Covers every field
 -- config.load_theme/save_theme round-trip -- site_name, the color
 -- overrides, hide_home_heading, system_prompt_extra, and logo/favicon
@@ -2772,7 +2772,7 @@ end
 -- not an activity dashboard (working lists, a calendar, recent-entries
 -- feed) yet -- a real starting point, not the end state. `theme` is
 -- config.load_theme(root)'s return value, purely for site_name; no
--- other Celleste-specific content belongs here (see theme.json's own
+-- other Celleste-specific content belongs here (see theme.lua's own
 -- split from platform-wip).
 function html.render_home(theme, show_sql, show_admin, has_tasks_view)
     site_name = "Platform"

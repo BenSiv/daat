@@ -56,12 +56,12 @@ tst/        tst/unit/*.lua (plain Luam scripts, no DB) and
 
 `src/agent_provider_test.lua` is the one file in `src/` that looks like
 it belongs in `tst/` instead -- it's the deterministic stub LLM backend
-`platform.json`'s `agent_provider: "test"` selects (see "Chat"). It has
+`platform.lua`'s `agent_provider: "test"` selects (see "Chat"). It has
 to live in `src/` on purpose: `bld/build.sh` bundles every `src/*.lua`
 file into the one compiled binary tests run against, and the whole
 point is that tests exercise that real binary, not a separate test-only
 build. The tradeoff this creates: nothing today stops `agent_provider:
-"test"` from ending up in a real deployment's `platform.json` by
+"test"` from ending up in a real deployment's `platform.lua` by
 mistake (a stray edit, a copy-pasted seed file) -- the app would
 silently serve canned responses with no error and no visible difference
 except the content itself. Not fixed as of this writing; worth a
@@ -303,12 +303,12 @@ and a small, explicit tool registry the model can act through.
   `knowledge.stats/list/distill` (the knowledge pool, see below).
 - **A deployment can append its own instructions to the system
   prompt** without editing platform-wip's own source --
-  `theme.json`'s `system_prompt_extra` field (`agent.default_system_
+  `theme.lua`'s `system_prompt_extra` field (`agent.default_system_
   prompt`) is appended verbatim, empty by default. For domain
   vocabulary, house style, or use-case-specific reminders (e.g. "this
   deployment tracks bioreactor runs -- always ask for the run ID
   before creating a sample") -- the same generic-hook split as every
-  other `theme.json` field. Prior art: fossil-scm's own `agent-system-
+  other `theme.lua` field. Prior art: fossil-scm's own `agent-system-
   prompt-extra` setting.
 - **The chat widget tells the model what page the user is on.**
   Every page (`html.page_shell`) emits `window.PLATFORM_PAGE_CONTEXT`
@@ -363,17 +363,17 @@ and a small, explicit tool registry the model can act through.
   doesn't have it compiled in, so search instead scores every active
   page directly, an acceptable tradeoff at the scale this is built for.
 - **Turn budgets, row caps, and retry counts are configurable via
-  platform.json, not hardcoded** -- the right value for any of these
+  platform.lua, not hardcoded** -- the right value for any of these
   genuinely depends on things a deployment chooses (which model
   `agent_model` names, that provider's own latency, how much data this
   deployment actually holds), not on this code. Read fresh per call via
   `config.platform_config()` (memoized per-process, not resolved once
-  at load) -- see `theme.json`'s own precedent for the file-shaped
+  at load) -- see `theme.lua`'s own precedent for the file-shaped
   config pattern this follows. Confirmed live why this matters: a
   self-check loop needing several rounds to converge on a real
   production turn took long enough to exceed the load balancer's own
   (separately configurable) timeout.
-  | `platform.json` field | Default | Controls |
+  | `platform.lua` field | Default | Controls |
   |---|---|---|
   | `agent_provider` | `"vertex"` | Which named backend `agent_provider.lua` loads (`"vertex"`, or `"test"` for the deterministic stub) |
   | `agent_model` | `"gemini-2.5-flash"` | The real model name passed to every `generate`/`converse`/`embeddings` call |

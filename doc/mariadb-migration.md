@@ -232,7 +232,7 @@ exist for the MariaDB work (task #57 territory again).
   round-trips correctly with plain doubling once that flag is set.
 - `config.lua` gains `config.db_backend()` (`db_backend` field, default
   `sqlite`) and `config.mariadb_descriptor()` (host/port/user/database
-  from `platform.json`, password from the `PLATFORM_MARIADB_PASSWORD`
+  from `platform.lua`, password from the `PLATFORM_MARIADB_PASSWORD`
   env var -- the one secret in the whole descriptor). Originally these
   read `PLATFORM_DB_BACKEND`/`PLATFORM_MARIADB_*` env vars directly,
   matching `PLATFORM_VENDOR_DIR`'s convention at the time; both moved

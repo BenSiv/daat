@@ -139,32 +139,66 @@ return {
 }
 """
 
--- theme.json can't hold real comments (it's parsed as plain JSON), so
--- "_comment" is a plain, harmless key here: config.load_theme ignores
--- any key it doesn't recognize, and it naturally drops out the first
--- time this file is saved through the Settings UI (task #89) or
--- edited by hand -- not a real field, just a note for whoever opens
--- the file before that happens.
-EXAMPLE_THEME_JSON = """{
-  "_comment": "Every field here is optional -- delete this file entirely for the plain generic default (indigo/slate, no logo, no extra chat instructions). Edit through Settings once the store is initialized, or by hand here before first boot.",
-  "site_name": "My Deployment",
-  "has_logo": false,
-  "hide_home_heading": false,
-  "system_prompt_extra": "",
-  "colors": {
-    "accent": "#4f46e5",
-    "accent_2": "#6366f1",
-    "bg": "#f8fafc",
-    "bg_2": "#f1f5f9",
-    "border": "#e2e8f0",
-    "border_2": "#cbd5e1",
-    "heading": "#0f172a",
-    "input_text": "#0f172a",
-    "muted": "#64748b",
-    "muted_2": "#94a3b8",
-    "text": "#334155",
-    "th_text": "#475569"
-  }
+EXAMPLE_THEME_LUA = """-- Every field here is optional -- delete this file entirely for the
+-- plain generic default (indigo/slate, no logo, no extra chat
+-- instructions). Edit through Settings once the store is initialized
+-- (task #89), or by hand here before first boot -- config.save_theme
+-- overwrites this comment the first time it's saved through the UI,
+-- same as it always did.
+return {
+  site_name = "My Deployment",
+  has_logo = false,
+  hide_home_heading = false,
+  system_prompt_extra = "",
+  colors = {
+    accent = "#4f46e5",
+    accent_2 = "#6366f1",
+    bg = "#f8fafc",
+    bg_2 = "#f1f5f9",
+    border = "#e2e8f0",
+    border_2 = "#cbd5e1",
+    heading = "#0f172a",
+    input_text = "#0f172a",
+    muted = "#64748b",
+    muted_2 = "#94a3b8",
+    text = "#334155",
+    th_text = "#475569",
+  },
+}
+"""
+
+-- Every field commented out on purpose -- unlike theme.lua (no
+-- sensible default exists for a color palette), platform.lua's fields
+-- already have documented defaults (see doc/architecture.md's own
+-- table) and vertex_project has no safe placeholder at all: a real,
+-- potentially billed GCP project name a deployer forgot to edit would
+-- fail confusingly instead of config.platform_config()'s own clear
+-- "not set" behavior. A commented-out file changes nothing (sandbox.run
+-- on an all-comments file returns nil, same as no file at all) -- it's
+-- reference documentation of what's available, not a behavior change.
+EXAMPLE_PLATFORM_LUA = """-- Every field here is optional; see doc/architecture.md's own table
+-- for the full list and current defaults. Uncomment and edit only what
+-- this deployment actually needs to override.
+return {
+  -- agent_provider = "vertex",
+  -- agent_model = "gemini-2.5-flash",
+  -- vertex_project = "your-gcp-project",
+  -- vertex_region = "us-central1",
+  -- agent_max_turns = 10,
+  -- agent_research_max_turns = 6,
+  -- agent_background_max_turns = 20,
+  -- agent_background_max_attempts = 3,
+  -- agent_search_excerpt_length = 1200,
+  -- agent_query_row_cap = 200,
+  -- agent_compaction_threshold = 4000,
+  -- platform_adhoc_row_cap = 1000,
+  -- extension_max_job_attempts = 5,
+  -- platform_heat_decay_half_life_days = 14,
+  -- db_backend = "sqlite",
+  -- mariadb_host = "127.0.0.1",
+  -- mariadb_port = 3306,
+  -- mariadb_user = "platform",
+  -- mariadb_database = "platform",
 }
 """
 
@@ -214,8 +248,13 @@ function examples.write_all(root)
     end
 
     theme_path = config.theme_path(root)
-    if write_if_missing(theme_path, EXAMPLE_THEME_JSON) == true then
+    if write_if_missing(theme_path, EXAMPLE_THEME_LUA) == true then
         table.insert(written, theme_path)
+    end
+
+    platform_config_path = config.platform_config_path(root)
+    if write_if_missing(platform_config_path, EXAMPLE_PLATFORM_LUA) == true then
+        table.insert(written, platform_config_path)
     end
 
     return written

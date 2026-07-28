@@ -10,7 +10,7 @@ teardown() {
     cleanup_test_env
 }
 
-@test "a plain init stays truly empty -- no seed content, no theme.json (task #101)" {
+@test "a plain init stays truly empty -- no seed content, no theme.lua (task #101)" {
     run "$BIN" init
     [[ "$output" =~ "Initialized store at" ]]
     [ -d schemas ]
@@ -21,13 +21,20 @@ teardown() {
     [ -z "$(ls -A extensions)" ]
     [ -z "$(ls -A views)" ]
     [ -z "$(ls -A templates)" ]
-    [ ! -f theme.json ]
+    [ ! -f theme.lua ]
 }
 
-@test "init --with-examples writes one example of each kind plus theme.json" {
+@test "init --with-examples writes one example of each kind plus theme.lua/platform.lua" {
+    # setup_test_env's own write_platform_config already seeded a
+    # minimal platform.lua (agent_provider = "test", for the
+    # deterministic test provider) -- remove it first so this test
+    # exercises examples.write_all's real platform.lua stub, not the
+    # harness's own scaffolding file.
+    rm -f platform.lua
+
     run "$BIN" init --with-examples
     [[ "$output" =~ "Initialized store at" ]]
-    [[ "$output" =~ "Wrote 7 example file(s)" ]]
+    [[ "$output" =~ "Wrote 8 example file(s)" ]]
 
     [ -f schemas/category.lua ]
     [ -f schemas/widget.lua ]
@@ -35,7 +42,10 @@ teardown() {
     [ -f templates/widget-intake.lua ]
     [ -f extensions/widget-quantity-range/manifest.lua ]
     [ -f extensions/widget-quantity-range/main.lua ]
-    [ -f theme.json ]
+    [ -f theme.lua ]
+    [ -f platform.lua ]
+    run cat platform.lua
+    [[ "$output" =~ "-- agent_provider" ]]
 
     # The generated content is real, working config-as-code, not just
     # placeholder text -- both example schemas register successfully.
@@ -62,9 +72,13 @@ teardown() {
     "$BIN" init
     [ -z "$(ls -A schemas)" ]
 
+    # Same harness-scaffolding removal as the previous test -- see its
+    # own comment.
+    rm -f platform.lua
+
     run "$BIN" init --with-examples
     [[ "$output" =~ "Already initialized" ]]
-    [[ "$output" =~ "Wrote 7 example file(s)" ]]
+    [[ "$output" =~ "Wrote 8 example file(s)" ]]
     [ -f schemas/widget.lua ]
 
     # Delete one example, keep the rest -- re-running only replaces

@@ -118,8 +118,8 @@ send_message() {
 @test "a provider failure still records knowledge_context/knowledge_chat_eval as an error, never reaching a real model call" {
     read session csrf < <(session_for admin secret123)
     chat_session=$(start_chat "$session" "$csrf" "Test")
-    cat > "${TEST_DIR}/platform.json" <<'EOF'
-{"agent_provider":"nonexistent-provider"}
+    cat > "${TEST_DIR}/platform.lua" <<'EOF'
+return {agent_provider = "nonexistent-provider"}
 EOF
     printf 'csrf_token=%s&session_id=%s&message=hi' "$csrf" "$chat_session" | \
         GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/chat-message" QUERY_STRING="" \

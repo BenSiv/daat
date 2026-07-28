@@ -295,11 +295,11 @@ EOF
     # default indigo/slate instead of the deployment's real theme --
     # ?embed=1 skips html.page_shell entirely (to avoid nesting a
     # second full page inside the iframe), which also meant it never
-    # got the :root { --platform-x: ...; } block a real theme.json
+    # got the :root { --platform-x: ...; } block a real theme.lua
     # compiles to, so every var(--platform-*, fallback) silently fell
     # back to the generic default.
-    cat > theme.json <<'EOF'
-{"site_name": "Celleste", "colors": {"accent": "#C97F1E"}}
+    cat > theme.lua <<'EOF'
+return {site_name = "Celleste", colors = {accent = "#C97F1E"}}
 EOF
     run_cgi_admin "/sql" "embed=1"
     [ "$status" -eq 0 ]
@@ -375,14 +375,14 @@ print('\n'.join(lines))
     [[ "$output" =~ "Showing first 1000 rows" ]]
 }
 
-@test "/sql's row cap is configurable via platform.json's platform_adhoc_row_cap, not fixed at 1000" {
+@test "/sql's row cap is configurable via platform.lua's platform_adhoc_row_cap, not fixed at 1000" {
     for i in $(seq 1 5); do
         "$BIN" entity create person full_name="Extra $i"
     done
     # setup()'s own Dr. Cohen makes 6 total -- override the cap well
     # below that, cheaply, instead of the default test's 1010-row bulk
     # insert (which exercises the *default* value specifically).
-    write_platform_config ',"platform_adhoc_row_cap":3'
+    write_platform_config ', platform_adhoc_row_cap = 3'
     run env GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/sql" \
         QUERY_STRING="q=SELECT+id+FROM+person%3B" \
         HTTP_COOKIE="session=${ADMIN_SESSION_COOKIE}; csrf=${ADMIN_CSRF_TOKEN}" \
