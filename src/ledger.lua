@@ -183,7 +183,15 @@ function format_change_value(v)
     if type(v) == "table" then
         parts = {}
         for _, item in ipairs(v) do
-            table.insert(parts, tostring(item))
+            if type(item) == "table" and item.type != nil then
+                -- A polymorphic-reference item ({type=, id=}) -- plain
+                -- tostring(item) on a table gives an opaque "table:
+                -- 0x..." address, same fix as entity.lua's own
+                -- format_cli_value.
+                table.insert(parts, tostring(item.type) .. ":" .. tostring(item.id))
+            else
+                table.insert(parts, tostring(item))
+            end
         end
         return "[" .. table.concat(parts, ", ") .. "]"
     end

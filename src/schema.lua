@@ -10,7 +10,7 @@ lfs = require("lfs")
 
 schema = {}
 
-FIELD_TYPES = {"text", "number", "date", "select", "reference", "multi_select", "multi_reference", "sql_select"}
+FIELD_TYPES = {"text", "number", "date", "select", "reference", "multi_select", "multi_reference", "sql_select", "polymorphic_reference", "multi_polymorphic_reference"}
 
 -- Field types stored in a companion junction table (schema.
 -- ensure_multi_field_table) instead of as a column on the entity's own
@@ -22,6 +22,38 @@ MULTI_FIELD_TYPES = {multi_select = true, multi_reference = true}
 
 function is_multi_field_type(t)
     return MULTI_FIELD_TYPES[t] == true
+end
+
+-- A reference whose *target type itself varies per row* -- a sample's
+-- "source" can be a plant or another sample, decided per row, not a
+-- fixed entity_type the way a plain `reference` field declares one.
+-- Real-world check before building this (2026-07-28): every genuine
+-- case in this deployment's actual data has a small, enumerable set of
+-- possible target types (2, never "any registered type"), so this
+-- isn't a generic "reference of unknown shape" -- each field declares
+-- its own closed `allowed_entity_types` list, validated the same
+-- strictness as a plain `select` field's declared value list.
+--
+-- Stored in ONE shared table (entity_source, see schema.
+-- ensure_entity_source_table) rather than a table per (entity_type,
+-- field_name) the way multi_reference's own junction tables work --
+-- schema.ensure_multi_field_table's per-type table can't represent
+-- "this row's target type differs from that row's," since its FK is
+-- fixed to one ref_type at table-creation time. polymorphic_reference
+-- (one target) and multi_polymorphic_reference (several, e.g.
+-- product.source can legitimately have more than one) mirror the
+-- existing reference/multi_reference singular/plural split rather than
+-- inventing a single type with a cardinality flag, matching this
+-- codebase's own established convention (select/multi_select is the
+-- same split).
+POLYMORPHIC_FIELD_TYPES = {polymorphic_reference = true, multi_polymorphic_reference = true}
+
+function is_polymorphic_field_type(t)
+    return POLYMORPHIC_FIELD_TYPES[t] == true
+end
+
+function is_multivalue_polymorphic_field_type(t)
+    return t == "multi_polymorphic_reference"
 end
 
 --------------------------------------------------------------------------
@@ -319,6 +351,16 @@ function schema.validate(def)
         if field.type == "multi_reference" and field.entity_type != nil and type(field.entity_type) != "string" then
             return string.format("schema '%s' field '%s': 'entity_type' must be a string", def.name, field.name)
         end
+        if is_polymorphic_field_type(field.type) then
+            if type(field.allowed_entity_types) != "table" or #field.allowed_entity_types == 0 then
+                return string.format("schema '%s' field '%s': type '%s' requires a non-empty 'allowed_entity_types' list", def.name, field.name, field.type)
+            end
+            for _, allowed_type in ipairs(field.allowed_entity_types) do
+                if type(allowed_type) != "string" or allowed_type == "" then
+                    return string.format("schema '%s' field '%s': 'allowed_entity_types' entries must be non-empty strings", def.name, field.name)
+                end
+            end
+        end
         -- Optional bounds on a "number" field -- UI-hint only for now
         -- (wired into the registration table's <input type="number">
         -- min/max, see html.lua), not yet enforced server-side. A real
@@ -359,6 +401,14 @@ function ensure_entity_field_display_column(db_path)
     end
     if have["display"] == nil then
         db.exec(db_path, "ALTER TABLE entity_field ADD COLUMN display INTEGER DEFAULT 0;")
+    end
+    -- entity_field predates polymorphic_reference/multi_polymorphic_
+    -- reference -- same migration pattern as `display` just above.
+    -- JSON-encoded list, same convention as enum_values, since a
+    -- polymorphic field's allowed target types are a list, not the one
+    -- fixed ref_entity_type a plain reference/multi_reference declares.
+    if have["allowed_entity_types"] == nil then
+        db.exec(db_path, "ALTER TABLE entity_field ADD COLUMN allowed_entity_types LONGTEXT;")
     end
 end
 
@@ -417,6 +467,11 @@ function schema.register(db_path, def)
             json = require("dkjson")
             enum_json = json.encode(resolve_field_values(db_path, field))
         end
+        allowed_types_json = nil
+        if is_polymorphic_field_type(field.type) then
+            json = require("dkjson")
+            allowed_types_json = json.encode(field.allowed_entity_types)
+        end
         required_flag = 0
         if field.required == true then
             required_flag = 1
@@ -426,14 +481,15 @@ function schema.register(db_path, def)
             display_flag = 1
         end
         db.exec(db_path, string.format(
-            "%s entity_field (entity_type, name, type, required, enum_values, ref_entity_type, field_order, display) VALUES (%s, %s, %s, %d, %s, %s, %d, %d);",
+            "%s entity_field (entity_type, name, type, required, enum_values, ref_entity_type, field_order, display, allowed_entity_types) VALUES (%s, %s, %s, %d, %s, %s, %d, %d, %s);",
             db.replace_into(db_path),
             db.quote(def.name), db.quote(field.name), db.quote(field.type),
             required_flag,
             db.literal(enum_json),
             db.literal(field.entity_type),
             i,
-            display_flag
+            display_flag,
+            db.literal(allowed_types_json)
         ))
     end
 
@@ -640,6 +696,140 @@ function schema.multi_fields_by_name(db_path, entity_type)
     return result
 end
 
+-- Same lookup as multi_fields_by_name, for polymorphic_reference/
+-- multi_polymorphic_reference fields.
+function schema.polymorphic_fields_by_name(db_path, entity_type)
+    result = {}
+    for _, field in ipairs(schema.fields(db_path, entity_type)) do
+        if is_polymorphic_field_type(field.type) then
+            result[field.name] = field
+        end
+    end
+    return result
+end
+
+--------------------------------------------------------------------------
+-- Polymorphic references (a "source" that can be a plant or a sample,
+-- decided per row) -- see is_polymorphic_field_type's own header
+-- comment for why this needs a different storage shape than
+-- multi_reference's per-(entity_type, field_name) junction table.
+--------------------------------------------------------------------------
+
+-- ONE shared table across every polymorphic field on every entity type
+-- -- not a table per (entity_type, field_name) the way
+-- ensure_multi_field_table creates, since to_type itself varies row by
+-- row and can't be a fixed FK target. No FK constraints on from_id/
+-- to_id (the target table varies), so referential integrity here is
+-- enforced at the application layer (entity.validate), the same trust
+-- boundary reference/multi_reference already put on entity.lua rather
+-- than the database for their own existence checks.
+function schema.ensure_entity_source_table(db_path)
+    if db.table_exists(db_path, "entity_source") then
+        return
+    end
+    db.exec(db_path, "CREATE TABLE entity_source (" ..
+        "id INTEGER PRIMARY KEY " .. db.autoincrement_keyword(db_path) .. ", " ..
+        "from_type VARCHAR(255) NOT NULL, " ..
+        "from_id INTEGER NOT NULL, " ..
+        "field_name VARCHAR(255) NOT NULL, " ..
+        "to_type VARCHAR(255) NOT NULL, " ..
+        "to_id INTEGER NOT NULL, " ..
+        "created_at TEXT DEFAULT (" .. db.now_expr(db_path) .. ")" ..
+        ");")
+    db.exec(db_path, "CREATE INDEX idx_entity_source_from ON entity_source (from_type, from_id, field_name);")
+end
+
+-- A single polymorphic item, in whichever shape the caller handed it:
+-- already a real {type=..., id=...} table (JSON API payloads, decoded
+-- by dkjson before reaching here), or a CLI-friendly "type:id" string
+-- (e.g. "sample:92785") -- the CLI's plain `field=value` args have no
+-- native table shape, so this is the same "flexible input, one real
+-- internal shape" split schema.normalize_multi_value already draws for
+-- multi_reference's own comma-separated ids, just with a type prefix
+-- since a bare id alone doesn't say which table it belongs to.
+function parse_polymorphic_item(item)
+    if type(item) == "table" then
+        return item
+    end
+    s = tostring(item)
+    colon_pos = string.find(s, ":")
+    if colon_pos == nil then
+        return nil
+    end
+    return {type = string.sub(s, 1, colon_pos - 1), id = tonumber(string.sub(s, colon_pos + 1))}
+end
+
+-- Normalizes a polymorphic field's raw input value (nil, a single
+-- {type=,id=} table, a list of them, or a CLI "type:id[,type:id...]"
+-- string) into a plain list of {type=, id=} tables -- schema.
+-- normalize_multi_value's own counterpart for this field family.
+function schema.normalize_polymorphic_value(value)
+    if value == nil then
+        return {}
+    end
+    if type(value) == "table" then
+        if value.type != nil then
+            return {value}
+        end
+        items = {}
+        for _, item in ipairs(value) do
+            parsed = parse_polymorphic_item(item)
+            if parsed != nil then
+                table.insert(items, parsed)
+            end
+        end
+        return items
+    end
+    items = {}
+    for raw in string.gmatch(tostring(value), "[^,]+") do
+        trimmed = (string.gsub(raw, "^%s*(.-)%s*$", "%1"))
+        if trimmed != "" then
+            parsed = parse_polymorphic_item(trimmed)
+            if parsed != nil then
+                table.insert(items, parsed)
+            end
+        end
+    end
+    return items
+end
+
+-- Replaces the full current set for one entity's polymorphic field --
+-- same delete-then-reinsert "recompute wholesale" pattern
+-- write_multi_field already uses.
+function schema.write_polymorphic_field(db_path, entity_type, entity_id, field, value)
+    schema.ensure_entity_source_table(db_path)
+    db.exec(db_path, string.format(
+        "DELETE FROM entity_source WHERE from_type = %s AND from_id = %d AND field_name = %s;",
+        db.quote(entity_type), tonumber(entity_id), db.quote(field.name)
+    ))
+    for _, item in ipairs(schema.normalize_polymorphic_value(value)) do
+        db.exec(db_path, string.format(
+            "INSERT INTO entity_source (from_type, from_id, field_name, to_type, to_id) VALUES (%s, %d, %s, %s, %d);",
+            db.quote(entity_type), tonumber(entity_id), db.quote(field.name), db.quote(item.type), tonumber(item.id)
+        ))
+    end
+end
+
+-- The current set for one entity's polymorphic field, as a plain array
+-- of {type=, id=} tables (schema.read_multi_field's own counterpart).
+function schema.read_polymorphic_field(db_path, entity_type, entity_id, field)
+    if db.table_exists(db_path, "entity_source") == false then
+        return {}
+    end
+    rows = db.query(db_path, string.format(
+        "SELECT to_type, to_id FROM entity_source WHERE from_type = %s AND from_id = %d AND field_name = %s;",
+        db.quote(entity_type), tonumber(entity_id), db.quote(field.name)
+    ))
+    if rows == nil then
+        return {}
+    end
+    values = {}
+    for _, row in ipairs(rows) do
+        table.insert(values, {type = row.to_type, id = tonumber(row.to_id)})
+    end
+    return values
+end
+
 -- Creates the projected table if it doesn't exist, or adds any columns
 -- for fields/builtins that aren't present yet. Never drops or renames a
 -- column -- that's a deliberately manual, reviewed operation, not an
@@ -650,7 +840,7 @@ function schema.sync_table(db_path, def)
     if db.table_exists(db_path, def.name) == false then
         columns = {"id INTEGER PRIMARY KEY " .. db.autoincrement_keyword(db_path)}
         for _, field in ipairs(def.fields) do
-            if is_multi_field_type(field.type) == false then
+            if is_multi_field_type(field.type) == false and is_polymorphic_field_type(field.type) == false then
                 table.insert(columns, db.quote_ident(field.name) .. " " .. SQL_TYPE[field.type])
             end
         end
@@ -670,6 +860,8 @@ function schema.sync_table(db_path, def)
         for _, field in ipairs(def.fields) do
             if is_multi_field_type(field.type) then
                 schema.ensure_multi_field_table(db_path, def.name, field)
+            elseif is_polymorphic_field_type(field.type) then
+                schema.ensure_entity_source_table(db_path)
             end
         end
         return
@@ -683,6 +875,8 @@ function schema.sync_table(db_path, def)
     for _, field in ipairs(def.fields) do
         if is_multi_field_type(field.type) then
             schema.ensure_multi_field_table(db_path, def.name, field)
+        elseif is_polymorphic_field_type(field.type) then
+            schema.ensure_entity_source_table(db_path)
         elseif have[field.name] == nil then
             db.exec(db_path, string.format(
                 "ALTER TABLE %s ADD COLUMN %s %s;", def.name, db.quote_ident(field.name), SQL_TYPE[field.type]
@@ -846,6 +1040,9 @@ function schema.layout(db_path, name)
             if field.entity_type != nil then
                 field_def.ref_entity_type = field.entity_type
             end
+            if field.allowed_entity_types != nil then
+                field_def.allowed_entity_types = field.allowed_entity_types
+            end
             if field.min != nil then
                 field_def.min = field.min
             end
@@ -879,6 +1076,9 @@ function schema.layout(db_path, name)
             end
             if f.ref_entity_type != nil and f.ref_entity_type != "" then
                 field_def.ref_entity_type = f.ref_entity_type
+            end
+            if f.allowed_entity_types != nil and f.allowed_entity_types != "" then
+                field_def.allowed_entity_types = dkjson.decode(f.allowed_entity_types)
             end
             table.insert(result.fields, field_def)
         end
@@ -993,6 +1193,24 @@ function schema.relationships(db_path)
                 -- junction table instead, schema.ensure_multi_field_table
                 -- -- not reverse-queryable the same way).
                 table.insert(edges, {from_type = t.name, to_type = field.ref_entity_type, field_name = field.name, field_type = field.type})
+            elseif is_polymorphic_field_type(field.type) and field.allowed_entity_types != nil then
+                -- One edge per allowed target type -- a real lineage
+                -- investigation (research.investigate/entity.relationships)
+                -- needs to see e.g. "sample.source -> plant" AND
+                -- "sample.source -> sample" both, not just one collapsed
+                -- row hiding which types are actually possible. Found
+                -- live: a chat query exploring "sample lineages" missed
+                -- this kind of edge entirely before polymorphic fields
+                -- existed at all, since there was nowhere for it to show
+                -- up in this list -- don't repeat that gap now that
+                -- there is one.
+                json = require("dkjson")
+                allowed_types = json.decode(field.allowed_entity_types)
+                if allowed_types != nil then
+                    for _, to_type in ipairs(allowed_types) do
+                        table.insert(edges, {from_type = t.name, to_type = to_type, field_name = field.name, field_type = field.type})
+                    end
+                end
             end
         end
     end

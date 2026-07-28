@@ -176,6 +176,38 @@ function entity.validate(db_path, entity_type, values, old)
                     end
                 end
             end
+        elseif field.type == "polymorphic_reference" or field.type == "multi_polymorphic_reference" then
+            items = schema.normalize_polymorphic_value(value)
+            if #items == 0 then
+                if tonumber(field.required) == 1 then
+                    table.insert(issues, {field = field.name, severity = "error",
+                        message = "required field is missing"})
+                end
+            else
+                if field.type == "polymorphic_reference" and #items > 1 then
+                    table.insert(issues, {field = field.name, severity = "error",
+                        message = "only one source is allowed for this field"})
+                end
+                allowed_types = json.decode(field.allowed_entity_types)
+                if allowed_types == nil then
+                    allowed_types = {}
+                end
+                for _, item in ipairs(items) do
+                    type_ok = false
+                    for _, allowed_type in ipairs(allowed_types) do
+                        if allowed_type == item.type then
+                            type_ok = true
+                        end
+                    end
+                    if type_ok == false then
+                        table.insert(issues, {field = field.name, severity = "error",
+                            message = "'" .. tostring(item.type) .. "' is not an allowed source type for this field"})
+                    elseif entity.get(db_path, item.type, tonumber(item.id)) == nil then
+                        table.insert(issues, {field = field.name, severity = "error",
+                            message = "references a nonexistent " .. tostring(item.type) .. " entity: " .. tostring(item.id)})
+                    end
+                end
+            end
         elseif (value == nil or value == "") then
             if tonumber(field.required) == 1 then
                 table.insert(issues, {field = field.name, severity = "error",
@@ -262,6 +294,7 @@ function entity.create(db_path, entity_type, values, author, source)
     end
 
     multi_fields = schema.multi_fields_by_name(db_path, entity_type)
+    polymorphic_fields = schema.polymorphic_fields_by_name(db_path, entity_type)
 
     -- The ledger's own audit copy normalizes a multivalue field to a
     -- real array (matching entity.update's own field_changes shape)
@@ -272,6 +305,8 @@ function entity.create(db_path, entity_type, values, author, source)
     for name, value in pairs(values) do
         if multi_fields[name] != nil then
             ledger_values[name] = schema.normalize_multi_value(value)
+        elseif polymorphic_fields[name] != nil then
+            ledger_values[name] = schema.normalize_polymorphic_value(value)
         else
             ledger_values[name] = value
         end
@@ -281,7 +316,7 @@ function entity.create(db_path, entity_type, values, author, source)
     columns = {"id"}
     literals = {tostring(entity_id)}
     for name, value in pairs(values) do
-        if multi_fields[name] == nil then
+        if multi_fields[name] == nil and polymorphic_fields[name] == nil then
             table.insert(columns, db.quote_ident(name))
             table.insert(literals, db.literal(value))
         end
@@ -299,6 +334,11 @@ function entity.create(db_path, entity_type, values, author, source)
     for name, field in pairs(multi_fields) do
         if values[name] != nil then
             schema.write_multi_field(db_path, entity_type, entity_id, field, values[name])
+        end
+    end
+    for name, field in pairs(polymorphic_fields) do
+        if values[name] != nil then
+            schema.write_polymorphic_field(db_path, entity_type, entity_id, field, values[name])
         end
     end
 
@@ -322,6 +362,27 @@ function multi_values_equal(a, b)
     end
     for _, v in ipairs(b) do
         if seen[tostring(v)] == nil then
+            return false
+        end
+    end
+    return true
+end
+
+-- Same idea as multi_values_equal, for a polymorphic field's set of
+-- {type=, id=} tables -- tostring(v) on a table gives an opaque
+-- "table: 0x..." address, never equal across two distinct tables even
+-- when their type/id contents match, so this compares the actual
+-- type:id pair instead.
+function polymorphic_values_equal(a, b)
+    if #a != #b then
+        return false
+    end
+    seen = {}
+    for _, v in ipairs(a) do
+        seen[tostring(v.type) .. ":" .. tostring(v.id)] = true
+    end
+    for _, v in ipairs(b) do
+        if seen[tostring(v.type) .. ":" .. tostring(v.id)] == nil then
             return false
         end
     end
@@ -364,6 +425,7 @@ function entity.update(db_path, entity_type, entity_id, values, author, source, 
     end
 
     multi_fields = schema.multi_fields_by_name(db_path, entity_type)
+    polymorphic_fields = schema.polymorphic_fields_by_name(db_path, entity_type)
 
     field_changes = {}
     assignments = {}
@@ -376,6 +438,16 @@ function entity.update(db_path, entity_type, entity_id, values, author, source, 
                 old_items = {}
             end
             if multi_values_equal(old_items, new_items) == false then
+                field_changes[name] = {old = old_items, new = new_items}
+                multi_changed = true
+            end
+        elseif polymorphic_fields[name] != nil then
+            new_items = schema.normalize_polymorphic_value(new_value)
+            old_items = current[name]
+            if old_items == nil then
+                old_items = {}
+            end
+            if polymorphic_values_equal(old_items, new_items) == false then
                 field_changes[name] = {old = old_items, new = new_items}
                 multi_changed = true
             end
@@ -403,6 +475,11 @@ function entity.update(db_path, entity_type, entity_id, values, author, source, 
     for name, field in pairs(multi_fields) do
         if values[name] != nil and field_changes[name] != nil then
             schema.write_multi_field(db_path, entity_type, entity_id, field, values[name])
+        end
+    end
+    for name, field in pairs(polymorphic_fields) do
+        if values[name] != nil and field_changes[name] != nil then
+            schema.write_polymorphic_field(db_path, entity_type, entity_id, field, values[name])
         end
     end
 
@@ -539,6 +616,9 @@ function entity.get(db_path, entity_type, entity_id)
     if row != nil then
         for name, field in pairs(schema.multi_fields_by_name(db_path, entity_type)) do
             row[name] = schema.read_multi_field(db_path, entity_type, entity_id, field)
+        end
+        for name, field in pairs(schema.polymorphic_fields_by_name(db_path, entity_type)) do
+            row[name] = schema.read_polymorphic_field(db_path, entity_type, entity_id, field)
         end
     end
     return row
@@ -750,11 +830,23 @@ end
 -- A multivalue field's value (task #84) is a plain Lua array -- tostring()
 -- on that gives an unreadable "table: 0x..." pointer, so this renders it
 -- as a real bracketed, comma-joined list instead. Scalars pass through.
+-- A single polymorphic-reference item ({type=, id=}) as "type:id" --
+-- matches the same CLI-facing convention entity create/update already
+-- accept for these fields, so what a user sees here is exactly what
+-- they could paste back in.
+function format_cli_polymorphic_item(item)
+    return tostring(item.type) .. ":" .. tostring(item.id)
+end
+
 function format_cli_value(v)
     if type(v) == "table" then
         parts = {}
         for _, item in ipairs(v) do
-            table.insert(parts, tostring(item))
+            if type(item) == "table" and item.type != nil then
+                table.insert(parts, format_cli_polymorphic_item(item))
+            else
+                table.insert(parts, tostring(item))
+            end
         end
         return "[" .. table.concat(parts, ", ") .. "]"
     end

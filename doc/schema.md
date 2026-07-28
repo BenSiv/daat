@@ -40,6 +40,8 @@ return {
 | `reference` | points at another record by id, optionally constrained to a specific record type |
 | `multi_select` | several values from a fixed `values` list or named `dropdown` |
 | `multi_reference` | several links to another record type by id |
+| `polymorphic_reference` | points at another record by id, where the *target record type itself* varies per row (a fixed, closed `allowed_entity_types` list, not "any registered type") |
+| `multi_polymorphic_reference` | several such links, each independently typed |
 | `sql_select` | a `text`-shaped value that must be a single, plain `SELECT` statement (no `;`, no DDL/DML/pragma) -- see "Label printing" below for the built-in type that uses it |
 
 A `number` field may optionally declare `min`/`max` -- wired into the
@@ -89,6 +91,60 @@ storage.
 Ledger history records a multivalue field's old/new as real sets, the
 same as any other field -- editing one is exactly as auditable as
 editing a scalar field, not an untracked side channel.
+
+## Polymorphic references (`polymorphic_reference`/
+## `multi_polymorphic_reference`) -- a link whose target type varies per row
+
+A plain `reference` field's target type is fixed once, in the schema
+file. Real data sometimes doesn't work that way: a lab sample's
+"source" might be a plant specimen directly, or another sample it was
+propagated from -- decided per row, not something the schema can pin
+down to one type. `entity_type` (singular) doesn't fit that; declare a
+closed list of the types this field can actually point to instead:
+
+```lua
+-- schemas/sample.lua
+return {
+  name = "sample",
+  fields = {
+    {name = "label",  type = "text", required = true, display = true},
+    {name = "source", type = "polymorphic_reference", required = false,
+      allowed_entity_types = {"plant", "sample"}},
+  },
+}
+```
+
+```lua
+-- schemas/product.lua -- a product can have more than one source
+{name = "source", type = "multi_polymorphic_reference", required = false,
+  allowed_entity_types = {"plant", "sample"}}
+```
+
+This is deliberately **not** "a reference to any registered type" --
+`allowed_entity_types` is a closed list validated the same strictness
+as a plain `select` field's declared `values`: a value naming a type
+outside that list is rejected, same as an out-of-list `select` value
+would be. Real-world check before adding this field-type pair at all:
+every genuine case found in this deployment's own data had 1-2 possible
+target types, never "could be anything" -- if a field in your own data
+genuinely needs "any of dozens of types," that's a sign this isn't the
+right tool for it.
+
+Storage is a single shared table (`entity_source`:
+`from_type, from_id, field_name, to_type, to_id`) across every
+polymorphic field on every record type -- not a table per (record
+type, field name) the way `multi_reference`'s own junction tables work,
+since a per-type junction table's foreign key is fixed to one target
+type at creation time and can't represent "this row's target type
+differs from that row's." A value is submitted as either a real
+`{type, id}` object (JSON API payloads) or a `type:id` string (CLI
+convenience, e.g. `source=plant:12`); several as a comma-separated list
+of either shape for the multi-value variant. Rendered the same real
+clickable link (with hover preview) a plain `reference` field's value
+gets, resolving each item's link target from its own `type`, and shows
+up in `entity.relationships`/the Data page's relation diagram as one
+edge per `allowed_entity_types` entry, exactly like a fixed-type
+reference field's edge would.
 
 ## Named dropdown lists -- share one value list across fields
 
@@ -248,7 +304,9 @@ Loading a definition does two things:
    last_event_id, archived_at)` -- the thing a dashboard actually
    queries. A `multi_select`/`multi_reference` field never becomes a
    column here -- it gets its own companion junction table instead (see
-   above).
+   above). A `polymorphic_reference`/`multi_polymorphic_reference`
+   field never becomes a column either -- it's stored in the shared
+   `entity_source` table instead (see "Polymorphic references" above).
 
 Changes to a definition are themselves ordinary version-control
 commits: renaming or adding a field is a diff against

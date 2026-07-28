@@ -813,6 +813,32 @@ function html.render(entity_type, layout_json, nonce, locked_fields)
                         opt.innerText = val;
                         input.appendChild(opt);
                     });
+                } else if (field.type === "polymorphic_reference" || field.type === "multi_polymorphic_reference") {
+                    // The target type itself varies per row (a sample's
+                    // source can be a plant or another sample) -- a type
+                    // picker alongside the usual search-by-name input,
+                    // not a fixed ref_entity_type the way reference/
+                    // multi_reference already have one. Submits as
+                    // "type:id" (or "type:id, type:id" for the multi
+                    // variant) -- schema.normalize_polymorphic_value
+                    // parses that same convention from the CLI too.
+                    const typeSelect = document.createElement("select");
+                    typeSelect.classList.add("cell-input", "cell-source-type");
+                    (field.allowed_entity_types || []).forEach(t => {
+                        const opt = document.createElement("option");
+                        opt.value = t;
+                        opt.innerText = t;
+                        typeSelect.appendChild(opt);
+                    });
+                    wrapper.appendChild(typeSelect);
+
+                    input = document.createElement("input");
+                    input.classList.add("cell-input");
+                    input.type = "text";
+                    input.setAttribute("autocomplete", "off");
+                    input.placeholder = field.type === "multi_polymorphic_reference" ?
+                        "Search ID or name, pick several..." : "Search ID or name...";
+                    setupPolymorphicAutocomplete(input, typeSelect, field.type === "multi_polymorphic_reference");
                 } else {
                     input = document.createElement("input");
                     input.classList.add("cell-input");
@@ -965,6 +991,69 @@ function html.render(entity_type, layout_json, nonce, locked_fields)
             });
         }
 
+        // Same search/pick UX as setupAutocomplete, but the target type
+        // comes from typeSelect's own current value at query/pick time
+        // (re-read live, not captured once) instead of one fixed
+        // refType -- a polymorphic field's target type is chosen by the
+        // user, not declared by the schema. Inserts "type:id", not a
+        // bare id, so the submitted value round-trips through
+        // schema.normalize_polymorphic_value the same way a hand-typed
+        // one would.
+        function setupPolymorphicAutocomplete(input, typeSelect, multi) {
+            const wrapper = input.parentElement;
+            let resultsContainer = null;
+            let debounceTimer;
+
+            input.addEventListener("input", () => {
+                clearTimeout(debounceTimer);
+                const raw = input.value;
+                const query = (multi ? raw.split(",").pop() : raw).trim();
+                if (resultsContainer) { resultsContainer.remove(); resultsContainer = null; }
+                if (query.length === 0) return;
+
+                debounceTimer = setTimeout(() => {
+                    const refType = typeSelect.value;
+                    fetch(`${baseUrl}/api/autocomplete?type=${refType}&query=${encodeURIComponent(query)}`)
+                        .then(res => res.json())
+                        .then(data => {
+                            if (resultsContainer) resultsContainer.remove();
+                            if (data.length === 0) return;
+                            resultsContainer = document.createElement("div");
+                            resultsContainer.classList.add("autocomplete-results");
+                            data.forEach(item => {
+                                const div = document.createElement("div");
+                                div.classList.add("autocomplete-item");
+                                div.innerText = `[${refType} #${item.id}] ${item.name}`;
+                                div.onclick = () => {
+                                    const entry = `${refType}:${item.id}`;
+                                    if (multi) {
+                                        const existing = input.value.split(",").map(s => s.trim()).filter(s => s.length > 0);
+                                        existing.pop();
+                                        if (!existing.includes(entry)) { existing.push(entry); }
+                                        input.value = existing.join(", ") + ", ";
+                                    } else {
+                                        input.value = entry;
+                                    }
+                                    clearCellError(input);
+                                    resultsContainer.remove();
+                                    resultsContainer = null;
+                                };
+                                resultsContainer.appendChild(div);
+                            });
+                            wrapper.appendChild(resultsContainer);
+                        })
+                        .catch(err => console.error("Autocomplete fetch error", err));
+                }, 200);
+            });
+
+            document.addEventListener("click", (e) => {
+                if (e.target !== input && resultsContainer && !resultsContainer.contains(e.target)) {
+                    resultsContainer.remove();
+                    resultsContainer = null;
+                }
+            });
+        }
+
         function submitBatch() {
             clearAllErrors();
             const tbody = document.getElementById("table-body");
@@ -985,7 +1074,7 @@ function html.render(entity_type, layout_json, nonce, locked_fields)
                         // there's no wire-format reason to flatten one.
                         if (field.type === "multi_select") {
                             val = Array.from(el.selectedOptions).map(o => o.value);
-                        } else if (field.type === "multi_reference") {
+                        } else if (field.type === "multi_reference" || field.type === "multi_polymorphic_reference") {
                             val = val.split(",").map(s => s.trim()).filter(s => s.length > 0);
                         }
                         rowData[field.name] = val;
@@ -1183,6 +1272,61 @@ function html.render_entity_edit(entity_type, layout_json, row_json, entity_id, 
             });
         }
 
+        // Same search/pick UX as setupAutocomplete, but the target type
+        // comes from typeSelect's own current value at query/pick time
+        // instead of one fixed refType -- see the /register batch
+        // table's own copy of this function for the full reasoning.
+        function setupPolymorphicAutocomplete(input, typeSelect, multi) {
+            const wrapper = input.parentElement;
+            let resultsContainer = null;
+            let debounceTimer;
+            input.addEventListener("input", () => {
+                clearTimeout(debounceTimer);
+                const raw = input.value;
+                const query = (multi ? raw.split(",").pop() : raw).trim();
+                if (resultsContainer) { resultsContainer.remove(); resultsContainer = null; }
+                if (query.length === 0) return;
+                debounceTimer = setTimeout(() => {
+                    const refType = typeSelect.value;
+                    fetch(`${baseUrl}/api/autocomplete?type=${refType}&query=${encodeURIComponent(query)}`)
+                        .then(res => res.json())
+                        .then(data => {
+                            if (resultsContainer) { resultsContainer.remove(); }
+                            if (!data || data.length === 0) return;
+                            resultsContainer = document.createElement("div");
+                            resultsContainer.className = "autocomplete-results";
+                            data.forEach(item => {
+                                const opt = document.createElement("div");
+                                opt.innerText = item.label;
+                                opt.addEventListener("mousedown", (e) => {
+                                    e.preventDefault();
+                                    const entry = `${refType}:${item.id}`;
+                                    if (multi) {
+                                        const parts = raw.split(",").map(s => s.trim()).filter(s => s.length > 0);
+                                        parts.pop();
+                                        if (!parts.includes(entry)) { parts.push(entry); }
+                                        input.value = parts.join(", ") + ", ";
+                                    } else {
+                                        input.value = entry;
+                                    }
+                                    resultsContainer.remove();
+                                    resultsContainer = null;
+                                    input.focus();
+                                });
+                                resultsContainer.appendChild(opt);
+                            });
+                            wrapper.appendChild(resultsContainer);
+                        });
+                }, 200);
+            });
+            document.addEventListener("click", (e) => {
+                if (e.target !== input && resultsContainer && !resultsContainer.contains(e.target)) {
+                    resultsContainer.remove();
+                    resultsContainer = null;
+                }
+            });
+        }
+
         function buildFields() {
             const container = document.getElementById("edit-fields");
             layout.fields.forEach(field => {
@@ -1217,6 +1361,35 @@ function html.render_entity_edit(entity_type, layout_json, row_json, entity_id, 
                         if (currentList.includes(val)) { opt.selected = true; }
                         input.appendChild(opt);
                     });
+                } else if (field.type === "polymorphic_reference" || field.type === "multi_polymorphic_reference") {
+                    // Same type-picker + search widget as the /register
+                    // batch table's own addRow() -- see that function's
+                    // own comment for why a fixed ref_entity_type won't
+                    // do here. current is entity.get's own list of
+                    // {type=, id=} tables (0 or 1 entries for the
+                    // singular variant) -- pre-filled as "type:id" text,
+                    // the same convention new entries get typed/picked
+                    // in as.
+                    const typeSelect = document.createElement("select");
+                    typeSelect.classList.add("cell-input", "cell-source-type");
+                    (field.allowed_entity_types || []).forEach(t => {
+                        const opt = document.createElement("option");
+                        opt.value = t; opt.innerText = t;
+                        typeSelect.appendChild(opt);
+                    });
+                    wrapper.appendChild(typeSelect);
+
+                    input = document.createElement("input");
+                    input.classList.add("cell-input");
+                    input.type = "text";
+                    input.setAttribute("autocomplete", "off");
+                    input.placeholder = field.type === "multi_polymorphic_reference" ?
+                        "Search ID or name, pick several..." : "Search ID or name...";
+                    const currentList = Array.isArray(current) ? current : [];
+                    if (currentList.length > 0) {
+                        input.value = currentList.map(v => `${v.type}:${v.id}`).join(", ") + ", ";
+                    }
+                    setupPolymorphicAutocomplete(input, typeSelect, field.type === "multi_polymorphic_reference");
                 } else {
                     input = document.createElement("input");
                     input.classList.add("cell-input");
@@ -1276,7 +1449,7 @@ function html.render_entity_edit(entity_type, layout_json, row_json, entity_id, 
                 if (field.type === "number" && val !== "") { val = parseFloat(val); }
                 if (field.type === "multi_select") {
                     val = Array.from(el.selectedOptions).map(o => o.value);
-                } else if (field.type === "multi_reference") {
+                } else if (field.type === "multi_reference" || field.type === "multi_polymorphic_reference") {
                     val = val.split(",").map(s => s.trim()).filter(s => s.length > 0);
                 }
                 payload[field.name] = val;
@@ -1338,7 +1511,18 @@ function display_value(value)
         end
         parts = {}
         for _, item in ipairs(value) do
-            table.insert(parts, html.html_escape(tostring(item)))
+            if type(item) == "table" and item.type != nil then
+                -- A polymorphic-reference item ({type=, id=}) -- same
+                -- "table: 0x..." address problem plain tostring(item)
+                -- has for entity.lua's format_cli_value/ledger.lua's
+                -- format_change_value. Plain text here, not a real
+                -- link, matching how a reference/multi_reference
+                -- field's own id already just shows as plain unlinked
+                -- text in this same ledger-history-diff view today.
+                table.insert(parts, html.html_escape(tostring(item.type) .. ":" .. tostring(item.id)))
+            else
+                table.insert(parts, html.html_escape(tostring(item)))
+            end
         end
         return table.concat(parts, ", ")
     end
@@ -1482,6 +1666,26 @@ function render_multi_reference_value(db_path, ref_entity_type, values)
     return table.concat(parts, ", ")
 end
 
+-- A polymorphic field's value (entity.get/schema.read_polymorphic_field
+-- always return a plain list of {type=, id=} tables, whether the field
+-- is the singular polymorphic_reference or the plural
+-- multi_polymorphic_reference variant -- 0 or 1 items either way for
+-- the singular case) -- each item already carries its own real target
+-- type, so render_reference_value (a real link + hover preview,
+-- exactly like a plain reference field gets) just needs calling once
+-- per item with that item's own type, not one fixed type for the
+-- whole field the way multi_reference's own renderer assumes.
+function render_polymorphic_reference_value(db_path, values)
+    if values == nil or #values == 0 then
+        return "&mdash;"
+    end
+    parts = {}
+    for _, v in ipairs(values) do
+        table.insert(parts, render_reference_value(db_path, v.type, v.id))
+    end
+    return table.concat(parts, ", ")
+end
+
 -- Picks the right renderer for a field's value, given its schema.layout()
 -- metadata (type + ref_entity_type, when type=="reference"/"multi_reference").
 function display_field_value(db_path, field, value)
@@ -1494,6 +1698,9 @@ function display_field_value(db_path, field, value)
             return display_value(value)
         end
         return render_multi_reference_value(db_path, ref_type, value)
+    end
+    if field.type == "polymorphic_reference" or field.type == "multi_polymorphic_reference" then
+        return render_polymorphic_reference_value(db_path, value)
     end
     return display_value(value)
 end
