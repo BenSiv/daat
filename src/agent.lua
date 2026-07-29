@@ -501,6 +501,80 @@ function agent.last_tool_call_arguments(db_path, session_id, tool_name)
     return nil
 end
 
+-- Extracts a SQL statement from the model's own plain-text final answer --
+-- for when a "write me a query" request gets answered as prose/a fenced
+-- code block instead of an actual entity.query tool call (real production
+-- case: the model called entity.list_types(), then wrote back
+-- "```sql\nSELECT * FROM sampling\n```" as its own text, never calling
+-- entity.query at all). Deliberately conservative: a fenced ```sql block
+-- or a fenced block starting with a SQL keyword is trusted outright; an
+-- unfenced statement is only trusted at a line start or right after
+-- "...: " AND only if it also contains FROM -- avoids misfiring on prose
+-- that merely mentions "select" in passing ("you can select any of the
+-- options above").
+function agent.extract_sql_from_text(text)
+    if text == nil then
+        return nil
+    end
+    candidate = string.match(text, "```sql%s*\n(.-)```")
+    if candidate == nil then
+        candidate = string.match(text, "```%s*\n%s*([Ss][Ee][Ll][Ee][Cc][Tt].-)```")
+    end
+    if candidate == nil then
+        candidate = string.match(text, "\n%s*([Ss][Ee][Ll][Ee][Cc][Tt][^`\n]*[Ff][Rr][Oo][Mm][^`\n]*)$")
+    end
+    if candidate == nil then
+        candidate = string.match(text, "^%s*([Ss][Ee][Ll][Ee][Cc][Tt][^`\n]*[Ff][Rr][Oo][Mm][^`\n]*)$")
+    end
+    if candidate == nil then
+        candidate = string.match(text, ":%s*([Ss][Ee][Ll][Ee][Cc][Tt][^`\n]*[Ff][Rr][Oo][Mm][^`\n]*)$")
+    end
+    if candidate == nil then
+        return nil
+    end
+    candidate = string.gsub(candidate, "^%s+", "")
+    candidate = string.gsub(candidate, "%s+$", "")
+    if candidate == "" then
+        return nil
+    end
+    return candidate
+end
+
+-- The console-prefill value for a session: the most recent of either an
+-- entity.query tool call's own `sql` argument, or SQL the model wrote out
+-- as plain final-answer text (see agent.extract_sql_from_text) -- whichever
+-- happened more recently, scanning assistant messages newest-first so a
+-- later plain-text answer correctly overrides an older real tool call and
+-- vice versa. Used only by chat_widget_state for the /sql console's
+-- client-side prefill; every other caller wanting a specific tool's raw
+-- arguments should use agent.last_tool_call_arguments instead.
+function agent.last_console_query_sql(db_path, session_id)
+    rows = db.query(db_path, string.format(
+        "SELECT content FROM agent_message WHERE session_id = %s AND role = 'assistant' ORDER BY id DESC;",
+        db.quote(session_id)
+    ))
+    if rows == nil then
+        return nil
+    end
+    for _, row in ipairs(rows) do
+        decoded, _, _ = json.decode(row.content)
+        if decoded != nil and decoded.blocks != nil then
+            for _, block in ipairs(decoded.blocks) do
+                if block.type == "toolCall" and block.name == "entity.query" and block.arguments != nil and block.arguments.sql != nil then
+                    return block.arguments.sql
+                end
+                if block.type == "text" then
+                    sql = agent.extract_sql_from_text(block.text)
+                    if sql != nil then
+                        return sql
+                    end
+                end
+            end
+        end
+    end
+    return nil
+end
+
 function agent.all_messages(db_path, session_id, include_tool_calls)
     if include_tool_calls == nil then
         include_tool_calls = true

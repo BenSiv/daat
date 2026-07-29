@@ -440,6 +440,25 @@ EOF
     [[ "$output" =~ '"last_query_sql":"SELECT title FROM task"' ]]
 }
 
+@test "the chat widget's own JSON state prefills the /sql console even when the model wrote the SQL as plain text instead of calling entity.query (regression)" {
+    write_task_schema
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    # Real production case: the model checked entity.list_types(), then
+    # answered "write a query for X" with the SQL as its own final text
+    # (a fenced ```sql block) instead of actually calling entity.query --
+    # the console should still pick up the SQL from that text.
+    scripted="$(tool_call_response "entity.list_types" '{}')"$'\1'"$(done_response '```sql
+SELECT * FROM task
+```')"
+    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=write+an+sql+query+to+get+all+the+task+records" "$COOKIE" "$scripted" >/dev/null
+
+    run env GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/api/chat-widget-history" \
+        QUERY_STRING="session_id=${session_id}" HTTP_COOKIE="$COOKIE" "$BIN"
+    [[ "$output" =~ '"last_query_sql":"SELECT * FROM task"' ]]
+}
+
 @test "entity.query refuses any table that isn't a registered entity type, even a real internal one" {
     resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
     session_id=$(extract_query_param "$resp" "session_id")

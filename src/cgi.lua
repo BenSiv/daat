@@ -87,17 +87,16 @@ function chat_widget_state(db_path, session_id)
         end
         pending_out = {id = pending.id, tool = pending.tool, method = pending.method, args = args}
     end
-    -- entity.query's own most recent `sql` argument this session, for
-    -- the /sql console's client-side prefill (see html.lua's chat
-    -- widget JS) -- nil if the agent hasn't run one yet. This is the
-    -- one deliberate, narrow exception to the "widget only sees
-    -- human-facing content" rule just above: real SQL text, not a
-    -- generic exposure of every tool call's raw arguments.
-    last_query_args = agent.last_tool_call_arguments(db_path, session_id, "entity.query")
-    last_query_sql = nil
-    if last_query_args != nil then
-        last_query_sql = last_query_args.sql
-    end
+    -- The most recent SQL the model constructed this session -- whether
+    -- via an actual entity.query tool call, or written out as plain
+    -- final-answer text (e.g. "write me a query" answered as a fenced
+    -- code block instead of a real tool call) -- for the /sql console's
+    -- client-side prefill (see html.lua's chat widget JS); nil if
+    -- neither has happened yet. This is the one deliberate, narrow
+    -- exception to the "widget only sees human-facing content" rule
+    -- just above: real SQL text, not a generic exposure of every tool
+    -- call's raw arguments.
+    last_query_sql = agent.last_console_query_sql(db_path, session_id)
     return {session_id = session_id, messages = messages, pending = pending_out, last_query_sql = last_query_sql}
 end
 
