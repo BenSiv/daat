@@ -158,6 +158,67 @@ function usage_from_response(response)
     }
 end
 
+-- agent.lua's own AGENT_TOOLS (see doc/agent-protocol.md) declares
+-- `parameters` as plain, standard JSON Schema -- lowercase `type`
+-- ("object"/"string"/"integer"/etc.) -- platform-wip's own neutral
+-- contract, not any one vendor's dialect. Vertex/Gemini's real
+-- functionDeclarations Schema requires the uppercase proto enum
+-- instead ("OBJECT"/"STRING"/"INTEGER") -- confirmed live, a real
+-- Vertex call rejects lowercase `type` outright. This function is
+-- this file's own half of that translation (agent_provider_claude.lua
+-- has the equivalent, much smaller, translation for Claude's dialect,
+-- which is already lowercase JSON Schema) -- recurses into `properties`
+-- (each value) and `items` (for arrays); every other key (description,
+-- required, additionalProperties) passes through unchanged.
+VERTEX_TYPE_ENUM = {
+    object = "OBJECT", string = "STRING", integer = "INTEGER",
+    number = "NUMBER", boolean = "BOOLEAN", array = "ARRAY",
+}
+
+function vertex_schema_from_canonical(schema)
+    if type(schema) != "table" then
+        return schema
+    end
+    out = {}
+    for k, v in pairs(schema) do
+        if k == "type" and VERTEX_TYPE_ENUM[v] != nil then
+            out[k] = VERTEX_TYPE_ENUM[v]
+        elseif k == "properties" then
+            props = {}
+            for prop_name, prop_schema in pairs(v) do
+                props[prop_name] = vertex_schema_from_canonical(prop_schema)
+            end
+            -- Same empty-table/dkjson object-vs-array ambiguity
+            -- AGENT_TOOLS' own EMPTY_OBJECT_SCHEMA already works around
+            -- (agent.lua) -- preserve it through translation instead of
+            -- re-triggering the same live 400 INVALID_ARGUMENT.
+            if next(props) == nil then
+                setmetatable(props, {__jsontype = "object"})
+            end
+            out[k] = props
+        elseif k == "items" then
+            out[k] = vertex_schema_from_canonical(v)
+        else
+            out[k] = v
+        end
+    end
+    return out
+end
+
+-- Applies vertex_schema_from_canonical to every declared tool's
+-- `parameters`, leaving `name`/`description` untouched.
+function vertex_tools_from_canonical(tools)
+    translated = {}
+    for _, tool in ipairs(tools) do
+        table.insert(translated, {
+            name = tool.name,
+            description = tool.description,
+            parameters = vertex_schema_from_canonical(tool.parameters),
+        })
+    end
+    return translated
+end
+
 -- Maps agent.lua's own canonical message-history shape (build_history_
 -- messages: role user/assistant/toolResult, assistant content is
 -- always a block array, toolResult content is always a single-block
@@ -260,7 +321,7 @@ function agent_provider_vertex.converse(model, system_prompt, messages, tools)
         payload.systemInstruction = {parts = {{text = system_prompt}}}
     end
     if tools != nil and #tools > 0 then
-        payload.tools = {{functionDeclarations = tools}}
+        payload.tools = {{functionDeclarations = vertex_tools_from_canonical(tools)}}
     end
     -- Gemini 2.5's own thought-summary feature -- unconditional, same as
     -- the old pi-ai bridge did for every call; response content then

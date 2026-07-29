@@ -1042,10 +1042,15 @@ EOF
 package.path = "${PROJECT_ROOT}/src/?.lua;" .. package.path
 agent_provider = require("agent_provider")
 
+-- Canonical lowercase JSON Schema (doc/agent-protocol.md), matching how
+-- agent.lua's own AGENT_TOOLS actually declares tools now -- exercises
+-- agent_provider_vertex.lua's real vertex_schema_from_canonical
+-- translation into Vertex's uppercase proto enum, not a passthrough of
+-- already-uppercase input.
 tools = {
     {name = "add", description = "Add two numbers", parameters = {
-        type = "OBJECT",
-        properties = {a = {type = "NUMBER"}, b = {type = "NUMBER"}},
+        type = "object",
+        properties = {a = {type = "number"}, b = {type = "number"}},
         required = {"a", "b"},
     }},
 }

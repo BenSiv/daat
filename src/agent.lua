@@ -589,18 +589,26 @@ end
 -- a *separate* later request (agent.approve_pending/deny_pending)
 -- executes it (or records the denial) and resumes the loop from there.
 
--- `parameters` is a real Vertex/Gemini function-declaration Schema
--- (task: native structured tool-calling via the pi-ai bridge, replacing
--- the old <tool>/<method>/<args> text protocol) -- verified live
--- against real Vertex AI, not assumed: `type` values are the uppercase
--- proto enum ("OBJECT"/"STRING"/"INTEGER", not JSON-Schema's lowercase),
--- and `additionalProperties = true` genuinely works for the open-ended
+-- `parameters` is platform-wip's own neutral tool-calling protocol
+-- (see doc/agent-protocol.md), not any one vendor's dialect: plain,
+-- standard JSON Schema -- lowercase `type` ("object"/"string"/
+-- "integer"/etc.), standard `properties`/`required`. Each
+-- agent_provider_<name>.lua is responsible for translating this into
+-- whatever its own vendor actually requires on the wire (e.g.
+-- agent_provider_vertex.lua converts to Gemini's uppercase proto enum,
+-- "OBJECT"/"STRING"/"INTEGER", before calling Vertex -- this file
+-- never speaks that dialect directly). This was NOT always true: this
+-- schema used to be authored directly in Vertex's own uppercase
+-- convention with zero translation layer, i.e. Vertex was silently
+-- "home" and every other provider a guest -- fixed to make every
+-- provider a symmetric, equal implementation of one shared contract.
+-- `additionalProperties = true` genuinely works for the open-ended
 -- "one arg per field" tools (entity.create/update) -- confirmed with a
--- real call that produced exactly the extra fields asked for alongside
--- the declared ones. `description` here is what the model actually
--- sees per tool (replacing the old hand-written system-prompt bullet
--- list); `destructive` is unchanged, still gates the pending-approval
--- flow below.
+-- real Vertex call that produced exactly the extra fields asked for
+-- alongside the declared ones. `description` here is what the model
+-- actually sees per tool (replacing the old hand-written system-prompt
+-- bullet list); `destructive` is unchanged, still gates the
+-- pending-approval flow below.
 -- properties = {} (a plain empty Lua table) is genuinely ambiguous to
 -- dkjson.encode -- confirmed live: it comes out as a JSON array ("[]"),
 -- not an object ("{}"), the same empty-table-encoding ambiguity that
@@ -611,8 +619,10 @@ end
 -- knowledge.stats -- broke every real tool-calling turn merely by
 -- being *declared*, before the model even chose one). dkjson's own
 -- __jsontype = "object" metatable marker forces object encoding
--- regardless of emptiness.
-EMPTY_OBJECT_SCHEMA = {type = "OBJECT", properties = setmetatable({}, {__jsontype = "object"})}
+-- regardless of emptiness -- this is a dkjson serialization quirk, not
+-- a Vertex-specific concern, so it stays regardless of which
+-- provider's translation runs afterward.
+EMPTY_OBJECT_SCHEMA = {type = "object", properties = setmetatable({}, {__jsontype = "object"})}
 
 AGENT_TOOLS = {
     document = {
@@ -620,8 +630,8 @@ AGENT_TOOLS = {
             destructive = false,
             description = "Search pages by keyword or topic; returns each matching page's id, title, and a real content excerpt so you can answer from what the page actually says, not just its title.",
             parameters = {
-                type = "OBJECT",
-                properties = {query = {type = "STRING", description = "search text"}},
+                type = "object",
+                properties = {query = {type = "string", description = "search text"}},
                 required = {"query"},
             },
         },
@@ -629,11 +639,11 @@ AGENT_TOOLS = {
             destructive = true,
             description = "Create a new page.",
             parameters = {
-                type = "OBJECT",
+                type = "object",
                 properties = {
-                    title = {type = "STRING"},
-                    parent_id = {type = "INTEGER", description = "optional parent page id"},
-                    content = {type = "STRING", description = "markdown content"},
+                    title = {type = "string"},
+                    parent_id = {type = "integer", description = "optional parent page id"},
+                    content = {type = "string", description = "markdown content"},
                 },
                 required = {"title"},
             },
@@ -642,12 +652,12 @@ AGENT_TOOLS = {
             destructive = true,
             description = "Update an existing page.",
             parameters = {
-                type = "OBJECT",
+                type = "object",
                 properties = {
-                    entity_id = {type = "INTEGER", description = "page id"},
-                    title = {type = "STRING", description = "optional new title"},
-                    parent_id = {type = "INTEGER", description = "optional new parent id"},
-                    content = {type = "STRING", description = "optional new content -- replaces the whole field, does not append"},
+                    entity_id = {type = "integer", description = "page id"},
+                    title = {type = "string", description = "optional new title"},
+                    parent_id = {type = "integer", description = "optional new parent id"},
+                    content = {type = "string", description = "optional new content -- replaces the whole field, does not append"},
                 },
                 required = {"entity_id"},
             },
@@ -669,8 +679,8 @@ AGENT_TOOLS = {
             destructive = false,
             description = "List an entity type's fields and their types, so you know what's valid before creating/updating one.",
             parameters = {
-                type = "OBJECT",
-                properties = {entity_type = {type = "STRING"}},
+                type = "object",
+                properties = {entity_type = {type = "string"}},
                 required = {"entity_type"},
             },
         },
@@ -683,8 +693,8 @@ AGENT_TOOLS = {
             destructive = false,
             description = "Run a read-only SQL SELECT against registered entity tables, for anything entity.list's own single-table exact-match filter can't express: joins across related types (call entity.relationships first to find the join path), counts, aggregates, grouping. Table and column names are this deployment's real registered entity type/field names -- call entity.list_types/entity.fields/entity.relationships first if unsure, don't guess. Must be a single plain SELECT statement (no semicolons, no INSERT/UPDATE/DELETE/DDL) referencing only registered entity tables -- anything else is refused. Results are row-capped (this deployment's own configured limit) -- add your own LIMIT or narrow the query if a result comes back truncated.",
             parameters = {
-                type = "OBJECT",
-                properties = {sql = {type = "STRING", description = "a single SELECT statement"}},
+                type = "object",
+                properties = {sql = {type = "string", description = "a single SELECT statement"}},
                 required = {"sql"},
             },
         },
@@ -692,13 +702,13 @@ AGENT_TOOLS = {
             destructive = false,
             description = "List rows of an entity type, optionally filtered to rows where one field equals a value.",
             parameters = {
-                type = "OBJECT",
+                type = "object",
                 properties = {
-                    entity_type = {type = "STRING"},
-                    filter_field = {type = "STRING", description = "optional field name"},
-                    filter_value = {type = "STRING", description = "optional value, only used with filter_field"},
-                    limit = {type = "INTEGER", description = "optional, default 20"},
-                    offset = {type = "INTEGER", description = "optional, for paging past the first page"},
+                    entity_type = {type = "string"},
+                    filter_field = {type = "string", description = "optional field name"},
+                    filter_value = {type = "string", description = "optional value, only used with filter_field"},
+                    limit = {type = "integer", description = "optional, default 20"},
+                    offset = {type = "integer", description = "optional, for paging past the first page"},
                 },
                 required = {"entity_type"},
             },
@@ -707,8 +717,8 @@ AGENT_TOOLS = {
             destructive = false,
             description = "Fetch one entity row by id.",
             parameters = {
-                type = "OBJECT",
-                properties = {entity_type = {type = "STRING"}, entity_id = {type = "INTEGER"}},
+                type = "object",
+                properties = {entity_type = {type = "string"}, entity_id = {type = "integer"}},
                 required = {"entity_type", "entity_id"},
             },
         },
@@ -725,10 +735,10 @@ AGENT_TOOLS = {
             destructive = false,
             description = "Check whether values are valid for an entity type, without writing anything -- runs the same validation entity.create/entity.update would apply (required fields, types, valid references, reason-required-on-update rules). Pass entity_type plus one property per field, same as entity.create; also pass entity_id to validate as an UPDATE against that row's current values instead of a fresh create. Use this before entity.create/entity.update on anything non-obvious, so an invalid write is caught here instead of failing only after a human approves it.",
             parameters = {
-                type = "OBJECT",
+                type = "object",
                 properties = {
-                    entity_type = {type = "STRING"},
-                    entity_id = {type = "INTEGER", description = "optional: validate as an update against this existing row instead of a fresh create"},
+                    entity_type = {type = "string"},
+                    entity_id = {type = "integer", description = "optional: validate as an update against this existing row instead of a fresh create"},
                 },
                 required = {"entity_type"},
                 additionalProperties = true,
@@ -738,8 +748,8 @@ AGENT_TOOLS = {
             destructive = true,
             description = "Create a new entity row. Pass entity_type plus one property per field the entity type actually has (call entity.fields first if unsure).",
             parameters = {
-                type = "OBJECT",
-                properties = {entity_type = {type = "STRING"}},
+                type = "object",
+                properties = {entity_type = {type = "string"}},
                 required = {"entity_type"},
                 additionalProperties = true,
             },
@@ -748,11 +758,11 @@ AGENT_TOOLS = {
             destructive = true,
             description = "Update fields on an existing entity row. Pass entity_type/entity_id plus one property per field to change. Some entity types require a reason -- if the tool result says one is required, ask the user why before retrying.",
             parameters = {
-                type = "OBJECT",
+                type = "object",
                 properties = {
-                    entity_type = {type = "STRING"},
-                    entity_id = {type = "INTEGER"},
-                    reason = {type = "STRING", description = "optional: why this change is being made"},
+                    entity_type = {type = "string"},
+                    entity_id = {type = "integer"},
+                    reason = {type = "string", description = "optional: why this change is being made"},
                 },
                 required = {"entity_type", "entity_id"},
                 additionalProperties = true,
@@ -762,11 +772,11 @@ AGENT_TOOLS = {
             destructive = true,
             description = "Archive (soft-remove) an entity row. Some entity types require a reason.",
             parameters = {
-                type = "OBJECT",
+                type = "object",
                 properties = {
-                    entity_type = {type = "STRING"},
-                    entity_id = {type = "INTEGER"},
-                    reason = {type = "STRING", description = "optional: why this change is being made"},
+                    entity_type = {type = "string"},
+                    entity_id = {type = "integer"},
+                    reason = {type = "string", description = "optional: why this change is being made"},
                 },
                 required = {"entity_type", "entity_id"},
             },
@@ -775,8 +785,8 @@ AGENT_TOOLS = {
             destructive = true,
             description = "Restore a previously archived entity row.",
             parameters = {
-                type = "OBJECT",
-                properties = {entity_type = {type = "STRING"}, entity_id = {type = "INTEGER"}},
+                type = "object",
+                properties = {entity_type = {type = "string"}, entity_id = {type = "integer"}},
                 required = {"entity_type", "entity_id"},
             },
         },
@@ -797,8 +807,8 @@ AGENT_TOOLS = {
             destructive = false,
             description = "Get one template's rendered content, ready to pass straight to document.create's own content arg, plus its suggested default page name.",
             parameters = {
-                type = "OBJECT",
-                properties = {name = {type = "STRING", description = "template name"}},
+                type = "object",
+                properties = {name = {type = "string", description = "template name"}},
                 required = {"name"},
             },
         },
@@ -819,19 +829,19 @@ AGENT_TOOLS = {
             destructive = false,
             description = "List knowledge pool documents with their id, tier, atomicity (ok/thin/needs-split), heat, and retrieval count.",
             parameters = {
-                type = "OBJECT",
-                properties = {tier = {type = "INTEGER", description = "optional, filter to one tier 0-3"}},
+                type = "object",
+                properties = {tier = {type = "integer", description = "optional, filter to one tier 0-3"}},
             },
         },
         distill = {
             destructive = true,
             description = "Write a new, concise, single-idea document distilled from a source you've actually read (e.g. via entity.get). Not a raw copy -- extract the one core idea in your own words. Only do this for a source that's genuinely not already atomic (\"thin\"/\"ok\" sources have nothing worth extracting).",
             parameters = {
-                type = "OBJECT",
+                type = "object",
                 properties = {
-                    title = {type = "STRING"},
-                    content = {type = "STRING", description = "the distilled markdown text"},
-                    source_document_id = {type = "INTEGER", description = "optional: the existing document this was distilled from"},
+                    title = {type = "string"},
+                    content = {type = "string", description = "the distilled markdown text"},
+                    source_document_id = {type = "integer", description = "optional: the existing document this was distilled from"},
                 },
                 required = {"title", "content"},
             },
@@ -854,8 +864,8 @@ AGENT_TOOLS = {
             destructive = false,
             description = "Delegate a focused sub-question to an isolated research pass that can run its own series of read-only lookups (entity.fields/entity.relationships/entity.query/entity.list/entity.get, document.search, knowledge.list/stats) before answering. Use this instead of a single direct lookup when a question genuinely needs digging -- a count/aggregate, a relationship you haven't already confirmed, anything where a first attempt coming up empty shouldn't be trusted without a different angle tried. Returns a synthesized, grounded finding, not raw rows -- the queries it runs along the way are not added to this conversation.",
             parameters = {
-                type = "OBJECT",
-                properties = {question = {type = "STRING", description = "the specific sub-question to research"}},
+                type = "object",
+                properties = {question = {type = "string", description = "the specific sub-question to research"}},
                 required = {"question"},
             },
         },
@@ -875,8 +885,8 @@ AGENT_TOOLS = {
             destructive = false,
             description = "Ask the user one clarifying question instead of guessing or giving up, when the request genuinely has more than one reasonable interpretation that would lead to a different answer or action, or is missing information you can't reasonably infer yourself or find with a tool. Try looking it up first -- don't ask for something a tool call could answer. Ends this turn; the user's next message is the answer.",
             parameters = {
-                type = "OBJECT",
-                properties = {question = {type = "STRING", description = "the specific question to ask the user"}},
+                type = "object",
+                properties = {question = {type = "string", description = "the specific question to ask the user"}},
                 required = {"question"},
             },
         },
@@ -894,8 +904,8 @@ AGENT_TOOLS = {
             destructive = false,
             description = "Hand a question off to a background task that keeps digging after this turn ends, for something that would need more turns than research.investigate's own budget -- use research.investigate first; only use this if that isn't enough. Returns a task id immediately; the finding is appended to this same conversation once it's ready (check with background.status, or just ask again later).",
             parameters = {
-                type = "OBJECT",
-                properties = {question = {type = "STRING", description = "the specific question to research in the background"}},
+                type = "object",
+                properties = {question = {type = "string", description = "the specific question to research in the background"}},
                 required = {"question"},
             },
         },
@@ -903,8 +913,8 @@ AGENT_TOOLS = {
             destructive = false,
             description = "Check on a background task started with background.start: still pending, or its finding if done.",
             parameters = {
-                type = "OBJECT",
-                properties = {task_id = {type = "INTEGER", description = "the id returned by background.start"}},
+                type = "object",
+                properties = {task_id = {type = "integer", description = "the id returned by background.start"}},
                 required = {"task_id"},
             },
         },
