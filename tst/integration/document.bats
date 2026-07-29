@@ -253,7 +253,7 @@ EOF
     run save_document "csrf_token=${CSRF}&entity_id=1&title=Home&parent_id=2&content="
     [[ "$output" =~ "200 OK" ]]
     [[ "$output" =~ "Can" ]]
-    [[ "$output" =~ "own sub-page" ]]
+    [[ "$output" =~ "own sub-document" ]]
 
     run "$BIN" entity show document 1
     [[ ! "$output" =~ "parent_id             2" ]]
@@ -291,7 +291,7 @@ EOF
     [[ "$output" =~ '"success":true' ]]
 
     run get_route "/documents" ""
-    [[ "$output" =~ "No pages yet" ]]
+    [[ "$output" =~ "No documents yet" ]]
 }
 
 @test "creating and updating a page auto-computes its embedding (task #105)" {
@@ -382,7 +382,7 @@ EOF
     # its Vertex configuration before running the backfill.
     write_platform_config
     run "$BIN" document reindex-embeddings
-    [[ "$output" =~ "Reindexed 1 page(s), 0 failed" ]]
+    [[ "$output" =~ "Reindexed 1 document(s), 0 failed" ]]
 
     run bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db 'SELECT COUNT(*) FROM document_embedding;'"
     [ "$output" = "1" ]

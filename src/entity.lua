@@ -750,7 +750,7 @@ end
 -- Cross-type "find this row" search for /data's own search box (task:
 -- /documents already has a fuzzy title search, /data had nothing --
 -- Ben's own explicit ask). A single client-side index across every
--- entity type doesn't scale the way /documents' page-title index does
+-- entity type doesn't scale the way /documents' title index does
 -- (many types, some already in the hundreds of rows each), so this is
 -- a server-side query instead: one bounded, indexable LIKE per type,
 -- against the builtin "name" column (populated for e.g. Benchling-

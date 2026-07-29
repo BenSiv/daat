@@ -734,7 +734,7 @@ AGENT_TOOLS = {
     document = {
         search = {
             destructive = false,
-            description = "Search pages by keyword or topic; returns each matching page's id, title, and a real content excerpt so you can answer from what the page actually says, not just its title.",
+            description = "Search documents by keyword or topic; returns each matching document's id, title, and a real content excerpt so you can answer from what the document actually says, not just its title.",
             parameters = {
                 type = "object",
                 properties = {query = {type = "string", description = "search text"}},
@@ -743,12 +743,12 @@ AGENT_TOOLS = {
         },
         create = {
             destructive = true,
-            description = "Create a new page.",
+            description = "Create a new document.",
             parameters = {
                 type = "object",
                 properties = {
                     title = {type = "string"},
-                    parent_id = {type = "integer", description = "optional parent page id"},
+                    parent_id = {type = "integer", description = "optional parent document id"},
                     content = {type = "string", description = "markdown content"},
                 },
                 required = {"title"},
@@ -756,11 +756,11 @@ AGENT_TOOLS = {
         },
         update = {
             destructive = true,
-            description = "Update an existing page.",
+            description = "Update an existing document.",
             parameters = {
                 type = "object",
                 properties = {
-                    entity_id = {type = "integer", description = "page id"},
+                    entity_id = {type = "integer", description = "document id"},
                     title = {type = "string", description = "optional new title"},
                     parent_id = {type = "integer", description = "optional new parent id"},
                     content = {type = "string", description = "optional new content -- replaces the whole field, does not append"},
@@ -906,12 +906,12 @@ AGENT_TOOLS = {
     template = {
         list = {
             destructive = false,
-            description = "List reusable Entry templates (name, label, description) available to build a new page from.",
+            description = "List reusable Entry templates (name, label, description) available to build a new document from.",
             parameters = EMPTY_OBJECT_SCHEMA,
         },
         get = {
             destructive = false,
-            description = "Get one template's rendered content, ready to pass straight to document.create's own content arg, plus its suggested default page name.",
+            description = "Get one template's rendered content, ready to pass straight to document.create's own content arg, plus its suggested default document name.",
             parameters = {
                 type = "object",
                 properties = {name = {type = "string", description = "template name"}},
@@ -1079,13 +1079,13 @@ function issues_summary(issues)
     return table.concat(parts, "; ")
 end
 
--- Grounds the agent's own answers in real page content (found live:
+-- Grounds the agent's own answers in real document content (found live:
 -- document.search's tool result used to return only "#id title" lines
 -- -- document.search itself already fetches full content for scoring,
 -- but the tool wrapper around it threw that away, so the model could
--- learn *which* pages might be relevant but never actually read one
--- before answering). Bounded per result (not the full page verbatim)
--- so a search that matches several long pages doesn't balloon every
+-- learn *which* documents might be relevant but never actually read one
+-- before answering). Bounded per result (not the full document verbatim)
+-- so a search that matches several long documents doesn't balloon every
 -- turn's prompt/token cost -- trimmed to the last whole word rather
 -- than cutting mid-word.
 function excerpt(text, max_length)
@@ -1163,9 +1163,9 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
     if tool_name == "document" and method_name == "search" then
         results = knowledge.search_and_log(db_path, args.query, 5, true, session_id, author)
         if #results == 0 then
-            return "No matching pages found."
+            return "No matching documents found."
         end
-        -- Structural, not just a prompt reminder: multiple pages
+        -- Structural, not just a prompt reminder: multiple documents
         -- genuinely sharing a title is real and common here (293
         -- duplicate titles in production, mostly repeated Benchling
         -- resyncs) -- rather than relying on the model to notice and
@@ -1196,7 +1196,7 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
             end
             if title_counts[r.title] > 1 then
                 header = header .. " [one of " .. tostring(title_counts[r.title]) ..
-                    " pages titled '" .. r.title .. "' -- distinguish by date/external_id/content above, never by asking the user for the id]"
+                    " documents titled '" .. r.title .. "' -- distinguish by date/external_id/content above, never by asking the user for the id]"
             end
             table.insert(lines, header .. "\n" .. excerpt(r.content, config.platform_config().agent_search_excerpt_length))
         end
@@ -1212,7 +1212,7 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
         if created_id == nil then
             return nil, issues_summary(issues)
         end
-        return "Created page #" .. tostring(created_id) .. " (" .. tostring(args.title) .. ")"
+        return "Created document #" .. tostring(created_id) .. " (" .. tostring(args.title) .. ")"
     end
 
     if tool_name == "document" and method_name == "update" then
@@ -1228,7 +1228,7 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
         if updated_id == nil then
             return nil, issues_summary(issues)
         end
-        return "Updated page #" .. tostring(updated_id)
+        return "Updated document #" .. tostring(updated_id)
     end
 
     if tool_name == "entity" and method_name == "list_types" then
@@ -1500,7 +1500,7 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
         if default_path == nil then
             default_path = def.label
         end
-        return "Suggested page name: " .. tostring(default_path) .. "\n\n" .. rendered
+        return "Suggested document name: " .. tostring(default_path) .. "\n\n" .. rendered
     end
 
     if tool_name == "knowledge" and method_name == "stats" then
@@ -1531,7 +1531,7 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
             end
             table.insert(lines, string.format(
                 "#%s [tier %s, %s] %s (heat=%.2f, retrievals=%s)",
-                tostring(row.id), tostring(row.tier), document.atomicity_status(body), tostring(row.title),
+                tostring(row.id), tostring(row.tier), document.content_shape(body), tostring(row.title),
                 row.effective_heat, tostring(row.retrieval_count)
             ))
         end
@@ -1796,7 +1796,7 @@ never treat them as part of what the user actually typed.
   name it shows). Trust it as ground truth (e.g. answer "what page am I on"
   directly from it).
 
-When creating or updating a record, fill in optional fields you can
+When creating or updating an entity, fill in optional fields you can
 reasonably infer from the request instead of leaving them blank (e.g. a
 concise subject/title summarizing what was asked, a sensible due date if one
 is clearly implied) -- the same judgment call a person filling out the same
@@ -1817,14 +1817,14 @@ You have room for several tool calls in a single turn -- use them when the
 question genuinely calls for it, rather than answering from a single
 attempt that came up empty or ambiguous.
 
-Multiple records can genuinely share the same title (e.g. several
-Benchling-synced pages all named after the same experiment number) --
-when that happens, never ask the user for a raw internal id to
+Multiple entities (or documents) can genuinely share the same title (e.g.
+several Benchling-synced documents all named after the same experiment
+number) -- when that happens, never ask the user for a raw internal id to
 disambiguate; they don't think in ids and shouldn't have to. Instead use
 what document.search or entity.get already gives you -- content excerpt,
 creation date, an external_id if the row has one -- to either tell the
 candidates apart yourself, or describe them to the user in those terms
-("there are two pages titled X, one from March about Y and one from June
+("there are two documents titled X, one from March about Y and one from June
 about Z -- which do you mean?").
 
 If you don't already know an entity type's fields, call entity.fields first
@@ -2314,7 +2314,7 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
         -- turn. Real thinking content (Gemini 2.5's own thought-summary
         -- blocks, see extract_thinking_text) gets split out into its
         -- own document (source_type='reasoning', task #106: a real
-        -- Notebook page under the Knowledge Pool folder, not a
+        -- document under the Knowledge Pool folder, not a
         -- separate knowledge_note) -- it then goes through the same
         -- tiering/retrieval/decay pipeline as every other pool
         -- document, rather than sitting in a second, parallel log only

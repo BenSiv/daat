@@ -1,6 +1,6 @@
-# Record Types as Code
+# Entity Types as Code
 
-A record type is defined as a small declarative file, one file per
+An entity type is defined as a small declarative file, one file per
 type -- not a schema entered through an admin UI, and not a
 serialized data format like YAML or JSON. The definition is itself
 executable, in the same language as everything else in the system, so
@@ -37,10 +37,10 @@ return {
 | `number` | numeric, integer or float |
 | `date` | ISO 8601 date |
 | `select` | one of a fixed `values` list, or a shared named `dropdown` (see below) |
-| `reference` | points at another record by id, optionally constrained to a specific record type |
+| `reference` | points at another entity by id, optionally constrained to a specific entity type |
 | `multi_select` | several values from a fixed `values` list or named `dropdown` |
-| `multi_reference` | several links to another record type by id |
-| `polymorphic_reference` | points at another record by id, where the *target record type itself* varies per row (a fixed, closed `allowed_entity_types` list, not "any registered type") |
+| `multi_reference` | several links to another entity type by id |
+| `polymorphic_reference` | points at another entity by id, where the *target entity type itself* varies per row (a fixed, closed `allowed_entity_types` list, not "any registered type") |
 | `multi_polymorphic_reference` | several such links, each independently typed |
 | `sql_select` | a `text`-shaped value that must be a single, plain `SELECT` statement (no `;`, no DDL/DML/pragma) -- see "Label printing" below for the built-in type that uses it |
 
@@ -57,9 +57,9 @@ underlying storage would need new columns) not done yet.
 Deferred: attachments/files, computed/formula fields, enforced numeric
 bounds. None of these are ruled out by the design -- they're just not
 needed to prove the core registration workflow end to end. (Rich text
-editing exists for the built-in Pages record type -- see
-`architecture.md`'s "Pages" section -- but a schema-defined `text`
-field on a custom record type is still a plain string, no markup.)
+editing exists for the built-in Document entity type -- see
+`architecture.md`'s "Documents" section -- but a schema-defined `text`
+field on a custom entity type is still a plain string, no markup.)
 
 ## Multivalue fields (`multi_select`/`multi_reference`) -- a real
 ## junction table, not a delimited string column
@@ -76,13 +76,13 @@ return {
 }
 ```
 
-A multivalue field never becomes a column on the record's own table --
+A multivalue field never becomes a column on the entity's own table --
 it gets its own companion junction table instead
-(`schema.ensure_multi_field_table`), named `<record_type>_<field_name>`
+(`schema.ensure_multi_field_table`), named `<entity_type>_<field_name>`
 (e.g. `sample_source_plants`, `sample_process`): a real many-to-many
 table with a composite primary key, the same shape `document_link`
-already uses for page-to-page links. `multi_reference`'s second column
-is a genuine foreign key into the referenced record type's table --
+already uses for document-to-document links. `multi_reference`'s second column
+is a genuine foreign key into the referenced entity type's table --
 never a lossy string join. A value arrives as either a real array
 (e.g. a JSON API payload) or a comma-separated string (CLI
 convenience); both normalize to the same array before validation and
@@ -132,7 +132,7 @@ right tool for it.
 
 Storage is a single shared table (`entity_source`:
 `from_type, from_id, field_name, to_type, to_id`) across every
-polymorphic field on every record type -- not a table per (record
+polymorphic field on every entity type -- not a table per (entity
 type, field name) the way `multi_reference`'s own junction tables work,
 since a per-type junction table's foreign key is fixed to one target
 type at creation time and can't represent "this row's target type
@@ -180,17 +180,17 @@ A definition can opt into `admin_write_only = true` at the top level
 create/update/archive any row of that type (checked in `cgi.lua`'s
 entity-write routes, not here -- schema.lua has no notion of an HTTP
 session). Anyone can still read/view rows of the type; this only gates
-writes. Meant for record types whose data is itself sensitive or
-consequential in a way ordinary lab records aren't -- see
+writes. Meant for entity types whose data is itself sensitive or
+consequential in a way ordinary lab entities aren't -- see
 `label_template` below, the first real consumer.
 
 ## Label printing (`label_template`)
 
 Label printing prints a physical barcode/ID label (ZPL, Zebra
-Programming Language) for one record, via the Zebra Browser Print
+Programming Language) for one entity, via the Zebra Browser Print
 desktop app's local JS SDK. A label template is a real, ledgered
-record of a built-in type, `label_template` -- not a config file --
-created/edited the same way any other record is (`/register`,
+entity of a built-in type, `label_template` -- not a config file --
+created/edited the same way any other entity is (`/register`,
 `/detail`), so editing a label's query or ZPL body is exactly as
 auditable as editing a sample:
 
@@ -207,11 +207,11 @@ return {
 }
 ```
 
-- `for_entity_type`: which record type's `/detail` page shows the
+- `for_entity_type`: which entity type's `/detail` page shows the
   "Print Label" button (e.g. `"sample"` -- matches a real schema name).
 - `sql`: a single `SELECT` with exactly one `?` placeholder, bound to
-  the record's own id at print time. Column aliases become `{{token}}`
-  names the `zpl` body can reference. Any cross-record value (e.g. a
+  the entity's own id at print time. Column aliases become `{{token}}`
+  names the `zpl` body can reference. Any cross-entity value (e.g. a
   linked experiment's title) is just a `JOIN` in this query -- not a
   separate mechanism, and not depth-limited the way a bespoke field-
   path resolver would be.
@@ -225,15 +225,15 @@ return {
 anything but a plain `SELECT` (reusing the same check `views/*.lua`
 already uses) -- re-checked again at render time too, storage is never
 trusted alone. `admin_write_only` means only an Admin can create or
-edit a `label_template` row; anyone who can view a record's `/detail`
+edit a `label_template` row; anyone who can view an entity's `/detail`
 page can still print it.
 
-## Master/detail: a record type with a variable-length list of children
+## Master/detail: a entity type with a variable-length list of children
 
-Some records are naturally a fixed set of fields plus however many
-child rows a user adds -- e.g. a `composite` record built from however
+Some entities are naturally a fixed set of fields plus however many
+child rows a user adds -- e.g. a `composite` entity built from however
 many `component` rows describe it (task #112). No new storage concept
-is needed for this: `component` is just its own record type with a
+is needed for this: `component` is just its own entity type with a
 plain `reference` field pointing at `composite`, exactly like any other
 `reference`. Children aren't picked from a pre-existing list the way a
 `multi_reference` value would be -- each one is entered fresh alongside
@@ -259,14 +259,14 @@ return {
 ```
 
 Three generic mechanisms, computed from `schema.relationships()` (every
-`reference`/`multi_reference` edge across all record types) rather than
+`reference`/`multi_reference` edge across all entity types) rather than
 declared per pair of types, make the actual workflow work:
 
 - **`/detail` shows a "Related records" section** for every plain
-  `reference` field elsewhere that points back at this record (e.g.
+  `reference` field elsewhere that points back at this entity (e.g.
   `component.composite -> composite`) -- a short preview of the actual
   rows, an "+ Add component" link, and a "View all N" link once there
-  are more than the preview cap. Automatic for *any* record type with
+  are more than the preview cap. Automatic for *any* entity type with
   an incoming `reference` -- `experiment`'s `/detail` page would start
   showing "samples referencing this experiment" the same way, with no
   extra schema declaration.
@@ -296,9 +296,9 @@ needing a second parser to get there.
 
 Loading a definition does two things:
 
-1. Registers (or updates) the record type's own field list, which the
+1. Registers (or updates) the entity type's own field list, which the
    history log and validation both read at runtime.
-2. Generates (or migrates) a real, typed table for that record type --
+2. Generates (or migrates) a real, typed table for that entity type --
    `reagent(id, lot_number, concentration, prepared_on, status,
    prepared_from, created_by, created_at, updated_by, updated_at,
    last_event_id, archived_at)` -- the thing a dashboard actually

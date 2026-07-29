@@ -22,7 +22,7 @@
 -- resolved document's immediate parent to be titled "subject". A full
 -- path-chain resolver would be more precise but is more machinery than
 -- inline prose links need; this one-level disambiguator covers the
--- realistic case (two same-titled pages in different folders) without
+-- realistic case (two same-titled documents in different folders) without
 -- it.
 --
 -- Links are a derived index over document content, not user-authored
@@ -86,7 +86,7 @@ end
 -- already makes synchronously). Best-effort: document.reindex_embedding
 -- already returns nil/err rather than throwing on failure (an
 -- unconfigured provider, a network hiccup, ...), and create_page/
--- update_page ignore that return value entirely -- a page save must
+-- update_page ignore that return value entirely -- a document save must
 -- never fail just because the embedding call did. document.reindex_all_
 -- embeddings/the CLI's own `reindex-embeddings` command still exist for
 -- bulk backfilling a store whose documents predate this (or after a
@@ -177,11 +177,11 @@ function document.init_schema(db_path)
     ensure_document_link_source_column(db_path)
 end
 
--- The single top-level Notebook folder every system/agent-derived
--- document (reasoning notes, and future distilled notes -- task #107)
--- lives under. Visible and browsable like any other folder (task
--- #106's explicit direction: organized, not hidden), never containing
--- a user's own authored pages. Created lazily on first use, not at
+-- The single top-level folder every system/agent-derived document
+-- (reasoning notes, and future distilled notes -- task #107) lives
+-- under. Visible and browsable like any other folder (task #106's
+-- explicit direction: organized, not hidden), never containing a
+-- user's own authored documents. Created lazily on first use, not at
 -- init time; idempotent -- a second call reuses the existing folder.
 KNOWLEDGE_POOL_FOLDER_TITLE = "Knowledge Pool"
 
@@ -252,7 +252,7 @@ function document.breadcrumbs(db_path, document_id)
 end
 
 -- True if setting `document_id`'s parent to `new_parent_id` would make
--- it its own ancestor (moving a page underneath its own descendant).
+-- it its own ancestor (moving a document underneath its own descendant).
 -- Checked explicitly at save time rather than only guarded against by
 -- breadcrumbs' own iteration cap -- a real error message beats a
 -- silently-truncated breadcrumb trail.
@@ -390,9 +390,9 @@ function document.spreading_delta(base_delta, fan_count)
 end
 
 -- entity.create/update + document.sync_links together -- the full
--- "save a page" sequence, shared by the web save route and the agent's
+-- "save a document" sequence, shared by the web save route and the agent's
 -- document tool so the two can never drift apart on what "saving a
--- page" actually entails.
+-- document" actually entails.
 function document.create_page(db_path, author, title, parent_id, content, source)
     values = {title = title, content = content, parent_id = parent_id}
     created_id, issues = entity.create(db_path, "document", values, author, source)
@@ -723,7 +723,7 @@ end
 -- weighted lexical matching, a whole-query substring bonus, blended
 -- embedding cosine-similarity, a relevance floor). Originally dropped
 -- curation-tier/heat-retrieval reinforcement and duplicate-suppression
--- as not applicable to Pages -- task #106 added them back in, once
+-- as not applicable to Documents -- task #106 added them back in, once
 -- tier/heat/duplicate_of/merged_into became real columns on `document`
 -- itself (see this section's own tier/heat block in search_score/
 -- search below).
@@ -962,12 +962,12 @@ end
 function document.do_document(cmd_args, db_path)
     action = cmd_args[1]
 
-    -- Bulk page import (e.g. meeting notes, a literature corpus) --
+    -- Bulk document import (e.g. meeting notes, a literature corpus) --
     -- deliberately NOT the generic `entity create-json` action: that
     -- goes through entity.create_batch -> entity.create directly, which
     -- skips document.create_page's own side effects (document.sync_links
     -- for backlinks, document.reindex_embedding for semantic search) --
-    -- a plain entity-create bulk import would leave every new page
+    -- a plain entity-create bulk import would leave every new document
     -- unfindable by embedding similarity and invisible to backlinks
     -- until a full document reindex-embeddings run, silently. Also
     -- deliberately NOT all-or-nothing the way create_batch's own
@@ -1015,11 +1015,11 @@ function document.do_document(cmd_args, db_path)
                 print("Error: " .. tostring(err))
                 return
             end
-            print("Reindexed embedding for page #" .. tostring(entity_id))
+            print("Reindexed embedding for document #" .. tostring(entity_id))
             return
         end
         reindexed, failed = document.reindex_all_embeddings(db_path)
-        print(string.format("Reindexed %d page(s), %d failed", reindexed, failed))
+        print(string.format("Reindexed %d document(s), %d failed", reindexed, failed))
         return
     end
 

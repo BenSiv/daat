@@ -1,10 +1,15 @@
 # Architecture
 
+See `glossary.md` for the terms this codebase, its UI, and its agent
+tools should use consistently (Document vs page/Notebook, Entity vs
+record, Knowledge Pool tier names, capability names) -- check there
+before introducing a new name for something that already has one.
+
 ## Overview
 
-The system is built around one idea: a record type is data, not code
-you write per-type, and every change to a record is remembered, not
-overwritten. Defining a new kind of record (a reagent, a sample, a
+The system is built around one idea: an entity type is data, not code
+you write per-type, and every change to an entity is remembered, not
+overwritten. Defining a new kind of entity (a reagent, a sample, a
 person) is authoring a small declarative definition; the platform
 takes care of storage, validation, a full audit trail, and a queryable
 table for that type. Nothing about using the system requires touching
@@ -17,7 +22,7 @@ the platform's own source.
                               |
                      +--------v---------+
                      |     platform     |
-                     | record history,  |
+                     | entity history,  |
                      | registration     |
                      | semantics,       |
                      | accounts/        |
@@ -28,7 +33,7 @@ the platform's own source.
                               |
                      +--------v---------+
                      |     storage      |   history log (append-only)
-                     |                  |   one table per record type
+                     |                  |   one table per entity type
                      +------------------+   accounts
 ```
 
@@ -70,17 +75,17 @@ safeguard if it ever becomes a real concern.
 ## History as the source of truth, not a side effect
 
 Two options were considered for "nothing is ever really lost, and
-every change is fully accountable": versioning individual records as
+every change is fully accountable": versioning individual entities as
 files, or an append-only log of changes with a materialized
-current-state table per record type. Files were rejected because the
+current-state table per entity type. Files were rejected because the
 explicit requirement is real downstream analysis -- diffing files
 doesn't give you fast joins and aggregations for a dashboard. An
 append-only log gives both: nothing is ever overwritten (only
-appended), *and* a normal table exists for every record type that a
+appended), *and* a normal table exists for every entity type that a
 dashboard can query directly.
 
 ```
-history log                               <record type> (e.g. "reagent")
+history log                               <entity type> (e.g. "reagent")
   entry_id      (monotonic, the version)    id
   entity_id     (stable logical identity)   <field columns, typed>
   entity_type                               created_by, created_at
@@ -91,18 +96,18 @@ history log                               <record type> (e.g. "reagent")
 ```
 
 The log is the answer to "what changed, when, and by whom" for any
-record -- append-only, never edited after the fact. A record's own
+entity -- append-only, never edited after the fact. An entity's own
 identity is the id of its own creation entry, so identity is tied
 directly to the history itself rather than to whatever the projected
-table's own storage happens to assign. Each record type also gets a
+table's own storage happens to assign. Each entity type also gets a
 real typed table generated from its definition (`schema.md`), kept in
 sync in the same transaction as the log entry. That's what a dashboard
 queries; nothing about analysis touches the log directly.
 
-**Nothing is ever hard-deleted.** Archiving/unarchiving a record are
+**Nothing is ever hard-deleted.** Archiving/unarchiving an entity are
 themselves just additive log entries -- never a row removal, never a
-rewrite of prior history. Listing/counting records excludes archived
-ones by default (an opt-in flag brings them back); looking a record up
+rewrite of prior history. Listing/counting entities excludes archived
+ones by default (an opt-in flag brings them back); looking an entity up
 directly, or its full history, always reaches it regardless of archive
 state. Accounts follow the same convention.
 
@@ -114,7 +119,7 @@ migration documented in `doc/mariadb-migration.md`) when real
 concurrency/scale demands it. The storage layer (`src/db.lua`) is a
 small, deliberately thin adapter (`config.db_backend()` picks the
 backend; `is_mariadb()` gates the handful of call sites where the two
-engines' dialects genuinely differ) so the history/record logic above
+engines' dialects genuinely differ) so the history/entity logic above
 it never needs to know which backend is live.
 
 Multiple independent installations (each with its own users and data)
@@ -126,12 +131,12 @@ many people using one installation's data at once.
 
 ## Sandboxed extensibility
 
-Because record-type definitions and extensions are both just small
+Because entity-type definitions and extensions are both just small
 scripts, and both need to run without becoming a way for one
 definition or extension to reach outside what it was actually granted,
 loading either kind of file happens inside a restricted execution
 environment: untrusted source runs bound to an environment table
-exposing only what's needed for its role -- a record-type definition
+exposing only what's needed for its role -- an entity-type definition
 gets just enough to construct and return a plain description, nothing
 that touches the filesystem, network, or process state; an extension
 gets read-only lookups, write access, or networking, but only exactly
@@ -150,9 +155,9 @@ Implemented today:
 - **After-hooks** (`entity.after_create`, `entity.after_update`,
   `entity.after_archive`): queued at write time, executed later
   (see `extensibility.md`), and cannot block or undo anything. This is
-  where integrations and derived-record automation live -- a slow or
+  where integrations and derived-entity automation live -- a slow or
   broken extension can never hang or corrupt someone's data entry.
-  Unarchiving a record does **not** trigger an after-hook today (only
+  Unarchiving an entity does **not** trigger an after-hook today (only
   archiving does) -- not a deliberate design stance, just not wired up
   yet.
 
@@ -160,45 +165,46 @@ Not yet implemented: a batch-level before/after pair distinct from the
 per-row hooks (batch validation and creation exist and run the per-row
 hooks already, but there's no separate whole-batch hook).
 
-## Pages
+## Documents
 
-A built-in document/notebook record type (not a deployment-authored
-one) -- a page's own id is its identity, not its title, so renaming or
-moving it is a plain field edit on `title`/`parent_id`, never a
-collision risk the way a name-is-identity wiki page has to worry about.
+A built-in entity type (not a deployment-authored one) -- a document's
+own id is its identity, not its title, so renaming or moving it is a
+plain field edit on `title`/`parent_id`, never a collision risk the
+way a name-is-identity wiki page has to worry about.
 
 - **A real tree, not a naming convention.** `parent_id` is a nullable
   self-reference (unset = top-level); breadcrumbs are computed by
   walking that chain on read, not cached -- so they can never go stale,
-  and moving a page under a different parent is exactly one field
-  write. Moving a page underneath its own descendant is rejected
+  and moving a document under a different parent is exactly one field
+  write. Moving a document underneath its own descendant is rejected
   outright at save time (a real error, not silent data corruption or
   an infinite loop waiting to happen at render time).
-- **Cross-page links** use an inline `[[title]]` / `[[folder/title]]`
+- **Cross-document links** use an inline `[[title]]` / `[[folder/title]]`
   syntax, parsed out of the raw content and resolved by title (and, if
-  a folder prefix is given, by requiring the resolved page's immediate
-  parent to carry that title -- a one-level disambiguator, not a full
-  path walk). A link to a page that doesn't exist yet renders as a
-  plain, visibly-marked placeholder instead of a broken link. Links are
-  a derived index over content (recomputed wholesale on every save, not
-  hand-maintained data with their own history) -- the content that
-  generates them already has full audit history in its own right.
+  a folder prefix is given, by requiring the resolved document's
+  immediate parent to carry that title -- a one-level disambiguator,
+  not a full path walk). A link to a document that doesn't exist yet
+  renders as a plain, visibly-marked placeholder instead of a broken
+  link. Links are a derived index over content (recomputed wholesale on
+  every save, not hand-maintained data with their own history) -- the
+  content that generates them already has full audit history in its
+  own right.
 - **Rendering** shells out to `cmark` (CommonMark) rather than a
   vendored/hand-rolled Markdown parser -- the same "bind to an existing,
   battle-tested implementation" stance as bcrypt/HMAC, except this one
   is an external runtime dependency (must be on `PATH`), not something
   compiled into the binary. `cmark`'s default (non-`--unsafe`) mode
   strips raw HTML out of the source Markdown before rendering, which
-  matters here specifically: page content is user-authored and shown
-  to other users, so it must never be able to smuggle in a raw
+  matters here specifically: document content is user-authored and
+  shown to other users, so it must never be able to smuggle in a raw
   `<script>` tag.
-- Creating/editing a page through the generic `entity create`/`entity
-  update` CLI (rather than the dedicated web routes) still works, but
-  bypasses link re-indexing -- that's layered on top of the generic
-  entity path deliberately (see "Sandboxed extensibility" above: this
-  behavior is specific to one record type, not something the generic
-  layer should know about), not something every write path gets for
-  free.
+- Creating/editing a document through the generic `entity create`/
+  `entity update` CLI (rather than the dedicated web routes) still
+  works, but bypasses link re-indexing -- that's layered on top of the
+  generic entity path deliberately (see "Sandboxed extensibility"
+  above: this behavior is specific to one entity type, not something
+  the generic layer should know about), not something every write path
+  gets for free.
 - **Editing** is Toast UI Editor (vendored into `vnd/`, no CDN
   dependency, no build step), starting in plain Markdown-source mode
   and offering a WYSIWYG mode (syntax hidden, edit the rendered view
@@ -290,8 +296,8 @@ and a small, explicit tool registry the model can act through.
   itself just a thin wrapper over the same `entity.lua` functions the
   registry already calls directly -- widening the registry, not adding
   a transport hop, is the real lever). Today: `document.search/create/
-  update` (pages); `entity.list_types/fields/list/get/create/update/
-  archive/unarchive` (any registered record type, with `filter_field`/
+  update` (documents); `entity.list_types/fields/list/get/create/update/
+  archive/unarchive` (any registered entity type, with `filter_field`/
   `filter_value`/`limit`/`offset` on `list` -- `entity.list_types`/
   `fields` exist so the model discovers real types and field names
   itself rather than the system prompt hardcoding every schema that
@@ -332,7 +338,7 @@ and a small, explicit tool registry the model can act through.
   distinguishes "asking" from "changing data" except that one fact.
 - **Every tool call is attributed to the real, authenticated user
   driving that conversation, never a separate "agent" identity** --
-  a page the assistant creates or updates shows up in that page's own
+  a document the assistant creates or updates shows up in that document's own
   audit history exactly like a direct manual edit, just additionally
   tagged with which chat session it came from, so the ledger can still
   answer "was this a direct edit or something the assistant did" without
@@ -357,16 +363,17 @@ and a small, explicit tool registry the model can act through.
   writes via chat, exactly matching what that account's own direct edits
   already can't do either.
 - **Semantic search** blends keyword matching with embedding
-  cosine-similarity when a page has been explicitly indexed -- indexing
-  a page is a deliberate, separate action, never an automatic side
-  effect of saving it, since computing an embedding is a real API call
-  per page. A query's own embedding, by contrast, is computed fresh on
-  every search (one cheap, real-time call) -- only the *document* side
-  of the comparison is precomputed and cached. SQLite FTS5 was
-  evaluated for the keyword half first, per the original plan for this
-  feature; confirmed directly that this project's SQLite binding
-  doesn't have it compiled in, so search instead scores every active
-  page directly, an acceptable tradeoff at the scale this is built for.
+  cosine-similarity when a document has been explicitly indexed --
+  indexing a document is a deliberate, separate action, never an
+  automatic side effect of saving it, since computing an embedding is a
+  real API call per document. A query's own embedding, by contrast, is
+  computed fresh on every search (one cheap, real-time call) -- only the
+  *document* side of the comparison is precomputed and cached. SQLite
+  FTS5 was evaluated for the keyword half first, per the original plan
+  for this feature; confirmed directly that this project's SQLite
+  binding doesn't have it compiled in, so search instead scores every
+  active document directly, an acceptable tradeoff at the scale this is
+  built for.
 - **Turn budgets, row caps, and retry counts are configurable via
   platform.lua, not hardcoded** -- the right value for any of these
   genuinely depends on things a deployment chooses (which model
@@ -414,7 +421,7 @@ to fields this codebase's notes don't have).
 `knowledge_note` was a separate table that mirrored a retrieved
 document's title/content into its own shadow row -- a note was never
 independently browsable until `knowledge.materialize_note` promoted it
-into a real page. Per explicit user direction ("why do we have a
+into a real document. Per explicit user direction ("why do we have a
 separate note concept? it should all be on the same level but with
 different scoring based on tier, heat and relevant"), `tier`/`heat`/
 `retrieval_count`/`last_retrieved_at`/`source_type`/`source_id`/
@@ -425,17 +432,17 @@ pattern as `ledger.lua`'s `ensure_entity_event_reason_column` -- not
 `DOCUMENT_SCHEMA.fields`, which would wrongly expose them as
 user-editable form fields). A document that gets searched **is** the
 record that accrues heat/tier; there's no second row shadowing it.
-System/agent-derived content that has no existing page to attach to
+System/agent-derived content that has no existing document to attach to
 (today: a chat's leaked reasoning text; task #107: future distilled
 notes) becomes a genuinely new `document` row instead, filed under a
-single lazily-created, always-visible top-level Notebook folder
+single lazily-created, always-visible top-level folder
 (`document.ensure_knowledge_pool_folder`, titled "Knowledge Pool") --
-organized separately from user-authored pages, per explicit user
+organized separately from user-authored documents, per explicit user
 direction, but never hidden; browsable and searchable like any other
-page. The pure tier/heat/dedup heuristics
+document. The pure tier/heat/dedup heuristics
 (`content_hash`/`effective_heat`/`promotion_target_tier`/
-`atomicity_status`/`title_is_generic`/`guess_title_from_body`/...) live
-in `document.lua` now, alongside the columns they score --
+`content_shape`/`was_revised`/`title_is_generic`/`guess_title_from_body`/
+...) live in `document.lua` now, alongside the columns they score --
 `knowledge.lua` depends on `document.lua`, never the reverse.
 
 - **Every search is logged and scores tier/heat directly**
@@ -503,9 +510,9 @@ in `document.lua` now, alongside the columns they score --
   on their own conversation's replies).
 - **No more materialization step** -- `knowledge.materialize_note` and
   its destructive `AGENT_TOOLS.knowledge.materialize` entry were removed
-  under task #106: every pool document already is a real page from the
-  moment it exists, so there's no separate "promote a hidden tracking
-  record into a real page" step left to gate. The old agent-driven
+  under task #106: every pool document already is a real document from
+  the moment it exists, so there's no separate "promote a hidden tracking
+  record into a real document" step left to gate. The old agent-driven
   review pass (`agent.run_knowledge_review`, `platform knowledge
   review`) was removed for the same reason -- its one job was deciding
   what to materialize.
@@ -560,7 +567,7 @@ in `document.lua` now, alongside the columns they score --
   `knowledge_note` was -- that would lose per-message ids, compaction,
   and the FK `knowledge_context`/`knowledge_chat_eval` key off); the
   synced document is a derived, searchable *projection* of that log, the
-  same relationship a rendered page has to its raw Markdown. Because
+  same relationship a rendered document has to its raw Markdown. Because
   it's a real document, a heavily-revisited conversation participates in
   the exact same tier/heat/distillation pipeline as anything else --
   "combine what a conversation touched into something durable" falls

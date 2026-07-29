@@ -1,7 +1,7 @@
--- Entry templates: reusable notebook-entry layouts (a Luam table file,
+-- Entry templates: reusable document layouts (a Luam table file,
 -- version-controlled alongside schemas/extensions/views -- see
 -- doc/schema.md's conventions), rendered into a plain Markdown snippet
--- the user copies into a new Fossil wiki page they create themselves.
+-- the user copies into a new document they create themselves.
 --
 -- Deliberately a snippet generator, not a live wiki-write: platform's own
 -- sandboxed request-handling has no path to invoke Fossil's own
@@ -27,16 +27,16 @@
 --               -- {{view:...:EXPERIMENT_ID}} marker (see html.lua's
 --               -- expand_inline_views) -- EXPERIMENT_ID is a literal
 --               -- placeholder the user replaces by hand once pasted
---               -- into a real page, same as registration_table's own
+--               -- into a real document, same as registration_table's own
 --               -- generic, un-filled-in link above.
 --       },
 --   }
 --
--- default_path is optional: it's the page-name value html.render_template
--- prefills the "New page name" field with (html.lua's own render_template
--- falls back to `label` if absent) -- a deployment's own page-naming
--- convention (e.g. a folder-path prefix) belongs here, in a deployment's
--- own template files, never hardcoded into platform itself.
+-- default_path is optional: it's the title value html.render_template
+-- prefills the new document's Title field with (html.lua's own
+-- render_template falls back to `label` if absent) -- a deployment's own
+-- document-naming convention (e.g. a folder-path prefix) belongs here, in
+-- a deployment's own template files, never hardcoded into platform itself.
 
 paths = require("paths")
 lfs = require("lfs")
@@ -143,11 +143,11 @@ function render_registration_table(section)
 end
 
 -- An inert `{{view:...}}` marker for a template snippet -- a template
--- is reusable across many future pages, so it has no experiment id of
--- its own to bind (unlike convert_entries_to_pages.py, which already
+-- is reusable across many future documents, so it has no experiment id
+-- of its own to bind (unlike convert_entries_to_pages.py, which already
 -- knows the real experiment_id at content-generation time). The
 -- EXPERIMENT_ID placeholder is meant to be replaced by hand after
--- pasting the snippet into a real page, same philosophy as
+-- pasting the snippet into a real document, same philosophy as
 -- render_registration_table's own generic, un-filled-in link.
 function render_lookup_view(section)
     label = section.label
@@ -155,7 +155,7 @@ function render_lookup_view(section)
         label = section.view_name
     end
     return "**" .. label .. "** -- {{view:" .. section.view_name ..
-        ":EXPERIMENT_ID}} _(replace EXPERIMENT_ID with this page's real experiment id)_"
+        ":EXPERIMENT_ID}} _(replace EXPERIMENT_ID with this document's real experiment id)_"
 end
 
 function template.render(def)

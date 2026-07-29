@@ -344,10 +344,10 @@ function html.page_shell(title, active, body, nonce, show_sql, show_admin, has_t
 
     root_css = html.theme_root_css(theme)
 
-    -- Icon-rail order: Home, Notebook, Data, Tasks, (System if Setup/
-    -- Admin). No separate New Page icon -- the Notebook page's own
-    -- "+ New page" button already covers that entry point. Chat has no
-    -- rail icon of its own either; it's the floating widget below.
+    -- Icon-rail order: Home, Documents, Data, Tasks, (System if Setup/
+    -- Admin). No separate New Document icon -- the document tree's own
+    -- "+ New document" button already covers that entry point. Chat has
+    -- no rail icon of its own either; it's the floating widget below.
     --
     -- No real nav items at all when nobody's authenticated (author ==
     -- nil, e.g. /login) -- every one of them just bounces back to
@@ -358,7 +358,7 @@ function html.page_shell(title, active, body, nonce, show_sql, show_admin, has_t
     if author != nil then
         nav_items = {
             {key = "home", href = "/", label = "Home", icon = ICON_HOME},
-            {key = "documents", href = "documents", label = "Notebook", icon = ICON_NOTEBOOK},
+            {key = "documents", href = "documents", label = "Documents", icon = ICON_NOTEBOOK},
             {key = "data", href = "data", label = "Data", icon = ICON_DATA},
         }
         -- Only a real rail icon when a deployment actually seeded a
@@ -734,8 +734,8 @@ function html.render(entity_type, layout_json, nonce, locked_fields)
             return match ? match[1] : "";
         }
 
-        // Which notebook entry (wiki page) this registration table is
-        // embedded in, for ledger provenance (source_notebook_entry_id).
+        // Which document this registration table is embedded in, for
+        // ledger provenance (source_notebook_entry_id).
         // An explicit ?entry= on this iframe's own src overrides
         // auto-detection via document.referrer (the parent page's URL,
         // set by the browser for a same-origin iframe navigation) --
@@ -3076,8 +3076,8 @@ function html.render_home(theme, show_sql, show_admin, has_tasks_view)
             <p>Welcome back. Use the sidebar to get around, or jump in below.</p>
         </div>
         <ul class="platform-sitemap">
-            <li><a href="document-edit">New Page</a><p>Write a new notebook page from scratch.</p></li>
-            <li><a href="documents">Notebook</a><p>Browse all pages, organized as a tree.</p></li>
+            <li><a href="document-edit">New Document</a><p>Write a new document from scratch.</p></li>
+            <li><a href="documents">Documents</a><p>Browse all documents, organized as a tree.</p></li>
             <li><a href="data">Data</a><p>Registered entity types, row counts, and relations.</p></li>
             %s
             %s
@@ -3103,7 +3103,7 @@ function html.render_system(show_sql, show_admin)
         items = items .. "<li><a href=\"admin-api-keys\">API keys</a><p>Manage external-integration API keys.</p></li>"
         items = items .. "<li><a href=\"settings\">Settings</a><p>Site name, branding, colors, and chat prompt.</p></li>"
     end
-    items = items .. "<li><a href=\"templates\">Templates</a><p>Reusable entry templates for new pages.</p></li>"
+    items = items .. "<li><a href=\"templates\">Templates</a><p>Reusable entry templates for new documents.</p></li>"
 
     return string.format("""
 <div class="fossil-doc" data-title="System">
@@ -3380,7 +3380,7 @@ function html.render_templates_list(entries)
             escaped_desc = html.html_escape(description)
             items = items .. "<li><a href=\"template?template_name=" .. escaped_name .. "\">" ..
                 escaped_label .. "</a><p>" .. escaped_desc .. "</p>" ..
-                "<p><a href=\"document-edit?from_template=" .. escaped_name .. "\">+ New page from this&rarr;</a></p></li>"
+                "<p><a href=\"document-edit?from_template=" .. escaped_name .. "\">+ New document from this&rarr;</a></p></li>"
         end
     end
 
@@ -3473,7 +3473,7 @@ function html.render_template(def, rendered_markdown, nonce)
                 <p>%s</p>
                 <p><a href="templates">&larr; All templates</a></p>
             </div>
-            <a class="btn btn-primary" href="document-edit?from_template=%s">+ New page from template</a>
+            <a class="btn btn-primary" href="document-edit?from_template=%s">+ New document from template</a>
         </div>
         <p>Or select-all and copy the rendered snippet below.</p>
         <textarea class="platform-snippet" id="platform-template-content" readonly>%s</textarea>
@@ -3698,7 +3698,7 @@ function render_document_tree_level(by_parent, key, depth)
     return items
 end
 
--- <option> tags for the parent-page <select> in render_document_edit.
+-- <option> tags for the parent-document <select> in render_document_edit.
 -- Excludes `exclude_id` (a document can't be its own parent) -- doesn't
 -- also exclude its descendants (which would need a full descendant
 -- walk to build); choosing one of those is instead caught at save time
@@ -3707,7 +3707,7 @@ end
 --
 -- Duplicate titles are real and already fairly common (task: found
 -- live, 293 titles with duplicates in production, mostly "Experiment
--- N" pages resynced from Benchling more than once) -- picking a parent
+-- N" documents resynced from Benchling more than once) -- picking a parent
 -- by title alone is ambiguous whenever that happens, and the person
 -- doing it has no way to tell the options apart. Never shown as a bare
 -- internal id (meaningless to a human, and the whole point of this
@@ -3762,7 +3762,7 @@ function html.document_parent_options(rows, selected_id, exclude_id)
     return options
 end
 
--- `can_create` is a plain boolean (the "+ New page" link's own gate) --
+-- `can_create` is a plain boolean (the "+ New document" link's own gate) --
 -- html.lua never checks capabilities itself, same convention
 -- render_system's show_sql/show_admin params already use; cgi.lua
 -- decides and passes the answer in.
@@ -3784,17 +3784,17 @@ function html.render_document_tree(rows, can_create, nonce)
     tree_items = render_document_tree_level(by_parent, "root", 0)
     tree_html = "<ul class=\"platform-document-tree\">" .. tree_items .. "</ul>"
     if tree_items == "" then
-        tree_html = "<p class=\"platform-empty\">No pages yet.</p>"
+        tree_html = "<p class=\"platform-empty\">No documents yet.</p>"
     end
 
     new_page_link = ""
     if can_create == true then
-        new_page_link = "<a class=\"btn btn-primary\" href=\"document-edit\">+ New page</a> " ..
+        new_page_link = "<a class=\"btn btn-primary\" href=\"document-edit\">+ New document</a> " ..
             "<a class=\"btn btn-secondary\" href=\"templates\">From template&hellip;</a>"
     end
 
     return string.format("""
-<div class="fossil-doc" data-title="Pages">
+<div class="fossil-doc" data-title="Documents">
     <style>
 %s
 %s
@@ -3833,11 +3833,11 @@ function html.render_document_tree(rows, can_create, nonce)
     </style>
     <div class="platform-container">
         <div class="platform-header">
-            <h2>Pages</h2>
+            <h2>Documents</h2>
             %s
         </div>
         <div class="platform-document-search">
-            <input type="text" id="platform-document-search-input" placeholder="Fuzzy search page titles..." autocomplete="off">
+            <input type="text" id="platform-document-search-input" placeholder="Fuzzy search document titles..." autocomplete="off">
             <div class="platform-document-search-results" id="platform-document-search-results"></div>
         </div>
         %s
@@ -3876,7 +3876,7 @@ function html.render_document_tree(rows, can_create, nonce)
             scored.sort(function(a, b){ return b.score - a.score; });
             scored = scored.slice(0, 15);
             if (scored.length === 0) {
-                results.innerHTML = '<div class="platform-document-search-empty">No matching pages.</div>';
+                results.innerHTML = '<div class="platform-document-search-empty">No matching documents.</div>';
             } else {
                 results.innerHTML = scored.map(function(s){
                     var title = s.item.title.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -3936,7 +3936,7 @@ function html.render_document(doc, rendered_html, breadcrumbs, children, backlin
     end
     children_block = ""
     if children_html != "" then
-        children_block = "<div class=\"platform-document-children\"><h4>Sub-pages</h4><ul>" .. children_html .. "</ul></div>"
+        children_block = "<div class=\"platform-document-children\"><h4>Sub-documents</h4><ul>" .. children_html .. "</ul></div>"
     end
 
     backlinks_html = ""
@@ -3970,7 +3970,7 @@ function html.render_document(doc, rendered_html, breadcrumbs, children, backlin
         .platform-document-children h4, .platform-document-backlinks h4 { margin: 0 0 8px 0; font-size: 0.95rem; color: var(--platform-muted, #64748b); }
     </style>
     <div class="platform-container">
-        <div class="platform-document-breadcrumbs">%s <a href="documents">(all pages)</a></div>
+        <div class="platform-document-breadcrumbs">%s <a href="documents">(all documents)</a></div>
         <div class="platform-header">
             <h2>%s</h2>
             %s
@@ -3986,19 +3986,19 @@ function html.render_document(doc, rendered_html, breadcrumbs, children, backlin
      breadcrumb_html, html.html_escape(doc.title), edit_link, rendered_html, children_block, backlinks_block)
 end
 
--- `doc` is nil for "create a new page", or the current row for editing
--- an existing one. `parent_options_html` is pre-rendered <option> tags
--- (cgi.lua builds these from document.all_active, since it needs
--- entity.get to know which one -- if any -- is currently selected).
--- `prefill` (only used when doc == nil, i.e. a genuinely new, unsaved
--- page): {title=, content=} to seed the form with, e.g. from a
--- template.lua template's own rendered content (cgi.lua's
+-- `doc` is nil for "create a new document", or the current row for
+-- editing an existing one. `parent_options_html` is pre-rendered
+-- <option> tags (cgi.lua builds these from document.all_active, since
+-- it needs entity.get to know which one -- if any -- is currently
+-- selected). `prefill` (only used when doc == nil, i.e. a genuinely
+-- new, unsaved document): {title=, content=} to seed the form with,
+-- e.g. from a template.lua template's own rendered content (cgi.lua's
 -- /document-edit?from_template=<name>). Nothing is created yet --
--- still a plain new-page form the user reviews/edits before Save,
+-- still a plain new-document form the user reviews/edits before Save,
 -- same as if they'd typed it by hand.
 function html.render_document_edit(doc, parent_options_html, csrf_token, error_message, nonce, prefill)
     is_edit = doc != nil
-    heading = "New page"
+    heading = "New document"
     entity_id_value = ""
     title_value = ""
     content_value_raw = ""
@@ -4074,7 +4074,7 @@ function html.render_document_edit(doc, parent_options_html, csrf_token, error_m
             initialEditType: 'markdown',
             previewStyle: 'vertical',
             initialValue: "%s",
-            placeholder: 'Write in Markdown. Link to other pages with [[title]] or [[folder/title]].',
+            placeholder: 'Write in Markdown. Link to other documents with [[title]] or [[folder/title]].',
             // WYSIWYG mode has no built-in notion of this project's own
             // "[[title]]" link syntax -- without a widget rule it shows
             // as inert literal text. This only styles it as recognized
@@ -4262,7 +4262,7 @@ function html.render_chat(sessions, session, messages, pending, csrf_token, nonc
         <form method="POST" action="chat-message" class="platform-chat-input-form">
             <input type="hidden" name="csrf_token" value="%s">
             <input type="hidden" name="session_id" value="%s">
-            <input type="text" name="message" placeholder="Ask something, or ask the assistant to search or create a page..." required autofocus>
+            <input type="text" name="message" placeholder="Ask something, or ask the assistant to search or create a document..." required autofocus>
             <button type="submit" class="btn btn-primary">Send</button>
         </form>
 """, html.html_escape(csrf_token), html.html_escape(session.id))
@@ -4401,7 +4401,7 @@ function html.render_chat_widget(nonce)
         <div class="platform-chat-widget-resize-handle" id="platform-chat-widget-resize-handle"></div>
         <div class="platform-chat-widget-header">Chat<button type="button" class="platform-chat-widget-new" id="platform-chat-widget-new" title="Start a new chat">+ New chat</button></div>
         <div class="platform-chat-widget-messages" id="platform-chat-widget-messages">
-            <p class="platform-chat-widget-empty">Ask something, or ask the assistant to search or create a page...</p>
+            <p class="platform-chat-widget-empty">Ask something, or ask the assistant to search or create a document...</p>
         </div>
         <form class="platform-chat-widget-input" id="platform-chat-widget-form">
             <input type="text" id="platform-chat-widget-text" placeholder="Message" required autofocus>
@@ -4455,7 +4455,7 @@ function html.render_chat_widget(nonce)
     }
     function render(state) {
         if (!state || !state.messages || state.messages.length === 0) {
-            messagesEl.innerHTML = '<p class="platform-chat-widget-empty">Ask something, or ask the assistant to search or create a page...</p>';
+            messagesEl.innerHTML = '<p class="platform-chat-widget-empty">Ask something, or ask the assistant to search or create a document...</p>';
         } else {
             var html = '';
             state.messages.forEach(function(msg){

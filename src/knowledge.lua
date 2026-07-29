@@ -187,7 +187,7 @@ end
 -- A document counts as "in the pool" for stats/listing once it's
 -- actually been retrieved, or was created as system/agent-derived
 -- content in the first place -- distinguishing that from every other
--- ordinary, never-touched Notebook page.
+-- ordinary, never-touched document.
 KNOWLEDGE_MEMBER_WHERE = "(retrieval_count > 0 OR (source_type IS NOT NULL AND source_type != ''))"
 
 --------------------------------------------------------------------------
@@ -205,7 +205,7 @@ end
 
 -- Creates a genuinely new document (chat reasoning today; future
 -- distilled notes -- task #107) under the Knowledge Pool folder --
--- there's no existing page to attach this content to, unlike a search
+-- there's no existing document to attach this content to, unlike a search
 -- hit against a document that already exists. Attributed to the real
 -- logged-in user, same as any other document, not a synthetic actor --
 -- the Knowledge Pool folder itself is the only thing authored as
@@ -270,7 +270,7 @@ end
 
 -- task #107: the agent-driven counterpart to knowledge.create_document_
 -- note's reasoning-note path -- a genuinely new, concise, single-idea
--- document distilled from a source (an existing page, a chat
+-- document distilled from a source (an existing document, a chat
 -- exchange), not a raw mirror of it. Always starts at tier 0 like any
 -- new pool document -- earns its way up through the same heat/
 -- retrieval mechanism as everything else, never pre-promoted just
@@ -318,7 +318,7 @@ end
 -- formula and records the per-hit row audit-style, mirroring
 -- ai_note_record_retrieval exactly (see document.reinforcement_delta).
 -- content_hash is refreshed on every hit (not just at creation) so
--- dedup review stays accurate even as a page's content is edited over
+-- dedup review stays accurate even as a document's content is edited over
 -- time.
 function knowledge.record_retrieval_hit(db_path, retrieval_id, document_id, tier, rank, score, content_hash)
     delta = document.reinforcement_delta(tier)
@@ -343,7 +343,7 @@ end
 
 -- Canonical = lowest id sharing the same content hash. Only ever
 -- MUTATES duplicate_of/merged_into for a system/agent-derived document
--- (source_type set) -- a real user-authored page is never silently
+-- (source_type set) -- a real user-authored document is never silently
 -- folded into another one just because their content happens to
 -- match; the status is still reported either way for visibility.
 function knowledge.duplication_status(db_path, document_id, content_hash, source_type)
@@ -376,7 +376,7 @@ end
 -- mutation (retitle, dedup, tier promotion), and records one
 -- knowledge_review row per document for audit. Retitling only ever
 -- applies to system/agent-derived documents (source_type set) -- a
--- real user-authored page's title is never rewritten out from under
+-- real user-authored document's title is never rewritten out from under
 -- them, even if it happens to look generic ("note", "untitled", ...).
 -- `author` (task #108) attributes any resulting distillation
 -- (knowledge.maybe_distill) to the real user whose retrieval actually
@@ -963,7 +963,7 @@ end
 -- field (added below) is the exact figure review/promotion decisions
 -- actually use. Restricted to documents that are actually "in the
 -- pool" (see KNOWLEDGE_MEMBER_WHERE) -- an ordinary, never-retrieved
--- Notebook page doesn't show up here just because it exists.
+-- document doesn't show up here just because it exists.
 function knowledge.list_documents(db_path, tier)
     query = string.format(
         "SELECT * FROM document WHERE %s AND (archived_at IS NULL OR archived_at = '')", KNOWLEDGE_MEMBER_WHERE

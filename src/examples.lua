@@ -122,7 +122,7 @@ end
 
 EXAMPLE_TEMPLATE = """-- Example entry template (see src/template.lua's own header comment
 -- for the full shape reference). Produces a Markdown snippet a user
--- copies into a new Notebook page -- templates never write a page
+-- copies into a new document -- templates never write a document
 -- directly, so this carries no execution risk and needs no admin
 -- approval the way extensions/views do.
 return {

@@ -665,7 +665,7 @@ function cgi.handle_request()
         if via_api_key then
             return print_response("403 Forbidden", "application/json", json.encode({error = "Insufficient capability"}))
         end
-        return print_response("403 Forbidden", "text/html", "<h3>Forbidden: requires check-in capability</h3>")
+        return print_response("403 Forbidden", "text/html", "<h3>Forbidden: requires baseline capability</h3>")
     end
 
     if path_info == "/register" then
@@ -950,7 +950,7 @@ function cgi.handle_request()
         end
         doc = entity.get(db_path, "document", entity_id)
         if doc == nil then
-            return print_response("404 Not Found", "text/html", "<h3>Error: no such page #" .. tostring(entity_id) .. "</h3>")
+            return print_response("404 Not Found", "text/html", "<h3>Error: no such document #" .. tostring(entity_id) .. "</h3>")
         end
         rendered_html = document.render_html(db_path, doc.content)
         rendered_html = html.expand_inline_views(db_path, rendered_html)
@@ -969,17 +969,17 @@ function cgi.handle_request()
         if entity_id != nil then
             doc = entity.get(db_path, "document", entity_id)
             if doc == nil then
-                return print_response("404 Not Found", "text/html", "<h3>Error: no such page #" .. tostring(entity_id) .. "</h3>")
+                return print_response("404 Not Found", "text/html", "<h3>Error: no such document #" .. tostring(entity_id) .. "</h3>")
             end
         end
 
-        -- task: "create new page from template" -- prefills a brand new
-        -- (still unsaved) page's title/content from one of template.lua's
+        -- task: "create new document from template" -- prefills a brand new
+        -- (still unsaved) document's title/content from one of template.lua's
         -- reusable Entry templates, same rendered content the read-only
         -- /template page already shows, just landed in the real editor
         -- instead of a copy-paste-it-yourself textarea. Only applies to a
-        -- genuinely new page (doc == nil) -- ?from_template on an existing
-        -- page's edit URL would silently clobber real content otherwise.
+        -- genuinely new document (doc == nil) -- ?from_template on an existing
+        -- document's edit URL would silently clobber real content otherwise.
         prefill = nil
         if doc == nil and params.from_template != nil and params.from_template != "" then
             templates_dir = config.templates_dir(root)
@@ -1000,9 +1000,9 @@ function cgi.handle_request()
         end
         parent_options_html = html.document_parent_options(document.all_active(db_path), parent_id, entity_id)
         body = html.render_document_edit(doc, parent_options_html, default_value(cookies.csrf, ""), nil, nonce, prefill)
-        page_context = {page_type = "document_edit", entity_type = "document", entity_id = entity_id, title = "Edit page"}
+        page_context = {page_type = "document_edit", entity_type = "document", entity_id = entity_id, title = "Edit document"}
         return print_response("200 OK", "text/html",
-            html.page_shell("Edit page", "documents", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author, page_context))
+            html.page_shell("Edit document", "documents", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author, page_context))
     end
 
     if path_info == "/document-save" and method == "POST" then
@@ -1021,10 +1021,10 @@ function cgi.handle_request()
             doc = entity.get(db_path, "document", entity_id)
             parent_options_html = html.document_parent_options(document.all_active(db_path), parent_id, entity_id)
             body = html.render_document_edit(doc, parent_options_html, default_value(cookies.csrf, ""),
-                "Can't move a page underneath its own sub-page.", nonce)
-            page_context = {page_type = "document_edit", entity_type = "document", entity_id = entity_id, title = "Edit page"}
+                "Can't move a document underneath its own sub-document.", nonce)
+            page_context = {page_type = "document_edit", entity_type = "document", entity_id = entity_id, title = "Edit document"}
             return print_response("200 OK", "text/html",
-                html.page_shell("Edit page", "documents", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author, page_context))
+                html.page_shell("Edit document", "documents", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author, page_context))
         end
 
         saved_id = nil
@@ -1045,9 +1045,9 @@ function cgi.handle_request()
             parent_options_html = html.document_parent_options(document.all_active(db_path), parent_id, entity_id)
             body = html.render_document_edit(doc, parent_options_html, default_value(cookies.csrf, ""),
                 issues_to_message(issues), nonce)
-            page_context = {page_type = "document_edit", entity_type = "document", entity_id = entity_id, title = "Edit page"}
+            page_context = {page_type = "document_edit", entity_type = "document", entity_id = entity_id, title = "Edit document"}
             return print_response("200 OK", "text/html",
-                html.page_shell("Edit page", "documents", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author, page_context))
+                html.page_shell("Edit document", "documents", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author, page_context))
         end
 
         return print_response("302 Found", "text/plain", "", {"Location: document?entity_id=" .. tostring(saved_id)})
