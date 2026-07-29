@@ -401,6 +401,7 @@ function html.page_shell(title, active, body, nonce, show_sql, show_admin, has_t
         user_box = string.format("""
 <div class="platform-nav-user">
     <div class="platform-nav-user-name">%s</div>
+    <a href="account-password">Change password</a>
     <a href="logout">Log out</a>
 </div>
 """, html.html_escape(author))
@@ -496,7 +497,7 @@ body {
     white-space: nowrap;
     margin-bottom: 4px;
 }
-.platform-nav-user a { font-size: 0.75rem; color: var(--platform-accent, #4f46e5); text-decoration: none; font-weight: 600; }
+.platform-nav-user a { display: block; font-size: 0.75rem; color: var(--platform-accent, #4f46e5); text-decoration: none; font-weight: 600; }
 .platform-nav-user a:hover { text-decoration: underline; }
 .platform-nav-brand { display: block; padding: 4px; margin-bottom: 8px; text-align: center; }
 .platform-nav-brand img { width: 100%%; max-width: 40px; height: auto; display: block; margin: 0 auto; }
@@ -2657,6 +2658,58 @@ function html.render_login(error_message, nonce)
     </form>
 </div>
 """, platform_container_css(800), platform_button_css(), error_html)
+end
+
+-- Self-service password change -- every capability level (baseline "i"
+-- included) can reach this via the "Change password" link in the nav
+-- user box. Deliberately narrow: cgi.lua's route always targets the
+-- requesting session's own login (never an arbitrary login field the
+-- way /admin-users-password's admin-only form does) and requires the
+-- current password to verify before setting a new one. No broader
+-- account-settings page, no other fields -- just this.
+function html.render_account_password(csrf_token, message, is_error)
+    render_lib = require("render")
+
+    message_html = ""
+    if message != nil and message != "" then
+        css_class = "platform-account-message"
+        if is_error == true then
+            css_class = "platform-account-message platform-account-message-error"
+        end
+        message_html = render_lib.render(
+            "<div class=\"" .. css_class .. "\">{{ message }}</div>",
+            {message = message}
+        )
+    end
+
+    return string.format("""
+<div class="fossil-doc" data-title="Change password">
+    <style>
+%s
+%s
+        .platform-account-card { max-width: 360px; margin: 60px auto; padding: 28px; background: var(--platform-bg, #f8fafc); border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); }
+        .platform-account-card h2 { margin: 0 0 18px 0; font-size: 1.4rem; font-weight: 700; color: var(--platform-heading, #0f172a); }
+        .platform-account-card label { display: block; margin-bottom: 4px; font-size: 0.88rem; color: var(--platform-muted, #64748b); }
+        .platform-account-card input[type=password] {
+            width: 100%%; box-sizing: border-box; padding: 8px 10px; margin-bottom: 14px;
+            border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-item, 10px); font-size: 0.95rem;
+        }
+        .platform-account-message { color: #166534; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: var(--platform-radius-item, 10px); padding: 10px 12px; margin-bottom: 14px; font-size: 0.88rem; }
+        .platform-account-message-error { color: #991b1b; background: #fef2f2; border-color: #fecaca; }
+        .platform-account-card .btn { width: 100%%; }
+    </style>
+    <form class="platform-account-card" method="POST" action="account-password">
+        <h2>Change password</h2>
+        %s
+        <input type="hidden" name="csrf_token" value="%s">
+        <label for="current_password">Current password</label>
+        <input type="password" id="current_password" name="current_password" autocomplete="current-password" required>
+        <label for="new_password">New password</label>
+        <input type="password" id="new_password" name="new_password" autocomplete="new-password" required>
+        <button type="submit" class="btn btn-primary">Change password</button>
+    </form>
+</div>
+""", platform_container_css(800), platform_button_css(), message_html, html.html_escape(csrf_token))
 end
 
 -- Minimal admin-only user management page -- Admin ("a") capability

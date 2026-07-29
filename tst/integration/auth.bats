@@ -305,3 +305,68 @@ EOF
     [[ "$output" =~ 'class="btn btn-secondary">Unarchive</button>' ]]
     [[ ! "$output" =~ 'class="btn btn-danger">Unarchive</button>' ]]
 }
+
+@test "/account-password lets a plain baseline user change their own password (no Admin capability needed)" {
+    read session csrf < <(login_test_user "alice" "i")
+    cookie="session=${session}; csrf=${csrf}"
+
+    run raw_admin_action "/account-password" "$cookie" "csrf_token=${csrf}&current_password=testpass123&new_password=newpass456"
+    [[ "$output" =~ "200 OK" ]]
+    [[ "$output" =~ "Password changed." ]]
+
+    run raw_login "alice" "newpass456"
+    [[ "$output" =~ "302 Found" ]]
+    [[ "$output" =~ "Set-Cookie: session=alice." ]]
+}
+
+@test "/account-password rejects a wrong current password, and the password stays unchanged" {
+    read session csrf < <(login_test_user "bob" "i")
+    cookie="session=${session}; csrf=${csrf}"
+
+    run raw_admin_action "/account-password" "$cookie" "csrf_token=${csrf}&current_password=wrongpass&new_password=newpass456"
+    [[ "$output" =~ "200 OK" ]]
+    [[ "$output" =~ "Current password is incorrect." ]]
+
+    run raw_login "bob" "testpass123"
+    [[ "$output" =~ "302 Found" ]]
+}
+
+@test "/account-password always targets the requester's own login, never an arbitrary one from the form" {
+    "$BIN" user add carol carolpass123 i
+    read session csrf < <(login_test_user "dave" "i")
+    cookie="session=${session}; csrf=${csrf}"
+
+    # Even if a login field were somehow smuggled in, the route reads
+    # `author` from the verified session, never from form data -- this
+    # confirms the real route has no way for a smuggled `login` field to
+    # redirect the change onto a different account.
+    run raw_admin_action "/account-password" "$cookie" "csrf_token=${csrf}&login=carol&current_password=testpass123&new_password=newpass456"
+    [[ "$output" =~ "Password changed." ]]
+
+    run raw_login "carol" "carolpass123"
+    [[ "$output" =~ "302 Found" ]]
+    run raw_login "dave" "newpass456"
+    [[ "$output" =~ "302 Found" ]]
+}
+
+@test "/account-password requires the matching CSRF token" {
+    read session csrf < <(login_test_user "erin" "i")
+    cookie="session=${session}; csrf=${csrf}"
+
+    run raw_admin_action "/account-password" "$cookie" "csrf_token=wrong-token&current_password=testpass123&new_password=newpass456"
+    [[ "$output" =~ "403 Forbidden" ]]
+
+    run raw_login "erin" "testpass123"
+    [[ "$output" =~ "302 Found" ]]
+}
+
+@test "GET /account-password renders the form for any logged-in user" {
+    read session csrf < <(login_test_user "frank" "i")
+
+    GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/account-password" QUERY_STRING="" \
+        HTTP_COOKIE="session=${session}; csrf=${csrf}" run "$BIN"
+    [[ "$output" =~ "200 OK" ]]
+    [[ "$output" =~ "Change password" ]]
+    [[ "$output" =~ 'name="current_password"' ]]
+    [[ "$output" =~ 'name="new_password"' ]]
+}

@@ -668,6 +668,40 @@ function cgi.handle_request()
         return print_response("403 Forbidden", "text/html", "<h3>Forbidden: requires baseline capability</h3>")
     end
 
+    -- Self-service password change -- baseline "i" capability only
+    -- (every logged-in account, not just Admin), and always targets the
+    -- requesting session's own `author`, never a form-supplied login the
+    -- way /admin-users-password's admin-only form does. Requires the
+    -- current password to verify (auth.login's own bcrypt check) before
+    -- setting a new one.
+    if path_info == "/account-password" then
+        if method == "POST" then
+            form = parse_query(io.read("*all"))
+            if not require_csrf(cookies, form.csrf_token) then
+                body = html.render_account_password(default_value(cookies.csrf, ""), "CSRF check failed.", true)
+                return print_response("403 Forbidden", "text/html",
+                    html.page_shell("Change password", "", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
+            end
+            if auth.login(db_path, author, default_value(form.current_password, "")) == nil then
+                body = html.render_account_password(default_value(cookies.csrf, ""), "Current password is incorrect.", true)
+                return print_response("200 OK", "text/html",
+                    html.page_shell("Change password", "", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
+            end
+            ok, err = auth.set_password(db_path, author, form.new_password)
+            if ok == nil then
+                body = html.render_account_password(default_value(cookies.csrf, ""), tostring(err), true)
+                return print_response("200 OK", "text/html",
+                    html.page_shell("Change password", "", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
+            end
+            body = html.render_account_password(default_value(cookies.csrf, ""), "Password changed.", false)
+            return print_response("200 OK", "text/html",
+                html.page_shell("Change password", "", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
+        end
+        body = html.render_account_password(default_value(cookies.csrf, ""), nil, false)
+        return print_response("200 OK", "text/html",
+            html.page_shell("Change password", "", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
+    end
+
     if path_info == "/register" then
         entity_type = params.type
         if entity_type == nil or entity_type == "" then
