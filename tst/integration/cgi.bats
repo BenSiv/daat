@@ -279,6 +279,51 @@ EOF
     [[ "$output" =~ "Dr. Cohen" ]]
 }
 
+@test "/api/preview resolves a polymorphic_reference field to a real link, not 'table: 0x...' (regression)" {
+    # Reported live: the hover-popover preview on a sample's own id link
+    # showed its polymorphic_reference "source" field as a raw Lua
+    # table address ("table: 0x561056eb87f0") instead of the linked
+    # record. Root cause: handle_preview's own field_lines loop did a
+    # bare tostring(value) on every field, and only special-cased plain
+    # "reference" fields -- entity.apply_computed_field_overrides
+    # (needed just above it) turns a polymorphic_reference field's raw
+    # column into a {type=,id=} array, which tostring()s as a table
+    # address for any field type this loop didn't special-case
+    # (polymorphic_reference, multi_reference, multi_polymorphic_
+    # reference alike). Fixed by reusing html.display_field_value, the
+    # same dispatcher /browse and /detail already use.
+    mkdir -p schemas
+    cat > schemas/plant.lua <<'EOF'
+return {
+  name = "plant",
+  fields = {
+    {name = "label", type = "text", required = true, display = true},
+  },
+}
+EOF
+    cat > schemas/sampling.lua <<'EOF'
+return {
+  name = "sampling",
+  fields = {
+    {name = "label", type = "text", required = true},
+    {name = "source", type = "polymorphic_reference", required = false,
+      allowed_entity_types = {"plant"}},
+  },
+}
+EOF
+    "$BIN" schema add schemas/plant.lua
+    "$BIN" schema add schemas/sampling.lua
+    "$BIN" entity create plant label="Rosemary #1" >/dev/null
+    plant_id=$(sqlite3 "$TEST_DIR/.store/store.db" "SELECT id FROM plant WHERE label = 'Rosemary #1';")
+    "$BIN" entity create sampling label="Sampling A" source="plant:${plant_id}" >/dev/null
+    sampling_id=$(sqlite3 "$TEST_DIR/.store/store.db" "SELECT id FROM sampling WHERE label = 'Sampling A';")
+
+    run_cgi "/api/preview" "type=sampling&entity_id=${sampling_id}"
+    [ "$status" -eq 0 ]
+    [[ ! "$output" =~ "table: 0x" ]]
+    [[ "$output" =~ "Rosemary #1" ]]
+}
+
 @test "/sql query textarea overrides Fossil's base 95% textarea max-width" {
     # Reported live: the query textarea measured visibly narrower than
     # the prompt-input+button row above it -- traced to Fossil's own

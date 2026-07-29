@@ -1688,7 +1688,13 @@ end
 
 -- Picks the right renderer for a field's value, given its schema.layout()
 -- metadata (type + ref_entity_type, when type=="reference"/"multi_reference").
-function display_field_value(db_path, field, value)
+-- Namespaced under html. (not a bare global like most of this file's own
+-- render_* helpers) specifically so cgi.lua's handle_preview can call it
+-- too -- a bare global declared here isn't reachable from another
+-- required file's own scope even though the build bundles everything
+-- into one binary (see entity.apply_computed_field_overrides' own
+-- comment for the same gotcha, hit twice this session).
+function html.display_field_value(db_path, field, value)
     if field.type == "reference" and field.ref_entity_type != nil then
         return render_reference_value(db_path, field.ref_entity_type, value)
     end
@@ -1739,7 +1745,7 @@ function html.render_browse(db_path, entity_type, layout, rows, page, page_size,
         cells = "<td><a href=\"detail?type=" .. escaped_type .. "&entity_id=" .. tostring(row.id) ..
             "\">" .. id_link_text .. "</a></td>"
         for _, field in ipairs(layout.fields) do
-            cells = cells .. "<td>" .. display_field_value(db_path, field, row[field.name]) .. "</td>"
+            cells = cells .. "<td>" .. html.display_field_value(db_path, field, row[field.name]) .. "</td>"
         end
         body_rows = body_rows .. "<tr>" .. cells .. "</tr>"
     end
@@ -1890,7 +1896,7 @@ function html.render_detail(db_path, entity_type, layout, row, history, nonce, h
     for _, field in ipairs(layout.fields) do
         fields_html = fields_html .. "<div class=\"detail-row\"><span class=\"detail-label\">" ..
             html.html_escape(field.label) .. "</span><span class=\"detail-value\">" ..
-            display_field_value(db_path, field, row[field.name]) .. "</span></div>"
+            html.display_field_value(db_path, field, row[field.name]) .. "</span></div>"
     end
 
     related_html = related_records_html(db_path, related, row.id)

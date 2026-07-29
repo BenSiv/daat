@@ -400,9 +400,9 @@ function handle_preview(db_path, params)
     -- Same raw-row override entity.list/entity.get need (see entity.lua's
     -- apply_computed_field_overrides) -- without it this preview would
     -- silently show a stale leftover column's old value instead of a
-    -- polymorphic_reference field's real current link (doesn't crash
-    -- here, unlike /browse, since this just tostring()s the value below
-    -- rather than iterating it -- but it'd be showing the wrong thing).
+    -- polymorphic_reference field's real current link (structured as a
+    -- Lua array here, not a string -- see the "table: 0x..." bug fixed
+    -- just below via html.display_field_value).
     entity.apply_computed_field_overrides(db_path, entity_type, rows)
     row = rows[1]
 
@@ -422,16 +422,25 @@ function handle_preview(db_path, params)
     for _, field in ipairs(fields) do
         if shown < 5 then
             value = row[field.name]
-            if value != nil and tostring(value) != "" then
-                display_value = tostring(value)
-                if field.type == "reference" and field.ref_entity_type != nil then
-                    ref_label = html.entity_display_label(db_path, field.ref_entity_type, value)
-                    if ref_label != nil then
-                        display_value = ref_label
-                    end
-                end
+            -- A multi_reference/(multi_)polymorphic_reference field's
+            -- value is a plain Lua array (see entity.apply_computed_
+            -- field_overrides above), not a scalar -- tostring(value)
+            -- on one of those is "table: 0x...", not "". Real bug hit
+            -- live: this preview showed a sample's polymorphic_reference
+            -- source field that way instead of the real linked record.
+            -- html.display_field_value (same dispatcher /browse and
+            -- /detail already use) renders every field type correctly
+            -- and already HTML-escapes/links as needed, so it isn't
+            -- re-escaped here the way the old bare tostring() was.
+            is_empty = value == nil
+            if type(value) == "table" then
+                is_empty = #value == 0
+            elseif tostring(value) == "" then
+                is_empty = true
+            end
+            if is_empty == false then
                 field_lines = field_lines .. "<div><strong>" .. html.html_escape(field.label) .. ":</strong> " ..
-                    html.html_escape(display_value) .. "</div>"
+                    html.display_field_value(db_path, field, value) .. "</div>"
                 shown = shown + 1
             end
         end
