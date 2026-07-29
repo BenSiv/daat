@@ -16,14 +16,14 @@
 -- searched IS the record that accrues heat/tier; there's no separate
 -- "note" created to shadow it. The only thing still created fresh here
 -- is a genuinely new document (e.g. a chat's leaked reasoning text, or
--- a future distilled note -- task #107) that has no existing page to
--- attach to -- those land under document.ensure_knowledge_pool_folder,
--- visible and browsable like any other Notebook folder, never hidden.
+-- a future distilled note -- task #107) that has no existing document
+-- to attach to -- those land under document.ensure_knowledge_pool_folder,
+-- visible and browsable like any other document folder, never hidden.
 --
 -- The pure tier/heat/dedup heuristics (content_hash, effective_heat,
--- promotion_target_tier, atomicity_status, title_is_generic, ...) live
--- in document.lua now, alongside the columns they score -- this file
--- depends on document.lua, never the reverse.
+-- promotion_target_tier, content_shape, was_revised, title_is_generic,
+-- ...) live in document.lua now, alongside the columns they score --
+-- this file depends on document.lua, never the reverse.
 --
 -- Retrieval/review bookkeeping (knowledge_retrieval, knowledge_
 -- retrieval_document, knowledge_review) stays in its own hand-rolled
@@ -401,7 +401,14 @@ function knowledge.review_retrieval(db_path, retrieval_id, author)
             if body == nil then
                 body = ""
             end
-            atomicity = document.atomicity_status(body)
+            -- content_shape/duplication/connectivity/title checks stay
+            -- unconditional every review -- cheap (regex over an
+            -- already-loaded body, or one indexed SELECT). Only the
+            -- tier recompute itself (document.was_revised's ledger
+            -- round-trip) is gated behind due_for_review -- retrieval_
+            -- count/effective_heat no longer decide the tier, only
+            -- whether it's worth rechecking at all.
+            content_shape = document.content_shape(body)
             duplication = knowledge.duplication_status(db_path, doc.id, doc.content_hash, doc.source_type)
             connectivity = document.connectivity_status(peer_count)
             is_duplicate = string.match(duplication, "^duplicate%-of%-") != nil
@@ -413,11 +420,12 @@ function knowledge.review_retrieval(db_path, retrieval_id, author)
                 title_status = "retitled"
             end
 
-            target_tier = document.promotion_target_tier(
-                tonumber(doc.tier), tonumber(doc.retrieval_count),
-                document.effective_heat(tonumber(doc.heat), doc.last_retrieved_at),
-                is_duplicate, atomicity
-            )
+            target_tier = tonumber(doc.tier)
+            if knowledge.due_for_review(tonumber(doc.retrieval_count),
+                                         document.effective_heat(tonumber(doc.heat), doc.last_retrieved_at)) then
+                maturity = document.processing_maturity(db_path, doc.id, body, doc.source_type)
+                target_tier = document.promotion_target_tier(tonumber(doc.tier), is_duplicate, maturity.revised, content_shape)
+            end
 
             db.exec(db_path, string.format(
                 "UPDATE document SET tier = %d, title = %s, updated_at = %s WHERE id = %d;",
@@ -426,19 +434,23 @@ function knowledge.review_retrieval(db_path, retrieval_id, author)
             db.exec(db_path, string.format(
                 "INSERT INTO knowledge_review (retrieval_id, document_id, atomicity_status, connectivity_status, duplication_status, title_status) " ..
                 "VALUES (%d, %d, %s, %s, %s, %s);",
-                tonumber(retrieval_id), doc.id, db.quote(atomicity), db.quote(connectivity), db.quote(duplication), db.quote(title_status)
+                tonumber(retrieval_id), doc.id, db.quote(content_shape), db.quote(connectivity), db.quote(duplication), db.quote(title_status)
             ))
 
-            -- task #108: reactive distillation -- a document that just
-            -- reached "frequently retrieved and reviewed" (tier 2,
-            -- Curated Draft) generates its one atomic derivative right
-            -- here, inline, if it doesn't already have one. See
-            -- knowledge.maybe_distill's own comment for why this is a
-            -- direct one-shot model call rather than a full agent
-            -- session, and why the guard inside it keeps this a rare,
+            -- task #108: reactive distillation -- decoupled from
+            -- target_tier and from the source's own revised/tier state
+            -- (fixes a real dead-code bug: the old gate required
+            -- atomicity != "needs-split" to reach tier 2 at all, which
+            -- made maybe_distill's own "only distill from needs-split"
+            -- guard unreachable). Distillation cares whether the SOURCE
+            -- is worth extracting a card from -- a "developed",
+            -- multi-section document -- not whether it's been processed
+            -- itself. See knowledge.maybe_distill's own comment for why
+            -- this is a direct one-shot model call rather than a full
+            -- agent session, and why its own guard keeps this a rare,
             -- at-most-once-per-document cost, not a per-search tax.
-            if target_tier >= 2 then
-                knowledge.maybe_distill(db_path, author, doc, atomicity)
+            if content_shape == "developed" then
+                knowledge.maybe_distill(db_path, author, doc, content_shape)
             end
         end
     end
@@ -598,18 +610,18 @@ function knowledge.already_distilled_from(db_path, source_document_id)
     return rows != nil and rows[1] != nil
 end
 
--- Called from review_retrieval once a document's target_tier reaches 2
--- ("Curated Draft" -- retrieval_count>=4, effective_heat>=1.60, not
--- needs-split; see document.promotion_target_tier). Never distills a
--- document that's itself already a distilled note (source_type ==
--- 'distilled'), never redistills the same source twice, and skips a
--- source whose atomicity is already "ok"/"thin" -- there's nothing to
--- extract that isn't already there as-is.
-function knowledge.maybe_distill(db_path, author, doc, atomicity)
+-- Called from review_retrieval whenever a document's content_shape comes
+-- back "developed" (long, multi-section -- see document.content_shape).
+-- Never distills a document that's itself already a distilled note
+-- (source_type == 'distilled'), never redistills the same source twice,
+-- and only ever fires for "developed" content -- an already-"atomic" or
+-- "thin"/"simple" source has nothing worth extracting that isn't already
+-- there as-is.
+function knowledge.maybe_distill(db_path, author, doc, content_shape)
     if doc.source_type == "distilled" then
         return nil
     end
-    if atomicity == "ok" or atomicity == "thin" then
+    if content_shape != "developed" then
         return nil
     end
     if knowledge.already_distilled_from(db_path, doc.id) then
@@ -756,6 +768,23 @@ function knowledge.document_link_exists(db_path, document_a_id, document_b_id)
         LIMIT 1;
     """, tonumber(document_a_id), tonumber(document_b_id), tonumber(document_b_id), tonumber(document_a_id)))
     return rows != nil and rows[1] != nil
+end
+
+-- Whether a document has been retrieved/reinforced enough to be worth
+-- spending a ledger round-trip (document.was_revised) rechecking its
+-- processing maturity -- retrieval_count/effective_heat no longer
+-- decide the tier itself (see document.promotion_target_tier's own
+-- comment), only whether it's worth looking again at all. The heat leg
+-- exists because knowledge.spread_activation bumps a linked neighbor's
+-- heat without ever bumping its retrieval_count -- without it, a
+-- document that only ever accrues heat by spreading activation would
+-- never become due for review.
+DUE_FOR_REVIEW_RETRIEVAL_COUNT = 2
+DUE_FOR_REVIEW_HEAT = 1.15
+
+function knowledge.due_for_review(retrieval_count, effective_heat)
+    return tonumber(retrieval_count) >= DUE_FOR_REVIEW_RETRIEVAL_COUNT
+        or tonumber(effective_heat) >= DUE_FOR_REVIEW_HEAT
 end
 
 -- Whether a pair due a fresh look right now -- no prior review at all

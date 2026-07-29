@@ -933,7 +933,7 @@ AGENT_TOOLS = {
         },
         list = {
             destructive = false,
-            description = "List knowledge pool documents with their id, tier, atomicity (ok/thin/needs-split), heat, and retrieval count.",
+            description = "List knowledge pool documents with their id, tier, content shape (developed/atomic/thin/simple), heat, and retrieval count.",
             parameters = {
                 type = "object",
                 properties = {tier = {type = "integer", description = "optional, filter to one tier 0-3"}},
@@ -941,7 +941,7 @@ AGENT_TOOLS = {
         },
         distill = {
             destructive = true,
-            description = "Write a new, concise, single-idea document distilled from a source you've actually read (e.g. via entity.get). Not a raw copy -- extract the one core idea in your own words. Only do this for a source that's genuinely not already atomic (\"thin\"/\"ok\" sources have nothing worth extracting).",
+            description = "Write a new, concise, single-idea document distilled from a source you've actually read (e.g. via entity.get). Not a raw copy -- extract the one core idea in your own words. Only do this for a source that's genuinely \"developed\" (long/multi-section) -- an already-\"atomic\"/\"thin\"/\"simple\" source has nothing worth extracting.",
             parameters = {
                 type = "object",
                 properties = {
@@ -1513,10 +1513,11 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
     end
 
     -- Read-only listing (task #87, updated #106/#107) -- surfaces the
-    -- pool's real document ids/tiers/atomicity to the model. Atomicity
-    -- (task #107) is what the distillation pass reads to decide what's
-    -- actually worth distilling from -- "ok" already covers one focused
-    -- idea, nothing to extract that isn't already there. Optional
+    -- pool's real document ids/tiers/content shape to the model. Content
+    -- shape (task #107) is what the distillation pass reads to decide
+    -- what's actually worth distilling from -- only "developed"
+    -- (long/multi-section) content has something worth extracting; an
+    -- already-"atomic"/"thin"/"simple" document doesn't. Optional
     -- args.tier filters, same as the CLI.
     if tool_name == "knowledge" and method_name == "list" then
         rows = knowledge.list_documents(db_path, tonumber(args.tier))
@@ -2462,9 +2463,9 @@ end
 -- approve every distillation from the resulting session in the normal
 -- chat UI, same as any other destructive tool call.
 KNOWLEDGE_DISTILL_SYSTEM_PROMPT = """
-You are reviewing this deployment's knowledge pool: documents captured from real retrieval activity, tiered by how often and how reliably they've proven useful (tier 0 raw intake, tier 1 working set, tier 2 curated draft, tier 3 atomic durable record). Heat decays over time, so tier and retrieval count alone don't guarantee current relevance -- effective_heat (from knowledge.list) reflects that.
+You are reviewing this deployment's knowledge pool: documents tiered by processing maturity, not just how often they've been looked up (tier 0 raw intake, tier 1 curated draft, tier 2 developed reference, tier 3 atomic record). A document only advances once it's actually been worked on and its content earns the shape a tier requires -- retrieval count and heat (from knowledge.list) just decide whether it's due for a fresh look, not which tier it lands in.
 
-Use knowledge.list to see current pool documents: id, tier, atomicity (ok / thin / needs-split), effective heat, retrieval count. For a document flagged "needs-split" (covers more than one real idea, or is unusually long/unfocused), read its full content with entity.get (entity_type=document) and write ONE genuinely atomic, single-idea document distilled from it with knowledge.distill -- concise, self-contained, in your own words, not a verbatim copy of the source. Do not distill from a document that's already "ok" or "thin" -- there's nothing worth extracting that isn't already there as-is.
+Use knowledge.list to see current pool documents: id, tier, content shape (developed / atomic / thin / simple), effective heat, retrieval count. For a document flagged "developed" (long, multi-section, covers more than one real idea), read its full content with entity.get (entity_type=document) and write ONE genuinely atomic, single-idea document distilled from it with knowledge.distill -- concise, self-contained, in your own words, not a verbatim copy of the source. Do not distill from a document that's already "atomic", "thin", or "simple" -- there's nothing worth extracting that isn't already there as-is.
 
 Distilling nothing this pass is a completely acceptable outcome -- do not distill from a document you're unsure about; say why you're leaving it alone instead. When you're done, summarize what you reviewed and what you did (or didn't) distill.
 """

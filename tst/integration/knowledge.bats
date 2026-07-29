@@ -110,7 +110,7 @@ search_for_bioreactor_extra() {
     search_for_bioreactor
 
     tool_result=$(sqlite3 .store/store.db "SELECT content FROM agent_message WHERE role='tool_result' ORDER BY id DESC LIMIT 1;")
-    [[ "$tool_result" =~ "one of 2 pages titled 'Bioreactor SOP'" ]]
+    [[ "$tool_result" =~ "one of 2 documents titled 'Bioreactor SOP'" ]]
     [[ "$tool_result" =~ "etr_AAA111" ]]
     [[ "$tool_result" =~ "etr_BBB222" ]]
     [[ "$tool_result" =~ "never by asking the user for the id" ]]
@@ -154,7 +154,7 @@ search_for_bioreactor_extra() {
     [[ "$output" =~ "heat=1.15" ]]
 }
 
-@test "searching for the same document twice reuses its own row (no duplicate) and promotes it to tier 1" {
+@test "searching for the same document twice reuses its own row (no duplicate), but retrieval alone never promotes it (content-maturity, not retrieval count)" {
     "$BIN" entity create document title="Bioreactor Notes" content="cleaning steps for the bioreactor procedure"
     search_for_bioreactor
     search_for_bioreactor
@@ -167,10 +167,33 @@ search_for_bioreactor_extra() {
     # starts a fresh session).
     [[ "$output" =~ "notes=3 retrievals=2" ]]
 
-    # 2 retrievals crosses the tier-0->1 promotion threshold.
+    # Retrieval alone -- however many times -- never promotes a document
+    # past tier 0 under the content-maturity mechanism: nothing has
+    # actually worked on this document's content yet (document.was_revised
+    # is false), regardless of how due for review its retrieval_count/heat
+    # made it.
+    run "$BIN" knowledge list 0
+    [[ "$output" =~ "Bioreactor Notes" ]]
+    run "$BIN" knowledge list 1
+    [[ ! "$output" =~ "Bioreactor Notes" ]]
+}
+
+@test "editing a document's content, then searching for it, promotes it based on the edited content's own shape (content-maturity, not retrieval count)" {
+    "$BIN" entity create document title="Bioreactor Notes" content="cleaning steps for the bioreactor procedure"
+    # A single long paragraph (>120 words, one heading at most) is neither
+    # "developed" (needs >1 heading or >6 paragraphs) nor "atomic" (needs
+    # <=120 words) -- it's "simple", landing at tier 1 (Curated Draft).
+    long_content=$(printf 'word %.0s' $(seq 1 130))
+    "$BIN" entity update document 1 content="$long_content"
+    search_for_bioreactor
+
+    # A single retrieval already crosses due_for_review (heat 1.0 -> 1.15
+    # on the very first hit) -- document.was_revised is now true (a real
+    # entity.update ledger event exists for this document).
     run "$BIN" knowledge list 1
     [[ "$output" =~ "Bioreactor Notes" ]]
-    [[ "$output" =~ "retrievals=2" ]]
+    run "$BIN" knowledge list 0
+    [[ ! "$output" =~ "Bioreactor Notes" ]]
 }
 
 @test "platform knowledge show prints a document's full pool detail" {
@@ -257,7 +280,7 @@ search_for_bioreactor_extra() {
     [[ "$output" =~ "200 OK" ]]
     [[ "$output" =~ "Knowledge Pool" ]]
     [[ "$output" =~ "Tier 0: Raw Intake" ]]
-    [[ "$output" =~ "Tier 3: Atomic Records" ]]
+    [[ "$output" =~ "Tier 3: Atomic Record" ]]
 }
 
 @test "/knowledge is forbidden for a plain (non Setup/Admin) user" {

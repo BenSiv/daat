@@ -610,32 +610,58 @@ function document.effective_heat(heat, last_retrieved_at)
     return heat * (0.5 ^ (days / half_life))
 end
 
--- Adapted from ai_promotion_target_tier, bidirectional: recomputed from
--- scratch against CURRENT (decayed) stats every time instead of
--- starting from the document's existing tier, so one that cools off
--- (stops being retrieved, effective_heat decays below a threshold it
--- previously cleared) genuinely drops back down on its next review.
--- Duplicates never move.
-function document.promotion_target_tier(tier, retrieval_count, effective_heat, is_duplicate, atomicity)
+-- Adapted from ai_promotion_target_tier -- originally a pure function of
+-- retrieval_count/effective_heat/atomicity, redesigned (explicit
+-- platform-owner direction) around content-processing maturity instead:
+-- retrieval_count/effective_heat now only decide whether a document is
+-- *due for review* at all (knowledge.due_for_review) -- once it is, the
+-- tier itself is decided by whether the document has actually been
+-- worked on (`revised`) and what shape that work produced
+-- (`content_shape`), not by how often it's been looked up. Still
+-- bidirectional: recomputed from scratch against the CURRENT body every
+-- review, so a document edited back down to a smaller/thinner shape
+-- genuinely drops back down, the same "never ratcheted" property the
+-- old heat-based version had, just driven by content now instead of
+-- usage decay. Duplicates never move.
+function document.promotion_target_tier(tier, is_duplicate, revised, content_shape)
     if is_duplicate == true then
         return tier
     end
-    target = 0
-    if retrieval_count >= 2 then
-        target = 1
+    if revised != true then
+        return 0
     end
-    if retrieval_count >= 4 and effective_heat >= 1.60 and atomicity != "needs-split" then
-        target = 2
+    if content_shape == "developed" then
+        return 2
     end
-    if retrieval_count >= 7 and effective_heat >= 2.60 and atomicity == "ok" then
-        target = 3
+    if content_shape == "atomic" then
+        return 3
     end
-    return target
+    return 1
 end
 
--- Exact port of the atomicity heuristic: counts "#"-prefixed heading
--- lines and blank-line-delimited paragraphs.
-function document.atomicity_status(body)
+-- Naive whitespace-token count -- same "plain ASCII pattern matching,
+-- no external tokenizer" style as content_hash/atomicity_status.
+function document.word_count(body)
+    body = tostring(body)
+    count = 0
+    for _ in string.gmatch(body, "%S+") do
+        count = count + 1
+    end
+    return count
+end
+
+-- Four content shapes, replacing the old three-way atomicity_status:
+-- "developed" (multi-section/long -- the SAME heading/paragraph
+-- thresholds the old "needs-split" used, but now a *positive* Tier-2
+-- signal: a fully-written-up, wiki-page-like article, not a problem to
+-- flag), "atomic" (short, single-subject, definition-card-shaped --
+-- Tier 3 territory), "thin" (too little content to be a genuine card
+-- yet, regardless of revision), or "simple" (short-to-medium, not yet
+-- multi-section -- Tier 1 territory). The 120-word ceiling for "atomic"
+-- is sized like a glossary/flashcard definition plus one clarifying
+-- sentence; the 6-word floor excludes bare fragments ("see below") from
+-- being mistaken for a real one-line definition.
+function document.content_shape(body)
     body = tostring(body)
     heading_count = 0
     for _ in string.gmatch(body, "\n#[^\n]*") do
@@ -652,13 +678,49 @@ function document.atomicity_status(body)
         end
     end
 
+    words = document.word_count(body)
+
     if heading_count > 1 or paragraph_count > 6 then
-        return "needs-split"
+        return "developed"
     end
-    if paragraph_count <= 1 and string.len(body) < 64 then
+    if heading_count <= 1 and paragraph_count <= 2 and words >= 6 and words <= 120 then
+        return "atomic"
+    end
+    if words < 6 then
         return "thin"
     end
-    return "ok"
+    return "simple"
+end
+
+-- Ledger query, not a new column: `entity_event` already records every
+-- genuine create/update for every entity type, and review_retrieval's
+-- own tier/title housekeeping writes go through raw `db.exec`, never
+-- `entity.update` -- so this only ever reflects a real human/agent edit
+-- made through document.update_page, never the review pipeline's own
+-- writes.
+function document.was_revised(db_path, document_id)
+    rows = db.query(db_path, string.format(
+        "SELECT COUNT(*) AS n FROM entity_event WHERE entity_type = 'document' AND entity_id = %d AND event_type = 'update';",
+        tonumber(document_id)
+    ))
+    if rows == nil or rows[1] == nil then
+        return false
+    end
+    return tonumber(rows[1].n) > 0
+end
+
+-- A document created by knowledge.distill (source_type == "distilled")
+-- is, by construction, a deliberate rewrite -- that's strictly stronger
+-- evidence of "processed" than one incidental ledger edit, so it
+-- satisfies the revised gate without waiting for a second, separate
+-- edit after creation. It must still independently pass
+-- content_shape == "atomic" though -- provenance proves intent, not
+-- that the actual output came out short and single-subject; a
+-- rambling "distillation" doesn't get to skip the content check just
+-- because of where it came from.
+function document.processing_maturity(db_path, document_id, body, source_type)
+    revised = (source_type == "distilled") or document.was_revised(db_path, document_id)
+    return {revised = revised, content_shape = document.content_shape(body), word_count = document.word_count(body)}
 end
 
 function document.connectivity_status(peer_count)

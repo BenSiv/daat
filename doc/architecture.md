@@ -453,38 +453,53 @@ document. The pure tier/heat/dedup heuristics
   a query is still excluded outright, never ranked highly just because
   it's "hot"). Documents already folded into a canonical duplicate
   (`merged_into` set) are excluded from search outright.
-- **Tiers 0-3** (Raw Intake / Working Set / Curated Drafts / Atomic
-  Records). A document's `heat` starts at 1.0 and grows by `0.15 +
-  tier_weight` (0/0.10/0.20/0.35 for tiers 0-3) on every retrieval hit.
-  **Heat decays** (task #87; the source system never had this either --
-  heat only ever grew there too): an exponential half-life of 14 days
-  computed lazily wherever heat is used for a decision
-  (`document.effective_heat`), not a scheduled job rewriting rows --
-  this codebase has no in-app background scheduler at all (the one
-  periodic job anywhere in the system, Benchling sync, is an external
-  systemd timer, not something `cgi.lua` runs). Promotion is automatic
-  and threshold-based, never a human-review gate, and genuinely
-  bidirectional: recomputed fresh from current `retrieval_count` and
-  *decayed* heat every review, not ratcheted upward from the document's
-  existing tier -- one that stops being retrieved cools off and drops
-  back down, rather than staying at whatever tier it once reached
-  forever. `retrieval_count>=2` reaches tier 1; `>=4` with effective
-  heat `>=1.60` and non-"needs-split" atomicity reaches tier 2; `>=7`
-  with effective heat `>=2.60` and "ok" atomicity reaches tier 3.
-  Duplicates never move.
+- **Tiers 0-3** (Raw Intake / Curated Draft / Developed Reference /
+  Atomic Record) are driven by **content-processing maturity, not
+  retrieval frequency** (explicit platform-owner redesign; retrieval/
+  heat used to decide the tier directly, and had real problems: "Curated
+  Drafts" implied manual curation when promotion was purely automatic,
+  and "Atomic Records" captured only one of three thresholds a document
+  actually had to clear). A document's `heat` still starts at 1.0 and
+  grows by `0.15 + tier_weight` (0/0.10/0.20/0.35 for tiers 0-3) on every
+  retrieval hit, and still decays (task #87) with a 14-day half-life
+  computed lazily wherever it's used (`document.effective_heat`) -- but
+  `retrieval_count`/`effective_heat` now only decide
+  `knowledge.due_for_review` (retrieval_count>=2 or effective_heat>=1.15
+  -- a low bar: a single hit's minimum 0.15 delta already crosses it),
+  i.e. whether it's worth spending a ledger round-trip re-checking a
+  document's maturity at all, never which tier it lands in. Once due:
+  Tier 0 -> 1/2/3 requires `document.was_revised` (a real ledger
+  `entity_event` update row exists for this document -- or it was
+  created by `knowledge.distill`, itself a deliberate rewrite) --
+  otherwise it stays at Tier 0 no matter how many times it's been
+  retrieved. Which of 1/2/3 a revised document reaches then depends on
+  `document.content_shape`: "developed" (multi-section/long -- reaches
+  Tier 2) or "atomic" (short, single-subject, definition-card-shaped --
+  reaches Tier 3); anything else ("thin"/"simple") is Tier 1. Still
+  genuinely bidirectional -- recomputed fresh from the *current* body
+  every review, not ratcheted upward -- but now that means a document
+  edited back down to a smaller/thinner shape drops back down, not one
+  that's simply stopped being retrieved lately (a well-written Tier-2
+  article doesn't get worse just because nobody's searched for it this
+  month). Duplicates never move.
 - **Review is rule-based, never an LLM call** for the automatic pass
-  that runs after every retrieval: atomicity (heading/paragraph counts
-  -- more than one heading or more than six paragraphs is
-  "needs-split"; a short single paragraph is "thin"), duplication (a
-  content hash matched against a lower-id document), title quality (a
-  generic title like "Note" gets regenerated from the document's own
-  first real line), and connectivity (how many other documents were
-  retrieved in the same batch). **Title retitling and dedup-merging only
-  ever mutate a system/agent-derived document** (`source_type` set) --
-  a real user-authored page's title or search visibility is never
-  silently changed just because it looks generic or happens to share
-  content with another page; the review status is still recorded for
-  visibility either way.
+  that runs after every retrieval: content shape (heading/paragraph/word
+  counts -- more than one heading or more than six paragraphs is
+  "developed"; <=1 heading, <=2 paragraphs, and 6-120 words is "atomic";
+  under 6 words is "thin"; otherwise "simple"), duplication (a content
+  hash matched against a lower-id document), title quality (a generic
+  title like "Note" gets regenerated from the document's own first real
+  line), and connectivity (how many other documents were retrieved in
+  the same batch). Content shape/duplication/connectivity/title checks
+  all stay unconditional every review (cheap -- a regex over an
+  already-loaded body, or one indexed `SELECT`); only the tier recompute
+  itself (`document.was_revised`'s ledger query) is gated behind
+  `due_for_review`. **Title retitling and dedup-merging only ever
+  mutate a system/agent-derived document** (`source_type` set) -- a real
+  user-authored document's title or search visibility is never silently
+  changed just because it looks generic or happens to share content with
+  another document; the review status is still recorded for visibility
+  either way.
 - **Full prompt/reasoning/token persistence** (task #87, `knowledge_context`,
   adapted from `ai_context`): every real model call -- a chat turn,
   compaction's own summarization call -- persists the *exact* prompt
@@ -525,8 +540,8 @@ document. The pure tier/heat/dedup heuristics
   number). Always starts at tier 0 like any new pool document, filed
   under the Knowledge Pool folder with `source_type = 'distilled'`
   pointing back at its source. `knowledge.list`'s tool output includes
-  each document's `atomicity_status` (`ok`/`thin`/`needs-split`) so the
-  model can tell what's actually worth distilling from. Triggered
+  each document's `content_shape` (`developed`/`atomic`/`thin`/`simple`)
+  so the model can tell what's actually worth distilling from. Triggered
   explicitly (`platform knowledge distill`, dispatched from `main.lua`
   directly rather than `knowledge.do_knowledge` itself, for the same
   knowledge/agent circular-require reason `review` used to be) -- a
@@ -537,12 +552,16 @@ document. The pure tier/heat/dedup heuristics
   periodic/cron-style scan of the whole pool ("it should be just part
   of the general usage processing... pages that are frequently
   retrieved and audited might generate new atomic documents"). Instead,
-  `knowledge.review_retrieval` calls `knowledge.maybe_distill` inline,
-  in the same request, the moment a document's `target_tier` reaches 2
-  ("Curated Draft" -- the same promotion bar `document.
-  promotion_target_tier` already applies) *and* it has no distilled
-  derivative yet (`knowledge.already_distilled_from`) *and* its
-  atomicity isn't already `ok`/`thin`. That guard makes this a rare,
+  `knowledge.review_retrieval` calls `knowledge.maybe_distill` inline, in
+  the same request, whenever a document's `content_shape` comes back
+  "developed" (long, multi-section) *and* it has no distilled derivative
+  yet (`knowledge.already_distilled_from`) -- deliberately decoupled
+  from `target_tier`/`was_revised` entirely: distillation cares whether
+  the *source* is worth extracting a card from, not whether it's itself
+  been processed. (This also fixes a real dead-code bug the old
+  mechanism had: requiring `atomicity != "needs-split"` just to reach
+  tier 2 at all made the old guard's own "only distill from needs-split"
+  check unreachable in practice.) That guard makes this a rare,
   at-most-once-per-source-document cost, not a per-search tax. Unlike
   `knowledge.distill`, this is a single direct `agent_provider.generate`
   call (not a full tool-calling agent session) and always auto-executes
@@ -608,10 +627,15 @@ document. The pure tier/heat/dedup heuristics
   effect": a heavily-linked hub document gives each neighbor a
   proportionally smaller nudge). Only `heat`/`last_retrieved_at` move
   for a spread neighbor, never `retrieval_count` -- that column
-  specifically measures direct retrieval hits (`promotion_target_tier`
-  reads it that way); a neighbor's tier can still rise from the extra
-  heat alone, since `review_retrieval` picks up every document touched
-  in the retrieval batch, direct hits and spread neighbors alike.
+  specifically measures direct retrieval hits. The extra heat alone
+  can still make a neighbor `due_for_review` (this is exactly why
+  `knowledge.due_for_review` checks heat as well as retrieval_count, not
+  retrieval_count alone), since `review_retrieval` picks up every
+  document touched in the retrieval batch, direct hits and spread
+  neighbors alike -- but being due for review only means its maturity
+  gets rechecked, not that its tier rises: a spread neighbor still only
+  actually promotes if it's genuinely been revised with the right
+  content shape, same as any other document.
 - **Deferred, not built**: a `knowledge-browser` filter page, an
   `ai_note_link`-style co-retrieval graph between documents, and
   agent-assisted linking -- the agent actively proposing/creating new

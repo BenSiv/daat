@@ -3128,11 +3128,26 @@ function html.render_system(show_sql, show_admin)
 """, platform_container_css(1200), items)
 end
 
+-- Content-maturity ladder (see document.promotion_target_tier's own
+-- comment for the real mechanism): a document only advances once it's
+-- actually been revised, and the tier it lands in depends on the shape
+-- that revision produced -- not on how often it's been retrieved.
 KNOWLEDGE_TIER_LABELS = {
     [0] = "Tier 0: Raw Intake",
-    [1] = "Tier 1: Working Set",
-    [2] = "Tier 2: Curated Drafts",
-    [3] = "Tier 3: Atomic Records",
+    [1] = "Tier 1: Curated Draft",
+    [2] = "Tier 2: Developed Reference",
+    [3] = "Tier 3: Atomic Record",
+}
+
+-- Plain-language criterion for each tier, shown under its label on
+-- /knowledge -- closes the "no explanation exists anywhere" gap: the
+-- names alone don't communicate that promotion depends on real editing,
+-- not just retrieval count.
+KNOWLEDGE_TIER_CAPTIONS = {
+    [0] = "Captured, not yet worked on.",
+    [1] = "Lightly edited -- summarized or cleaned up.",
+    [2] = "Fully developed -- multi-section, covers a nuanced subject.",
+    [3] = "Short, single-subject, distilled to one idea.",
 }
 
 -- Landing page for src/knowledge.lua's tiering/retrieval-logging
@@ -3143,8 +3158,10 @@ function html.render_knowledge_pool(stats, recent_retrievals)
     tier_tiles = ""
     for tier = 0, 3 do
         tier_tiles = tier_tiles .. string.format(
-            '<div class="platform-knowledge-tier"><strong>%s</strong><span class="dimmed">%d note(s)</span></div>',
-            html.html_escape(KNOWLEDGE_TIER_LABELS[tier]), stats.tier_counts[tier]
+            '<div class="platform-knowledge-tier"><strong>%s</strong><span class="dimmed">%d note(s)</span>' ..
+            '<p class="platform-knowledge-tier-caption">%s</p></div>',
+            html.html_escape(KNOWLEDGE_TIER_LABELS[tier]), stats.tier_counts[tier],
+            html.html_escape(KNOWLEDGE_TIER_CAPTIONS[tier])
         )
     end
 
@@ -3173,6 +3190,7 @@ function html.render_knowledge_pool(stats, recent_retrievals)
         .platform-knowledge-tiers { display: grid; grid-template-columns: repeat(2, minmax(14em, 1fr)); gap: 12px; }
         .platform-knowledge-tier { border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-item, 10px); padding: 12px 14px; background: var(--platform-bg, #f8fafc); }
         .platform-knowledge-tier strong { display: block; margin-bottom: 4px; }
+        .platform-knowledge-tier-caption { margin: 6px 0 0 0; font-size: 0.82rem; color: var(--platform-muted, #64748b); }
         .platform-knowledge-panel { border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-item, 10px); padding: 14px 16px; background: var(--platform-bg, #f8fafc); margin-bottom: 14px; }
         .platform-knowledge-panel h4 { margin: 0 0 10px 0; font-size: 0.95rem; color: var(--platform-muted, #64748b); }
         .platform-knowledge-retrieval { margin: 6px 0; font-size: 0.9rem; }

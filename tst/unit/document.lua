@@ -1,11 +1,13 @@
 -- tst/unit/document.lua
 -- Unit tests for src/document.lua's pure math/heuristics: the
--- reinforcement formula, tier-promotion thresholds, heat decay, and the
--- rule-based review heuristics (atomicity, title-guessing, content
--- hashing) -- all ported from a Fossil SCM fork's ai_note/ai_retrieval
--- system (see document.lua's own header). Moved here from tst/unit/
--- knowledge.lua under task #106, when these columns/heuristics moved
--- from a separate knowledge_note table onto `document` itself.
+-- reinforcement formula, tier-promotion (content-maturity, not
+-- retrieval/heat -- see promotion_target_tier's own comment), heat
+-- decay, and the rule-based review heuristics (content_shape,
+-- title-guessing, content hashing) -- all ported/adapted from a Fossil
+-- SCM fork's ai_note/ai_retrieval system (see document.lua's own
+-- header). Moved here from tst/unit/knowledge.lua under task #106,
+-- when these columns/heuristics moved from a separate knowledge_note
+-- table onto `document` itself.
 
 document = require("document")
 
@@ -26,55 +28,71 @@ function test_reinforcement_delta_matches_tier_weights()
     check(document.reinforcement_delta(3) == 0.50, "tier 3 should be 0.50, got " .. tostring(document.reinforcement_delta(3)))
 end
 
-function test_promotion_tier_0_to_1_at_two_retrievals()
-    print("Testing promotion from tier 0 to 1 at retrieval_count >= 2")
-    check(document.promotion_target_tier(0, 1, 1.0, false, "ok") == 0, "1 retrieval should not promote")
-    check(document.promotion_target_tier(0, 2, 1.0, false, "ok") == 1, "2 retrievals should promote to tier 1")
+function test_promotion_requires_revised_regardless_of_content_shape()
+    print("Testing an unrevised document stays at tier 0 no matter how its content looks")
+    check(document.promotion_target_tier(0, false, false, "developed") == 0, "unrevised developed content should not promote")
+    check(document.promotion_target_tier(0, false, false, "atomic") == 0, "unrevised atomic-shaped content should not promote")
 end
 
-function test_promotion_tier_1_to_2_requires_count_heat_and_atomicity()
-    print("Testing promotion from tier 1 to 2 requires count>=4, heat>=1.60, and atomicity ok")
-    check(document.promotion_target_tier(1, 4, 1.60, false, "ok") == 2, "count=4, heat=1.60, ok atomicity should promote to tier 2")
-    check(document.promotion_target_tier(1, 3, 1.60, false, "ok") == 1, "count=3 should not promote (below threshold)")
-    check(document.promotion_target_tier(1, 4, 1.59, false, "ok") == 1, "heat=1.59 should not promote (below threshold)")
-    check(document.promotion_target_tier(1, 4, 1.60, false, "needs-split") == 1, "needs-split atomicity should block promotion to tier 2")
+function test_promotion_simple_or_thin_content_lands_tier_1()
+    print("Testing revised content that's neither developed nor atomic lands at tier 1 (Curated Draft)")
+    check(document.promotion_target_tier(0, false, true, "simple") == 1, "revised + simple should be tier 1")
+    check(document.promotion_target_tier(0, false, true, "thin") == 1, "revised + thin should be tier 1")
 end
 
-function test_promotion_tier_2_to_3_requires_count_heat_and_ok_atomicity()
-    print("Testing promotion from tier 2 to 3 requires count>=7, heat>=2.60, and atomicity == ok")
-    check(document.promotion_target_tier(2, 7, 2.60, false, "ok") == 3, "count=7, heat=2.60, ok atomicity should promote to tier 3")
-    check(document.promotion_target_tier(2, 6, 2.60, false, "ok") == 2, "count=6 should not promote (below threshold)")
-    check(document.promotion_target_tier(2, 7, 2.59, false, "ok") == 2, "heat=2.59 should not promote (below threshold)")
-    check(document.promotion_target_tier(2, 7, 2.60, false, "thin") == 2, "non-ok atomicity should block promotion to tier 3")
+function test_promotion_developed_content_lands_tier_2()
+    print("Testing revised, developed (multi-section/long) content lands at tier 2 (Developed Reference)")
+    check(document.promotion_target_tier(0, false, true, "developed") == 2, "revised + developed should be tier 2")
+end
+
+function test_promotion_atomic_content_lands_tier_3()
+    print("Testing revised, atomic (short single-subject) content lands at tier 3 (Atomic Record)")
+    check(document.promotion_target_tier(0, false, true, "atomic") == 3, "revised + atomic should be tier 3")
 end
 
 function test_promotion_duplicate_never_advances()
     print("Testing a duplicate document never advances tier regardless of other inputs")
-    check(document.promotion_target_tier(0, 100, 100.0, true, "ok") == 0, "duplicate should stay at tier 0 even with huge count/heat")
-    check(document.promotion_target_tier(2, 100, 100.0, true, "ok") == 2, "duplicate should stay at its current tier, not advance")
+    check(document.promotion_target_tier(0, true, true, "atomic") == 0, "duplicate should stay at tier 0 even with atomic content")
+    check(document.promotion_target_tier(2, true, true, "atomic") == 2, "duplicate should stay at its current tier, not advance")
 end
 
-function test_atomicity_needs_split_on_multiple_headings()
-    print("Testing atomicity_status flags multiple headings as needs-split")
+function test_promotion_demotes_when_edited_down_to_a_smaller_shape()
+    print("Testing a document at tier 3 demotes if its current content no longer earns that shape (task #87, redesigned for content-maturity)")
+    -- Recomputed fresh from the CURRENT body every review (no
+    -- ratcheting) -- a document that was legitimately tier 3 once (an
+    -- atomic-shaped edit) but has since been edited down to something
+    -- merely "simple" drops back down on its next review.
+    result = document.promotion_target_tier(3, false, true, "simple")
+    check(result == 1, "tier-3 document edited down to 'simple' content should demote to tier 1, got " .. tostring(result))
+end
+
+function test_content_shape_developed_on_multiple_headings()
+    print("Testing content_shape flags multiple headings as developed")
     body = "# First heading\nSome text.\n\n# Second heading\nMore text."
-    check(document.atomicity_status(body) == "needs-split", "2 headings should be needs-split, got " .. document.atomicity_status(body))
+    check(document.content_shape(body) == "developed", "2 headings should be developed, got " .. document.content_shape(body))
 end
 
-function test_atomicity_needs_split_on_many_paragraphs()
-    print("Testing atomicity_status flags more than 6 paragraphs as needs-split")
+function test_content_shape_developed_on_many_paragraphs()
+    print("Testing content_shape flags more than 6 paragraphs as developed")
     body = "P1.\n\nP2.\n\nP3.\n\nP4.\n\nP5.\n\nP6.\n\nP7."
-    check(document.atomicity_status(body) == "needs-split", "7 paragraphs should be needs-split, got " .. document.atomicity_status(body))
+    check(document.content_shape(body) == "developed", "7 paragraphs should be developed, got " .. document.content_shape(body))
 end
 
-function test_atomicity_thin_on_short_single_paragraph()
-    print("Testing atomicity_status flags a short single paragraph as thin")
-    check(document.atomicity_status("Too short.") == "thin", "short single paragraph should be thin")
+function test_content_shape_thin_on_very_short_body()
+    print("Testing content_shape flags a body under 6 words as thin")
+    check(document.content_shape("Too short.") == "thin", "a 2-word body should be thin, got " .. document.content_shape("Too short."))
 end
 
-function test_atomicity_ok_on_normal_body()
-    print("Testing atomicity_status is ok for a normal single-heading multi-paragraph body")
-    body = "# Heading\n\nThis is a real paragraph with enough content to not be thin.\n\nAnd a second paragraph here."
-    check(document.atomicity_status(body) == "ok", "normal body should be ok, got " .. document.atomicity_status(body))
+function test_content_shape_atomic_on_short_single_subject_body()
+    print("Testing content_shape flags a short, single-paragraph, single-subject body as atomic")
+    body = "Beer's Law states that absorbance is directly proportional to the concentration of a solution and the path length of light through it."
+    check(document.content_shape(body) == "atomic", "a short single-subject definition should be atomic, got " .. document.content_shape(body))
+end
+
+function test_content_shape_simple_when_too_long_for_atomic_but_not_developed()
+    print("Testing content_shape falls back to simple for a single-paragraph body over the atomic word ceiling")
+    body = string.rep("word ", 130)
+    check(document.content_shape(body) == "simple", "130 words in one paragraph should be simple, got " .. document.content_shape(body))
 end
 
 function test_connectivity_status_format()
@@ -158,16 +176,6 @@ function test_effective_heat_decays_heavily_over_many_half_lives()
     check(result < 0.01, "expected heavily decayed heat after 10 half-lives, got " .. tostring(result))
 end
 
-function test_promotion_demotes_when_effective_heat_has_decayed()
-    print("Testing promotion_target_tier demotes when decayed heat no longer supports the current tier (task #87)")
-    -- A document that was legitimately tier 3 once (high retrieval_count,
-    -- high heat at the time) but whose heat has since decayed toward
-    -- zero should drop back down on its next review -- retrieval_count
-    -- alone can no longer hold it at tier 3 once heat has decayed.
-    result = document.promotion_target_tier(3, 10, 0.01, false, "ok")
-    check(result == 1, "high retrieval_count with heavily decayed heat should demote to tier 1, not stay at 3, got " .. tostring(result))
-end
-
 function test_tier_weight_known_and_unknown_tiers()
     print("Testing tier_weight returns each tier's weight and 0.0 for an unknown tier")
     check(document.tier_weight(0) == 0.0, "tier 0 weight should be 0.0")
@@ -177,14 +185,17 @@ end
 
 -- Run them
 test_reinforcement_delta_matches_tier_weights()
-test_promotion_tier_0_to_1_at_two_retrievals()
-test_promotion_tier_1_to_2_requires_count_heat_and_atomicity()
-test_promotion_tier_2_to_3_requires_count_heat_and_ok_atomicity()
+test_promotion_requires_revised_regardless_of_content_shape()
+test_promotion_simple_or_thin_content_lands_tier_1()
+test_promotion_developed_content_lands_tier_2()
+test_promotion_atomic_content_lands_tier_3()
 test_promotion_duplicate_never_advances()
-test_atomicity_needs_split_on_multiple_headings()
-test_atomicity_needs_split_on_many_paragraphs()
-test_atomicity_thin_on_short_single_paragraph()
-test_atomicity_ok_on_normal_body()
+test_promotion_demotes_when_edited_down_to_a_smaller_shape()
+test_content_shape_developed_on_multiple_headings()
+test_content_shape_developed_on_many_paragraphs()
+test_content_shape_thin_on_very_short_body()
+test_content_shape_atomic_on_short_single_subject_body()
+test_content_shape_simple_when_too_long_for_atomic_but_not_developed()
 test_connectivity_status_format()
 test_title_is_generic_case_insensitive()
 test_guess_title_skips_heading_uses_first_real_line()
@@ -197,7 +208,6 @@ test_days_since_nil_for_missing_or_unparseable()
 test_effective_heat_unchanged_with_no_last_retrieved()
 test_effective_heat_halves_at_one_half_life()
 test_effective_heat_decays_heavily_over_many_half_lives()
-test_promotion_demotes_when_effective_heat_has_decayed()
 test_tier_weight_known_and_unknown_tiers()
 
 if FAILURES > 0 then
