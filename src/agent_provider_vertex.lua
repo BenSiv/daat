@@ -257,10 +257,34 @@ function vertex_contents_from_messages(messages)
             if msg.content != nil and msg.content[1] != nil then
                 text = tostring(msg.content[1].text)
             end
-            table.insert(contents, {role = "user", parts = {
-                {functionResponse = {name = msg.toolName, response = {content = text}}},
-            }})
+            part = {functionResponse = {name = msg.toolName, response = {content = text}}}
+            -- Gemini requires every functionResponse part answering one
+            -- functionCall turn to arrive together, in the SAME
+            -- contents[] entry -- confirmed live: a parallel-tool-call
+            -- turn (2+ toolCall blocks in one assistant turn) produces
+            -- consecutive canonical toolResult messages, one per call
+            -- (see agent.lua's run_turn/run_research_loop), which used
+            -- to become one separate {role="user",...} entry each right
+            -- here -- a real research.investigate run hit exactly this,
+            -- failing with "Please ensure that the number of function
+            -- response parts is equal to the number of function call
+            -- parts of the function call turn." `is_tool_response_group`
+            -- is a purely internal marker distinguishing a merged-
+            -- responses entry from an ordinary plain-text user message
+            -- (both map to Vertex role "user", so checking `.role` alone
+            -- would wrongly merge a genuine new user message into a
+            -- preceding tool-response group too) -- stripped before
+            -- this function returns, never sent to Vertex.
+            previous = contents[#contents]
+            if previous != nil and previous.is_tool_response_group == true then
+                table.insert(previous.parts, part)
+            else
+                table.insert(contents, {role = "user", parts = {part}, is_tool_response_group = true})
+            end
         end
+    end
+    for _, entry in ipairs(contents) do
+        entry.is_tool_response_group = nil
     end
     return contents
 end

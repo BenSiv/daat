@@ -1125,6 +1125,92 @@ EOF
     [[ "$output" =~ "42" ]]
 }
 
+@test "real Vertex AI (native Luam): parallel tool calls in one turn all get answered, not just the first (regression)" {
+    if [ -z "${VERTEX_PROJECT:-}" ]; then
+        skip "VERTEX_PROJECT not set in this environment"
+    fi
+    if ! gcloud auth application-default print-access-token >/dev/null 2>&1; then
+        skip "no usable gcloud application-default credentials"
+    fi
+
+    # Real production incident: a research.investigate run asked the
+    # model to call two tools in one turn; agent_provider_vertex.lua's
+    # own vertex_contents_from_messages used to turn each canonical
+    # toolResult message into its own separate Vertex contents[] entry
+    # (one {role="user",...} per result), instead of merging every
+    # functionResponse answering one functionCall turn into a single
+    # entry the way Gemini requires -- confirmed live in production's
+    # own agent_message ledger: "Vertex AI error: Please ensure that the
+    # number of function response parts is equal to the number of
+    # function call parts of the function call turn." Reproduced here
+    # against the real API before the fix, confirmed gone after it.
+    cat > "${TEST_DIR}/vertex_parallel_tool_check.lua" <<EOF
+package.path = "${PROJECT_ROOT}/src/?.lua;" .. package.path
+agent_provider = require("agent_provider")
+
+tools = {
+    {name = "add", description = "Add two numbers", parameters = {
+        type = "object",
+        properties = {a = {type = "number"}, b = {type = "number"}},
+        required = {"a", "b"},
+    }},
+    {name = "multiply", description = "Multiply two numbers", parameters = {
+        type = "object",
+        properties = {a = {type = "number"}, b = {type = "number"}},
+        required = {"a", "b"},
+    }},
+}
+
+response, err = agent_provider.converse("gemini-2.5-flash",
+    "You must use the add and multiply tools for arithmetic -- never compute yourself. If asked for both a sum and a product, call BOTH tools in the same turn.",
+    {{role = "user", content = "What is 15 plus 27, AND what is 6 times 7? Use both tools in parallel."}}, tools)
+stop1 = nil
+if response != nil then stop1 = response.stopReason end
+print("STOP1:", stop1, "ERR1:", err)
+
+tool_calls = {}
+if response != nil then
+    for _, block in ipairs(response.content) do
+        if block.type == "toolCall" then table.insert(tool_calls, block) end
+    end
+end
+print("NUM_TOOL_CALLS:", #tool_calls)
+
+results = {add = "42", multiply = "42"}
+history = {
+    {role = "user", content = "What is 15 plus 27, AND what is 6 times 7? Use both tools in parallel."},
+    {role = "assistant", content = tool_calls},
+}
+for _, tool_call in ipairs(tool_calls) do
+    result_text = results[tool_call.name]
+    if result_text == nil then result_text = "?" end
+    table.insert(history, {role = "toolResult", toolCallId = tool_call.id, toolName = tool_call.name,
+        content = {{type = "text", text = result_text}}, isError = false})
+end
+
+response2, err2 = agent_provider.converse("gemini-2.5-flash",
+    "You must use the add and multiply tools for arithmetic -- never compute yourself. If asked for both a sum and a product, call BOTH tools in the same turn.",
+    history, tools)
+stop2 = nil
+if response2 != nil then stop2 = response2.stopReason end
+print("STOP2:", stop2, "ERR2:", err2)
+EOF
+    cat > "${TEST_DIR}/platform.lua" <<EOF
+return {agent_provider = "vertex", vertex_project = "${VERTEX_PROJECT}", vertex_region = "${VERTEX_REGION:-us-central1}"}
+EOF
+    if [ -z "${LUAM_DIR:-}" ]; then
+        LUAM_DIR=$(cd "${PROJECT_ROOT}/../luam" && pwd)
+    fi
+    run env LUA_PATH="${PROJECT_ROOT}/src/?.lua;${LUAM_DIR}/lib/?.lua;${LUAM_DIR}/lib/?/init.lua;;" \
+        LUA_CPATH="${LUAM_DIR}/bin/?.so;${LUAM_DIR}/lib/lfs/?.so;;" \
+        "${LUAM_DIR}/bin/luam" "${TEST_DIR}/vertex_parallel_tool_check.lua"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "NUM_TOOL_CALLS:	2" ]]
+    [[ "$output" =~ "ERR2:	nil" ]]
+    [[ "$output" =~ "STOP2:	stop" ]]
+    [[ ! "$output" =~ "function response parts" ]]
+}
+
 write_admin_schema() {
     mkdir -p schemas
     cat > schemas/secret_report.lua <<'EOF'
