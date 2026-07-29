@@ -1018,6 +1018,26 @@ function schema.layout(db_path, name)
     end
 
     if def != nil then
+        -- A field.dropdown = "<name>" reference has no `values` of its
+        -- own in the raw file -- schema sync resolves the dropdown's
+        -- current values into this field's own `entity_field.enum_values`
+        -- column (see schema.sync_all), which is the only place they
+        -- live for a dropdown-referencing field. Real bug found live:
+        -- this loop used to check only the raw file's own `field.values`
+        -- (set for a field that inlines its own literal list), so a
+        -- dropdown-referencing select field got no `values` array sent
+        -- to the browser at all -- the register page's own client-side
+        -- JS (addRow(), html.lua) crashes on `field.values.forEach` the
+        -- instant it reaches the first such field, breaking the whole
+        -- batch-entry table for any entity type with a dropdown-based
+        -- select (e.g. cell_line's required `tissue_code`), not just
+        -- that one field.
+        dkjson = require("dkjson")
+        db_fields_by_name = {}
+        for _, f in ipairs(schema.fields(db_path, name)) do
+            db_fields_by_name[f.name] = f
+        end
+
         result = {
             name = def.name,
             fields = {}
@@ -1036,6 +1056,11 @@ function schema.layout(db_path, name)
             }
             if field.values != nil then
                 field_def.values = field.values
+            elseif field.dropdown != nil then
+                db_field = db_fields_by_name[field.name]
+                if db_field != nil and db_field.enum_values != nil and db_field.enum_values != "" then
+                    field_def.values = dkjson.decode(db_field.enum_values)
+                end
             end
             if field.entity_type != nil then
                 field_def.ref_entity_type = field.entity_type

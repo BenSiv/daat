@@ -84,6 +84,43 @@ setup_full_schema() {
     [[ "$output" =~ "processing" ]]
 }
 
+@test "/register's own layout JSON resolves a select field's dropdown into real values, not leaving them out (regression)" {
+    # Reported live: /register?type=cell_line crashed its own "+ Add Row"
+    # button silently -- root cause was schema.layout's *file-based*
+    # path (used whenever the schema .lua file still exists on disk,
+    # i.e. the normal case) only ever copied a field's own literal
+    # `values` list from the raw file; a `dropdown = "..."` reference
+    # has no `values` of its own there at all -- those only ever get
+    # resolved into entity_field.enum_values at sync time. The browser's
+    # own addRow() (html.lua) does `field.values.forEach(...)` for every
+    # select field with no guard, so a dropdown-referencing required
+    # select field (the very first field on this schema, matching the
+    # real cell_line.tissue_code bug) crashed the whole batch-entry
+    # table before a single row could ever render.
+    mkdir -p schemas dropdowns
+    cat > dropdowns/tissue_codes.lua <<'EOF'
+return {
+  name = "tissue_codes",
+  values = {"SUS", "CAL"},
+}
+EOF
+    cat > schemas/cell_line.lua <<'EOF'
+return {
+  name = "cell_line",
+  fields = {
+    {name = "tissue_code", type = "select", required = true, dropdown = "tissue_codes"},
+  },
+}
+EOF
+    "$BIN" schema sync
+    read session csrf < <(login_test_user "tester" "i")
+
+    run env GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/register" QUERY_STRING="type=cell_line" \
+        HTTP_COOKIE="session=${session}; csrf=${csrf}" "$BIN"
+    [[ "$output" =~ '"name":"tissue_code"' ]]
+    [[ "$output" =~ '"values":["SUS","CAL"]' ]]
+}
+
 @test "changing a dropdown's values and re-syncing updates every field referencing it" {
     setup_full_schema
     cat > dropdowns/work_process.lua <<'EOF'
