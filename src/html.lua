@@ -112,28 +112,43 @@ function platform_button_css()
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            text-decoration: none;
+            /* !important on both of these: a real bug found live -- a
+               generic "a { color: var(--platform-accent) }"/"a:hover {
+               text-decoration: underline }" rule scoped to some
+               surrounding wrapper (.platform-header a and friends,
+               hand-copied across ~18 render_* functions) has higher
+               specificity than a bare .btn-* class, so a <a class="btn
+               btn-primary"> sitting inside one silently lost its own
+               white text to the wrapper's accent-color rule -- on this
+               deployment's own amber accent, that made the button's
+               text exactly match its own background: completely
+               invisible, not just low-contrast. Centralized here
+               (the one shared place every .btn already comes from)
+               instead of chasing down every current and future
+               wrapper-link rule with its own :not(.btn) exception. */
+            text-decoration: none !important;
         }
+        .btn:hover { text-decoration: none !important; }
         .btn-primary {
             background: var(--platform-accent, #4f46e5);
-            color: #ffffff;
+            color: #ffffff !important;
         }
         .btn-primary:hover { filter: brightness(1.08); }
         .btn-primary:active { transform: scale(0.98); }
         .btn-secondary {
             background: var(--platform-bg, #f8fafc);
-            color: var(--platform-th-text, #475569);
+            color: var(--platform-th-text, #475569) !important;
             border: 1px solid var(--platform-border, #e2e8f0);
         }
-        .btn-secondary:hover { background: var(--platform-bg-2, #f1f5f9); color: var(--platform-heading, #0f172a); }
+        .btn-secondary:hover { background: var(--platform-bg-2, #f1f5f9); color: var(--platform-heading, #0f172a) !important; }
         .btn-secondary:active { transform: scale(0.98); }
         .btn-secondary:disabled { opacity: 0.6; cursor: default; transform: none; }
         .btn-danger {
             background: var(--platform-bg, #f8fafc);
-            color: #b91c1c;
+            color: #b91c1c !important;
             border: 1px solid #fecaca;
         }
-        .btn-danger:hover { background: #fef2f2; color: #b91c1c; }
+        .btn-danger:hover { background: #fef2f2; color: #b91c1c !important; }
         .btn-danger:active { transform: scale(0.98); }
         .btn-delete {
             background: transparent;
@@ -146,6 +161,31 @@ function platform_button_css()
         }
         .btn-delete:hover { color: #ef4444; }
 """
+end
+
+-- Shared "sitemap" card-grid CSS -- was hand-copied identically across
+-- render_home/render_system (task: whole-card clickability). The whole
+-- card is now the hit target, not just the title text -- same mechanism
+-- html.render_index's own .platform-index-list already uses for /data's
+-- entity-type cards (put everything inside the one <a>, then stretch
+-- that <a> to fill its parent via display:block, rather than a sibling
+-- <a>+<p> where only the <a> was ever clickable).
+function platform_sitemap_css()
+    return """
+        .platform-sitemap { list-style: none !important; margin: 16px 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+        .platform-sitemap li { list-style: none !important; background: var(--platform-bg, #f8fafc); border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-item, 10px); overflow: hidden; transition: var(--platform-transition, all 0.2s cubic-bezier(0.4, 0, 0.2, 1)); }
+        .platform-sitemap li:hover { border-color: var(--platform-accent, #4f46e5); box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
+        .platform-sitemap a { display: block; padding: 16px 18px; text-decoration: none !important; }
+        .platform-sitemap a strong { display: block; font-weight: 700; color: var(--platform-accent, #4f46e5); font-size: 1.05rem; }
+        .platform-sitemap a:hover strong { text-decoration: underline; }
+        .platform-sitemap p { margin: 6px 0 0 0; color: var(--platform-muted, #64748b); font-size: 0.9rem; }
+"""
+end
+
+-- One sitemap card, whole-card clickable (see platform_sitemap_css).
+function render_sitemap_item(href, title, description)
+    return "<li><a href=\"" .. href .. "\"><strong>" .. html.html_escape(title) .. "</strong><p>" ..
+        html.html_escape(description) .. "</p></a></li>"
 end
 
 -- Generic hover-popover component, for "reveal detail on hover instead
@@ -189,6 +229,21 @@ function html.popover_css()
 .platform-popover-trigger:hover .platform-popover,
 .platform-popover-trigger:focus .platform-popover { opacity: 1; visibility: visible; transform: translateY(0); pointer-events: auto; }
 .platform-popover-loading, .platform-popover-error { color: var(--platform-muted, #94a3b8); font-style: italic; }
+/* Was hand-copied identically across render_browse/render_detail/
+   render_document_tree (~3 drifting copies) -- centralized here since
+   every .platform-entity-ref always travels with this same popover
+   mechanism anyway. !important on color/text-decoration/font-weight for
+   the same reason .btn's own rules have it (see platform_button_css's
+   own comment): a page-specific ancestor rule like ".platform-header a"
+   or "#browse-table a" has higher specificity than a bare class alone,
+   so without this guard, whichever wrapper a reference link happened to
+   render inside could silently win over this component's own look --
+   the underlying color is still fully theme-configurable
+   (var(--platform-accent, ...)), this only guarantees THIS rule is the
+   one that wins, not a hardcoded value. */
+.platform-entity-ref { color: var(--platform-accent, #4f46e5) !important; text-decoration: none !important; font-weight: 600 !important; }
+.platform-entity-ref::after { content: " \2197"; font-size: 0.85em; }
+.platform-entity-ref:hover { text-decoration: underline !important; }
 </style>
 """
 end
@@ -1848,9 +1903,6 @@ function html.render_browse(db_path, entity_type, layout, rows, page, page_size,
         .platform-pager-links { display: flex; gap: 14px; align-items: center; }
         .platform-pager-links a { color: var(--platform-accent, #4f46e5); text-decoration: none; font-weight: 600; }
         .platform-pager-links a:hover { text-decoration: underline; }
-        .platform-entity-ref { color: var(--platform-accent, #4f46e5); text-decoration: none; font-weight: 600; }
-        .platform-entity-ref::after { content: " \2197"; font-size: 0.85em; }
-        .platform-entity-ref:hover { text-decoration: underline; }
     </style>
     %s
     <div class="platform-container">
@@ -1972,9 +2024,6 @@ function html.render_detail(db_path, entity_type, layout, row, history, nonce, h
         #history-table td { background: #ffffff; }
         .change-item { margin-bottom: 4px; }
         .change-item:last-child { margin-bottom: 0; }
-        .platform-entity-ref { color: var(--platform-accent, #4f46e5); text-decoration: none; font-weight: 600; }
-        .platform-entity-ref::after { content: " \2197"; font-size: 0.85em; }
-        .platform-entity-ref:hover { text-decoration: underline; }
         .platform-print-label { display: inline-flex; align-items: center; gap: 8px; margin-left: 16px; }
         .platform-print-label select { padding: 6px 10px; border-radius: var(--platform-radius-sm, 8px); border: 1px solid var(--platform-border, #e2e8f0); }
         #platform-print-label-status { font-size: 0.85rem; color: var(--platform-muted, #64748b); }
@@ -3095,7 +3144,7 @@ function html.render_home(theme, show_sql, show_admin, has_tasks_view)
 
     system_link = ""
     if show_sql or show_admin then
-        system_link = "<li><a href=\"system\">System</a><p>Admin, SQL console, and templates.</p></li>"
+        system_link = render_sitemap_item("system", "System", "Admin, SQL console, and templates.")
     end
 
     -- Only a real link when a deployment actually seeded a
@@ -3104,23 +3153,18 @@ function html.render_home(theme, show_sql, show_admin, has_tasks_view)
     -- "cannot open view: ./views/prioritized_tasks.lua" (task #101).
     tasks_link = ""
     if has_tasks_view == true then
-        tasks_link = "<li><a href=\"view?view_name=prioritized_tasks\">Tasks</a><p>Open tasks, ranked by priority.</p></li>"
+        tasks_link = render_sitemap_item("view?view_name=prioritized_tasks", "Tasks", "Open tasks, ranked by priority.")
     end
 
     return string.format("""
 <div class="fossil-doc" data-title="Home">
     <style>
 %s
+%s
         .platform-header { margin-bottom: 20px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; }
         .platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
         .platform-header p { color: var(--platform-muted, #64748b); margin: 0; font-size: 0.95rem; }
         .platform-home-logo { display: block; max-width: 240px; height: auto; margin-bottom: 16px; }
-        .platform-sitemap { list-style: none !important; margin: 16px 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
-        .platform-sitemap li { list-style: none !important; background: var(--platform-bg, #f8fafc); border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-item, 10px); padding: 16px 18px; transition: var(--platform-transition, all 0.2s cubic-bezier(0.4, 0, 0.2, 1)); }
-        .platform-sitemap li:hover { border-color: var(--platform-accent, #4f46e5); box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
-        .platform-sitemap a { font-weight: 700; color: var(--platform-accent, #4f46e5); text-decoration: none; font-size: 1.05rem; }
-        .platform-sitemap a:hover { text-decoration: underline; }
-        .platform-sitemap p { margin: 6px 0 0 0; color: var(--platform-muted, #64748b); font-size: 0.9rem; }
     </style>
     <div class="platform-container">
         <div class="platform-header">
@@ -3129,15 +3173,19 @@ function html.render_home(theme, show_sql, show_admin, has_tasks_view)
             <p>Welcome back. Use the sidebar to get around, or jump in below.</p>
         </div>
         <ul class="platform-sitemap">
-            <li><a href="document-edit">New Document</a><p>Write a new document from scratch.</p></li>
-            <li><a href="documents">Documents</a><p>Browse all documents, organized as a tree.</p></li>
-            <li><a href="data">Data</a><p>Registered entity types, row counts, and relations.</p></li>
+            %s
+            %s
+            %s
             %s
             %s
         </ul>
     </div>
 </div>
-""", platform_container_css(1200), logo_html, heading_html, tasks_link, system_link)
+""", platform_container_css(1200), platform_sitemap_css(), logo_html, heading_html,
+     render_sitemap_item("document-edit", "New Document", "Write a new document from scratch."),
+     render_sitemap_item("documents", "Documents", "Browse all documents, organized as a tree."),
+     render_sitemap_item("data", "Data", "Registered entity types, row counts, and relations."),
+     tasks_link, system_link)
 end
 
 -- Landing page for Setup/Admin-only tooling -- a single destination
@@ -3147,29 +3195,24 @@ end
 -- before rendering this; the links below still only show what the
 -- caller says is allowed via its own show_sql/show_admin parameters.
 function html.render_system(show_sql, show_admin)
-    items = "<li><a href=\"knowledge\">Knowledge Pool</a><p>Tiered notes, retrieval activity, and chat sessions.</p></li>"
+    items = render_sitemap_item("knowledge", "Knowledge Pool", "Tiered notes, retrieval activity, and chat sessions.")
     if show_sql then
-        items = items .. "<li><a href=\"sql\">SQL console</a><p>Run ad hoc, read-only queries.</p></li>"
+        items = items .. render_sitemap_item("sql", "SQL console", "Run ad hoc, read-only queries.")
     end
     if show_admin then
-        items = items .. "<li><a href=\"admin-users\">Users</a><p>Manage accounts and capabilities.</p></li>"
-        items = items .. "<li><a href=\"admin-api-keys\">API keys</a><p>Manage external-integration API keys.</p></li>"
-        items = items .. "<li><a href=\"settings\">Settings</a><p>Site name, branding, colors, and chat prompt.</p></li>"
+        items = items .. render_sitemap_item("admin-users", "Users", "Manage accounts and capabilities.")
+        items = items .. render_sitemap_item("admin-api-keys", "API keys", "Manage external-integration API keys.")
+        items = items .. render_sitemap_item("settings", "Settings", "Site name, branding, colors, and chat prompt.")
     end
-    items = items .. "<li><a href=\"templates\">Templates</a><p>Reusable entry templates for new documents.</p></li>"
+    items = items .. render_sitemap_item("templates", "Templates", "Reusable entry templates for new documents.")
 
     return string.format("""
 <div class="fossil-doc" data-title="System">
     <style>
 %s
+%s
         .platform-header { margin-bottom: 20px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; }
         .platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
-        .platform-sitemap { list-style: none !important; margin: 16px 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
-        .platform-sitemap li { list-style: none !important; background: var(--platform-bg, #f8fafc); border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-item, 10px); padding: 16px 18px; transition: var(--platform-transition, all 0.2s cubic-bezier(0.4, 0, 0.2, 1)); }
-        .platform-sitemap li:hover { border-color: var(--platform-accent, #4f46e5); box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
-        .platform-sitemap a { font-weight: 700; color: var(--platform-accent, #4f46e5); text-decoration: none; font-size: 1.05rem; }
-        .platform-sitemap a:hover { text-decoration: underline; }
-        .platform-sitemap p { margin: 6px 0 0 0; color: var(--platform-muted, #64748b); font-size: 0.9rem; }
     </style>
     <div class="platform-container">
         <div class="platform-header"><h2>System</h2></div>
@@ -3178,7 +3221,7 @@ function html.render_system(show_sql, show_admin)
         </ul>
     </div>
 </div>
-""", platform_container_css(1200), items)
+""", platform_container_css(1200), platform_sitemap_css(), items)
 end
 
 -- Content-maturity ladder (see document.promotion_target_tier's own
@@ -3689,9 +3732,6 @@ function html.render_sql(db_path, sql_text, column_names, rows, err, ref_columns
         #sql-table th { background: var(--platform-bg-2, #f1f5f9); font-weight: 600; font-size: 0.75rem; color: var(--platform-th-text, #475569); text-transform: uppercase; letter-spacing: 0.06em; }
         #sql-table td { background: #ffffff; }
         .platform-empty { margin-top: 20px; padding: 24px; text-align: center; color: var(--platform-muted, #64748b); background: var(--platform-bg, #f8fafc); border: 1px dashed var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); }
-        .platform-entity-ref { color: var(--platform-accent, #4f46e5); text-decoration: none; font-weight: 600; }
-        .platform-entity-ref::after { content: " \2197"; font-size: 0.85em; }
-        .platform-entity-ref:hover { text-decoration: underline; }
         %s
     </style>
     <div class="platform-container">
@@ -4037,6 +4077,8 @@ function html.render_document(doc, rendered_html, breadcrumbs, children, backlin
         .platform-header h2 { margin: 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
         .platform-document-content { line-height: 1.6; }
         .platform-document-content h1, .platform-document-content h2, .platform-document-content h3 { margin-top: 1.2em; }
+        .platform-document-content a { color: var(--platform-accent, #4f46e5); text-decoration: none; }
+        .platform-document-content a:hover { text-decoration: underline; }
         .platform-document-children, .platform-document-backlinks { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--platform-border, #e2e8f0); }
         .platform-document-children h4, .platform-document-backlinks h4 { margin: 0 0 8px 0; font-size: 0.95rem; color: var(--platform-muted, #64748b); }
     </style>
@@ -4200,6 +4242,8 @@ function platform_chat_thread_css()
     return """
         .platform-chat-messages { max-height: 55vh; overflow-y: auto; margin-bottom: 16px; padding: 12px; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); background: var(--platform-bg, #f8fafc); }
         .platform-chat-msg { margin-bottom: 10px; padding: 8px 10px; border-radius: var(--platform-radius-sm, 8px); background: #fff; border: 1px solid var(--platform-border, #e2e8f0); }
+        .platform-chat-msg a { color: var(--platform-accent, #4f46e5); text-decoration: none; }
+        .platform-chat-msg a:hover { text-decoration: underline; }
         .platform-chat-user { background: #eef2ff; }
         .platform-chat-tool_result { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85rem; }
         .platform-chat-compaction_summary { font-style: italic; color: var(--platform-muted, #64748b); }
@@ -4354,10 +4398,12 @@ function html.render_chat(sessions, session, messages, pending, csrf_token, nonc
         .platform-chat-sessions a { color: var(--platform-accent, #4f46e5); text-decoration: none; font-weight: 600; }
         .platform-chat-session-active a { text-decoration: underline; }
         .platform-chat-session-started { font-size: 0.75rem; color: var(--platform-muted, #64748b); }
-        .platform-chat-new-form { display: flex; gap: 6px; margin-bottom: 16px; }
-        .platform-chat-new-form input[type=text] { flex: 1; padding: 6px 8px; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-sm, 8px); }
+        .platform-chat-new-form { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
+        .platform-chat-new-form input[type=text] { flex: 1; min-width: 0; padding: 6px 8px; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-sm, 8px); }
         .platform-chat-messages { max-height: 55vh; overflow-y: auto; margin-bottom: 16px; padding: 12px; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); background: var(--platform-bg, #f8fafc); }
         .platform-chat-msg { margin-bottom: 10px; padding: 8px 10px; border-radius: var(--platform-radius-sm, 8px); background: #fff; border: 1px solid var(--platform-border, #e2e8f0); }
+        .platform-chat-msg a { color: var(--platform-accent, #4f46e5); text-decoration: none; }
+        .platform-chat-msg a:hover { text-decoration: underline; }
         .platform-chat-user { background: #eef2ff; }
         .platform-chat-tool_result { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85rem; }
         .platform-chat-compaction_summary { font-style: italic; color: var(--platform-muted, #64748b); }
