@@ -208,6 +208,10 @@ EOF
     [[ "$output" =~ "document.create" ]]
     [[ "$output" =~ "Approve" ]]
     [[ "$output" =~ "Deny" ]]
+    # button-audit follow-up: Deny is a one-way negative action (unlike
+    # Approve, which has no reverse toggle either but is the affirmative
+    # path) -- it gets the same .btn-danger treatment as Archive.
+    [[ "$output" =~ 'class="btn btn-danger">Deny</button>' ]]
 }
 
 @test "approving a pending action executes it, attributes it to the real user, and resumes the loop" {

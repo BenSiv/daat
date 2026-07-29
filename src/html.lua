@@ -86,14 +86,19 @@ function platform_container_css(max_width)
 """, max_width)
 end
 
--- Shared .btn/.btn-primary/.btn-secondary/.btn-delete rules -- previously
--- three separate, hand-copied inline copies (render(), render_browse(),
--- render_sql()) that had quietly drifted apart: render_sql()'s never
--- picked up the shared .btn base at all (no flex-centering, no shared
--- transition/padding token), and its .btn-secondary was a whole
--- font-size step smaller (0.85rem vs the others' inherited 0.9rem) --
--- confirmed via a real rendered-page diff, not just reading the CSS.
--- One copy now, used everywhere a button appears.
+-- Shared .btn/.btn-primary/.btn-secondary/.btn-delete/.btn-danger rules --
+-- previously three separate, hand-copied inline copies (render(),
+-- render_browse(), render_sql()) that had quietly drifted apart:
+-- render_sql()'s never picked up the shared .btn base at all (no
+-- flex-centering, no shared transition/padding token), and its
+-- .btn-secondary was a whole font-size step smaller (0.85rem vs the
+-- others' inherited 0.9rem) -- confirmed via a real rendered-page diff,
+-- not just reading the CSS. One copy now, used everywhere a button
+-- appears. .btn-danger (button-audit follow-up) is for a genuinely
+-- one-way negative action -- Archive, Deny -- as opposed to .btn-delete's
+-- own narrower "remove this not-yet-saved row" icon-button use, or a
+-- reversible toggle like Unarchive/Approve, which stay .btn-secondary/
+-- .btn-primary.
 function platform_button_css()
     return """
         .btn {
@@ -123,6 +128,13 @@ function platform_button_css()
         .btn-secondary:hover { background: var(--platform-bg-2, #f1f5f9); color: var(--platform-heading, #0f172a); }
         .btn-secondary:active { transform: scale(0.98); }
         .btn-secondary:disabled { opacity: 0.6; cursor: default; transform: none; }
+        .btn-danger {
+            background: var(--platform-bg, #f8fafc);
+            color: #b91c1c;
+            border: 1px solid #fecaca;
+        }
+        .btn-danger:hover { background: #fef2f2; color: #b91c1c; }
+        .btn-danger:active { transform: scale(0.98); }
         .btn-delete {
             background: transparent;
             color: var(--platform-muted-2, #94a3b8);
@@ -1846,14 +1858,14 @@ function html.render_browse(db_path, entity_type, layout, rows, page, page_size,
                 <h2>Browse %s</h2>
                 <p>%d registered</p>
             </div>
-            <a class="btn btn-primary" href="register?type=%s">+ Register new</a>
+            <a class="btn btn-primary" href="register?type=%s">+ New %s</a>
         </div>
         %s
         %s
     </div>
 </div>
 %s
-""", escaped_type, platform_container_css(1200), platform_button_css(), html.popover_css(), escaped_type, total, escaped_type, table_or_empty, pager, html.popover_js(nonce))
+""", escaped_type, platform_container_css(1200), platform_button_css(), html.popover_css(), escaped_type, total, escaped_type, escaped_type, table_or_empty, pager, html.popover_js(nonce))
 end
 
 -- Real bug found while extracting platform_container_css above, unrelated
@@ -1921,10 +1933,11 @@ function html.render_detail(db_path, entity_type, layout, row, history, nonce, h
 <div class="fossil-doc" data-title="%s %s">
     <style>
 %s
-        .platform-header { margin-bottom: 24px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; }
+        .platform-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; }
         .platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
         .platform-header a { color: var(--platform-accent, #4f46e5); text-decoration: none; font-weight: 600; font-size: 0.9rem; }
         .platform-header a:hover { text-decoration: underline; }
+        .platform-header-actions { display: flex; align-items: center; gap: 12px; }
         .platform-subheading { font-size: 1.05rem; color: var(--platform-heading, #0f172a); margin: 28px 0 14px 0; }
         .platform-detail-fields {
             display: grid;
@@ -1981,10 +1994,14 @@ function html.render_detail(db_path, entity_type, layout, row, history, nonce, h
     %s
     <div class="platform-container">
         <div class="platform-header">
-            <h2>%s %s</h2>
-            <a href="browse?type=%s">&larr; Back to browse</a>
-            %s
-            %s
+            <div>
+                <h2>%s %s</h2>
+                <a href="browse?type=%s">&larr; Back to browse</a>
+            </div>
+            <div class="platform-header-actions">
+                %s
+                %s
+            </div>
         </div>
 
         <div class="platform-detail-fields">
@@ -2192,9 +2209,10 @@ function html.render_view(view_def, rows, param_value)
     -- dead end with no way to add the row they're meant to be tracking.
     register_link = ""
     if view_def.entity_type != nil then
+        escaped_entity_type = html.html_escape(view_def.entity_type)
         register_link = string.format(
-            "<a class=\"btn btn-primary\" href=\"register?type=%s\">+ Register new</a>",
-            html.html_escape(view_def.entity_type)
+            "<a class=\"btn btn-primary\" href=\"register?type=%s\">+ New %s</a>",
+            escaped_entity_type, escaped_entity_type
         )
     end
 
@@ -2202,7 +2220,7 @@ function html.render_view(view_def, rows, param_value)
 <div class="fossil-doc" data-title="%s">
     <style>
 %s
-        .platform-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; }
+        .platform-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; }
         .platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
         .platform-header p { color: var(--platform-muted, #64748b); margin: 0; font-size: 0.95rem; }
         .platform-table-wrapper { overflow-x: auto; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); background: var(--platform-bg, #f8fafc); }
@@ -2671,9 +2689,11 @@ function html.render_admin_users(users, csrf_token, message, is_error)
         end
         archive_action = "archive"
         archive_label = "Archive"
+        archive_button_class = "btn-danger"
         if status == "archived" then
             archive_action = "unarchive"
             archive_label = "Unarchive"
+            archive_button_class = "btn-secondary"
         end
 
         rows_html = rows_html .. string.format("""
@@ -2698,12 +2718,12 @@ function html.render_admin_users(users, csrf_token, message, is_error)
                 <form method="POST" action="admin-users-%s" class="platform-admin-inline-form">
                     <input type="hidden" name="csrf_token" value="%s">
                     <input type="hidden" name="login" value="%s">
-                    <button type="submit" class="btn btn-secondary">%s</button>
+                    <button type="submit" class="btn %s">%s</button>
                 </form>
             </td>
         </tr>
 """, escaped_login, escaped_csrf, escaped_login, html.html_escape(u.cap), status,
-     escaped_csrf, escaped_login, archive_action, escaped_csrf, escaped_login, archive_label)
+     escaped_csrf, escaped_login, archive_action, escaped_csrf, escaped_login, archive_button_class, archive_label)
     end
 
     return string.format("""
@@ -2785,9 +2805,11 @@ function html.render_admin_api_keys(keys, csrf_token, message, is_error, new_raw
         end
         archive_action = "archive"
         archive_label = "Archive"
+        archive_button_class = "btn-danger"
         if status == "archived" then
             archive_action = "unarchive"
             archive_label = "Unarchive"
+            archive_button_class = "btn-secondary"
         end
 
         rows_html = rows_html .. string.format("""
@@ -2806,12 +2828,12 @@ function html.render_admin_api_keys(keys, csrf_token, message, is_error, new_raw
                 <form method="POST" action="admin-api-keys-%s" class="platform-admin-inline-form">
                     <input type="hidden" name="csrf_token" value="%s">
                     <input type="hidden" name="label" value="%s">
-                    <button type="submit" class="btn btn-secondary">%s</button>
+                    <button type="submit" class="btn %s">%s</button>
                 </form>
             </td>
         </tr>
 """, escaped_label, escaped_csrf, escaped_label, html.html_escape(k.cap), status,
-     archive_action, escaped_csrf, escaped_label, archive_label)
+     archive_action, escaped_csrf, escaped_label, archive_button_class, archive_label)
     end
 
     return string.format("""
@@ -3451,7 +3473,7 @@ function html.render_template(def, rendered_markdown, nonce)
                 <p>%s</p>
                 <p><a href="templates">&larr; All templates</a></p>
             </div>
-            <a class="btn btn-primary" href="document-edit?from_template=%s">Create new page from this template</a>
+            <a class="btn btn-primary" href="document-edit?from_template=%s">+ New page from template</a>
         </div>
         <p>Or select-all and copy the rendered snippet below.</p>
         <textarea class="platform-snippet" id="platform-template-content" readonly>%s</textarea>
@@ -3940,6 +3962,8 @@ function html.render_document(doc, rendered_html, breadcrumbs, children, backlin
         .platform-document-breadcrumbs { margin-bottom: 12px; font-size: 0.88rem; color: var(--platform-muted, #64748b); }
         .platform-document-breadcrumbs a { color: var(--platform-accent, #4f46e5); text-decoration: none; }
         .platform-document-breadcrumbs a:hover { text-decoration: underline; }
+        .platform-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; }
+        .platform-header h2 { margin: 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
         .platform-document-content { line-height: 1.6; }
         .platform-document-content h1, .platform-document-content h2, .platform-document-content h3 { margin-top: 1.2em; }
         .platform-document-children, .platform-document-backlinks { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--platform-border, #e2e8f0); }
@@ -4205,7 +4229,7 @@ function render_chat_pending(pending, csrf_token)
             <input type="hidden" name="csrf_token" value="%s">
             <input type="hidden" name="pending_id" value="%s">
             <input type="hidden" name="session_id" value="%s">
-            <button type="submit" class="btn btn-secondary">Deny</button>
+            <button type="submit" class="btn btn-danger">Deny</button>
         </form>
     </div>
 """, html.html_escape(pending.tool), html.html_escape(pending.method), args_lines,
@@ -4280,7 +4304,7 @@ function html.render_chat(sessions, session, messages, pending, csrf_token, nonc
                 <form method="POST" action="chat-start" class="platform-chat-new-form">
                     <input type="hidden" name="csrf_token" value="%s">
                     <input type="text" name="title" placeholder="New chat title">
-                    <button type="submit" class="btn btn-secondary">+</button>
+                    <button type="submit" class="btn btn-secondary">+ New chat</button>
                 </form>
                 %s
             </div>
@@ -4375,7 +4399,7 @@ function html.render_chat_widget(nonce)
 <div class="platform-chat-widget" id="platform-chat-widget">
     <div class="platform-chat-widget-panel">
         <div class="platform-chat-widget-resize-handle" id="platform-chat-widget-resize-handle"></div>
-        <div class="platform-chat-widget-header">Chat<button type="button" class="platform-chat-widget-new" id="platform-chat-widget-new" title="Start a new chat">+ New</button></div>
+        <div class="platform-chat-widget-header">Chat<button type="button" class="platform-chat-widget-new" id="platform-chat-widget-new" title="Start a new chat">+ New chat</button></div>
         <div class="platform-chat-widget-messages" id="platform-chat-widget-messages">
             <p class="platform-chat-widget-empty">Ask something, or ask the assistant to search or create a page...</p>
         </div>
@@ -4456,7 +4480,7 @@ function html.render_chat_widget(nonce)
             for (var k in state.pending.args) { argsLines += '<div>' + escapeHtml(k) + ' = ' + escapeHtml(state.pending.args[k]) + '</div>'; }
             messagesEl.innerHTML += '<div class="platform-chat-pending"><p><strong>Run:</strong> ' + escapeHtml(state.pending.tool) + '.' + escapeHtml(state.pending.method) + '</p>' + argsLines +
                 '<button type="button" class="btn btn-primary" data-approve="' + state.pending.id + '">Approve</button> ' +
-                '<button type="button" class="btn btn-secondary" data-deny="' + state.pending.id + '">Deny</button></div>';
+                '<button type="button" class="btn btn-danger" data-deny="' + state.pending.id + '">Deny</button></div>';
             form.style.display = 'none';
         } else {
             form.style.display = 'flex';

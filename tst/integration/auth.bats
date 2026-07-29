@@ -284,3 +284,24 @@ EOF
     run raw_login bob newpass456
     [[ "$output" =~ "302 Found" ]]
 }
+
+@test "/admin-users renders Archive as btn-danger (a one-way negative action) and Unarchive as plain btn-secondary" {
+    "$BIN" user add alice secret123 ia
+    "$BIN" user add bob bobpass123 i
+    raw=$(raw_login alice secret123)
+    session=$(printf '%s' "$raw" | grep -o 'Set-Cookie: session=[^;]*' | sed 's/Set-Cookie: session=//')
+    csrf=$(printf '%s' "$raw" | grep -o 'Set-Cookie: csrf=[^;]*' | sed 's/Set-Cookie: csrf=//')
+    cookie="session=${session}; csrf=${csrf}"
+
+    GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/admin-users" QUERY_STRING="" \
+        HTTP_COOKIE="session=${session}" run "$BIN"
+    [[ "$output" =~ 'class="btn btn-danger">Archive</button>' ]]
+
+    run raw_admin_action "/admin-users-archive" "$cookie" "csrf_token=${csrf}&login=bob"
+    [[ "$output" =~ "302 Found" ]]
+
+    GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/admin-users" QUERY_STRING="" \
+        HTTP_COOKIE="session=${session}" run "$BIN"
+    [[ "$output" =~ 'class="btn btn-secondary">Unarchive</button>' ]]
+    [[ ! "$output" =~ 'class="btn btn-danger">Unarchive</button>' ]]
+}

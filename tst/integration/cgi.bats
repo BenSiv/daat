@@ -453,10 +453,10 @@ EOF
     [ "$status" -eq 0 ]
     [[ "$output" =~ "LOT-42" ]]
     # No entity_type declared on this view -- no register link expected.
-    [[ ! "$output" =~ "Register new" ]]
+    [[ ! "$output" =~ 'href="register?type=' ]]
 }
 
-@test "/view shows a Register new link when the view declares entity_type" {
+@test "/view shows a + New <type> link when the view declares entity_type, matching /browse's own wording" {
     cat > views/samples_with_type.lua <<'EOF'
 return {
   name = "samples_with_type",
@@ -473,7 +473,7 @@ EOF
 
     run_cgi "/view" "view_name=samples_with_type"
     [ "$status" -eq 0 ]
-    [[ "$output" =~ "Register new" ]]
+    [[ "$output" =~ "+ New sample" ]]
     [[ "$output" =~ 'href="register?type=sample"' ]]
 }
 
