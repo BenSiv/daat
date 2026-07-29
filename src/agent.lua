@@ -469,6 +469,38 @@ end
 -- sync_session_document's own full session-document sync. Nothing is
 -- ever deleted from agent_message either way; this only changes what a
 -- given caller gets back.
+-- The arguments of the most recent `tool_name` toolCall block in this
+-- session (nil if none yet) -- for surfacing a specific tool call's
+-- real structured input to a page-specific client feature (e.g. the
+-- SQL console prefilling itself from the agent's own entity.query
+-- calls, see chat_widget_state). Deliberately bypasses agent.all_
+-- messages/display_content/display_blocks: those intentionally
+-- collapse a toolCall down to a human-readable "-> name(...)" string
+-- for the widget's own transcript, discarding `arguments` entirely --
+-- correct for that purpose, useless for this one. Reads raw
+-- agent_message rows directly instead; nothing here changes what the
+-- human-facing transcript itself ever shows.
+function agent.last_tool_call_arguments(db_path, session_id, tool_name)
+    rows = db.query(db_path, string.format(
+        "SELECT content FROM agent_message WHERE session_id = %s AND role = 'assistant' ORDER BY id DESC;",
+        db.quote(session_id)
+    ))
+    if rows == nil then
+        return nil
+    end
+    for _, row in ipairs(rows) do
+        decoded, _, _ = json.decode(row.content)
+        if decoded != nil and decoded.blocks != nil then
+            for _, block in ipairs(decoded.blocks) do
+                if block.type == "toolCall" and block.name == tool_name then
+                    return block.arguments
+                end
+            end
+        end
+    end
+    return nil
+end
+
 function agent.all_messages(db_path, session_id, include_tool_calls)
     if include_tool_calls == nil then
         include_tool_calls = true

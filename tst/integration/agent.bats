@@ -420,6 +420,26 @@ EOF
     [[ "$output" =~ "| 2" ]]
 }
 
+@test "the chat widget's own JSON state surfaces entity.query's real sql for the /sql console to prefill itself with" {
+    write_task_schema
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    # Before any entity.query call this session, the widget's state has
+    # no query to offer -- the /sql console shouldn't be told to
+    # prefill from nothing.
+    run env GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/api/chat-widget-history" \
+        QUERY_STRING="session_id=${session_id}" HTTP_COOKIE="$COOKIE" "$BIN"
+    [[ ! "$output" =~ "SELECT" ]]
+
+    scripted="$(tool_call_response "entity.query" '{"sql":"SELECT title FROM task"}')"$'\1'"$(done_response "Here they are.")"
+    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=list+task+titles" "$COOKIE" "$scripted" >/dev/null
+
+    run env GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/api/chat-widget-history" \
+        QUERY_STRING="session_id=${session_id}" HTTP_COOKIE="$COOKIE" "$BIN"
+    [[ "$output" =~ '"last_query_sql":"SELECT title FROM task"' ]]
+}
+
 @test "entity.query refuses any table that isn't a registered entity type, even a real internal one" {
     resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
     session_id=$(extract_query_param "$resp" "session_id")

@@ -3559,10 +3559,9 @@ function html.render_sql(db_path, sql_text, column_names, rows, err, ref_columns
             /* max-width explicit, not left to inherit: Fossil's own base
             ** CSS (src/default.css) has a bare "textarea { max-width:
             ** 95%% }" rule that otherwise wins over nothing here -- a
-            ** real, confirmed-live gap between this box and the
-            ** .platform-nlsql row above it (measured 1045px vs 1100px,
-            ** exactly 95%% of the same 1100px parent). This class
-            ** selector's higher specificity overrides it. */
+            ** real, confirmed-live gap (measured 1045px vs the intended
+            ** 1100px). This class selector's higher specificity
+            ** overrides it. */
             max-width: 100%%;
             min-height: 140px;
             box-sizing: border-box;
@@ -3594,28 +3593,12 @@ function html.render_sql(db_path, sql_text, column_names, rows, err, ref_columns
         .platform-entity-ref { color: var(--platform-accent, #4f46e5); text-decoration: none; font-weight: 600; }
         .platform-entity-ref::after { content: " \2197"; font-size: 0.85em; }
         .platform-entity-ref:hover { text-decoration: underline; }
-        .platform-nlsql { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
-        .platform-nlsql input {
-            flex: 1;
-            padding: 10px 14px;
-            border: 1px solid var(--platform-border, #e2e8f0);
-            border-radius: var(--platform-radius-sm, 8px);
-            background: var(--platform-bg, #f8fafc);
-            color: var(--platform-input-text, #1e293b);
-            font-size: 0.9rem;
-        }
-        .platform-nlsql-status { font-size: 0.8rem; color: var(--platform-muted, #64748b); white-space: nowrap; }
         %s
     </style>
     <div class="platform-container">
         <div class="platform-header">
             <h2>Query</h2>
             <p>Read-only (SELECT only) queries against the entity store. Setup/Admin only.</p>
-        </div>
-        <div class="platform-nlsql" id="platform-nlsql">
-            <input type="text" id="platform-nlsql-input" placeholder="Ask the agent to write or update this query in plain English..." autocomplete="off" />
-            <button type="button" class="btn btn-secondary" id="platform-nlsql-btn">Generate query</button>
-            <span class="platform-nlsql-status" id="platform-nlsql-status"></span>
         </div>
         <form method="get" action="sql">
             <textarea class="platform-sql-input" id="platform-sql-query" name="q" placeholder="SELECT * FROM sample LIMIT 20;">%s</textarea>
@@ -4473,6 +4456,26 @@ function html.render_chat_widget(nonce)
             form.style.display = 'flex';
         }
         messagesEl.scrollTop = messagesEl.scrollHeight;
+        syncSqlConsole(state);
+    }
+
+    // Prefills the /sql console's own query textarea from the agent's
+    // most recent entity.query call this session (chat_widget_state,
+    // cgi.lua) -- only on this specific page (page_type "sql", set by
+    // page_shell), and only once per new value, so re-renders after an
+    // unrelated turn (or the initial page-load fetch) don't keep
+    // clobbering text the user is actively editing by hand. Writes the
+    // query text only -- running it is still a deliberate click on
+    // /sql's own Run button, through its own real capability check and
+    // row cap, not something this widget ever does itself.
+    var lastAppliedQuerySql = null;
+    function syncSqlConsole(state) {
+        if (!window.PLATFORM_PAGE_CONTEXT || window.PLATFORM_PAGE_CONTEXT.page_type !== 'sql') { return; }
+        if (!state || !state.last_query_sql) { return; }
+        if (state.last_query_sql === lastAppliedQuerySql) { return; }
+        lastAppliedQuerySql = state.last_query_sql;
+        var queryBox = document.getElementById('platform-sql-query');
+        if (queryBox) { queryBox.value = state.last_query_sql; }
     }
 
     function post(url, body) {
