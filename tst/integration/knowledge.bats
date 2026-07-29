@@ -260,7 +260,15 @@ search_for_bioreactor_extra() {
     scripted="$(tool_call_response "knowledge.stats" '{}')"$'\1'"$(done_response "Here you go.")"
     raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=summarize+the+knowledge+pool" "$COOKIE" "$scripted" >/dev/null
 
-    run raw_get "/chat" "session_id=${session_id}"
+    # Reported live: this test used to assert against /chat's own
+    # rendered page, which deliberately strips tool calls/results for
+    # human display (cgi.lua's chat route, agent.all_messages(...,
+    # false)) -- the string "notes=2" can never appear there for any
+    # input, so the assertion was checking a view that structurally
+    # never carries this content. Fixed to read the raw tool_result row
+    # directly (same pattern as latest_tool_result, test_helper.bash),
+    # which is what the tool itself actually returned.
+    run latest_tool_result "$session_id"
     # notes=2: Bioreactor Notes plus the first session's own transcript
     # document (task #108 follow-up) -- this second session's own
     # transcript isn't synced yet at the moment its knowledge.stats tool
