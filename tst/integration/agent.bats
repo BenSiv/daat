@@ -1324,17 +1324,17 @@ EOF
     [[ ! "$output" =~ "Second" ]]
 }
 
-@test "the chat agent's own write capability is independent of the chatting user -- not configured means no admin-gated writes at all" {
+@test "the chat agent's write capability is the chatting user's own -- alice (plain 'i') is Forbidden from admin-gated writes via chat, matching her own /register form" {
     write_admin_schema
     resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
     session_id=$(extract_query_param "$resp" "session_id")
 
-    # No "chat-agent" api key exists yet -- alice is a plain "i" user
-    # either way, proving this is really the agent's own capability
-    # being checked, not hers. Still pauses for human approval first
-    # (destructive=true gates on that regardless), the capability
-    # check itself only fires once execute_tool actually runs, i.e.
-    # after approval.
+    # alice is a plain "i" user (setup()) with no "a" of her own -- no
+    # "chat-agent" key is involved at all anymore, proving this checks
+    # HER capability, not some separately configured identity. Still
+    # pauses for human approval first (destructive=true gates on that
+    # regardless), the capability check itself only fires once
+    # execute_tool actually runs, i.e. after approval.
     scripted="$(tool_call_response "entity.create" '{"entity_type":"secret_report","title":"Leaked"}')"
     raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=create+a+secret+report" "$COOKIE" "$scripted" >/dev/null
 
@@ -1349,9 +1349,9 @@ EOF
     [[ "$output" =~ "Forbidden" ]]
 }
 
-@test "once a chat-agent api key is granted Admin capability, the same write actually goes through the normal approval flow" {
+@test "once alice's own account is granted Admin capability (no chat-agent key involved at all), the same write via chat succeeds" {
     write_admin_schema
-    "$BIN" api-key create chat-agent a >/dev/null
+    "$BIN" user capabilities alice ia >/dev/null
     resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
     session_id=$(extract_query_param "$resp" "session_id")
 

@@ -337,20 +337,25 @@ and a small, explicit tool registry the model can act through.
   tagged with which chat session it came from, so the ledger can still
   answer "was this a direct edit or something the assistant did" without
   that ever affecting who it's attributed to.
-- **Attribution and authorization are two separate questions, and only
-  the first one is the chatting user's.** *Who gets credited* for a
-  write is always the real human (previous bullet) -- but *whether an
-  admin-gated write is allowed at all* is the agent's own, independently
-  configured capability, not derived from whoever happens to be
-  chatting. This reuses the `api_key` table/admin UI wholesale via a
-  reserved `"chat-agent"` label (`/admin-api-keys`, or `platform
-  api-key create/capabilities chat-agent <cap>`) -- the same principle
-  already applied to every other API key ("a key's capabilities are its
-  own, not derived from whoever created it"). No such key configured
-  means no `admin_write_only`-gated writes at all, not silent full
-  access -- a baseline user's chat session can't reach further than an
-  admin's simply because nobody's set this up yet, and an admin's own
-  session isn't artificially capped by it either.
+- **Attribution and authorization are both the chatting user's own.**
+  *Who gets credited* for a write is always the real human (previous
+  bullet), and *whether an admin-gated write is allowed at all* is now
+  that same user's own capability (`user.cap`) -- exactly what their own
+  `/register` form would already allow them, no more and no less. This
+  intentionally reverses an earlier design: `admin_write_only` writes
+  used to check one fixed, reserved `api_key` row (label `"chat-agent"`,
+  configured via `/admin-api-keys`), independent of whoever was chatting
+  -- reasoned at the time from the same principle applied to every other
+  API key ("a key's capabilities are its own, not derived from whoever
+  created it"). In practice that meant a baseline user's chat session
+  could reach further than their own form (if that key had `"a"`), and an
+  admin's own session could be capped below their own form (if it
+  didn't) -- confirmed live, both directions, not hypothetical. Deriving
+  the check from the real chatting user's own account instead
+  (`agent.check_write_capability`, `agent.lua`) closes both gaps: no
+  admin capability on the account means no `admin_write_only`-gated
+  writes via chat, exactly matching what that account's own direct edits
+  already can't do either.
 - **Semantic search** blends keyword matching with embedding
   cosine-similarity when a page has been explicitly indexed -- indexing
   a page is a deliberate, separate action, never an automatic side

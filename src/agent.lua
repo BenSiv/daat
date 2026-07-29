@@ -1009,30 +1009,36 @@ function row_summary(row)
     return table.concat(parts, "; ")
 end
 
--- Whether the agent itself is allowed to write to entity_type. The
--- agent's own capability is independently configured, exactly like any
--- other API key -- not derived from whichever human happens to be
--- chatting (auth.lua's own principle for api_key rows: "a key's
--- capabilities are its own, not derived from whoever created it").
--- Without this, a plain baseline user's chat session could write to an
--- admin_write_only type the same user's own /register form would
--- refuse -- confirmed live as a real gap, not hypothetical.
+-- Whether the agent is allowed to write to entity_type, *on behalf of
+-- `login`* -- the agent's authority is exactly the delegating user's
+-- own capability, never more and never less. Intentionally reverses an
+-- earlier design here: this used to check one fixed, reserved
+-- "chat-agent" api_key row, independent of whoever was chatting (per
+-- auth.lua's general principle for api_key rows, "a key's capabilities
+-- are its own, not derived from whoever created it") -- but that meant
+-- a baseline user's chat session could reach an admin_write_only write
+-- their own /register form would refuse (if that key had "a"), and an
+-- actual Admin's own chat session could be blocked from the same write
+-- if no such key existed at all -- confirmed live, both directions, not
+-- hypothetical. Delegating to the real chatting user's own `user.cap`
+-- instead (the same row/column require_write_capability, cgi.lua,
+-- already checks for a direct form submission) makes the agent's
+-- authority a strict function of the real account acting through it --
+-- fails closed the same way: no such user row (or no "a" on it) means
+-- no admin-gated writes, not a silent default.
 --
--- Reuses the api_key table/admin UI wholesale via a well-known
--- reserved label ("chat-agent") rather than inventing a new concept --
--- an admin configures the agent's own capability the exact same way
--- they'd configure any other integration's key, via
--- /admin-api-keys or `platform api-key create/capabilities`. Fails
--- closed: no such key yet means no admin-gated writes at all, not a
--- silent default of full access.
-function agent.check_write_capability(db_path, entity_type)
+-- `login` is always a real, session-authenticated user.login here --
+-- every chat entry point (agent.run_turn/approve_pending/deny_pending)
+-- is reached only from cgi.lua routes gated by require_csrf(cookies),
+-- never an API key, so there's no "api:label" case to handle.
+function agent.check_write_capability(db_path, entity_type, login)
     if schema.admin_write_only(db_path, entity_type) == false then
         return true
     end
-    agent_key = auth.get_api_key(db_path, "chat-agent")
+    user = auth.get_user(db_path, login)
     cap = ""
-    if agent_key != nil then
-        cap = agent_key.cap
+    if user != nil then
+        cap = user.cap
     end
     return string.find(cap, "a", 1, true) != nil
 end
@@ -1092,8 +1098,8 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
     end
 
     if tool_name == "document" and method_name == "create" then
-        if agent.check_write_capability(db_path, "document") == false then
-            return nil, "Forbidden: this requires the chat agent's own Admin capability -- ask an admin to grant it via /admin-api-keys."
+        if agent.check_write_capability(db_path, "document", author) == false then
+            return nil, "Forbidden: this requires your own Admin capability -- ask an admin to grant it to your account."
         end
         parent_id = tonumber(args.parent_id)
         created_id, issues = document.create_page(db_path, author, args.title, parent_id, args.content, source)
@@ -1104,8 +1110,8 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
     end
 
     if tool_name == "document" and method_name == "update" then
-        if agent.check_write_capability(db_path, "document") == false then
-            return nil, "Forbidden: this requires the chat agent's own Admin capability -- ask an admin to grant it via /admin-api-keys."
+        if agent.check_write_capability(db_path, "document", author) == false then
+            return nil, "Forbidden: this requires your own Admin capability -- ask an admin to grant it to your account."
         end
         target_id = tonumber(args.entity_id)
         if target_id == nil then
@@ -1284,8 +1290,8 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
         if args.entity_type == nil then
             return nil, "create requires entity_type"
         end
-        if agent.check_write_capability(db_path, args.entity_type) == false then
-            return nil, "Forbidden: " .. tostring(args.entity_type) .. " requires the chat agent's own Admin capability -- ask an admin to grant it via /admin-api-keys."
+        if agent.check_write_capability(db_path, args.entity_type, author) == false then
+            return nil, "Forbidden: " .. tostring(args.entity_type) .. " requires your own Admin capability -- ask an admin to grant it to your account."
         end
         values = {}
         for k, v in pairs(args) do
@@ -1305,8 +1311,8 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
         if args.entity_type == nil or target_id == nil then
             return nil, "update requires entity_type and entity_id"
         end
-        if agent.check_write_capability(db_path, args.entity_type) == false then
-            return nil, "Forbidden: " .. tostring(args.entity_type) .. " requires the chat agent's own Admin capability -- ask an admin to grant it via /admin-api-keys."
+        if agent.check_write_capability(db_path, args.entity_type, author) == false then
+            return nil, "Forbidden: " .. tostring(args.entity_type) .. " requires your own Admin capability -- ask an admin to grant it to your account."
         end
         -- reason (task #93) is metadata about the change, not a field
         -- being changed on the entity itself -- pulled out the same way
@@ -1330,8 +1336,8 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
         if args.entity_type == nil or target_id == nil then
             return nil, "archive requires entity_type and entity_id"
         end
-        if agent.check_write_capability(db_path, args.entity_type) == false then
-            return nil, "Forbidden: " .. tostring(args.entity_type) .. " requires the chat agent's own Admin capability -- ask an admin to grant it via /admin-api-keys."
+        if agent.check_write_capability(db_path, args.entity_type, author) == false then
+            return nil, "Forbidden: " .. tostring(args.entity_type) .. " requires your own Admin capability -- ask an admin to grant it to your account."
         end
         archived_id, issues = entity.archive(db_path, args.entity_type, target_id, author, source, args.reason)
         if archived_id == nil then
@@ -1345,8 +1351,8 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
         if args.entity_type == nil or target_id == nil then
             return nil, "unarchive requires entity_type and entity_id"
         end
-        if agent.check_write_capability(db_path, args.entity_type) == false then
-            return nil, "Forbidden: " .. tostring(args.entity_type) .. " requires the chat agent's own Admin capability -- ask an admin to grant it via /admin-api-keys."
+        if agent.check_write_capability(db_path, args.entity_type, author) == false then
+            return nil, "Forbidden: " .. tostring(args.entity_type) .. " requires your own Admin capability -- ask an admin to grant it to your account."
         end
         unarchived_id, issues = entity.unarchive(db_path, args.entity_type, target_id, author, source)
         if unarchived_id == nil then
