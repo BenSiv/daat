@@ -36,18 +36,18 @@ session_for() {
 
 start_chat() {
     local session="$1" csrf="$2" title="$3"
-    printf 'csrf_token=%s&title=%s' "$csrf" "$title" | \
-        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/chat-start" QUERY_STRING="" \
-        HTTP_COOKIE="session=${session}; csrf=${csrf}" "$BIN" \
-        | grep -o 'session_id=[a-f0-9]*' | head -1 | sed 's/session_id=//'
+    local cookie="session=${session}; csrf=${csrf}"
+    local resp
+    resp=$(raw_post_json "/api/chat-widget-start" "{\"title\":\"${title}\"}" "$cookie" "$csrf" "")
+    json_body "$resp" | jq -r '.session_id'
 }
 
 send_message() {
     local session="$1" csrf="$2" chat_session_id="$3" message="$4" scripted="$5"
-    printf 'csrf_token=%s&session_id=%s&message=%s' "$csrf" "$chat_session_id" "$message" | \
-        AGENT_TEST_RESPONSES="$scripted" \
-        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/chat-message" QUERY_STRING="" \
-        HTTP_COOKIE="session=${session}; csrf=${csrf}" "$BIN"
+    local cookie="session=${session}; csrf=${csrf}"
+    local escaped="${message//\\/\\\\}"
+    escaped="${escaped//\"/\\\"}"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${chat_session_id}\",\"message\":\"${escaped}\"}" "$cookie" "$csrf" "$scripted"
 }
 
 @test "a real chat turn persists the exact prompt and real token counts in knowledge_context" {
@@ -121,9 +121,9 @@ send_message() {
     cat > "${TEST_DIR}/platform.lua" <<'EOF'
 return {agent_provider = "nonexistent-provider"}
 EOF
-    printf 'csrf_token=%s&session_id=%s&message=hi' "$csrf" "$chat_session" | \
-        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/chat-message" QUERY_STRING="" \
-        HTTP_COOKIE="session=${session}; csrf=${csrf}" "$BIN" > /dev/null
+    printf '{"session_id":"%s","message":"hi"}' "$chat_session" | \
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/chat-widget-send" QUERY_STRING="" \
+        HTTP_COOKIE="session=${session}; csrf=${csrf}" HTTP_X_CSRF_TOKEN="${csrf}" "$BIN" > /dev/null
 
     run sqlite3 .store/store.db "SELECT reply_kind, quality_status FROM knowledge_chat_eval ORDER BY id DESC LIMIT 1;"
     [[ "$output" =~ "error|error" ]]
@@ -149,10 +149,10 @@ EOF
     [ "$output" -eq 0 ]
 
     pending_id=$(sqlite3 .store/store.db "SELECT id FROM agent_pending_action;")
-    printf 'csrf_token=%s&pending_id=%s&session_id=%s' "$csrf" "$pending_id" "$chat_session" | \
+    printf '{"pending_id":%s,"session_id":"%s"}' "$pending_id" "$chat_session" | \
         AGENT_TEST_RESPONSES="$(done_response "Distilled.")" \
-        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/chat-approve" QUERY_STRING="" \
-        HTTP_COOKIE="session=${session}; csrf=${csrf}" "$BIN" > /dev/null
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/chat-widget-approve" QUERY_STRING="" \
+        HTTP_COOKIE="session=${session}; csrf=${csrf}" HTTP_X_CSRF_TOKEN="${csrf}" "$BIN" > /dev/null
 
     run sqlite3 .store/store.db "SELECT tier, source_type, source_id FROM document WHERE title = 'Core idea';"
     [[ "$output" =~ "0|distilled|${source_id}" ]]

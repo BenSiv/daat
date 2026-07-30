@@ -835,6 +835,25 @@ function cgi.handle_request()
             html.page_shell("Knowledge Pool", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
     end
 
+    -- Backing view for /knowledge's stat cards (task: make "N pool
+    -- records" and each tier tile clickable instead of plain divs) --
+    -- reuses knowledge.list_documents (already existed for the CLI's
+    -- `platform knowledge list`) rather than /browse: "document" has no
+    -- schemas/document.lua file, and tier/retrieval_count/heat are
+    -- migration-added columns, not part of DOCUMENT_SCHEMA.fields, so
+    -- /browse's filter_field validation (must match a registered field)
+    -- can never accept "tier" as a filter.
+    if path_info == "/knowledge-documents" then
+        if show_sql_nav == false and show_admin_nav == false then
+            return print_response("403 Forbidden", "text/html", "<h3>Forbidden: requires Setup or Admin capability</h3>")
+        end
+        tier = tonumber(params.tier)
+        rows = knowledge.list_documents(db_path, tier)
+        body = html.render_knowledge_documents(rows, tier)
+        return print_response("200 OK", "text/html",
+            html.page_shell("Knowledge Pool", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
+    end
+
     if path_info == "/detail" then
         entity_type = params.type
         entity_id = tonumber(params.entity_id)
@@ -1366,6 +1385,15 @@ function cgi.handle_request()
         return print_response("302 Found", "text/plain", "", {"Location: settings"})
     end
 
+    -- Read-only chat-history browser (task: only the floating widget
+    -- actually chats, see html.render_chat_widget) -- the old chat-start/
+    -- chat-message/chat-approve/chat-deny form-POST routes that used to
+    -- live here are gone; /api/chat-widget-* below is the only surviving
+    -- way to mutate a chat session. open_chat_session_id in page_context
+    -- lets the widget's own init script (html.lua) resume this exact
+    -- session -- session_id is already ownership-checked (agent.get_session
+    -- requires login == author) before it's handed off, and the widget's
+    -- own /api/chat-widget-history re-checks ownership independently anyway.
     if path_info == "/chat" then
         session_id = params.session_id
         sessions = agent.list_sessions(db_path, author)
@@ -1382,60 +1410,15 @@ function cgi.handle_request()
             messages = agent.all_messages(db_path, session_id, false)
             pending = agent.latest_pending(db_path, session_id)
         end
-        body = html.render_chat(sessions, session, messages, pending, default_value(cookies.csrf, ""), nonce)
+        body = html.render_chat(sessions, session, messages, pending, nonce)
+        page_context = {page_type = "chat", open_chat_session_id = session_id}
         return print_response("200 OK", "text/html",
-            html.page_shell("Chat", "chat", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
+            html.page_shell("Chat", "chat", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author, page_context))
     end
 
-    if path_info == "/chat-start" and method == "POST" then
-        form = parse_query(io.read("*all"))
-        if not require_csrf(cookies, form.csrf_token) then
-            return print_response("403 Forbidden", "text/html", "<h3>Forbidden: CSRF check failed</h3>")
-        end
-        new_session_id, err = agent.create_session(db_path, author, form.title)
-        if new_session_id == nil then
-            return print_response("500 Internal Server Error", "text/html", "<h3>Error: " .. tostring(err) .. "</h3>")
-        end
-        return print_response("302 Found", "text/plain", "", {"Location: chat?session_id=" .. new_session_id})
-    end
-
-    if path_info == "/chat-message" and method == "POST" then
-        form = parse_query(io.read("*all"))
-        if not require_csrf(cookies, form.csrf_token) then
-            return print_response("403 Forbidden", "text/html", "<h3>Forbidden: CSRF check failed</h3>")
-        end
-        session = agent.get_session(db_path, form.session_id, author)
-        if session == nil then
-            return print_response("404 Not Found", "text/html", "<h3>Error: no such chat session</h3>")
-        end
-        model = config.platform_config().agent_model
-        agent.run_turn(db_path, form.session_id, author, nil, model, form.message)
-        return print_response("302 Found", "text/plain", "", {"Location: chat?session_id=" .. form.session_id})
-    end
-
-    if path_info == "/chat-approve" and method == "POST" then
-        form = parse_query(io.read("*all"))
-        if not require_csrf(cookies, form.csrf_token) then
-            return print_response("403 Forbidden", "text/html", "<h3>Forbidden: CSRF check failed</h3>")
-        end
-        model = config.platform_config().agent_model
-        agent.approve_pending(db_path, tonumber(form.pending_id), author, nil, model)
-        return print_response("302 Found", "text/plain", "", {"Location: chat?session_id=" .. form.session_id})
-    end
-
-    if path_info == "/chat-deny" and method == "POST" then
-        form = parse_query(io.read("*all"))
-        if not require_csrf(cookies, form.csrf_token) then
-            return print_response("403 Forbidden", "text/html", "<h3>Forbidden: CSRF check failed</h3>")
-        end
-        model = config.platform_config().agent_model
-        agent.deny_pending(db_path, tonumber(form.pending_id), author, nil, model)
-        return print_response("302 Found", "text/plain", "", {"Location: chat?session_id=" .. form.session_id})
-    end
-
-    -- JSON counterparts of the four routes just above, for the floating
-    -- chat widget (html.page_shell) rather than the full /chat page --
-    -- same underlying agent.* calls, fetch()-friendly responses instead
+    -- JSON counterparts of the old full-page chat routes, for the
+    -- floating chat widget (html.page_shell) -- same underlying
+    -- agent.* calls, fetch()-friendly responses instead
     -- of a 302 redirect back to a full page render. `chat_widget_state`
     -- (above) is the one place "here's the session now" gets built, so
     -- all four stay in sync with each other and with /chat itself.

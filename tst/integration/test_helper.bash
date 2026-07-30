@@ -78,6 +78,65 @@ login_test_user() {
     echo "${session_cookie} ${csrf_token}"
 }
 
+# Plain GET/POST against the real built binary, real CGI env vars --
+# no assumed prior login (unlike run_cgi, which always attaches
+# TEST_SESSION_COOKIE/TEST_CSRF_TOKEN). Used where a test builds its
+# own cookie string (e.g. multiple logged-in users in one file).
+raw_get() {
+    local path_info="$1"
+    local query_string="${2:-}"
+    local cookie="${3:-}"
+    GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="$path_info" QUERY_STRING="$query_string" \
+        HTTP_COOKIE="$cookie" "$BIN"
+}
+
+raw_post() {
+    local path_info="$1"
+    local body="$2"
+    local cookie="$3"
+    local test_responses="${4:-}"
+    local compaction_threshold="${5:-}"
+    if [ -n "$compaction_threshold" ]; then
+        write_platform_config ", agent_compaction_threshold = ${compaction_threshold}"
+    fi
+    printf '%s' "$body" | AGENT_TEST_RESPONSES="$test_responses" \
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="$path_info" QUERY_STRING="" \
+        HTTP_COOKIE="$cookie" "$BIN"
+}
+
+# JSON counterpart of raw_post -- for /api/chat-widget-* (task: /chat's
+# own chat-start/chat-message/chat-approve/chat-deny form routes are
+# gone, the widget's JSON API is the only surviving way to drive a
+# chat turn in a test). Sets HTTP_X_CSRF_TOKEN, not a csrf_token form
+# field -- confirmed via cgi.lua's require_csrf(cookies) call at every
+# /api/chat-widget-* route: JSON routes check *only* the header, no
+# form-field fallback (unlike the old form routes' require_csrf(cookies,
+# form.csrf_token)).
+raw_post_json() {
+    local path_info="$1"
+    local json_body="$2"
+    local cookie="$3"
+    local csrf="$4"
+    local test_responses="${5:-}"
+    printf '%s' "$json_body" | AGENT_TEST_RESPONSES="$test_responses" \
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="$path_info" QUERY_STRING="" \
+        HTTP_COOKIE="$cookie" HTTP_X_CSRF_TOKEN="$csrf" "$BIN"
+}
+
+# A CGI response is headers, a blank line, then the body -- pull just
+# the JSON body back out (chat-widget routes always return exactly one
+# JSON object) so callers can pipe straight into `jq` without also
+# matching against "HTTP/1.1 200 OK" or header lines above it.
+json_body() {
+    printf '%s' "$1" | sed -n '/^{/,$p'
+}
+
+extract_query_param() {
+    local response="$1"
+    local param="$2"
+    printf '%s' "$response" | grep -o "${param}=[^ ]*" | sed "s/${param}=//" | tr -d '\r'
+}
+
 # Runs the binary in real CGI mode -- the same GATEWAY_INTERFACE
 # env-var trigger a real web server's CGI/FastCGI invocation would use
 # (see main.lua's main()), not the CLI dispatch. Attaches a real,

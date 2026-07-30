@@ -188,6 +188,41 @@ function render_sitemap_item(href, title, description)
         html.html_escape(description) .. "</p></a></li>"
 end
 
+-- Shared page-header CSS -- was hand-copied, with real drift, across
+-- ~19 separate render_* functions in this file (confirmed live:
+-- margin-bottom 20px vs 24px depending which function you looked at,
+-- some missing the flex/space-between layout entirely, render_document
+-- missing the h2's own bottom margin). Centralized here the same way
+-- platform_button_css/platform_sitemap_css/html.popover_css already
+-- centralize their own components -- see render_page_header for the
+-- matching markup helper.
+function platform_page_header_css()
+    return """
+        .platform-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px; margin-bottom: 20px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; }
+        .platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
+        .platform-header p { color: var(--platform-muted, #64748b); margin: 0; font-size: 0.95rem; }
+        .platform-header > div:first-child { min-width: 0; }
+"""
+end
+
+-- One page header: a title, optional extra markup under it (a
+-- subtitle <p>, a back-link, more than one paragraph -- caller's own
+-- raw HTML, or nil/"" for none), and an optional right-aligned action
+-- (a .btn link, a toggle control, or nil/"" for none). `title` is
+-- placed unescaped, same trust level render_* functions already give
+-- their own title interpolations (an entity_type/document title that
+-- reaches here has already been through html.html_escape by the
+-- caller, or is a literal like "Settings").
+function render_page_header(title, extra, action)
+    if extra == nil then
+        extra = ""
+    end
+    if action == nil then
+        action = ""
+    end
+    return "<div class=\"platform-header\"><div><h2>" .. title .. "</h2>" .. extra .. "</div>" .. action .. "</div>"
+end
+
 -- Generic hover-popover component, for "reveal detail on hover instead
 -- of cramming it into the default view" -- the design principle behind
 -- moving Data-index row counts and SQL-result entity previews off the
@@ -807,13 +842,13 @@ function html.page_shell(title, active, body, nonce, show_sql, show_admin, has_t
 
     -- No chat widget for an unauthenticated page either -- same
     -- reasoning as nav_items above. The backend already rejects an
-    -- unauthenticated /chat-start or /chat-message before it ever
-    -- reaches the agent/Vertex AI call (cgi.handle_request's own
-    -- session check runs first, confirmed live), so this isn't a
+    -- unauthenticated /api/chat-widget-start or /api/chat-widget-send
+    -- before it ever reaches the agent/Vertex AI call (cgi.handle_request's
+    -- own session check runs first, confirmed live), so this isn't a
     -- billing/security gap by itself -- but showing a chat box nobody
     -- can actually use is confusing UX, and only ever produces a
-    -- confusing "error" in the widget (a 302 redirect response its own
-    -- JS isn't expecting), not a real conversation.
+    -- confusing JSON error response its own JS isn't expecting, not a
+    -- real conversation.
     chat_widget_html = ""
     if author != nil then
         chat_widget_html = html.render_chat_widget(nonce)
@@ -933,27 +968,14 @@ function html.render(entity_type, layout_json, nonce, locked_fields)
     end
     json = require("dkjson")
     locked_fields_json = json.encode(locked_fields)
+    register_header = render_page_header("Register " .. escaped_type,
+        "<p>Fill out the sheet. Fields marked with <span class=\"req-dot\">*</span> are required.</p>",
+        "<a class=\"btn btn-secondary\" href=\"browse?type=" .. escaped_type .. "\">Browse " .. escaped_type .. "</a>")
     return string.format("""
 <div class="fossil-doc" data-title="Register %s">
     <style>
 %s
-        .platform-header {
-            margin-bottom: 24px;
-            border-bottom: 1px solid var(--platform-bg-2, #f1f5f9);
-            padding-bottom: 16px;
-        }
-        .platform-header h2 {
-            margin: 0 0 6px 0;
-            font-size: 1.6rem;
-            font-weight: 700;
-            color: var(--platform-heading, #0f172a);
-            letter-spacing: -0.02em;
-        }
-        .platform-header p {
-            color: var(--platform-muted, #64748b);
-            margin: 0;
-            font-size: 0.95rem;
-        }
+%s
         .platform-header span.req-dot {
             color: #ef4444;
             font-weight: bold;
@@ -1093,11 +1115,7 @@ function html.render(entity_type, layout_json, nonce, locked_fields)
     </style>
 
     <div class="platform-container">
-        <div class="platform-header">
-            <h2>Register %s</h2>
-            <p>Fill out the sheet. Fields marked with <span class="req-dot">*</span> are required.</p>
-            <p><a class="btn btn-secondary" href="browse?type=%s">Browse %s</a></p>
-        </div>
+        %s
 
         <div class="platform-table-wrapper">
             <table id="registration-table">
@@ -1280,7 +1298,7 @@ function html.render(entity_type, layout_json, nonce, locked_fields)
         document.getElementById("btn-submit-batch").addEventListener("click", submitBatch);
     </script>
 </div>
-""", escaped_type, platform_container_css(1200), platform_button_css(), escaped_type, escaped_type, escaped_type, nonce, json_for_script(layout_json), js_string_literal(entity_type), json_for_script(locked_fields_json))
+""", escaped_type, platform_container_css(1200), platform_page_header_css(), platform_button_css(), register_header, nonce, json_for_script(layout_json), js_string_literal(entity_type), json_for_script(locked_fields_json))
 end
 
 -- Single-row edit form for an existing entity -- the generic-entity
@@ -1298,15 +1316,15 @@ end
 -- /api/submit.
 function html.render_entity_edit(entity_type, layout_json, row_json, entity_id, nonce)
     escaped_type = html.html_escape(entity_type)
+    escaped_entity_id = tostring(entity_id)
+    edit_header = render_page_header("Edit " .. escaped_type .. " #" .. escaped_entity_id,
+        "<a href=\"detail?type=" .. escaped_type .. "&entity_id=" .. escaped_entity_id .. "\">&larr; Back to detail</a>", nil)
     return string.format("""
 <div class="fossil-doc" data-title="Edit %s #%s">
     <style>
 %s
 %s
-        .platform-header { margin-bottom: 24px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; }
-        .platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
-        .platform-header a { color: var(--platform-accent, #4f46e5); text-decoration: none; font-weight: 600; font-size: 0.9rem; }
-        .platform-header a:hover { text-decoration: underline; }
+%s
         .platform-edit-fields { display: flex; flex-direction: column; gap: 14px; max-width: 640px; }
         .platform-edit-field label { display: block; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--platform-muted, #64748b); font-weight: 600; margin-bottom: 6px; }
         .platform-edit-field label .req-dot { color: #ef4444; font-weight: bold; }
@@ -1332,10 +1350,7 @@ function html.render_entity_edit(entity_type, layout_json, row_json, entity_id, 
     </style>
 
     <div class="platform-container">
-        <div class="platform-header">
-            <h2>Edit %s #%s</h2>
-            <a href="detail?type=%s&entity_id=%s">&larr; Back to detail</a>
-        </div>
+        %s
 
         <div class="platform-edit-fields" id="edit-fields"><!-- fields injected --></div>
 
@@ -1439,8 +1454,8 @@ function html.render_entity_edit(entity_type, layout_json, row_json, entity_id, 
         document.getElementById("btn-save").addEventListener("click", submitEdit);
     </script>
 </div>
-""", escaped_type, tostring(entity_id), platform_container_css(1200), platform_button_css(),
-     escaped_type, tostring(entity_id), escaped_type, tostring(entity_id),
+""", escaped_type, escaped_entity_id, platform_container_css(1200), platform_button_css(), platform_page_header_css(),
+     edit_header,
      nonce, json_for_script(layout_json), json_for_script(row_json), js_string_literal(entity_type), tostring(entity_id))
 end
 
@@ -1721,22 +1736,13 @@ function html.render_browse(db_path, entity_type, layout, rows, page, page_size,
         pager = pager .. "</span></div>"
     end
 
+    browse_header = render_page_header("Browse " .. escaped_type, "<p>" .. tostring(total) .. " registered</p>",
+        "<a class=\"btn btn-primary\" href=\"register?type=" .. escaped_type .. "\">+ New " .. escaped_type .. "</a>")
     return string.format("""
 <div class="fossil-doc" data-title="Browse %s">
     <style>
 %s
-        .platform-header {
-            margin-bottom: 24px;
-            border-bottom: 1px solid var(--platform-bg-2, #f1f5f9);
-            padding-bottom: 16px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        .platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
-        .platform-header p { color: var(--platform-muted, #64748b); margin: 0; font-size: 0.95rem; }
-        .platform-header a { color: var(--platform-accent, #4f46e5); text-decoration: none; font-weight: 600; }
-        .platform-header a:hover { text-decoration: underline; }
+%s
         %s
         .platform-table-wrapper {
             overflow-x: auto;
@@ -1784,19 +1790,13 @@ function html.render_browse(db_path, entity_type, layout, rows, page, page_size,
     </style>
     %s
     <div class="platform-container">
-        <div class="platform-header">
-            <div>
-                <h2>Browse %s</h2>
-                <p>%d registered</p>
-            </div>
-            <a class="btn btn-primary" href="register?type=%s">+ New %s</a>
-        </div>
+        %s
         %s
         %s
     </div>
 </div>
 %s
-""", escaped_type, platform_container_css(1200), platform_button_css(), html.popover_css(), escaped_type, total, escaped_type, escaped_type, table_or_empty, pager, html.popover_js(nonce))
+""", escaped_type, platform_container_css(1200), platform_page_header_css(), platform_button_css(), html.popover_css(), browse_header, table_or_empty, pager, html.popover_js(nonce))
 end
 
 -- Real bug found while extracting platform_container_css above, unrelated
@@ -1860,15 +1860,15 @@ function html.render_detail(db_path, entity_type, layout, row, history, nonce, h
             html.html_escape(event.created_at) .. "</td><td>" .. changes .. "</td></tr>"
     end
 
+    detail_header = render_page_header(escaped_type .. " " .. title_id_part,
+        "<a href=\"browse?type=" .. escaped_type .. "\">&larr; Back to browse</a>",
+        "<div class=\"platform-header-actions\">" .. edit_link .. print_label_html .. "</div>")
     return string.format("""
 <div class="fossil-doc" data-title="%s %s">
     <style>
 %s
 %s
-        .platform-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; }
-        .platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
-        .platform-header a { color: var(--platform-accent, #4f46e5); text-decoration: none; font-weight: 600; font-size: 0.9rem; }
-        .platform-header a:hover { text-decoration: underline; }
+%s
         .platform-header-actions { display: flex; align-items: center; gap: 12px; }
         .platform-subheading { font-size: 1.05rem; color: var(--platform-heading, #0f172a); margin: 28px 0 14px 0; }
         .platform-detail-fields {
@@ -1922,16 +1922,7 @@ function html.render_detail(db_path, entity_type, layout, row, history, nonce, h
     </style>
     %s
     <div class="platform-container">
-        <div class="platform-header">
-            <div>
-                <h2>%s %s</h2>
-                <a href="browse?type=%s">&larr; Back to browse</a>
-            </div>
-            <div class="platform-header-actions">
-                %s
-                %s
-            </div>
-        </div>
+        %s
 
         <div class="platform-detail-fields">
             %s
@@ -1950,7 +1941,7 @@ function html.render_detail(db_path, entity_type, layout, row, history, nonce, h
 </div>
 %s
 %s
-""", escaped_type, title_id_part, platform_container_css(1200), platform_button_css(), html.popover_css(), escaped_type, title_id_part, escaped_type, edit_link, print_label_html, fields_html, related_html, history_rows, html.popover_js(nonce), print_label_js_block)
+""", escaped_type, title_id_part, platform_container_css(1200), platform_button_css(), platform_page_header_css(), html.popover_css(), detail_header, fields_html, related_html, history_rows, html.popover_js(nonce), print_label_js_block)
 end
 
 -- task #112: "Related records" -- every real, plain `reference` field
@@ -2145,13 +2136,12 @@ function html.render_view(view_def, rows, param_value)
         )
     end
 
+    view_header = render_page_header(escaped_title, "<p>" .. subtitle .. "</p>", register_link)
     return string.format("""
 <div class="fossil-doc" data-title="%s">
     <style>
 %s
-        .platform-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; }
-        .platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
-        .platform-header p { color: var(--platform-muted, #64748b); margin: 0; font-size: 0.95rem; }
+%s
         .platform-table-wrapper { overflow-x: auto; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); background: var(--platform-bg, #f8fafc); }
         .platform-view-table { width: 100%%; border-collapse: separate; border-spacing: 0; min-width: 600px; }
         .platform-view-table th, .platform-view-table td { padding: 12px 16px; text-align: left; border-bottom: 1px solid var(--platform-border, #e2e8f0); font-size: 0.9rem; }
@@ -2174,17 +2164,11 @@ function html.render_view(view_def, rows, param_value)
         }
     </style>
     <div class="platform-container">
-        <div class="platform-header">
-            <div>
-                <h2>%s</h2>
-                <p>%s</p>
-            </div>
-            %s
-        </div>
+        %s
         %s
     </div>
 </div>
-""", escaped_title, platform_container_css(1200), escaped_title, subtitle, register_link, table_or_empty)
+""", escaped_title, platform_container_css(1200), platform_page_header_css(), view_header, table_or_empty)
 end
 
 -- Expands `{{view:view_name:123}}` markers in already-rendered document
@@ -2727,8 +2711,7 @@ function html.render_admin_users(users, csrf_token, message, is_error)
     <style>
 %s
 %s
-        .platform-header { margin-bottom: 20px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; }
-        .platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
+%s
         .platform-admin-message { padding: 10px 12px; margin-bottom: 16px; border-radius: var(--platform-radius-item, 10px); background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; font-size: 0.9rem; }
         .platform-admin-message-error { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
         .platform-admin-create-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 24px; padding: 16px; background: var(--platform-bg, #f8fafc); border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); }
@@ -2743,9 +2726,7 @@ function html.render_admin_users(users, csrf_token, message, is_error)
         }
     </style>
     <div class="platform-container">
-        <div class="platform-header">
-            <h2>Manage users</h2>
-        </div>
+        %s
         %s
         <form method="POST" action="admin-users-create" class="platform-admin-create-form">
             <input type="hidden" name="csrf_token" value="%s">
@@ -2762,7 +2743,7 @@ function html.render_admin_users(users, csrf_token, message, is_error)
         </table>
     </div>
 </div>
-""", platform_container_css(1000), platform_button_css(), message_html, escaped_csrf, rows_html)
+""", platform_container_css(1000), platform_button_css(), platform_page_header_css(), render_page_header("Manage users", nil, nil), message_html, escaped_csrf, rows_html)
 end
 
 -- Admin UI for task #114's api_key table, mirroring render_admin_users
@@ -2837,8 +2818,7 @@ function html.render_admin_api_keys(keys, csrf_token, message, is_error, new_raw
     <style>
 %s
 %s
-        .platform-header { margin-bottom: 20px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; }
-        .platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
+%s
         .platform-admin-message { padding: 10px 12px; margin-bottom: 16px; border-radius: var(--platform-radius-item, 10px); background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; font-size: 0.9rem; }
         .platform-admin-message-error { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
         .platform-admin-new-key code { display: inline-block; margin-left: 8px; padding: 2px 8px; background: #fff; border: 1px solid #bbf7d0; border-radius: 6px; font-size: 0.9rem; }
@@ -2854,9 +2834,7 @@ function html.render_admin_api_keys(keys, csrf_token, message, is_error, new_raw
         }
     </style>
     <div class="platform-container">
-        <div class="platform-header">
-            <h2>Manage API keys</h2>
-        </div>
+        %s
         %s
         %s
         <form method="POST" action="admin-api-keys-create" class="platform-admin-create-form">
@@ -2873,7 +2851,7 @@ function html.render_admin_api_keys(keys, csrf_token, message, is_error, new_raw
         </table>
     </div>
 </div>
-""", platform_container_css(1000), platform_button_css(), message_html, new_key_html, escaped_csrf, rows_html)
+""", platform_container_css(1000), platform_button_css(), platform_page_header_css(), render_page_header("Manage API keys", nil, nil), message_html, new_key_html, escaped_csrf, rows_html)
 end
 
 -- Settings (task #89): a real UI for theme.lua's own fields, instead
@@ -2931,8 +2909,7 @@ function html.render_settings(theme, csrf_token, message, is_error)
     <style>
 %s
 %s
-        .platform-header { margin-bottom: 20px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; }
-        .platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
+%s
         .platform-admin-message { padding: 10px 12px; margin-bottom: 16px; border-radius: var(--platform-radius-item, 10px); background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; font-size: 0.9rem; }
         .platform-admin-message-error { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
         .platform-settings-section { margin-bottom: 28px; padding: 16px; background: var(--platform-bg, #f8fafc); border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); }
@@ -2949,7 +2926,7 @@ function html.render_settings(theme, csrf_token, message, is_error)
         .platform-settings-color input { margin-bottom: 0; }
     </style>
     <div class="platform-container">
-        <div class="platform-header"><h2>Settings</h2></div>
+        %s
         %s
         <form method="POST" action="settings-save" enctype="multipart/form-data">
             <input type="hidden" name="csrf_token" value="%s">
@@ -2994,7 +2971,7 @@ function html.render_settings(theme, csrf_token, message, is_error)
         </form>
     </div>
 </div>
-""", platform_container_css(900), platform_button_css(), message_html, escaped_csrf,
+""", platform_container_css(900), platform_button_css(), platform_page_header_css(), render_page_header("Settings", nil, nil), message_html, escaped_csrf,
      html.html_escape(theme.site_name), hide_heading_checked, html.html_escape(logo_status),
      color_rows, html.html_escape(system_prompt_extra_value))
 end
@@ -3050,22 +3027,25 @@ function html.render_home(theme, show_sql, show_admin, has_tasks_view)
         tasks_link = render_sitemap_item("view?view_name=prioritized_tasks", "Tasks", "Open tasks, ranked by priority.")
     end
 
+    -- Not built via render_page_header's usual title slot: logo_html is
+    -- a real <img>, a sibling block before the <h2>, not text belonging
+    -- inside the heading itself (nesting it into <h2> would put an
+    -- image inside a heading element and change how its own margin
+    -- interacts with the h2's, both wrong). Still reuses the shared
+    -- platform_page_header_css() below -- only the markup differs from
+    -- the single-title-string case render_page_header covers.
+    home_header = "<div class=\"platform-header\"><div>" .. logo_html .. heading_html ..
+        "<p>Welcome back. Use the sidebar to get around, or jump in below.</p></div></div>"
     return string.format("""
 <div class="fossil-doc" data-title="Home">
     <style>
 %s
 %s
-        .platform-header { margin-bottom: 20px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; }
-        .platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
-        .platform-header p { color: var(--platform-muted, #64748b); margin: 0; font-size: 0.95rem; }
+%s
         .platform-home-logo { display: block; max-width: 240px; height: auto; margin-bottom: 16px; }
     </style>
     <div class="platform-container">
-        <div class="platform-header">
-            %s
-            %s
-            <p>Welcome back. Use the sidebar to get around, or jump in below.</p>
-        </div>
+        %s
         <ul class="platform-sitemap">
             %s
             %s
@@ -3075,7 +3055,7 @@ function html.render_home(theme, show_sql, show_admin, has_tasks_view)
         </ul>
     </div>
 </div>
-""", platform_container_css(1200), platform_sitemap_css(), logo_html, heading_html,
+""", platform_container_css(1200), platform_sitemap_css(), platform_page_header_css(), home_header,
      render_sitemap_item("document-edit", "New Document", "Write a new document from scratch."),
      render_sitemap_item("documents", "Documents", "Browse all documents, organized as a tree."),
      render_sitemap_item("data", "Data", "Registered entity types, row counts, and relations."),
@@ -3105,17 +3085,16 @@ function html.render_system(show_sql, show_admin)
     <style>
 %s
 %s
-        .platform-header { margin-bottom: 20px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; }
-        .platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
+%s
     </style>
     <div class="platform-container">
-        <div class="platform-header"><h2>System</h2></div>
+        %s
         <ul class="platform-sitemap">
 %s
         </ul>
     </div>
 </div>
-""", platform_container_css(1200), platform_sitemap_css(), items)
+""", platform_container_css(1200), platform_sitemap_css(), platform_page_header_css(), render_page_header("System", nil, nil), items)
 end
 
 -- Content-maturity ladder (see document.promotion_target_tier's own
@@ -3148,9 +3127,9 @@ function html.render_knowledge_pool(stats, recent_retrievals)
     tier_tiles = ""
     for tier = 0, 3 do
         tier_tiles = tier_tiles .. string.format(
-            '<div class="platform-knowledge-tier"><strong>%s</strong><span class="dimmed">%d note(s)</span>' ..
-            '<p class="platform-knowledge-tier-caption">%s</p></div>',
-            html.html_escape(KNOWLEDGE_TIER_LABELS[tier]), stats.tier_counts[tier],
+            '<a class="platform-knowledge-tier" href="knowledge-documents?tier=%d"><strong>%s</strong><span class="dimmed">%d note(s)</span>' ..
+            '<p class="platform-knowledge-tier-caption">%s</p></a>',
+            tier, html.html_escape(KNOWLEDGE_TIER_LABELS[tier]), stats.tier_counts[tier],
             html.html_escape(KNOWLEDGE_TIER_CAPTIONS[tier])
         )
     end
@@ -3171,16 +3150,17 @@ function html.render_knowledge_pool(stats, recent_retrievals)
     <style>
 %s
 %s
-        .platform-header { margin-bottom: 20px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; }
-        .platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
-        .platform-header p { color: var(--platform-muted, #64748b); margin: 0; font-size: 0.95rem; }
+%s
         .platform-knowledge-stats { display: grid; grid-template-columns: repeat(4, minmax(10em, 1fr)); gap: 14px; margin-bottom: 20px; }
-        .platform-knowledge-stats div { border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-item, 10px); padding: 14px 16px; background: var(--platform-bg, #f8fafc); }
+        .platform-knowledge-stats div, .platform-knowledge-stats a { border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-item, 10px); padding: 14px 16px; background: var(--platform-bg, #f8fafc); }
+        .platform-knowledge-stats a { display: block; text-decoration: none !important; transition: var(--platform-transition, all 0.2s cubic-bezier(0.4, 0, 0.2, 1)); }
+        .platform-knowledge-stats a:hover { border-color: var(--platform-accent, #4f46e5); box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
         .platform-knowledge-stats strong { display: block; font-size: 1.4rem; color: var(--platform-heading, #0f172a); }
         .platform-knowledge-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; }
         .platform-knowledge-tiers { display: grid; grid-template-columns: repeat(2, minmax(14em, 1fr)); gap: 12px; }
-        .platform-knowledge-tier { border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-item, 10px); padding: 12px 14px; background: var(--platform-bg, #f8fafc); }
-        .platform-knowledge-tier strong { display: block; margin-bottom: 4px; }
+        .platform-knowledge-tier { display: block; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-item, 10px); padding: 12px 14px; background: var(--platform-bg, #f8fafc); text-decoration: none !important; transition: var(--platform-transition, all 0.2s cubic-bezier(0.4, 0, 0.2, 1)); }
+        .platform-knowledge-tier:hover { border-color: var(--platform-accent, #4f46e5); box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
+        .platform-knowledge-tier strong { display: block; margin-bottom: 4px; color: var(--platform-heading, #0f172a); }
         .platform-knowledge-tier-caption { margin: 6px 0 0 0; font-size: 0.82rem; color: var(--platform-muted, #64748b); }
         .platform-knowledge-panel { border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-item, 10px); padding: 14px 16px; background: var(--platform-bg, #f8fafc); margin-bottom: 14px; }
         .platform-knowledge-panel h4 { margin: 0 0 10px 0; font-size: 0.95rem; color: var(--platform-muted, #64748b); }
@@ -3188,15 +3168,12 @@ function html.render_knowledge_pool(stats, recent_retrievals)
         .dimmed { color: var(--platform-muted, #64748b); font-size: 0.85rem; }
     </style>
     <div class="platform-container">
-        <div class="platform-header">
-            <h2>Knowledge Pool</h2>
-            <p>Notes promote through processing tiers as they're retrieved and reinforced; every retrieval is logged.</p>
-        </div>
+        %s
         <div class="platform-knowledge-stats">
-            <div><strong>%d</strong><span class="dimmed">pool records</span></div>
+            <a href="knowledge-documents"><strong>%d</strong><span class="dimmed">pool records</span></a>
             <div><strong>%d</strong><span class="dimmed">retrieval runs</span></div>
             <div><strong>%d</strong><span class="dimmed">reviewed notes</span></div>
-            <div><strong>%d</strong><span class="dimmed">chat sessions</span></div>
+            <a href="chat"><strong>%d</strong><span class="dimmed">chat sessions</span></a>
         </div>
         <div class="platform-knowledge-grid">
             <div>
@@ -3219,8 +3196,70 @@ function html.render_knowledge_pool(stats, recent_retrievals)
         </div>
     </div>
 </div>
-""", platform_container_css(1200), platform_button_css(), stats.note_count, stats.retrieval_count, stats.reviewed_note_count,
+""", platform_container_css(1200), platform_button_css(), platform_page_header_css(),
+     render_page_header("Knowledge Pool", "<p>Notes promote through processing tiers as they're retrieved and reinforced; every retrieval is logged.</p>", nil),
+     stats.note_count, stats.retrieval_count, stats.reviewed_note_count,
      stats.session_count, tier_tiles, retrieval_rows)
+end
+
+-- Backing table for /knowledge's "N pool records" stat and each tier
+-- tile (see cgi.lua's /knowledge-documents route for why this is its
+-- own small view rather than /browse: "document" has no filterable
+-- "tier" field to reuse /browse's ?filter_field= mechanism against).
+-- `tier` is nil for the unfiltered "all pool records" link, 0-3 for a
+-- single tier tile.
+function html.render_knowledge_documents(rows, tier)
+    title = "Pool records"
+    if tier != nil then
+        title = KNOWLEDGE_TIER_LABELS[tier]
+        if title == nil then
+            title = "Pool records"
+        end
+    end
+
+    body_rows = ""
+    for _, row in ipairs(rows) do
+        tier_label = KNOWLEDGE_TIER_LABELS[tonumber(row.tier)]
+        if tier_label == nil then
+            tier_label = tostring(row.tier)
+        end
+        body_rows = body_rows .. string.format(
+            "<tr><td><a href=\"document?entity_id=%s\">%s</a></td><td>%s</td><td>%s</td>" ..
+            "<td>%s</td><td>%s</td></tr>",
+            tostring(row.id), html.html_escape(row.title), html.html_escape(tier_label),
+            tostring(row.retrieval_count), string.format("%.2f", row.effective_heat), display_value(row.source_type)
+        )
+    end
+
+    table_or_empty = "<p class=\"platform-empty\">No documents.</p>"
+    if #rows > 0 then
+        table_or_empty = "<div class=\"platform-table-wrapper\"><table class=\"platform-view-table\"><thead><tr>" ..
+            "<th>Title</th><th>Tier</th><th>Retrievals</th><th>Effective heat</th><th>Source</th>" ..
+            "</tr></thead><tbody>" .. body_rows .. "</tbody></table></div>"
+    end
+
+    escaped_title = html.html_escape(title)
+    kd_header = render_page_header(escaped_title, "<p>" .. tostring(#rows) .. " document(s)</p>",
+        "<a class=\"btn btn-secondary\" href=\"knowledge\">&larr; Back to Knowledge Pool</a>")
+    return string.format("""
+<div class="fossil-doc" data-title="%s">
+    <style>
+%s
+%s
+%s
+        .platform-table-wrapper { overflow-x: auto; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); background: var(--platform-bg, #f8fafc); }
+        .platform-view-table { width: 100%%; border-collapse: separate; border-spacing: 0; min-width: 600px; }
+        .platform-view-table th, .platform-view-table td { padding: 12px 16px; text-align: left; border-bottom: 1px solid var(--platform-border, #e2e8f0); font-size: 0.9rem; }
+        .platform-view-table th { background: var(--platform-bg-2, #f1f5f9); font-weight: 600; font-size: 0.78rem; color: var(--platform-th-text, #475569); text-transform: uppercase; letter-spacing: 0.06em; }
+        .platform-view-table td { background: #ffffff; }
+        .platform-empty { padding: 32px; text-align: center; color: var(--platform-muted, #64748b); background: var(--platform-bg, #f8fafc); border: 1px dashed var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); }
+    </style>
+    <div class="platform-container">
+        %s
+        %s
+    </div>
+</div>
+""", escaped_title, platform_container_css(1200), platform_button_css(), platform_page_header_css(), kd_header, table_or_empty)
 end
 
 function html.render_index(db_path, entity_types, edges, nonce)
@@ -3255,13 +3294,18 @@ function html.render_index(db_path, entity_types, edges, nonce)
 
     diagram_html = html.render_relation_diagram(db_path, entity_types, edges)
 
+    index_header = render_page_header("Entity types", "<p>" .. tostring(#entity_types) .. " registered</p>", """
+            <div class="platform-view-toggle" id="platform-view-toggle">
+                <label class="platform-hide-empty-toggle"><input type="checkbox" id="platform-hide-empty"> Hide empty types</label>
+                <button type="button" data-view="list" class="platform-view-active">List</button>
+                <button type="button" data-view="diagram">Diagram</button>
+            </div>
+""")
     return string.format("""
 <div class="fossil-doc" data-title="Overview">
     <style>
 %s
-        .platform-header { margin-bottom: 20px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-        .platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
-        .platform-header p { color: var(--platform-muted, #64748b); margin: 0; font-size: 0.95rem; }
+%s
         .platform-view-toggle { display: flex; gap: 6px; flex-shrink: 0; }
         .platform-view-toggle button { padding: 6px 14px; border-radius: var(--platform-radius-sm, 8px); border: 1px solid var(--platform-border, #e2e8f0); background: var(--platform-bg, #f8fafc); color: var(--platform-text, #334155); font-weight: 600; font-size: 0.85rem; cursor: pointer; transition: var(--platform-transition, all 0.2s cubic-bezier(0.4, 0, 0.2, 1)); }
         .platform-view-toggle button.platform-view-active { background: var(--platform-accent, #4f46e5); border-color: var(--platform-accent, #4f46e5); color: #ffffff; }
@@ -3301,17 +3345,7 @@ function html.render_index(db_path, entity_types, edges, nonce)
     </style>
     %s
     <div class="platform-container">
-        <div class="platform-header">
-            <div>
-                <h2>Entity types</h2>
-                <p>%d registered</p>
-            </div>
-            <div class="platform-view-toggle" id="platform-view-toggle">
-                <label class="platform-hide-empty-toggle"><input type="checkbox" id="platform-hide-empty"> Hide empty types</label>
-                <button type="button" data-view="list" class="platform-view-active">List</button>
-                <button type="button" data-view="diagram">Diagram</button>
-            </div>
-        </div>
+        %s
         <div class="platform-entity-search">
             <input type="text" id="platform-entity-search-input" placeholder="Search entities by name..." autocomplete="off">
             <div class="platform-entity-search-results" id="platform-entity-search-results"></div>
@@ -3354,8 +3388,8 @@ function html.render_index(db_path, entity_types, edges, nonce)
     </script>
 </div>
 %s
-""", platform_container_css(800), html.relation_diagram_css(), html.popover_css(), #entity_types,
-     list_or_empty, diagram_html, nonce, html.diagram_js(nonce))
+""", platform_container_css(800), platform_page_header_css(), html.relation_diagram_css(), html.popover_css(),
+     index_header, list_or_empty, diagram_html, nonce, html.diagram_js(nonce))
 end
 
 -- Every entry template found (whether it loaded cleanly or not), each
@@ -3394,9 +3428,7 @@ function html.render_templates_list(entries)
     <style>
 %s
 %s
-        .platform-header { margin-bottom: 20px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; }
-        .platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
-        .platform-header p { color: var(--platform-muted, #64748b); margin: 0; font-size: 0.95rem; }
+%s
         .platform-index-list { list-style: none !important; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
         .platform-index-list li { list-style: none !important; background: var(--platform-bg, #f8fafc); border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-item, 10px); padding: 14px 16px; }
         .platform-index-list li::marker { content: ""; }
@@ -3414,14 +3446,12 @@ function html.render_templates_list(entries)
         }
     </style>
     <div class="platform-container">
-        <div class="platform-header">
-            <h2>Entry templates</h2>
-            <p>Pick a template to see its rendered Markdown.</p>
-        </div>
+        %s
         %s
     </div>
 </div>
-""", platform_container_css(800), platform_button_css(), list_or_empty)
+""", platform_container_css(800), platform_button_css(), platform_page_header_css(),
+     render_page_header("Entry templates", "<p>Pick a template to see its rendered Markdown.</p>", nil), list_or_empty)
 end
 
 -- The rendered Markdown snippet for one template, in a read-only
@@ -3444,16 +3474,15 @@ function html.render_template(def, rendered_markdown, nonce)
     escaped_body = html.html_escape(rendered_markdown)
     escaped_name = html.html_escape(def.name)
 
+    template_header = render_page_header(escaped_label,
+        "<p>" .. escaped_desc .. "</p><p><a href=\"templates\">&larr; All templates</a></p>",
+        "<a class=\"btn btn-primary\" href=\"document-edit?from_template=" .. escaped_name .. "\">+ New document from template</a>")
     return string.format("""
 <div class="fossil-doc" data-title="Template: %s">
     <style>
 %s
 %s
-        .platform-header { margin-bottom: 20px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
-        .platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
-        .platform-header p { color: var(--platform-muted, #64748b); margin: 0; font-size: 0.95rem; }
-        .platform-header a { color: var(--platform-accent, #4f46e5); text-decoration: none; font-weight: 600; }
-        .platform-header a:hover { text-decoration: underline; }
+%s
         .platform-snippet {
             width: 100%%;
             min-height: 360px;
@@ -3468,19 +3497,12 @@ function html.render_template(def, rendered_markdown, nonce)
         }
     </style>
     <div class="platform-container">
-        <div class="platform-header">
-            <div>
-                <h2>%s</h2>
-                <p>%s</p>
-                <p><a href="templates">&larr; All templates</a></p>
-            </div>
-            <a class="btn btn-primary" href="document-edit?from_template=%s">+ New document from template</a>
-        </div>
+        %s
         <p>Or select-all and copy the rendered snippet below.</p>
         <textarea class="platform-snippet" id="platform-template-content" readonly>%s</textarea>
     </div>
 </div>
-""", escaped_label, platform_container_css(900), platform_button_css(), escaped_label, escaped_desc, escaped_name, escaped_body)
+""", escaped_label, platform_container_css(900), platform_button_css(), platform_page_header_css(), template_header, escaped_body)
 end
 
 -- Ad-hoc SQL console (Setup/Admin only -- see cgi.lua's /sql route):
@@ -3576,13 +3598,12 @@ function html.render_sql(db_path, sql_text, column_names, rows, err, ref_columns
         result_html = "<p class=\"platform-empty\">Enter a SQL query above, then click Run.</p>"
     end
 
+    sql_header = render_page_header("Query", "<p>Read-only (SELECT only) queries against the entity store. Setup/Admin only.</p>", nil)
     return string.format("""
 <div class="fossil-doc" data-title="Query">
     <style>
 %s
-        .platform-header { margin-bottom: 20px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; }
-        .platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
-        .platform-header p { color: var(--platform-muted, #64748b); margin: 0; font-size: 0.95rem; }
+%s
         .platform-sql-input {
             width: 100%%;
             /* max-width explicit, not left to inherit: Fossil's own base
@@ -3622,10 +3643,7 @@ function html.render_sql(db_path, sql_text, column_names, rows, err, ref_columns
         %s
     </style>
     <div class="platform-container">
-        <div class="platform-header">
-            <h2>Query</h2>
-            <p>Read-only (SELECT only) queries against the entity store. Setup/Admin only.</p>
-        </div>
+        %s
         <form method="get" action="sql">
             <textarea class="platform-sql-input" id="platform-sql-query" name="q" placeholder="SELECT * FROM sample LIMIT 20;">%s</textarea>
             <button class="btn btn-primary" type="submit">Run</button>
@@ -3634,7 +3652,7 @@ function html.render_sql(db_path, sql_text, column_names, rows, err, ref_columns
     </div>
 </div>
 %s
-""", platform_container_css(1100), platform_button_css(), html.popover_css() .. embed_css, escaped_sql, result_html, html.popover_js(nonce))
+""", platform_container_css(1100), platform_page_header_css(), platform_button_css(), html.popover_css() .. embed_css, sql_header, escaped_sql, result_html, html.popover_js(nonce))
 end
 
 --------------------------------------------------------------------------
@@ -3791,13 +3809,13 @@ function html.render_document_tree(rows, can_create, nonce)
             "<a class=\"btn btn-secondary\" href=\"templates\">From template&hellip;</a>"
     end
 
+    doc_tree_header = render_page_header("Documents", nil, new_page_link)
     return string.format("""
 <div class="fossil-doc" data-title="Documents">
     <style>
 %s
 %s
-        .platform-header { margin-bottom: 20px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-        .platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
+%s
         .platform-document-search { position: relative; margin-bottom: 16px; }
         .platform-document-search input {
             width: 100%%; padding: 10px 12px; box-sizing: border-box;
@@ -3830,10 +3848,7 @@ function html.render_document_tree(rows, can_create, nonce)
         .platform-tree-leaf { padding: 2px 0 2px 16px; }
     </style>
     <div class="platform-container">
-        <div class="platform-header">
-            <h2>Documents</h2>
-            %s
-        </div>
+        %s
         <div class="platform-document-search">
             <input type="text" id="platform-document-search-input" placeholder="Fuzzy search document titles..." autocomplete="off">
             <div class="platform-document-search-results" id="platform-document-search-results"></div>
@@ -3900,7 +3915,7 @@ function html.render_document_tree(rows, can_create, nonce)
     })();
     </script>
 </div>
-""", platform_container_css(900), platform_button_css(), new_page_link, tree_html,
+""", platform_container_css(900), platform_button_css(), platform_page_header_css(), doc_tree_header, tree_html,
      nonce, document_search_index_json(rows))
 end
 
@@ -3950,6 +3965,8 @@ function html.render_document(doc, rendered_html, breadcrumbs, children, backlin
         edit_link = "<a class=\"btn btn-secondary\" href=\"document-edit?entity_id=" .. tostring(doc.id) .. "\">Edit</a>"
     end
 
+    escaped_doc_title = html.html_escape(doc.title)
+    doc_header = render_page_header(escaped_doc_title, nil, edit_link)
     return string.format("""
 <div class="fossil-doc" data-title="%s">
     <style>
@@ -3958,8 +3975,7 @@ function html.render_document(doc, rendered_html, breadcrumbs, children, backlin
         .platform-document-breadcrumbs { margin-bottom: 12px; font-size: 0.88rem; color: var(--platform-muted, #64748b); }
         .platform-document-breadcrumbs a { color: var(--platform-accent, #4f46e5); text-decoration: none; }
         .platform-document-breadcrumbs a:hover { text-decoration: underline; }
-        .platform-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; }
-        .platform-header h2 { margin: 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
+        %s
         .platform-document-content { line-height: 1.6; }
         .platform-document-content h1, .platform-document-content h2, .platform-document-content h3 { margin-top: 1.2em; }
         .platform-document-content a { color: var(--platform-accent, #4f46e5); text-decoration: none; }
@@ -3969,10 +3985,7 @@ function html.render_document(doc, rendered_html, breadcrumbs, children, backlin
     </style>
     <div class="platform-container">
         <div class="platform-document-breadcrumbs">%s <a href="documents">(all documents)</a></div>
-        <div class="platform-header">
-            <h2>%s</h2>
-            %s
-        </div>
+        %s
         <div class="platform-document-content">
 %s
         </div>
@@ -3980,8 +3993,8 @@ function html.render_document(doc, rendered_html, breadcrumbs, children, backlin
         %s
     </div>
 </div>
-""", html.html_escape(doc.title), platform_container_css(900), platform_button_css(),
-     breadcrumb_html, html.html_escape(doc.title), edit_link, rendered_html, children_block, backlinks_block)
+""", escaped_doc_title, platform_container_css(900), platform_button_css(),
+     platform_page_header_css(), breadcrumb_html, doc_header, rendered_html, children_block, backlinks_block)
 end
 
 -- `doc` is nil for "create a new document", or the current row for
@@ -4021,10 +4034,12 @@ function html.render_document_edit(doc, parent_options_html, csrf_token, error_m
         error_html = "<div class=\"platform-login-error\">" .. html.html_escape(error_message) .. "</div>"
     end
 
+    doc_edit_header = render_page_header(heading, nil, nil)
     return string.format("""
 <div class="fossil-doc" data-title="%s">
     <link rel="stylesheet" href="vendor?name=toastui-editor.min.css">
     <style>
+%s
 %s
 %s
         .platform-login-error { color: #991b1b; background: #fef2f2; border: 1px solid #fecaca; border-radius: var(--platform-radius-item, 10px); padding: 10px 12px; margin-bottom: 14px; font-size: 0.88rem; }
@@ -4038,7 +4053,7 @@ function html.render_document_edit(doc, parent_options_html, csrf_token, error_m
         }
     </style>
     <div class="platform-container">
-        <div class="platform-header"><h2>%s</h2></div>
+        %s
         %s
         <form method="POST" action="document-save" id="platform-document-edit-form">
             <input type="hidden" name="csrf_token" value="%s">
@@ -4098,7 +4113,7 @@ function html.render_document_edit(doc, parent_options_html, csrf_token, error_m
     })();
     </script>
 </div>
-""", heading, platform_container_css(1200), platform_button_css(), heading, error_html,
+""", heading, platform_container_css(1200), platform_button_css(), platform_page_header_css(), doc_edit_header, error_html,
      html.html_escape(csrf_token), entity_id_value, title_value, parent_options_html,
      nonce, nonce, js_string_literal(content_value_raw))
 end
@@ -4136,10 +4151,8 @@ function platform_chat_thread_css()
         .platform-chat-compaction_summary { font-style: italic; color: var(--platform-muted, #64748b); }
         .platform-chat-self_check { font-style: italic; color: var(--platform-muted, #64748b); border-left: 3px solid #fbbf24; }
         .platform-chat-out-of-context { opacity: 0.45; }
-        .platform-chat-input-form { display: flex; gap: 8px; }
-        .platform-chat-input-form input[type=text] { flex: 1; padding: 8px 10px; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-sm, 8px); }
         .platform-chat-pending { padding: 14px; border: 1px solid #fde68a; background: #fffbeb; border-radius: var(--platform-radius-md, 12px); }
-        .platform-chat-pending-form { display: inline-block; margin-right: 8px; margin-top: 8px; }
+        .platform-chat-pending-note { margin: 0; color: var(--platform-muted, #64748b); font-style: italic; }
 """
 end
 
@@ -4206,71 +4219,51 @@ end
 -- `pending`, if not nil, blocks the plain message input and shows an
 -- approve/deny prompt instead -- a destructive tool call has to be
 -- resolved before the conversation can continue.
-function render_chat_pending(pending, csrf_token)
-    json = require("dkjson")
-    args, _, _ = json.decode(pending.args_json)
-    if args == nil then
-        args = {}
-    end
-    args_lines = ""
-    for k, v in pairs(args) do
-        args_lines = args_lines .. "<div>" .. html.html_escape(tostring(k)) .. " = " .. html.html_escape(tostring(v)) .. "</div>"
-    end
-
-    return string.format("""
-    <div class="platform-chat-pending">
-        <p><strong>The assistant wants to run:</strong> %s.%s</p>
-        %s
-        <form method="POST" action="chat-approve" class="platform-chat-pending-form">
-            <input type="hidden" name="csrf_token" value="%s">
-            <input type="hidden" name="pending_id" value="%s">
-            <input type="hidden" name="session_id" value="%s">
-            <button type="submit" class="btn btn-primary">Approve</button>
-        </form>
-        <form method="POST" action="chat-deny" class="platform-chat-pending-form">
-            <input type="hidden" name="csrf_token" value="%s">
-            <input type="hidden" name="pending_id" value="%s">
-            <input type="hidden" name="session_id" value="%s">
-            <button type="submit" class="btn btn-danger">Deny</button>
-        </form>
-    </div>
-""", html.html_escape(pending.tool), html.html_escape(pending.method), args_lines,
-     html.html_escape(csrf_token), tostring(pending.id), html.html_escape(pending.session_id),
-     html.html_escape(csrf_token), tostring(pending.id), html.html_escape(pending.session_id))
+-- /chat is a read-only history browser (task: only the floating widget
+-- chats) -- no approve/deny forms here anymore, just an honest note
+-- that something needs a response, same "never hidden, only marked"
+-- principle render_chat_message already applies to out-of-context
+-- messages.
+function render_chat_pending_note(pending)
+    return string.format(
+        "<div class=\"platform-chat-pending\"><p class=\"platform-chat-pending-note\"><strong>%s.%s</strong> is awaiting approval -- respond via the chat widget.</p></div>",
+        html.html_escape(pending.tool), html.html_escape(pending.method)
+    )
 end
 
-function html.render_chat(sessions, session, messages, pending, csrf_token, nonce)
+-- Read-only chat-history browser (task: only the floating widget
+-- actually chats -- see html.render_chat_widget). Shows the session
+-- list and, once one's picked via ?session_id=, its transcript --
+-- no "+ New chat" form, no message-send form, no approve/deny buttons;
+-- a session with a pending action gets a plain note instead (see
+-- render_chat_pending_note). Selecting a session here also hands its
+-- id to the widget (cgi.lua's /chat route sets page_context.
+-- open_chat_session_id, which render_chat_widget's own init script
+-- picks up), so continuing the conversation is one click into the
+-- widget away, not a dead end.
+function html.render_chat(sessions, session, messages, pending, nonce)
     current_session_id = nil
     if session != nil then
         current_session_id = session.id
     end
     sessions_html = render_chat_sessions_list(sessions, current_session_id)
 
-    main_html = "<p class=\"platform-empty\">Start a new chat, or pick one from the list.</p>"
+    main_html = "<p class=\"platform-empty\">Pick a chat from the list to view its transcript.</p>"
     if session != nil then
         messages_html = ""
         for _, msg in ipairs(messages) do
             messages_html = messages_html .. render_chat_message(msg)
         end
         if messages_html == "" then
-            messages_html = "<p class=\"platform-empty\">No messages yet -- say something below.</p>"
+            messages_html = "<p class=\"platform-empty\">No messages in this chat.</p>"
         end
 
-        input_html = ""
+        pending_html = ""
         if pending != nil then
-            input_html = render_chat_pending(pending, csrf_token)
-        else
-            input_html = string.format("""
-        <form method="POST" action="chat-message" class="platform-chat-input-form">
-            <input type="hidden" name="csrf_token" value="%s">
-            <input type="hidden" name="session_id" value="%s">
-            <input type="text" name="message" placeholder="Ask something, or ask the assistant to search or create a document..." required autofocus>
-            <button type="submit" class="btn btn-primary">Send</button>
-        </form>
-""", html.html_escape(csrf_token), html.html_escape(session.id))
+            pending_html = render_chat_pending_note(pending)
         end
 
-        main_html = "<div class=\"platform-chat-messages\">" .. messages_html .. "</div>" .. input_html
+        main_html = "<div class=\"platform-chat-messages\">" .. messages_html .. "</div>" .. pending_html
     end
 
     return string.format("""
@@ -4278,26 +4271,19 @@ function html.render_chat(sessions, session, messages, pending, csrf_token, nonc
     <style>
 %s
 %s
-        .platform-header { margin-bottom: 20px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; }
+%s
         .platform-chat-layout { display: grid; grid-template-columns: 220px 1fr; gap: 20px; }
         .platform-chat-sessions { list-style: none !important; margin: 0; padding: 0; }
         .platform-chat-sessions li { margin: 4px 0; display: flex; flex-direction: column; }
         .platform-chat-sessions a { color: var(--platform-accent, #4f46e5); text-decoration: none; font-weight: 600; }
         .platform-chat-session-active a { text-decoration: underline; }
         .platform-chat-session-started { font-size: 0.75rem; color: var(--platform-muted, #64748b); }
-        .platform-chat-new-form { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
-        .platform-chat-new-form input[type=text] { flex: 1; min-width: 0; padding: 6px 8px; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-sm, 8px); }
 %s
     </style>
     <div class="platform-container">
-        <div class="platform-header"><h2>Chat</h2></div>
+        %s
         <div class="platform-chat-layout">
             <div>
-                <form method="POST" action="chat-start" class="platform-chat-new-form">
-                    <input type="hidden" name="csrf_token" value="%s">
-                    <input type="text" name="title" placeholder="New chat title">
-                    <button type="submit" class="btn btn-secondary">+ New chat</button>
-                </form>
                 %s
             </div>
             <div>
@@ -4306,17 +4292,21 @@ function html.render_chat(sessions, session, messages, pending, csrf_token, nonc
         </div>
     </div>
 </div>
-""", platform_container_css(1200), platform_button_css(), platform_chat_thread_css(), html.html_escape(csrf_token), sessions_html, main_html)
+""", platform_container_css(1200), platform_button_css(), platform_page_header_css(), platform_chat_thread_css(),
+     render_page_header("Chat", "<p>Past conversations -- send messages via the chat button.</p>", nil),
+     sessions_html, main_html)
 end
 
 --------------------------------------------------------------------------
 -- Floating chat widget -- rendered on every authenticated page (see
--- html.page_shell), talking to /api/chat-widget-* (cgi.lua) rather
--- than the full-page /chat/chat-start/chat-message/chat-approve/
--- chat-deny routes render_chat above uses. Its own session_id lives in
--- the browser's localStorage (not server-rendered state), so it
--- survives a normal, full-page navigation between one platform page
--- and the next the same way it would if this were a true SPA.
+-- html.page_shell), the only surviving way to actually chat (render_chat
+-- above is a read-only history browser). Talks to /api/chat-widget-*
+-- (cgi.lua). Its own session_id lives in the browser's localStorage (not
+-- server-rendered state), so it survives a normal, full-page navigation
+-- between one platform page and the next the same way it would if this
+-- were a true SPA -- except when a page hands it a specific session to
+-- resume via page_context.open_chat_session_id (see below), which wins
+-- over whatever was already cached.
 function platform_chat_widget_css()
     return """
 .platform-chat-widget { position: fixed; right: 20px; bottom: 20px; z-index: 1000; font-family: inherit; }
@@ -4651,6 +4641,16 @@ function html.render_chat_widget(nonce)
             }).catch(showFeedbackError);
         }
     });
+
+    // A page can hand off a specific session to resume (currently only
+    // /chat's history browser does this, via cgi.lua's page_context.
+    // open_chat_session_id -- clicking a past session there should
+    // continue it here, not leave the widget on whatever it had cached).
+    // Wins over an existing cached session id, since the user just
+    // explicitly picked this one.
+    if (window.PLATFORM_PAGE_CONTEXT && window.PLATFORM_PAGE_CONTEXT.open_chat_session_id) {
+        localStorage.setItem(STORAGE_KEY, window.PLATFORM_PAGE_CONTEXT.open_chat_session_id);
+    }
 
     var existingSessionId = localStorage.getItem(STORAGE_KEY);
     if (existingSessionId) {

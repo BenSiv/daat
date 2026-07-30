@@ -18,38 +18,18 @@ teardown() {
     cleanup_test_env
 }
 
-raw_post() {
-    local path_info="$1"
-    local body="$2"
-    local cookie="$3"
-    local test_responses="$4"
-    printf '%s' "$body" | AGENT_TEST_RESPONSES="$test_responses" \
-        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="$path_info" QUERY_STRING="" \
-        HTTP_COOKIE="$cookie" "$BIN"
-}
-
-raw_get() {
-    local path_info="$1"
-    local query_string="$2"
-    GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="$path_info" QUERY_STRING="$query_string" \
-        HTTP_COOKIE="$COOKIE" "$BIN"
-}
-
-extract_query_param() {
-    local response="$1"
-    local param="$2"
-    printf '%s' "$response" | grep -o "${param}=[^ ]*" | sed "s/${param}=//" | tr -d '\r'
-}
-
 start_chat() {
-    raw_post "/chat-start" "csrf_token=${CSRF}&title=Chat" "$COOKIE" ""
+    local resp sid
+    resp=$(raw_post_json "/api/chat-widget-start" '{"title":"Chat"}' "$COOKIE" "$CSRF" "")
+    sid=$(json_body "$resp" | jq -r '.session_id')
+    printf 'session_id=%s' "$sid"
 }
 
 search_for_bioreactor() {
     resp=$(start_chat)
     session_id=$(extract_query_param "$resp" "session_id")
     scripted="$(tool_call_response "document.search" '{"query":"bioreactor"}')"$'\1'"$(done_response "Found it.")"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=find+bioreactor+pages" "$COOKIE" "$scripted" >/dev/null
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"find bioreactor pages\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 }
 
 # Same as search_for_bioreactor, but with an optional extra scripted
@@ -71,7 +51,7 @@ search_for_bioreactor_extra() {
         scripted="${scripted}"$'\1'"${extra_response}"
     fi
     scripted="${scripted}"$'\1'"$(done_response "Found it.")"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=find+bioreactor+pages" "$COOKIE" "$scripted" >/dev/null
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"find bioreactor pages\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 }
 
 @test "platform knowledge stats shows all zeros on a fresh store" {
@@ -240,7 +220,7 @@ search_for_bioreactor_extra() {
     resp=$(start_chat)
     session_id=$(extract_query_param "$resp" "session_id")
     scripted="$(tool_call_response "document.search" '{"query":"bioreactor"}')"$'\1'"$(done_response "Found it.")"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=find+bioreactor+pages" "$COOKIE" "$scripted" >/dev/null
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"find bioreactor pages\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
     # The linked neighbor ("Cleaning Checklist") never matched the query
     # directly, so its retrieval_count stays 0 -- but it should still
@@ -258,7 +238,7 @@ search_for_bioreactor_extra() {
     resp=$(start_chat)
     session_id=$(extract_query_param "$resp" "session_id")
     scripted="$(tool_call_response "knowledge.stats" '{}')"$'\1'"$(done_response "Here you go.")"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=summarize+the+knowledge+pool" "$COOKIE" "$scripted" >/dev/null
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"summarize the knowledge pool\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
     # Reported live: this test used to assert against /chat's own
     # rendered page, which deliberately strips tool calls/results for
@@ -292,7 +272,7 @@ search_for_bioreactor_extra() {
 }
 
 @test "/knowledge is forbidden for a plain (non Setup/Admin) user" {
-    run raw_get "/knowledge" ""
+    run raw_get "/knowledge" "" "$COOKIE"
     [[ "$output" =~ "403 Forbidden" ]]
 }
 

@@ -101,11 +101,11 @@ raw_admin_action() {
 }
 
 @test "an unauthenticated /chat-start or /chat-message never reaches the agent" {
-    GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/chat-start" QUERY_STRING="" run "$BIN"
+    GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/chat-widget-start" QUERY_STRING="" run "$BIN"
     [[ "$output" =~ "302 Found" ]]
     [[ "$output" =~ "Location: /login" ]]
 
-    GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/chat-message" QUERY_STRING="" run "$BIN"
+    GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/chat-widget-send" QUERY_STRING="" run "$BIN"
     [[ "$output" =~ "302 Found" ]]
     [[ "$output" =~ "Location: /login" ]]
 }

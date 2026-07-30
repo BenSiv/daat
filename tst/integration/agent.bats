@@ -25,42 +25,19 @@ teardown() {
     cleanup_test_env
 }
 
-# The Location header's value carries a trailing \r (CRLF line ending)
-# that a naive extraction misses -- a real bug caught manually while
-# verifying this feature -- so every extraction here strips it.
-extract_query_param() {
-    local response="$1"
-    local param="$2"
-    printf '%s' "$response" | grep -o "${param}=[^ ]*" | sed "s/${param}=//" | tr -d '\r'
-}
-
-raw_get() {
-    local path_info="$1"
-    local query_string="$2"
-    local cookie="$3"
-    GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="$path_info" QUERY_STRING="$query_string" \
-        HTTP_COOKIE="$cookie" "$BIN"
-}
-
-raw_post() {
-    local path_info="$1"
-    local body="$2"
-    local cookie="$3"
-    local test_responses="$4"
-    local compaction_threshold="${5:-}"
-    if [ -n "$compaction_threshold" ]; then
-        write_platform_config ", agent_compaction_threshold = ${compaction_threshold}"
-    fi
-    printf '%s' "$body" | AGENT_TEST_RESPONSES="$test_responses" \
-        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="$path_info" QUERY_STRING="" \
-        HTTP_COOKIE="$cookie" "$BIN"
-}
-
+# start_chat now drives the JSON widget API (/api/chat-widget-start)
+# instead of the deleted form-POST /chat-start route, but keeps its
+# external contract identical: callers still pipe its output through
+# extract_query_param "$resp" "session_id", so it still prints
+# "session_id=<value>" text.
 start_chat() {
     local cookie="$1"
     local csrf="$2"
     local title="$3"
-    raw_post "/chat-start" "csrf_token=${csrf}&title=${title}" "$cookie" ""
+    local resp sid
+    resp=$(raw_post_json "/api/chat-widget-start" "{\"title\":\"${title}\"}" "$cookie" "$csrf" "")
+    sid=$(json_body "$resp" | jq -r '.session_id')
+    printf 'session_id=%s' "$sid"
 }
 
 @test "GET /chat with no sessions shows the empty state" {
@@ -70,13 +47,14 @@ start_chat() {
 }
 
 @test "chat-start creates a session owned by the logged-in user" {
-    run start_chat "$COOKIE" "$CSRF" "First+chat"
-    [[ "$output" =~ "302 Found" ]]
-    [[ "$output" =~ "Location: chat?session_id=" ]]
+    run raw_post_json "/api/chat-widget-start" '{"title":"First chat"}' "$COOKIE" "$CSRF" ""
+    [[ "$output" =~ "200 OK" ]]
+    [[ "$(json_body "$output" | jq -r '.session_id')" != "" ]]
+    [[ "$(json_body "$output" | jq -r '.session_id')" != "null" ]]
 }
 
 @test "chat session list shows the session's start timestamp next to its title" {
-    start_chat "$COOKIE" "$CSRF" "Timestamped+chat"
+    start_chat "$COOKIE" "$CSRF" "Timestamped chat"
 
     run raw_get "/chat" "" "$COOKIE"
     [[ "$output" =~ "Timestamped chat" ]]
@@ -87,8 +65,8 @@ start_chat() {
     resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
     session_id=$(extract_query_param "$resp" "session_id")
 
-    run raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=What+is+2%2B2%3F" "$COOKIE" "$(done_response "2+2 is 4.")"
-    [[ "$output" =~ "302 Found" ]]
+    run raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"What is 2+2?\"}" "$COOKIE" "$CSRF" "$(done_response "2+2 is 4.")"
+    [[ "$output" =~ "200 OK" ]]
 
     run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
     [[ "$output" =~ "What is 2+2?" ]]
@@ -99,8 +77,8 @@ start_chat() {
     resp=$(start_chat "$COOKIE" "$CSRF" "")
     session_id=$(extract_query_param "$resp" "session_id")
 
-    run raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=What+is+the+boiling+point+of+water%3F" "$COOKIE" "$(done_response "100 degrees C.")"
-    [[ "$output" =~ "302 Found" ]]
+    run raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"What is the boiling point of water?\"}" "$COOKIE" "$CSRF" "$(done_response "100 degrees C.")"
+    [[ "$output" =~ "200 OK" ]]
 
     run raw_get "/chat" "" "$COOKIE"
     [[ "$output" =~ "What is the boiling point of water?" ]]
@@ -115,11 +93,11 @@ EOF
     session_id=$(extract_query_param "$resp" "session_id")
 
     capture_file="$TEST_DIR/captured_system_prompt.txt"
-    printf 'csrf_token=%s&session_id=%s&message=hello' "$CSRF" "$session_id" | \
+    printf '{"session_id":"%s","message":"hello"}' "$session_id" | \
         AGENT_TEST_RESPONSES="$(done_response "Hi.")" \
         AGENT_TEST_CAPTURE_SYSTEM_PROMPT="$capture_file" \
-        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/chat-message" QUERY_STRING="" \
-        HTTP_COOKIE="$COOKIE" "$BIN" > /dev/null
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/chat-widget-send" QUERY_STRING="" \
+        HTTP_COOKIE="$COOKIE" HTTP_X_CSRF_TOKEN="$CSRF" "$BIN" > /dev/null
 
     [ -f "$capture_file" ]
     run cat "$capture_file"
@@ -130,15 +108,13 @@ EOF
     resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
     session_id=$(extract_query_param "$resp" "session_id")
 
-    # Simulates exactly what the widget's own JS prepends -- a raw form
+    # Simulates exactly what the widget's own JS prepends -- a raw JSON
     # POST bypasses the JS, so this locks in the *server-side* strip
     # behavior (agent.display_content) independently of the browser.
-    # Built already form-urlencoded (%0A for newline, + for space)
-    # rather than encoding a shell string with real newlines, which sed
-    # can't do reliably line-by-line.
-    encoded_message="%5BCurrent+user:+alice%5D%0A%5BCurrent+page:+home+%22Home%22%5D%0A%0Awhat+page+am+I+on%3F"
-    run raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=${encoded_message}" "$COOKIE" "$(done_response "You are on the Home page.")"
-    [[ "$output" =~ "302 Found" ]]
+    # Built as a real JSON string with \n newline escapes and \" for the
+    # literal embedded quotes around "Home".
+    run raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"[Current user: alice]\\n[Current page: home \\\"Home\\\"]\\n\\nwhat page am I on?\"}" "$COOKIE" "$CSRF" "$(done_response "You are on the Home page.")"
+    [[ "$output" =~ "200 OK" ]]
 
     run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
     [[ "$output" =~ "what page am I on?" ]]
@@ -156,8 +132,8 @@ EOF
     session_id=$(extract_query_param "$resp" "session_id")
 
     scripted="$(tool_call_response "document.search" '{"query":"bioreactor"}')"$'\1'"$(done_response "Found it.")"
-    run raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=find+bioreactor+pages" "$COOKIE" "$scripted"
-    [[ "$output" =~ "302 Found" ]]
+    run raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"find bioreactor pages\"}" "$COOKIE" "$CSRF" "$scripted"
+    [[ "$output" =~ "200 OK" ]]
 
     # The real tool result is recorded in full (see agent_message
     # directly)...
@@ -191,8 +167,14 @@ EOF
     session_id=$(extract_query_param "$resp" "session_id")
 
     scripted="$(tool_call_response "document.create" '{"title":"New Page","content":"hello"}')"
-    run raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=create+a+page" "$COOKIE" "$scripted"
-    [[ "$output" =~ "302 Found" ]]
+    run raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"create a page\"}" "$COOKIE" "$CSRF" "$scripted"
+    [[ "$output" =~ "200 OK" ]]
+    # The pending action is surfaced with its real tool/method, ready for
+    # the floating widget's own Approve/Deny buttons to act on -- /chat
+    # itself is a read-only browser now, no approve/deny buttons of its
+    # own (see render_chat_pending_note).
+    [[ "$(json_body "$output" | jq -r '.pending.tool')" = "document" ]]
+    [[ "$(json_body "$output" | jq -r '.pending.method')" = "create" ]]
 
     # Not asserting the document table is empty -- a real chat turn now
     # syncs the Knowledge Pool folder and this session's own transcript
@@ -204,14 +186,8 @@ EOF
     [ "$output" -eq 0 ]
 
     run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
-    [[ "$output" =~ "wants to run" ]]
     [[ "$output" =~ "document.create" ]]
-    [[ "$output" =~ "Approve" ]]
-    [[ "$output" =~ "Deny" ]]
-    # button-audit follow-up: Deny is a one-way negative action (unlike
-    # Approve, which has no reverse toggle either but is the affirmative
-    # path) -- it gets the same .btn-danger treatment as Archive.
-    [[ "$output" =~ 'class="btn btn-danger">Deny</button>' ]]
+    [[ "$output" =~ "is awaiting approval" ]]
 }
 
 @test "approving a pending action executes it, attributes it to the real user, and resumes the loop" {
@@ -219,13 +195,11 @@ EOF
     session_id=$(extract_query_param "$resp" "session_id")
 
     scripted="$(tool_call_response "document.create" '{"title":"New Page","content":"hello"}')"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=create+a+page" "$COOKIE" "$scripted" >/dev/null
+    send_resp=$(raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"create a page\"}" "$COOKIE" "$CSRF" "$scripted")
+    pending_id=$(json_body "$send_resp" | jq -r '.pending.id')
 
-    page_html=$(raw_get "/chat" "session_id=${session_id}" "$COOKIE")
-    pending_id=$(printf '%s' "$page_html" | grep -o 'pending_id" value="[0-9]*"' | grep -o '[0-9]*' | head -1)
-
-    run raw_post "/chat-approve" "csrf_token=${CSRF}&pending_id=${pending_id}&session_id=${session_id}" "$COOKIE" "$(done_response "Created it.")"
-    [[ "$output" =~ "302 Found" ]]
+    run raw_post_json "/api/chat-widget-approve" "{\"pending_id\":${pending_id},\"session_id\":\"${session_id}\"}" "$COOKIE" "$CSRF" "$(done_response "Created it.")"
+    [[ "$output" =~ "200 OK" ]]
 
     # Not necessarily id 1 -- ledger ids are a single sequence shared
     # across every entity type, and this session's own transcript
@@ -260,11 +234,9 @@ EOF
     session_id=$(extract_query_param "$resp" "session_id")
 
     scripted="$(tool_call_response "document.create" '{"title":"Table Test","content":"# Heading\n\nSome text.\n\n| A | B |\n|---|---|\n| 1 | 2 |"}')"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=make+a+table" "$COOKIE" "$scripted" >/dev/null
-
-    page_html=$(raw_get "/chat" "session_id=${session_id}" "$COOKIE")
-    pending_id=$(printf '%s' "$page_html" | grep -o 'pending_id" value="[0-9]*"' | grep -o '[0-9]*' | head -1)
-    raw_post "/chat-approve" "csrf_token=${CSRF}&pending_id=${pending_id}&session_id=${session_id}" "$COOKIE" "$(done_response "Created.")" >/dev/null
+    send_resp=$(raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"make a table\"}" "$COOKIE" "$CSRF" "$scripted")
+    pending_id=$(json_body "$send_resp" | jq -r '.pending.id')
+    raw_post_json "/api/chat-widget-approve" "{\"pending_id\":${pending_id},\"session_id\":\"${session_id}\"}" "$COOKIE" "$CSRF" "$(done_response "Created.")" >/dev/null
 
     stored_content=$(sqlite3 "$TEST_DIR/.store/store.db" "SELECT content FROM document WHERE title = 'Table Test';")
     [[ "$stored_content" =~ "# Heading" ]]
@@ -278,13 +250,11 @@ EOF
     session_id=$(extract_query_param "$resp" "session_id")
 
     scripted="$(tool_call_response "document.create" '{"title":"Denied Page","content":"hello"}')"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=create+a+page" "$COOKIE" "$scripted" >/dev/null
+    send_resp=$(raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"create a page\"}" "$COOKIE" "$CSRF" "$scripted")
+    pending_id=$(json_body "$send_resp" | jq -r '.pending.id')
 
-    page_html=$(raw_get "/chat" "session_id=${session_id}" "$COOKIE")
-    pending_id=$(printf '%s' "$page_html" | grep -o 'pending_id" value="[0-9]*"' | grep -o '[0-9]*' | head -1)
-
-    run raw_post "/chat-deny" "csrf_token=${CSRF}&pending_id=${pending_id}&session_id=${session_id}" "$COOKIE" "$(done_response "Understood.")"
-    [[ "$output" =~ "302 Found" ]]
+    run raw_post_json "/api/chat-widget-deny" "{\"pending_id\":${pending_id},\"session_id\":\"${session_id}\"}" "$COOKIE" "$CSRF" "$(done_response "Understood.")"
+    [[ "$output" =~ "200 OK" ]]
 
     # Not asserting the document table is empty -- see the "pauses for
     # approval" test's own comment (task #108 follow-up: every real
@@ -319,7 +289,7 @@ EOF
     session_id=$(extract_query_param "$resp" "session_id")
 
     scripted="$(tool_call_response "entity.list_types" '{}')"$'\1'"$(done_response "Listed.")"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=what+entity+types+exist" "$COOKIE" "$scripted" >/dev/null
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"what entity types exist\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
     run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
     [[ "$output" =~ "document" ]]
@@ -332,7 +302,7 @@ EOF
     session_id=$(extract_query_param "$resp" "session_id")
 
     scripted="$(multi_tool_call_response "entity.list_types" "{}" "entity.fields" '{"entity_type":"task"}')"$'\1'"$(done_response "Got both.")"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=what+types+and+fields+does+task+have" "$COOKIE" "$scripted" >/dev/null
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"what types and fields does task have\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
     run sqlite3 "$TEST_DIR/.store/store.db" "SELECT content FROM agent_message WHERE session_id = '${session_id}' AND role = 'tool_result' ORDER BY id ASC;"
     [[ "$output" =~ "document" ]]
@@ -350,10 +320,10 @@ EOF
     scripted="$(multi_tool_call_response \
         "entity.create" '{"entity_type":"task","title":"First task","status":"open"}' \
         "entity.create" '{"entity_type":"task","title":"Second task","status":"open"}')"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=create+two+tasks" "$COOKIE" "$scripted" >/dev/null
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"create two tasks\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
     run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
-    [[ "$output" =~ "wants to run" ]]
+    [[ "$output" =~ "is awaiting approval" ]]
     run latest_tool_result "$session_id"
     [[ "$output" =~ "skipped" ]]
 
@@ -369,7 +339,7 @@ EOF
     session_id=$(extract_query_param "$resp" "session_id")
 
     scripted="$(tool_call_response "entity.fields" '{"entity_type":"task"}')"$'\1'"$(done_response "Listed.")"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=what+fields+does+task+have" "$COOKIE" "$scripted" >/dev/null
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"what fields does task have\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
     run latest_tool_result "$session_id"
     [[ "$output" =~ "title (text, required)" ]]
@@ -397,7 +367,7 @@ EOF
     session_id=$(extract_query_param "$resp" "session_id")
 
     scripted="$(tool_call_response "entity.relationships" '{}')"$'\1'"$(done_response "Listed.")"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=what+references+what" "$COOKIE" "$scripted" >/dev/null
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"what references what\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
     run latest_tool_result "$session_id"
     [[ "$output" =~ "task_note.task -> task (reference)" ]]
@@ -416,7 +386,7 @@ EOF
 
     sql="SELECT task.title, COUNT(*) AS note_count FROM task_note JOIN task ON task_note.task = task.id GROUP BY task.title"
     scripted="$(tool_call_response "entity.query" "$(printf '{"sql":"%s"}' "$sql")")"$'\1'"$(done_response "Counted.")"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=how+many+notes+per+task" "$COOKIE" "$scripted" >/dev/null
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"how many notes per task\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
     run latest_tool_result "$session_id"
     [[ "$output" =~ "Ship it" ]]
@@ -437,7 +407,7 @@ EOF
     [[ ! "$output" =~ "SELECT" ]]
 
     scripted="$(tool_call_response "entity.query" '{"sql":"SELECT title FROM task"}')"$'\1'"$(done_response "Here they are.")"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=list+task+titles" "$COOKIE" "$scripted" >/dev/null
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"list task titles\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
     run env GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/api/chat-widget-history" \
         QUERY_STRING="session_id=${session_id}" HTTP_COOKIE="$COOKIE" "$BIN"
@@ -456,7 +426,7 @@ EOF
     scripted="$(tool_call_response "entity.list_types" '{}')"$'\1'"$(done_response '```sql
 SELECT * FROM task
 ```')"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=write+an+sql+query+to+get+all+the+task+records" "$COOKIE" "$scripted" >/dev/null
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"write an sql query to get all the task records\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
     run env GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/api/chat-widget-history" \
         QUERY_STRING="session_id=${session_id}" HTTP_COOKIE="$COOKIE" "$BIN"
@@ -468,7 +438,7 @@ SELECT * FROM task
     session_id=$(extract_query_param "$resp" "session_id")
 
     scripted="$(tool_call_response "entity.query" '{"sql":"SELECT * FROM agent_message"}')"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=show+me+internal+messages" "$COOKIE" "$scripted" >/dev/null
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"show me internal messages\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
     run latest_tool_result "$session_id"
     [[ "$output" =~ "not a registered entity type" ]]
@@ -481,7 +451,7 @@ SELECT * FROM task
     session_id=$(extract_query_param "$resp" "session_id")
 
     scripted="$(tool_call_response "entity.query" '{"sql":"DELETE FROM task"}')"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=delete+all+tasks" "$COOKIE" "$scripted" >/dev/null
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"delete all tasks\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
     run latest_tool_result "$session_id"
     [[ "$output" =~ "not a plain SELECT" ]]
@@ -504,7 +474,7 @@ SELECT * FROM task
 
     sql="SELECT COUNT(*) AS note_count FROM task_note JOIN task ON task_note.task = task.id WHERE task.title = 'Ship it'"
     scripted="$(tool_call_response "research.investigate" '{"question":"how many task_notes reference the Ship it task"}')"$'\1'"$(tool_call_response "entity.query" "$(printf '{"sql":"%s"}' "$sql")")"$'\1'"$(done_response "Found note_count=2 via a join on task_note.task = task.id.")"$'\1'"$(done_response "The Ship it task has 2 notes.")"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=dig+into+how+many+notes+the+Ship+it+task+has" "$COOKIE" "$scripted" >/dev/null
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"dig into how many notes the Ship it task has\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
     run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
     [[ "$output" =~ "The Ship it task has 2 notes." ]]
@@ -524,7 +494,7 @@ SELECT * FROM task
     session_id=$(extract_query_param "$resp" "session_id")
 
     scripted="$(tool_call_response "research.investigate" '{"question":"create a task"}')"$'\1'"$(tool_call_response "entity.create" '{"entity_type":"task","title":"Sneaky","status":"open"}')"$'\1'"$(done_response "I could not create anything -- research is read-only.")"$'\1'"$(done_response "Research reported it cannot write data.")"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=try+to+sneak+in+a+write+via+research" "$COOKIE" "$scripted" >/dev/null
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"try to sneak in a write via research\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
     run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
     [[ "$output" =~ "Research reported it cannot write data." ]]
@@ -546,7 +516,7 @@ SELECT * FROM task
         scripted="${scripted}"$'\1'"$(tool_call_response "entity.list_types" '{}')"
     done
     scripted="${scripted}"$'\1'"$(done_response "Giving up after the budget ran out.")"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=keep+digging+forever" "$COOKIE" "$scripted" >/dev/null
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"keep digging forever\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
     run latest_tool_result "$session_id"
     [[ "$output" =~ "exceeded its turn budget" ]]
@@ -560,7 +530,7 @@ SELECT * FROM task
     session_id=$(extract_query_param "$resp" "session_id")
 
     scripted="$(tool_call_response "clarify.ask" '{"question":"There are two open tasks -- did you mean Ship it or Draft plan?"}')"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=archive+the+task" "$COOKIE" "$scripted" >/dev/null
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"archive the task\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
     run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
     [[ "$output" =~ "did you mean" ]]
@@ -576,7 +546,7 @@ SELECT * FROM task
     # The user's own next message is the answer -- an ordinary
     # /chat-message continues this same session with no special resume
     # endpoint, unlike a destructive pending action.
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=Ship+it" "$COOKIE" "$(done_response "Archived Ship it.")" >/dev/null
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"Ship it\"}" "$COOKIE" "$CSRF" "$(done_response "Archived Ship it.")" >/dev/null
     run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
     [[ "$output" =~ "Archived Ship it." ]]
 }
@@ -589,7 +559,7 @@ SELECT * FROM task
     scripted="$(multi_tool_call_response \
         "clarify.ask" '{"question":"What status should the new task have?"}' \
         "entity.create" '{"entity_type":"task","title":"Ambiguous","status":"open"}')"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=create+a+task" "$COOKIE" "$scripted" >/dev/null
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"create a task\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
     run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
     [[ "$output" =~ "What status should the new task have?" ]]
@@ -614,7 +584,7 @@ SELECT * FROM task
     session_id=$(extract_query_param "$resp" "session_id")
 
     scripted="$(tool_call_response "background.start" '{"question":"how many task_notes reference the Ship it task"}')"$'\1'"$(done_response "I will dig into that and let you know.")"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=dig+deeper+on+this+one" "$COOKIE" "$scripted" >/dev/null
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"dig deeper on this one\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
     run latest_tool_result "$session_id"
     [[ "$output" =~ "Started background task" ]]
@@ -646,19 +616,19 @@ SELECT * FROM task
     resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
     session_id=$(extract_query_param "$resp" "session_id")
 
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=dig+deeper" "$COOKIE" \
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"dig deeper\"}" "$COOKIE" "$CSRF" \
         "$(tool_call_response "background.start" '{"question":"anything unusual about open tasks"}')"$'\1'"$(done_response "On it.")" >/dev/null
     task_id=$(sqlite3 "$TEST_DIR/.store/store.db" "SELECT id FROM agent_background_task;")
 
     scripted="$(tool_call_response "background.status" "$(printf '{"task_id":%s}' "$task_id")")"$'\1'"$(done_response "Still working on it.")"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=any+update" "$COOKIE" "$scripted" >/dev/null
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"any update\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
     run latest_tool_result "$session_id"
     [[ "$output" =~ "is still pending" ]]
 
     AGENT_TEST_RESPONSES="$(done_response "Nothing unusual found.")" run "$BIN" agent run-pending-background
 
     scripted2="$(tool_call_response "background.status" "$(printf '{"task_id":%s}' "$task_id")")"$'\1'"$(done_response "Here it is.")"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=any+update+now" "$COOKIE" "$scripted2" >/dev/null
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"any update now\"}" "$COOKIE" "$CSRF" "$scripted2" >/dev/null
     run latest_tool_result "$session_id"
     [[ "$output" =~ "(done): Nothing unusual found." ]]
 }
@@ -667,15 +637,15 @@ SELECT * FROM task
     write_task_schema
     resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
     session_id=$(extract_query_param "$resp" "session_id")
-    other_resp=$(start_chat "$COOKIE" "$CSRF" "Other+chat")
+    other_resp=$(start_chat "$COOKIE" "$CSRF" "Other chat")
     other_session_id=$(extract_query_param "$other_resp" "session_id")
 
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${other_session_id}&message=dig+deeper" "$COOKIE" \
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${other_session_id}\",\"message\":\"dig deeper\"}" "$COOKIE" "$CSRF" \
         "$(tool_call_response "background.start" '{"question":"something"}')"$'\1'"$(done_response "On it.")" >/dev/null
     other_task_id=$(sqlite3 "$TEST_DIR/.store/store.db" "SELECT id FROM agent_background_task;")
 
     scripted="$(tool_call_response "background.status" "$(printf '{"task_id":%s}' "$other_task_id")")"$'\1'"$(done_response "Couldn't find it.")"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=check+task" "$COOKIE" "$scripted" >/dev/null
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"check task\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
     run latest_tool_result "$session_id"
     [[ "$output" =~ "no such background task" ]]
@@ -688,14 +658,14 @@ SELECT * FROM task
     session_id=$(extract_query_param "$resp" "session_id")
 
     scripted="$(tool_call_response "entity.list" '{"entity_type":"task"}')"$'\1'"$(done_response "Found tasks.")"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=list+tasks" "$COOKIE" "$scripted" >/dev/null
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"list tasks\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
     run latest_tool_result "$session_id"
     [[ "$output" =~ "Ship it" ]]
     run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
     [[ ! "$output" =~ "wants to run" ]]
 
     scripted2="$(tool_call_response "entity.get" '{"entity_type":"task","entity_id":1}')"$'\1'"$(done_response "Here it is.")"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=show+task+1" "$COOKIE" "$scripted2" >/dev/null
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"show task 1\"}" "$COOKIE" "$CSRF" "$scripted2" >/dev/null
     run latest_tool_result "$session_id"
     [[ "$output" =~ "status=open" ]]
 }
@@ -706,7 +676,7 @@ SELECT * FROM task
     session_id=$(extract_query_param "$resp" "session_id")
 
     scripted="$(tool_call_response "entity.validate" '{"entity_type":"task","status":"bogus"}')"$'\1'"$(done_response "Checked.")"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=would+this+be+valid" "$COOKIE" "$scripted" >/dev/null
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"would this be valid\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
     run latest_tool_result "$session_id"
     [[ "$output" =~ "title: required field is missing" ]]
@@ -726,7 +696,7 @@ SELECT * FROM task
     session_id=$(extract_query_param "$resp" "session_id")
 
     scripted="$(tool_call_response "entity.validate" '{"entity_type":"task","title":"Ship it","status":"open"}')"$'\1'"$(done_response "That would be valid.")"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=would+this+be+valid" "$COOKIE" "$scripted" >/dev/null
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"would this be valid\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
     run latest_tool_result "$session_id"
     [[ "$output" =~ "Valid" ]]
@@ -746,7 +716,7 @@ SELECT * FROM task
     # as missing, but an update against the existing row should not,
     # since the current row's own title fills in the merge.
     scripted="$(tool_call_response "entity.validate" "$(printf '{"entity_type":"task","entity_id":%s,"status":"done"}' "$task_id")")"$'\1'"$(done_response "That update would be valid.")"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=would+marking+it+done+be+valid" "$COOKIE" "$scripted" >/dev/null
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"would marking it done be valid\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
     run latest_tool_result "$session_id"
     [[ "$output" =~ "Valid" ]]
@@ -763,17 +733,14 @@ SELECT * FROM task
     session_id=$(extract_query_param "$resp" "session_id")
 
     scripted="$(tool_call_response "entity.create" '{"entity_type":"task","title":"New task","status":"open"}')"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=create+a+task" "$COOKIE" "$scripted" >/dev/null
+    send_resp=$(raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"create a task\"}" "$COOKIE" "$CSRF" "$scripted")
+    pending_id=$(json_body "$send_resp" | jq -r '.pending.id')
 
     run "$BIN" entity list task
     [[ "$output" == "" ]]
 
-    page_html=$(raw_get "/chat" "session_id=${session_id}" "$COOKIE")
-    [[ "$page_html" =~ "wants to run" ]]
-    pending_id=$(printf '%s' "$page_html" | grep -o 'pending_id" value="[0-9]*"' | grep -o '[0-9]*' | head -1)
-
-    run raw_post "/chat-approve" "csrf_token=${CSRF}&pending_id=${pending_id}&session_id=${session_id}" "$COOKIE" "$(done_response "Created it.")"
-    [[ "$output" =~ "302 Found" ]]
+    run raw_post_json "/api/chat-widget-approve" "{\"pending_id\":${pending_id},\"session_id\":\"${session_id}\"}" "$COOKIE" "$CSRF" "$(done_response "Created it.")"
+    [[ "$output" =~ "200 OK" ]]
 
     # Not necessarily id 1 -- ledger ids are a single sequence shared
     # across every entity type (document included), and this session's
@@ -792,15 +759,13 @@ SELECT * FROM task
     session_id=$(extract_query_param "$resp" "session_id")
 
     scripted="$(tool_call_response "entity.update" '{"entity_type":"task","entity_id":1,"status":"done"}')"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=mark+task+1+done" "$COOKIE" "$scripted" >/dev/null
+    send_resp=$(raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"mark task 1 done\"}" "$COOKIE" "$CSRF" "$scripted")
+    pending_id=$(json_body "$send_resp" | jq -r '.pending.id')
 
     run "$BIN" entity show task 1
     [[ "$output" =~ status[[:space:]]+open ]]
 
-    page_html=$(raw_get "/chat" "session_id=${session_id}" "$COOKIE")
-    pending_id=$(printf '%s' "$page_html" | grep -o 'pending_id" value="[0-9]*"' | grep -o '[0-9]*' | head -1)
-
-    raw_post "/chat-approve" "csrf_token=${CSRF}&pending_id=${pending_id}&session_id=${session_id}" "$COOKIE" "$(done_response "Done.")" >/dev/null
+    raw_post_json "/api/chat-widget-approve" "{\"pending_id\":${pending_id},\"session_id\":\"${session_id}\"}" "$COOKIE" "$CSRF" "$(done_response "Done.")" >/dev/null
 
     run "$BIN" entity show task 1
     [[ "$output" =~ status[[:space:]]+done ]]
@@ -813,18 +778,18 @@ SELECT * FROM task
     run raw_get "/chat" "session_id=${session_id}" "$BOB_COOKIE"
     [[ "$output" =~ "404 Not Found" ]]
 
-    run raw_post "/chat-message" "csrf_token=${BOB_CSRF}&session_id=${session_id}&message=hi" "$BOB_COOKIE" ""
+    run raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"hi\"}" "$BOB_COOKIE" "$BOB_CSRF" ""
     [[ "$output" =~ "404 Not Found" ]]
 }
 
 @test "chat-start/chat-message/chat-approve/chat-deny all require the matching CSRF token" {
-    run raw_post "/chat-start" "csrf_token=wrong&title=x" "$COOKIE" ""
+    run raw_post_json "/api/chat-widget-start" '{"title":"x"}' "$COOKIE" "wrong" ""
     [[ "$output" =~ "403 Forbidden" ]]
 
     resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
     session_id=$(extract_query_param "$resp" "session_id")
 
-    run raw_post "/chat-message" "csrf_token=wrong&session_id=${session_id}&message=hi" "$COOKIE" ""
+    run raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"hi\"}" "$COOKIE" "wrong" ""
     [[ "$output" =~ "403 Forbidden" ]]
 }
 
@@ -833,11 +798,11 @@ SELECT * FROM task
     session_id=$(extract_query_param "$resp" "session_id")
 
     scripted="$(done_response "There are 0.")"$'\1'"$(done_response "Actually there are 5, I checked again.")"
-    printf 'csrf_token=%s&session_id=%s&message=how+many' "$CSRF" "$session_id" | \
+    printf '{"session_id":"%s","message":"how many"}' "$session_id" | \
         AGENT_TEST_RESPONSES="$scripted" \
         AGENT_TEST_SELF_CHECK_RESPONSE="$(done_response "Did you verify that? Check again.")" \
-        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/chat-message" QUERY_STRING="" \
-        HTTP_COOKIE="$COOKIE" "$BIN" >/dev/null
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/chat-widget-send" QUERY_STRING="" \
+        HTTP_COOKIE="$COOKIE" HTTP_X_CSRF_TOKEN="$CSRF" "$BIN" >/dev/null
 
     run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
     [[ "$output" =~ "There are 0." ]]
@@ -852,12 +817,12 @@ SELECT * FROM task
 
     capture_file="$TEST_DIR/captured_messages.json"
     scripted="$(done_response "There are 0.")"$'\1'"$(done_response "Actually there are 5, I checked again.")"
-    printf 'csrf_token=%s&session_id=%s&message=how+many' "$CSRF" "$session_id" | \
+    printf '{"session_id":"%s","message":"how many"}' "$session_id" | \
         AGENT_TEST_RESPONSES="$scripted" \
         AGENT_TEST_SELF_CHECK_RESPONSE="$(done_response "Did you verify that? Check again.")" \
         AGENT_TEST_CAPTURE_MESSAGES="$capture_file" \
-        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/chat-message" QUERY_STRING="" \
-        HTTP_COOKIE="$COOKIE" "$BIN" >/dev/null
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/chat-widget-send" QUERY_STRING="" \
+        HTTP_COOKIE="$COOKIE" HTTP_X_CSRF_TOKEN="$CSRF" "$BIN" >/dev/null
 
     # Whatever the last converse() call of the run actually received --
     # once the first self-check rejection happens, every later call
@@ -876,7 +841,7 @@ SELECT * FROM task
     resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
     session_id=$(extract_query_param "$resp" "session_id")
 
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=hi" "$COOKIE" "$(done_response "Hello!")" >/dev/null
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"hi\"}" "$COOKIE" "$CSRF" "$(done_response "Hello!")" >/dev/null
 
     run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
     [[ "$output" =~ "Hello!" ]]
@@ -898,11 +863,11 @@ SELECT * FROM task
     # -- self-check silently stopped ever confirming, looping every
     # turn out to the full turn budget regardless of whether the answer
     # was fine. text_only_blocks has to be what's actually checked.
-    printf 'csrf_token=%s&session_id=%s&message=hi' "$CSRF" "$session_id" | \
+    printf '{"session_id":"%s","message":"hi"}' "$session_id" | \
         AGENT_TEST_RESPONSES="$(done_response "Hello!")" \
         AGENT_TEST_SELF_CHECK_RESPONSE="$(thinking_response "Let me review this answer carefully..." "CONFIRM")" \
-        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/chat-message" QUERY_STRING="" \
-        HTTP_COOKIE="$COOKIE" "$BIN" >/dev/null
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/chat-widget-send" QUERY_STRING="" \
+        HTTP_COOKIE="$COOKIE" HTTP_X_CSRF_TOKEN="$CSRF" "$BIN" >/dev/null
 
     run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
     [[ "$output" =~ "Hello!" ]]
@@ -916,7 +881,7 @@ SELECT * FROM task
     resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
     session_id=$(extract_query_param "$resp" "session_id")
 
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=hi" "$COOKIE" "$(done_response "This is **bold** text.")" >/dev/null
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"hi\"}" "$COOKIE" "$CSRF" "$(done_response "This is **bold** text.")" >/dev/null
 
     run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
     [[ "$output" =~ "<strong>bold</strong>" ]]
@@ -939,11 +904,11 @@ SELECT * FROM task
     # answer returns immediately since there's no budget left to act on
     # a critique (turn == max_turns skips self-check entirely).
     write_platform_config ', agent_max_turns = 2'
-    printf 'csrf_token=%s&session_id=%s&message=how+many' "$CSRF" "$session_id" | \
+    printf '{"session_id":"%s","message":"how many"}' "$session_id" | \
         AGENT_TEST_RESPONSES="$(done_response "An answer.")" \
         AGENT_TEST_SELF_CHECK_RESPONSE="$(done_response "Not confirmed, check again.")" \
-        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/chat-message" QUERY_STRING="" \
-        HTTP_COOKIE="$COOKIE" "$BIN" >/dev/null
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/chat-widget-send" QUERY_STRING="" \
+        HTTP_COOKIE="$COOKIE" HTTP_X_CSRF_TOKEN="$CSRF" "$BIN" >/dev/null
 
     run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM agent_message WHERE session_id = '${session_id}' AND role = 'assistant';"
     [ "$output" -eq 2 ]
@@ -961,10 +926,10 @@ SELECT * FROM task
 
     scripted="$(tool_call_response "entity.query" '{"sql":"SELECT title FROM task"}')"$'\1'"$(done_response "Here.")"
     write_platform_config ', agent_query_row_cap = 1'
-    printf 'csrf_token=%s&session_id=%s&message=list+tasks' "$CSRF" "$session_id" | \
+    printf '{"session_id":"%s","message":"list tasks"}' "$session_id" | \
         AGENT_TEST_RESPONSES="$scripted" \
-        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/chat-message" QUERY_STRING="" \
-        HTTP_COOKIE="$COOKIE" "$BIN" >/dev/null
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/chat-widget-send" QUERY_STRING="" \
+        HTTP_COOKIE="$COOKIE" HTTP_X_CSRF_TOKEN="$CSRF" "$BIN" >/dev/null
 
     run latest_tool_result "$session_id"
     [[ "$output" =~ "truncated at 1 rows" ]]
@@ -974,9 +939,10 @@ SELECT * FROM task
     resp=$(start_chat "$COOKIE" "$CSRF" "Long chat")
     session_id=$(extract_query_param "$resp" "session_id")
 
+    write_platform_config ', agent_compaction_threshold = 30'
     for i in 1 2 3 4 5 6; do
-        raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=message+number+${i}+with+extra+padding+text" \
-            "$COOKIE" "$(done_response "ok")" "30" >/dev/null
+        raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"message number ${i} with extra padding text\"}" \
+            "$COOKIE" "$CSRF" "$(done_response "ok")" >/dev/null
     done
 
     run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
@@ -1289,7 +1255,7 @@ EOF
     session_id=$(extract_query_param "$resp" "session_id")
 
     scripted="$(tool_call_response "template.list" '{}')"$'\1'"$(done_response "Listed.")"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=what+templates+exist" "$COOKIE" "$scripted" >/dev/null
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"what templates exist\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
     run latest_tool_result "$session_id"
     [[ "$output" =~ "standard_experiment" ]]
@@ -1302,7 +1268,7 @@ EOF
     session_id=$(extract_query_param "$resp" "session_id")
 
     scripted="$(tool_call_response "template.get" '{"name":"standard_experiment"}')"$'\1'"$(done_response "Got it.")"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=get+the+standard+experiment+template" "$COOKIE" "$scripted" >/dev/null
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"get the standard experiment template\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
     run latest_tool_result "$session_id"
     [[ "$output" =~ "## Objective" ]]
@@ -1315,8 +1281,8 @@ EOF
     session_id=$(extract_query_param "$resp" "session_id")
 
     scripted="$(tool_call_response "template.get" '{"name":"nonexistent"}')"$'\1'"$(done_response "No such template.")"
-    run raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=get+a+bogus+template" "$COOKIE" "$scripted"
-    [[ "$output" =~ "302 Found" ]]
+    run raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"get a bogus template\"}" "$COOKIE" "$CSRF" "$scripted"
+    [[ "$output" =~ "200 OK" ]]
 }
 
 @test "entity.archive and entity.unarchive are destructive: pause for approval, then really apply once approved" {
@@ -1326,14 +1292,13 @@ EOF
     session_id=$(extract_query_param "$resp" "session_id")
 
     scripted="$(tool_call_response "entity.archive" '{"entity_type":"task","entity_id":1}')"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=archive+task+1" "$COOKIE" "$scripted" >/dev/null
+    send_resp=$(raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"archive task 1\"}" "$COOKIE" "$CSRF" "$scripted")
+    pending_id=$(json_body "$send_resp" | jq -r '.pending.id')
 
     run "$BIN" entity list task
     [[ "$output" =~ "#1" ]]
 
-    page_html=$(raw_get "/chat" "session_id=${session_id}" "$COOKIE")
-    pending_id=$(printf '%s' "$page_html" | grep -o 'pending_id" value="[0-9]*"' | grep -o '[0-9]*' | head -1)
-    raw_post "/chat-approve" "csrf_token=${CSRF}&pending_id=${pending_id}&session_id=${session_id}" "$COOKIE" "$(done_response "Archived.")" >/dev/null
+    raw_post_json "/api/chat-widget-approve" "{\"pending_id\":${pending_id},\"session_id\":\"${session_id}\"}" "$COOKIE" "$CSRF" "$(done_response "Archived.")" >/dev/null
 
     run "$BIN" entity list task
     [[ ! "$output" =~ "#1" ]]
@@ -1341,10 +1306,9 @@ EOF
     resp2=$(start_chat "$COOKIE" "$CSRF" "Chat2")
     session_id2=$(extract_query_param "$resp2" "session_id")
     scripted2="$(tool_call_response "entity.unarchive" '{"entity_type":"task","entity_id":1}')"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id2}&message=restore+task+1" "$COOKIE" "$scripted2" >/dev/null
-    page_html2=$(raw_get "/chat" "session_id=${session_id2}" "$COOKIE")
-    pending_id2=$(printf '%s' "$page_html2" | grep -o 'pending_id" value="[0-9]*"' | grep -o '[0-9]*' | head -1)
-    raw_post "/chat-approve" "csrf_token=${CSRF}&pending_id=${pending_id2}&session_id=${session_id2}" "$COOKIE" "$(done_response "Restored.")" >/dev/null
+    send_resp2=$(raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id2}\",\"message\":\"restore task 1\"}" "$COOKIE" "$CSRF" "$scripted2")
+    pending_id2=$(json_body "$send_resp2" | jq -r '.pending.id')
+    raw_post_json "/api/chat-widget-approve" "{\"pending_id\":${pending_id2},\"session_id\":\"${session_id2}\"}" "$COOKIE" "$CSRF" "$(done_response "Restored.")" >/dev/null
 
     run "$BIN" entity list task
     [[ "$output" =~ "#1" ]]
@@ -1359,7 +1323,7 @@ EOF
     session_id=$(extract_query_param "$resp" "session_id")
 
     scripted="$(tool_call_response "entity.list" '{"entity_type":"task","filter_field":"status","filter_value":"open"}')"$'\1'"$(done_response "Listed.")"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=list+open+tasks" "$COOKIE" "$scripted" >/dev/null
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"list open tasks\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
     run latest_tool_result "$session_id"
     [[ "$output" =~ "First" ]]
@@ -1379,12 +1343,10 @@ EOF
     # regardless), the capability check itself only fires once
     # execute_tool actually runs, i.e. after approval.
     scripted="$(tool_call_response "entity.create" '{"entity_type":"secret_report","title":"Leaked"}')"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=create+a+secret+report" "$COOKIE" "$scripted" >/dev/null
-
-    page_html=$(raw_get "/chat" "session_id=${session_id}" "$COOKIE")
-    [[ "$page_html" =~ "wants to run" ]]
-    pending_id=$(printf '%s' "$page_html" | grep -o 'pending_id" value="[0-9]*"' | grep -o '[0-9]*' | head -1)
-    raw_post "/chat-approve" "csrf_token=${CSRF}&pending_id=${pending_id}&session_id=${session_id}" "$COOKIE" "$(done_response "Done.")" >/dev/null
+    send_resp=$(raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"create a secret report\"}" "$COOKIE" "$CSRF" "$scripted")
+    [[ "$(json_body "$send_resp" | jq -r '.pending.tool')" = "entity" ]]
+    pending_id=$(json_body "$send_resp" | jq -r '.pending.id')
+    raw_post_json "/api/chat-widget-approve" "{\"pending_id\":${pending_id},\"session_id\":\"${session_id}\"}" "$COOKIE" "$CSRF" "$(done_response "Done.")" >/dev/null
 
     run "$BIN" entity list secret_report
     [[ "$output" == "" ]]
@@ -1399,12 +1361,9 @@ EOF
     session_id=$(extract_query_param "$resp" "session_id")
 
     scripted="$(tool_call_response "entity.create" '{"entity_type":"secret_report","title":"Approved report"}')"
-    raw_post "/chat-message" "csrf_token=${CSRF}&session_id=${session_id}&message=create+a+secret+report" "$COOKIE" "$scripted" >/dev/null
-
-    page_html=$(raw_get "/chat" "session_id=${session_id}" "$COOKIE")
-    [[ "$page_html" =~ "wants to run" ]]
-    pending_id=$(printf '%s' "$page_html" | grep -o 'pending_id" value="[0-9]*"' | grep -o '[0-9]*' | head -1)
-    raw_post "/chat-approve" "csrf_token=${CSRF}&pending_id=${pending_id}&session_id=${session_id}" "$COOKIE" "$(done_response "Created.")" >/dev/null
+    send_resp=$(raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"create a secret report\"}" "$COOKIE" "$CSRF" "$scripted")
+    pending_id=$(json_body "$send_resp" | jq -r '.pending.id')
+    raw_post_json "/api/chat-widget-approve" "{\"pending_id\":${pending_id},\"session_id\":\"${session_id}\"}" "$COOKIE" "$CSRF" "$(done_response "Created.")" >/dev/null
 
     run "$BIN" entity list secret_report
     [[ "$output" != "" ]]
