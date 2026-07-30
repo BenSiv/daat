@@ -310,6 +310,347 @@ function html.popover_js(nonce)
 """, nonce)
 end
 
+-- Shared client-side helpers -- CSRF-token reading, JSON fetch/post,
+-- HTML-escaping, debounce, outside-click-close, and cell-error display --
+-- previously hand-copied (in some cases 3x, byte-near-identical) across
+-- html.render/html.render_entity_edit/html.render_index/
+-- html.render_document_tree/html.render_chat_widget. A per-field-type
+-- input builder (PlatformJS.buildFieldInput, the biggest single
+-- duplication in the file) and the shared autocomplete implementation
+-- join this same namespace in a later migration step, once these smaller
+-- primitives they depend on (postJSON, debounce, onOutsideClick,
+-- clearCellError/highlightError) are already proven out.
+-- Emitted once per page from html.page_shell (same treatment as
+-- platform_button_css()/html.popover_css() for CSS: define the shared
+-- component once, guard it, let every caller reuse it instead of
+-- re-deriving it) -- safe to emit unconditionally on every page since it
+-- only defines a namespace object with zero top-level side effects (no
+-- DOM queries, no listeners registered at load time), exactly like
+-- page_shell's own PLATFORM_PAGE_CONTEXT script tag it sits beside.
+function platform_common_js(nonce)
+    if nonce == nil then
+        nonce = ""
+    end
+    return string.format("""
+<script nonce="%s">
+window.PlatformJS = (function(){
+    function getCsrfToken() {
+        var match = document.cookie.match(/(?:^|;\\s*)csrf=([^;]*)/);
+        return match ? match[1] : "";
+    }
+
+    function escapeHtml(s) {
+        return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    function fetchJSON(url) {
+        return fetch(url).then(function(res){ return res.json(); });
+    }
+
+    function postJSON(url, body) {
+        return fetch(url, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'X-CSRF-Token': getCsrfToken()},
+            body: JSON.stringify(body)
+        }).then(function(res){ return res.json(); });
+    }
+
+    function debounce(fn, waitMs) {
+        var timer;
+        return function() {
+            var args = arguments, ctx = this;
+            clearTimeout(timer);
+            timer = setTimeout(function(){ fn.apply(ctx, args); }, waitMs);
+        };
+    }
+
+    // triggerEl: the element a click ON does not count as "outside".
+    // getContainer(): returns the currently-open results element, or
+    // null/undefined if none is open right now.
+    function onOutsideClick(triggerEl, getContainer, closeFn) {
+        document.addEventListener('click', function(e){
+            var container = getContainer();
+            if (e.target !== triggerEl && container && !container.contains(e.target)) {
+                closeFn();
+            }
+        });
+    }
+
+    function showStatus(el, msg, isError) {
+        el.textContent = msg;
+        el.className = isError ? 'platform-status-error' : 'platform-status-ok';
+    }
+
+    function clearCellError(input) {
+        input.classList.remove('error');
+        var badge = input.parentElement.querySelector('.error-badge');
+        if (badge) badge.remove();
+    }
+
+    function highlightError(input, message) {
+        input.classList.add('error');
+        var parent = input.parentElement;
+        var badge = parent.querySelector('.error-badge');
+        if (!badge) {
+            badge = document.createElement('span');
+            badge.classList.add('error-badge');
+            parent.appendChild(badge);
+        }
+        badge.innerText = message;
+    }
+
+    function clearAllErrors(scopeEl, statusEl) {
+        scopeEl.querySelectorAll('.cell-input').forEach(clearCellError);
+        if (statusEl) {
+            statusEl.className = 'status-msg';
+            statusEl.innerText = '';
+            statusEl.style.display = 'none';
+        }
+    }
+
+    // Reference-field autocomplete: debounced search, a transient results
+    // dropdown, pick via mousedown+preventDefault+refocus (avoids the
+    // blur race a plain click/onclick handler has), and clearCellError on
+    // pick. Previously two near-identical hand copies (register's batch
+    // table and the single-row edit form) that had silently drifted:
+    // edit's showed the literal text "undefined" for every suggestion
+    // (it read item.label, but /api/autocomplete only ever returns
+    // {id, name}) and never cleared a prior error-highlight on pick.
+    // Both are fixed here by construction, not by choice -- there's only
+    // one implementation now.
+    function setupAutocomplete(input, refType, multi, baseUrl) {
+        // input.parentElement is read fresh at render time, not captured
+        // here -- setupAutocomplete is always called before its caller
+        // appends `input` into the DOM (both addRow() and buildFields()
+        // build the whole cell before attaching it), so a captured
+        // `const wrapper = input.parentElement` would be null forever.
+        // Confirmed live: this exact bug already existed, on both pages,
+        // before this consolidation -- the debounced fetch would resolve
+        // fine, then `wrapper.appendChild(...)` threw a TypeError,
+        // silently swallowed by the existing .catch(), so the dropdown
+        // never actually rendered at all.
+        var resultsContainer = null;
+        function closeResults() {
+            if (resultsContainer) { resultsContainer.remove(); resultsContainer = null; }
+        }
+        var doSearch = debounce(function(query) {
+            fetchJSON(baseUrl + '/api/autocomplete?type=' + refType + '&query=' + encodeURIComponent(query))
+                .then(function(data) {
+                    closeResults();
+                    if (!data || data.length === 0) return;
+                    resultsContainer = document.createElement('div');
+                    resultsContainer.className = 'autocomplete-results';
+                    data.forEach(function(item) {
+                        var opt = document.createElement('div');
+                        opt.innerText = '[#' + item.id + '] ' + item.name;
+                        opt.addEventListener('mousedown', function(e) {
+                            e.preventDefault();
+                            if (multi) {
+                                var existing = input.value.split(',').map(function(s){ return s.trim(); }).filter(function(s){ return s.length > 0; });
+                                existing.pop();
+                                if (existing.indexOf(String(item.id)) === -1) { existing.push(String(item.id)); }
+                                input.value = existing.join(', ') + ', ';
+                            } else {
+                                input.value = item.id;
+                            }
+                            clearCellError(input);
+                            closeResults();
+                            input.focus();
+                        });
+                        resultsContainer.appendChild(opt);
+                    });
+                    input.parentElement.appendChild(resultsContainer);
+                })
+                .catch(function(err) { console.error('Autocomplete fetch error', err); });
+        }, 200);
+        input.addEventListener('input', function() {
+            var raw = input.value;
+            var query = (multi ? raw.split(',').pop() : raw).trim();
+            closeResults();
+            if (query.length === 0) return;
+            doSearch(query);
+        });
+        onOutsideClick(input, function(){ return resultsContainer; }, closeResults);
+    }
+
+    // Same search/pick UX as setupAutocomplete, but the target type
+    // comes from typeSelect's own current value at query/pick time
+    // (re-read live, not captured once) since a polymorphic field's
+    // target type is chosen by the user, not declared by the schema.
+    // Inserts "type:id", not a bare id, so the submitted value
+    // round-trips through schema.normalize_polymorphic_value the same
+    // way a hand-typed one would.
+    function setupPolymorphicAutocomplete(input, typeSelect, multi, baseUrl) {
+        // See setupAutocomplete's own comment: input.parentElement must
+        // be read fresh at render time, not captured at setup time.
+        var resultsContainer = null;
+        function closeResults() {
+            if (resultsContainer) { resultsContainer.remove(); resultsContainer = null; }
+        }
+        var doSearch = debounce(function(query) {
+            var refType = typeSelect.value;
+            fetchJSON(baseUrl + '/api/autocomplete?type=' + refType + '&query=' + encodeURIComponent(query))
+                .then(function(data) {
+                    closeResults();
+                    if (!data || data.length === 0) return;
+                    resultsContainer = document.createElement('div');
+                    resultsContainer.className = 'autocomplete-results';
+                    data.forEach(function(item) {
+                        var opt = document.createElement('div');
+                        opt.innerText = '[' + refType + ' #' + item.id + '] ' + item.name;
+                        opt.addEventListener('mousedown', function(e) {
+                            e.preventDefault();
+                            var entry = refType + ':' + item.id;
+                            if (multi) {
+                                var existing = input.value.split(',').map(function(s){ return s.trim(); }).filter(function(s){ return s.length > 0; });
+                                existing.pop();
+                                if (existing.indexOf(entry) === -1) { existing.push(entry); }
+                                input.value = existing.join(', ') + ', ';
+                            } else {
+                                input.value = entry;
+                            }
+                            clearCellError(input);
+                            closeResults();
+                            input.focus();
+                        });
+                        resultsContainer.appendChild(opt);
+                    });
+                    input.parentElement.appendChild(resultsContainer);
+                })
+                .catch(function(err) { console.error('Autocomplete fetch error', err); });
+        }, 200);
+        input.addEventListener('input', function() {
+            var raw = input.value;
+            var query = (multi ? raw.split(',').pop() : raw).trim();
+            closeResults();
+            if (query.length === 0) return;
+            doSearch(query);
+        });
+        onOutsideClick(input, function(){ return resultsContainer; }, closeResults);
+    }
+
+    // Builds one field's input control, appending it (and, for a
+    // polymorphic field, its type-picker <select> too) into `container`
+    // -- the caller's own per-field wrapper div. Previously two ~120-line
+    // near-duplicate switches (register's addRow() and the single-row
+    // edit form's buildFields()); the only real difference between the
+    // two pages was whether a field has an existing value to prefill
+    // (opts.value) -- register's blank rows simply never pass one.
+    // opts.locked (register-only, task #112) short-circuits everything
+    // else for a `?lock_<field>=<value>` field.
+    function buildFieldInput(field, container, opts) {
+        opts = opts || {};
+        var current = opts.value;
+        var input;
+
+        if (opts.locked !== undefined) {
+            var display = document.createElement('span');
+            display.className = 'cell-locked-value';
+            display.innerText = opts.locked.label;
+            container.appendChild(display);
+            var hidden = document.createElement('input');
+            hidden.type = 'hidden';
+            hidden.name = field.name;
+            hidden.value = opts.locked.value;
+            container.appendChild(hidden);
+            return hidden;
+        }
+
+        if (field.type === 'select') {
+            input = document.createElement('select');
+            input.classList.add('cell-input');
+            var optEmpty = document.createElement('option');
+            optEmpty.value = ''; optEmpty.innerText = '';
+            input.appendChild(optEmpty);
+            field.values.forEach(function(val) {
+                var opt = document.createElement('option');
+                opt.value = val; opt.innerText = val;
+                if (current === val) { opt.selected = true; }
+                input.appendChild(opt);
+            });
+        } else if (field.type === 'multi_select') {
+            input = document.createElement('select');
+            input.classList.add('cell-input');
+            input.multiple = true;
+            var currentList = Array.isArray(current) ? current : [];
+            field.values.forEach(function(val) {
+                var opt = document.createElement('option');
+                opt.value = val; opt.innerText = val;
+                if (currentList.indexOf(val) !== -1) { opt.selected = true; }
+                input.appendChild(opt);
+            });
+        } else if (field.type === 'polymorphic_reference' || field.type === 'multi_polymorphic_reference') {
+            var multiPoly = field.type === 'multi_polymorphic_reference';
+            var typeSelect = document.createElement('select');
+            typeSelect.classList.add('cell-input', 'cell-source-type');
+            (field.allowed_entity_types || []).forEach(function(t) {
+                var opt = document.createElement('option');
+                opt.value = t; opt.innerText = t;
+                typeSelect.appendChild(opt);
+            });
+            container.appendChild(typeSelect);
+
+            input = document.createElement('input');
+            input.classList.add('cell-input');
+            input.type = 'text';
+            input.setAttribute('autocomplete', 'off');
+            input.placeholder = multiPoly ? 'Search ID or name, pick several...' : 'Search ID or name...';
+            var currentPoly = Array.isArray(current) ? current : [];
+            if (currentPoly.length > 0) {
+                input.value = currentPoly.map(function(v){ return v.type + ':' + v.id; }).join(', ') + ', ';
+            }
+            setupPolymorphicAutocomplete(input, typeSelect, multiPoly, opts.baseUrl);
+        } else {
+            input = document.createElement('input');
+            input.classList.add('cell-input');
+            if (field.type === 'number') {
+                input.type = 'number'; input.step = 'any';
+                if (field.min !== undefined && field.min !== null) { input.min = field.min; }
+                if (field.max !== undefined && field.max !== null) { input.max = field.max; }
+                if (current !== undefined && current !== null) { input.value = current; }
+            } else if (field.type === 'date') {
+                input.type = 'date';
+                if (current) { input.value = current; }
+            } else if (field.type === 'multi_reference') {
+                input.type = 'text';
+                input.setAttribute('autocomplete', 'off');
+                input.placeholder = 'Search ID or name, pick several...';
+                var currentRefs = Array.isArray(current) ? current : [];
+                if (currentRefs.length > 0) { input.value = currentRefs.join(', ') + ', '; }
+                setupAutocomplete(input, field.ref_entity_type, true, opts.baseUrl);
+            } else {
+                input.type = 'text';
+                if (current !== undefined && current !== null) { input.value = current; }
+                if (field.type === 'reference') {
+                    input.setAttribute('autocomplete', 'off');
+                    input.placeholder = 'Search ID or name...';
+                    setupAutocomplete(input, field.ref_entity_type, false, opts.baseUrl);
+                }
+            }
+        }
+
+        input.name = field.name;
+        input.addEventListener('input', function(){ clearCellError(input); });
+        input.addEventListener('change', function(){ clearCellError(input); });
+        container.appendChild(input);
+        return input;
+    }
+
+    return {
+        getCsrfToken: getCsrfToken, escapeHtml: escapeHtml,
+        fetchJSON: fetchJSON, postJSON: postJSON,
+        debounce: debounce, onOutsideClick: onOutsideClick,
+        showStatus: showStatus,
+        clearCellError: clearCellError, highlightError: highlightError, clearAllErrors: clearAllErrors,
+        setupAutocomplete: setupAutocomplete, setupPolymorphicAutocomplete: setupPolymorphicAutocomplete,
+        buildFieldInput: buildFieldInput
+    };
+})();
+</script>
+""", nonce)
+end
+
 -- The CSS custom-property names a theme may override, in a fixed
 -- display order -- matches config.lua's own THEME_COLOR_KEYS exactly.
 THEME_COLOR_KEYS = {
@@ -484,6 +825,7 @@ function html.page_shell(title, active, body, nonce, show_sql, show_admin, has_t
 <title>%s</title>
 <link rel="icon" type="image/png" href="theme-asset?name=favicon.png">
 <script nonce="%s">window.PLATFORM_PAGE_CONTEXT = %s;</script>
+%s
 <style>
 %s
 * { box-sizing: border-box; }
@@ -573,7 +915,7 @@ body {
 %s
 </body>
 </html>
-""", html.html_escape(title), nonce, page_context_json, root_css, platform_chat_widget_css(), brand_html, table.concat(nav_links, ""), user_box, body,
+""", html.html_escape(title), nonce, page_context_json, platform_common_js(nonce), root_css, platform_chat_widget_css(), brand_html, table.concat(nav_links, ""), user_box, body,
      chat_widget_html)
 end
 
@@ -783,13 +1125,6 @@ function html.render(entity_type, layout_json, nonce, locked_fields)
         const baseUrl = window.location.pathname.replace(/\/register\/?$/, "");
         let rowCounter = 0;
 
-        // Reads the non-HttpOnly csrf cookie (set at /login) for the
-        // double-submit CSRF check -- see cgi.lua's require_csrf.
-        function getCsrfToken() {
-            const match = document.cookie.match(/(?:^|;\s*)csrf=([^;]*)/);
-            return match ? match[1] : "";
-        }
-
         // Which document this registration table is embedded in, for
         // ledger provenance (source_notebook_entry_id).
         // An explicit ?entry= on this iframe's own src overrides
@@ -839,113 +1174,7 @@ function html.render(entity_type, layout_json, nonce, locked_fields)
                 // querySelector(`[name="..."]`) collection picks up the
                 // value with no changes needed there at all.
                 const locked = lockedFields[field.name];
-                if (locked !== undefined) {
-                    const display = document.createElement("span");
-                    display.className = "cell-locked-value";
-                    display.innerText = locked.label;
-                    wrapper.appendChild(display);
-                    const hidden = document.createElement("input");
-                    hidden.type = "hidden";
-                    hidden.name = field.name;
-                    hidden.value = locked.value;
-                    wrapper.appendChild(hidden);
-                    td.appendChild(wrapper);
-                    tr.appendChild(td);
-                    return;
-                }
-
-                let input;
-                if (field.type === "select") {
-                    input = document.createElement("select");
-                    input.classList.add("cell-input");
-                    const optEmpty = document.createElement("option");
-                    optEmpty.value = "";
-                    optEmpty.innerText = "";
-                    input.appendChild(optEmpty);
-                    field.values.forEach(val => {
-                        const opt = document.createElement("option");
-                        opt.value = val;
-                        opt.innerText = val;
-                        input.appendChild(opt);
-                    });
-                } else if (field.type === "multi_select") {
-                    // task #84: a native multi-select listbox -- no new
-                    // widget needed, the browser's own ctrl/cmd-click
-                    // multi-selection is enough for a fixed value list.
-                    input = document.createElement("select");
-                    input.classList.add("cell-input");
-                    input.multiple = true;
-                    field.values.forEach(val => {
-                        const opt = document.createElement("option");
-                        opt.value = val;
-                        opt.innerText = val;
-                        input.appendChild(opt);
-                    });
-                } else if (field.type === "polymorphic_reference" || field.type === "multi_polymorphic_reference") {
-                    // The target type itself varies per row (a sample's
-                    // source can be a plant or another sample) -- a type
-                    // picker alongside the usual search-by-name input,
-                    // not a fixed ref_entity_type the way reference/
-                    // multi_reference already have one. Submits as
-                    // "type:id" (or "type:id, type:id" for the multi
-                    // variant) -- schema.normalize_polymorphic_value
-                    // parses that same convention from the CLI too.
-                    const typeSelect = document.createElement("select");
-                    typeSelect.classList.add("cell-input", "cell-source-type");
-                    (field.allowed_entity_types || []).forEach(t => {
-                        const opt = document.createElement("option");
-                        opt.value = t;
-                        opt.innerText = t;
-                        typeSelect.appendChild(opt);
-                    });
-                    wrapper.appendChild(typeSelect);
-
-                    input = document.createElement("input");
-                    input.classList.add("cell-input");
-                    input.type = "text";
-                    input.setAttribute("autocomplete", "off");
-                    input.placeholder = field.type === "multi_polymorphic_reference" ?
-                        "Search ID or name, pick several..." : "Search ID or name...";
-                    setupPolymorphicAutocomplete(input, typeSelect, field.type === "multi_polymorphic_reference");
-                } else {
-                    input = document.createElement("input");
-                    input.classList.add("cell-input");
-                    if (field.type === "number") {
-                        input.type = "number";
-                        input.step = "any";
-                        // Real bug found in production: with no min/max
-                        // set, the native spinner arrows let a value
-                        // cycle past any sensible bound (e.g. past 5 on
-                        // a 1-5 field) with zero feedback. Both optional
-                        // -- a schema author declares them per-field
-                        // (see schema.md), platform itself has no opinion
-                        // on what range makes sense for a given field.
-                        if (field.min !== undefined && field.min !== null) { input.min = field.min; }
-                        if (field.max !== undefined && field.max !== null) { input.max = field.max; }
-                    } else if (field.type === "date") {
-                        input.type = "date";
-                    } else {
-                        input.type = "text";
-                    }
-                    if (field.type === "reference") {
-                        input.setAttribute("autocomplete", "off");
-                        input.placeholder = "Search ID or name...";
-                        setupAutocomplete(input, field.ref_entity_type, false);
-                    } else if (field.type === "multi_reference") {
-                        // task #84: same autocomplete search as a
-                        // singular reference field -- picking a
-                        // suggestion appends to a comma-separated list
-                        // instead of replacing the input's value.
-                        input.setAttribute("autocomplete", "off");
-                        input.placeholder = "Search ID or name, pick several...";
-                        setupAutocomplete(input, field.ref_entity_type, true);
-                    }
-                }
-
-                input.name = field.name;
-                input.addEventListener("input",  () => clearCellError(input));
-                input.addEventListener("change", () => clearCellError(input));
-                wrapper.appendChild(input);
+                PlatformJS.buildFieldInput(field, wrapper, { locked: locked, baseUrl: baseUrl });
                 td.appendChild(wrapper);
                 tr.appendChild(td);
             });
@@ -968,158 +1197,20 @@ function html.render(entity_type, layout_json, nonce, locked_fields)
             tbody.appendChild(tr);
         }
 
-        function clearCellError(input) {
-            input.classList.remove("error");
-            const parent = input.parentElement;
-            const existingBadge = parent.querySelector(".error-badge");
-            if (existingBadge) { existingBadge.remove(); }
-        }
-
+        // Row/field lookup stays bespoke here (register's inputs share
+        // one bare `name` per <tr>, so a lookup needs the row too) --
+        // only the "mark this input errored" mechanics are shared.
         function highlightError(rowIndex, fieldName, message) {
             const tbody = document.getElementById("table-body");
             const tr = tbody.getElementsByTagName("tr")[rowIndex];
             if (!tr) return;
             const input = tr.querySelector(`[name="${fieldName}"]`);
             if (!input) return;
-            input.classList.add("error");
-            const parent = input.parentElement;
-            let badge = parent.querySelector(".error-badge");
-            if (!badge) {
-                badge = document.createElement("span");
-                badge.classList.add("error-badge");
-                parent.appendChild(badge);
-            }
-            badge.innerText = message;
+            PlatformJS.highlightError(input, message);
         }
 
         function clearAllErrors() {
-            document.querySelectorAll(".cell-input").forEach(input => clearCellError(input));
-            const msg = document.getElementById("status-message");
-            msg.className = "status-msg";
-            msg.innerText = "";
-            msg.style.display = "none";
-        }
-
-        // `multi` (task #84): for a multi_reference field, a picked
-        // suggestion appends to a comma-separated list in the input
-        // (skipping an id already present) instead of replacing the
-        // whole value the way a singular reference field's picker does.
-        // The search itself is identical either way -- same endpoint,
-        // same debounce, same results dropdown.
-        function setupAutocomplete(input, refType, multi) {
-            const wrapper = input.parentElement;
-            let resultsContainer = null;
-            let debounceTimer;
-
-            input.addEventListener("input", () => {
-                clearTimeout(debounceTimer);
-                const raw = input.value;
-                const query = (multi ? raw.split(",").pop() : raw).trim();
-                if (resultsContainer) { resultsContainer.remove(); resultsContainer = null; }
-                if (query.length === 0) return;
-
-                debounceTimer = setTimeout(() => {
-                    fetch(`${baseUrl}/api/autocomplete?type=${refType}&query=${encodeURIComponent(query)}`)
-                        .then(res => res.json())
-                        .then(data => {
-                            if (resultsContainer) resultsContainer.remove();
-                            if (data.length === 0) return;
-                            resultsContainer = document.createElement("div");
-                            resultsContainer.classList.add("autocomplete-results");
-                            data.forEach(item => {
-                                const div = document.createElement("div");
-                                div.classList.add("autocomplete-item");
-                                div.innerText = `[#${item.id}] ${item.name}`;
-                                div.onclick = () => {
-                                    if (multi) {
-                                        const existing = input.value.split(",").map(s => s.trim()).filter(s => s.length > 0);
-                                        existing.pop();
-                                        if (!existing.includes(String(item.id))) { existing.push(String(item.id)); }
-                                        input.value = existing.join(", ") + ", ";
-                                    } else {
-                                        input.value = item.id;
-                                    }
-                                    clearCellError(input);
-                                    resultsContainer.remove();
-                                    resultsContainer = null;
-                                };
-                                resultsContainer.appendChild(div);
-                            });
-                            wrapper.appendChild(resultsContainer);
-                        })
-                        .catch(err => console.error("Autocomplete fetch error", err));
-                }, 200);
-            });
-
-            document.addEventListener("click", (e) => {
-                if (e.target !== input && resultsContainer && !resultsContainer.contains(e.target)) {
-                    resultsContainer.remove();
-                    resultsContainer = null;
-                }
-            });
-        }
-
-        // Same search/pick UX as setupAutocomplete, but the target type
-        // comes from typeSelect's own current value at query/pick time
-        // (re-read live, not captured once) instead of one fixed
-        // refType -- a polymorphic field's target type is chosen by the
-        // user, not declared by the schema. Inserts "type:id", not a
-        // bare id, so the submitted value round-trips through
-        // schema.normalize_polymorphic_value the same way a hand-typed
-        // one would.
-        function setupPolymorphicAutocomplete(input, typeSelect, multi) {
-            const wrapper = input.parentElement;
-            let resultsContainer = null;
-            let debounceTimer;
-
-            input.addEventListener("input", () => {
-                clearTimeout(debounceTimer);
-                const raw = input.value;
-                const query = (multi ? raw.split(",").pop() : raw).trim();
-                if (resultsContainer) { resultsContainer.remove(); resultsContainer = null; }
-                if (query.length === 0) return;
-
-                debounceTimer = setTimeout(() => {
-                    const refType = typeSelect.value;
-                    fetch(`${baseUrl}/api/autocomplete?type=${refType}&query=${encodeURIComponent(query)}`)
-                        .then(res => res.json())
-                        .then(data => {
-                            if (resultsContainer) resultsContainer.remove();
-                            if (data.length === 0) return;
-                            resultsContainer = document.createElement("div");
-                            resultsContainer.classList.add("autocomplete-results");
-                            data.forEach(item => {
-                                const div = document.createElement("div");
-                                div.classList.add("autocomplete-item");
-                                div.innerText = `[${refType} #${item.id}] ${item.name}`;
-                                div.onclick = () => {
-                                    const entry = `${refType}:${item.id}`;
-                                    if (multi) {
-                                        const existing = input.value.split(",").map(s => s.trim()).filter(s => s.length > 0);
-                                        existing.pop();
-                                        if (!existing.includes(entry)) { existing.push(entry); }
-                                        input.value = existing.join(", ") + ", ";
-                                    } else {
-                                        input.value = entry;
-                                    }
-                                    clearCellError(input);
-                                    resultsContainer.remove();
-                                    resultsContainer = null;
-                                };
-                                resultsContainer.appendChild(div);
-                            });
-                            wrapper.appendChild(resultsContainer);
-                        })
-                        .catch(err => console.error("Autocomplete fetch error", err));
-                }, 200);
-            });
-
-            document.addEventListener("click", (e) => {
-                if (e.target !== input && resultsContainer && !resultsContainer.contains(e.target)) {
-                    resultsContainer.remove();
-                    resultsContainer = null;
-                }
-            });
+            PlatformJS.clearAllErrors(document, document.getElementById("status-message"));
         }
 
         function submitBatch() {
@@ -1157,12 +1248,7 @@ function html.render(entity_type, layout_json, nonce, locked_fields)
             msg.style.display = "block";
 
             const entryParam = notebookEntry ? `&entry=${encodeURIComponent(notebookEntry)}` : "";
-            fetch(`${baseUrl}/api/submit?type=${entityType}${entryParam}`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() },
-                body: JSON.stringify(payload)
-            })
-            .then(res => res.json())
+            PlatformJS.postJSON(`${baseUrl}/api/submit?type=${entityType}${entryParam}`, payload)
             .then(data => {
                 if (data.success) {
                     msg.className = "status-msg success";
@@ -1265,134 +1351,13 @@ function html.render_entity_edit(entity_type, layout_json, row_json, entity_id, 
         const entityId = %s;
         const baseUrl = window.location.pathname.replace(/\/entity-edit\/?$/, "");
 
-        function getCsrfToken() {
-            const match = document.cookie.match(/(?:^|;\s*)csrf=([^;]*)/);
-            return match ? match[1] : "";
-        }
-
-        function clearCellError(input) {
-            input.classList.remove("error");
-            const parent = input.parentElement;
-            const existingBadge = parent.querySelector(".error-badge");
-            if (existingBadge) { existingBadge.remove(); }
-        }
-
+        // Field lookup stays bespoke here (document-global, not
+        // row-scoped like register's) -- only the "mark this input
+        // errored" mechanics are shared.
         function highlightError(fieldName, message) {
             const input = document.querySelector(`[name="${fieldName}"]`);
             if (!input) return;
-            input.classList.add("error");
-            const parent = input.parentElement;
-            let badge = parent.querySelector(".error-badge");
-            if (!badge) {
-                badge = document.createElement("span");
-                badge.classList.add("error-badge");
-                parent.appendChild(badge);
-            }
-            badge.innerText = message;
-        }
-
-        function setupAutocomplete(input, refType, multi) {
-            const wrapper = input.parentElement;
-            let resultsContainer = null;
-            let debounceTimer;
-            input.addEventListener("input", () => {
-                clearTimeout(debounceTimer);
-                const raw = input.value;
-                const query = (multi ? raw.split(",").pop() : raw).trim();
-                if (resultsContainer) { resultsContainer.remove(); resultsContainer = null; }
-                if (query.length === 0) return;
-                debounceTimer = setTimeout(() => {
-                    fetch(`${baseUrl}/api/autocomplete?type=${refType}&query=${encodeURIComponent(query)}`)
-                        .then(res => res.json())
-                        .then(data => {
-                            if (resultsContainer) { resultsContainer.remove(); }
-                            if (!data || data.length === 0) return;
-                            resultsContainer = document.createElement("div");
-                            resultsContainer.className = "autocomplete-results";
-                            data.forEach(item => {
-                                const opt = document.createElement("div");
-                                opt.innerText = item.label;
-                                opt.addEventListener("mousedown", (e) => {
-                                    e.preventDefault();
-                                    if (multi) {
-                                        const parts = raw.split(",").map(s => s.trim()).filter(s => s.length > 0);
-                                        parts.pop();
-                                        if (!parts.includes(String(item.id))) { parts.push(String(item.id)); }
-                                        input.value = parts.join(", ") + ", ";
-                                    } else {
-                                        input.value = item.id;
-                                    }
-                                    resultsContainer.remove();
-                                    resultsContainer = null;
-                                    input.focus();
-                                });
-                                resultsContainer.appendChild(opt);
-                            });
-                            wrapper.appendChild(resultsContainer);
-                        });
-                }, 200);
-            });
-            document.addEventListener("click", (e) => {
-                if (e.target !== input && resultsContainer && !resultsContainer.contains(e.target)) {
-                    resultsContainer.remove();
-                    resultsContainer = null;
-                }
-            });
-        }
-
-        // Same search/pick UX as setupAutocomplete, but the target type
-        // comes from typeSelect's own current value at query/pick time
-        // instead of one fixed refType -- see the /register batch
-        // table's own copy of this function for the full reasoning.
-        function setupPolymorphicAutocomplete(input, typeSelect, multi) {
-            const wrapper = input.parentElement;
-            let resultsContainer = null;
-            let debounceTimer;
-            input.addEventListener("input", () => {
-                clearTimeout(debounceTimer);
-                const raw = input.value;
-                const query = (multi ? raw.split(",").pop() : raw).trim();
-                if (resultsContainer) { resultsContainer.remove(); resultsContainer = null; }
-                if (query.length === 0) return;
-                debounceTimer = setTimeout(() => {
-                    const refType = typeSelect.value;
-                    fetch(`${baseUrl}/api/autocomplete?type=${refType}&query=${encodeURIComponent(query)}`)
-                        .then(res => res.json())
-                        .then(data => {
-                            if (resultsContainer) { resultsContainer.remove(); }
-                            if (!data || data.length === 0) return;
-                            resultsContainer = document.createElement("div");
-                            resultsContainer.className = "autocomplete-results";
-                            data.forEach(item => {
-                                const opt = document.createElement("div");
-                                opt.innerText = item.label;
-                                opt.addEventListener("mousedown", (e) => {
-                                    e.preventDefault();
-                                    const entry = `${refType}:${item.id}`;
-                                    if (multi) {
-                                        const parts = raw.split(",").map(s => s.trim()).filter(s => s.length > 0);
-                                        parts.pop();
-                                        if (!parts.includes(entry)) { parts.push(entry); }
-                                        input.value = parts.join(", ") + ", ";
-                                    } else {
-                                        input.value = entry;
-                                    }
-                                    resultsContainer.remove();
-                                    resultsContainer = null;
-                                    input.focus();
-                                });
-                                resultsContainer.appendChild(opt);
-                            });
-                            wrapper.appendChild(resultsContainer);
-                        });
-                }, 200);
-            });
-            document.addEventListener("click", (e) => {
-                if (e.target !== input && resultsContainer && !resultsContainer.contains(e.target)) {
-                    resultsContainer.remove();
-                    resultsContainer = null;
-                }
-            });
+            PlatformJS.highlightError(input, message);
         }
 
         function buildFields() {
@@ -1405,91 +1370,7 @@ function html.render_entity_edit(entity_type, layout_json, row_json, entity_id, 
                 wrapper.appendChild(label);
 
                 const current = row[field.name];
-                let input;
-                if (field.type === "select") {
-                    input = document.createElement("select");
-                    input.classList.add("cell-input");
-                    const optEmpty = document.createElement("option");
-                    optEmpty.value = ""; optEmpty.innerText = "";
-                    input.appendChild(optEmpty);
-                    field.values.forEach(val => {
-                        const opt = document.createElement("option");
-                        opt.value = val; opt.innerText = val;
-                        if (current === val) { opt.selected = true; }
-                        input.appendChild(opt);
-                    });
-                } else if (field.type === "multi_select") {
-                    input = document.createElement("select");
-                    input.classList.add("cell-input");
-                    input.multiple = true;
-                    const currentList = Array.isArray(current) ? current : [];
-                    field.values.forEach(val => {
-                        const opt = document.createElement("option");
-                        opt.value = val; opt.innerText = val;
-                        if (currentList.includes(val)) { opt.selected = true; }
-                        input.appendChild(opt);
-                    });
-                } else if (field.type === "polymorphic_reference" || field.type === "multi_polymorphic_reference") {
-                    // Same type-picker + search widget as the /register
-                    // batch table's own addRow() -- see that function's
-                    // own comment for why a fixed ref_entity_type won't
-                    // do here. current is entity.get's own list of
-                    // {type=, id=} tables (0 or 1 entries for the
-                    // singular variant) -- pre-filled as "type:id" text,
-                    // the same convention new entries get typed/picked
-                    // in as.
-                    const typeSelect = document.createElement("select");
-                    typeSelect.classList.add("cell-input", "cell-source-type");
-                    (field.allowed_entity_types || []).forEach(t => {
-                        const opt = document.createElement("option");
-                        opt.value = t; opt.innerText = t;
-                        typeSelect.appendChild(opt);
-                    });
-                    wrapper.appendChild(typeSelect);
-
-                    input = document.createElement("input");
-                    input.classList.add("cell-input");
-                    input.type = "text";
-                    input.setAttribute("autocomplete", "off");
-                    input.placeholder = field.type === "multi_polymorphic_reference" ?
-                        "Search ID or name, pick several..." : "Search ID or name...";
-                    const currentList = Array.isArray(current) ? current : [];
-                    if (currentList.length > 0) {
-                        input.value = currentList.map(v => `${v.type}:${v.id}`).join(", ") + ", ";
-                    }
-                    setupPolymorphicAutocomplete(input, typeSelect, field.type === "multi_polymorphic_reference");
-                } else {
-                    input = document.createElement("input");
-                    input.classList.add("cell-input");
-                    if (field.type === "number") {
-                        input.type = "number"; input.step = "any";
-                        if (field.min !== undefined && field.min !== null) { input.min = field.min; }
-                        if (field.max !== undefined && field.max !== null) { input.max = field.max; }
-                        if (current !== undefined && current !== null) { input.value = current; }
-                    } else if (field.type === "date") {
-                        input.type = "date";
-                        if (current) { input.value = current; }
-                    } else if (field.type === "multi_reference") {
-                        input.type = "text";
-                        input.setAttribute("autocomplete", "off");
-                        input.placeholder = "Search ID or name, pick several...";
-                        const currentList = Array.isArray(current) ? current : [];
-                        if (currentList.length > 0) { input.value = currentList.join(", ") + ", "; }
-                        setupAutocomplete(input, field.ref_entity_type, true);
-                    } else {
-                        input.type = "text";
-                        if (current !== undefined && current !== null) { input.value = current; }
-                        if (field.type === "reference") {
-                            input.setAttribute("autocomplete", "off");
-                            input.placeholder = "Search ID or name...";
-                            setupAutocomplete(input, field.ref_entity_type, false);
-                        }
-                    }
-                }
-                input.name = field.name;
-                input.addEventListener("input",  () => clearCellError(input));
-                input.addEventListener("change", () => clearCellError(input));
-                wrapper.appendChild(input);
+                PlatformJS.buildFieldInput(field, wrapper, { value: current, baseUrl: baseUrl });
                 container.appendChild(wrapper);
             });
 
@@ -1508,7 +1389,7 @@ function html.render_entity_edit(entity_type, layout_json, row_json, entity_id, 
         }
 
         function submitEdit() {
-            document.querySelectorAll(".cell-input").forEach(clearCellError);
+            document.querySelectorAll(".cell-input").forEach(PlatformJS.clearCellError);
             const payload = {};
             layout.fields.forEach(field => {
                 const el = document.querySelector(`[name="${field.name}"]`);
@@ -1530,12 +1411,7 @@ function html.render_entity_edit(entity_type, layout_json, row_json, entity_id, 
 
             const reasonEl = document.getElementById("platform-edit-reason");
             const reasonParam = reasonEl.value ? `&reason=${encodeURIComponent(reasonEl.value)}` : "";
-            fetch(`${baseUrl}/api/update?type=${entityType}&entity_id=${entityId}${reasonParam}`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() },
-                body: JSON.stringify(payload)
-            })
-            .then(res => res.json())
+            PlatformJS.postJSON(`${baseUrl}/api/update?type=${entityType}&entity_id=${entityId}${reasonParam}`, payload)
             .then(data => {
                 if (data.success) {
                     window.location.href = `${baseUrl}/detail?type=${entityType}&entity_id=${entityId}`;
@@ -2181,7 +2057,7 @@ function label_print_js(nonce, entity_type, entity_id)
         var device = devices[parseInt(select.value, 10)];
         if(!device){ showStatus('No printer selected.', true); return; }
         showStatus('Printing...', false);
-        fetch('label?type=%s&entity_id=%s').then(function(resp){
+        fetch("label?type=%s&entity_id=%s").then(function(resp){
             if(!resp.ok){ throw new Error('label render failed'); }
             return resp.text();
         }).then(function(zpl){
@@ -2196,7 +2072,7 @@ function label_print_js(nonce, entity_type, entity_id)
     });
 })();
 </script>
-""", nonce, entity_type, entity_id)
+""", nonce, js_string_literal(entity_type), js_string_literal(tostring(entity_id)))
 end
 
 -- Generic view: any approved custom SQL view rendered as a table.
@@ -3428,11 +3304,6 @@ function html.render_index(db_path, entity_types, edges, nonce)
     (function(){
         var input = document.getElementById('platform-entity-search-input');
         var results = document.getElementById('platform-entity-search-results');
-        var debounceTimer;
-
-        function escapeHtml(s) {
-            return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        }
 
         function render(items) {
             if (items.length === 0) {
@@ -3440,26 +3311,22 @@ function html.render_index(db_path, entity_types, edges, nonce)
             } else {
                 results.innerHTML = items.map(function(item){
                     return '<a href="detail?type=' + encodeURIComponent(item.entity_type) + '&entity_id=' + item.id + '">' +
-                        escapeHtml(item.label) + '<span class="platform-entity-search-type">' + escapeHtml(item.entity_type) + '</span></a>';
+                        PlatformJS.escapeHtml(item.label) + '<span class="platform-entity-search-type">' + PlatformJS.escapeHtml(item.entity_type) + '</span></a>';
                 }).join('');
             }
             results.classList.add('platform-entity-search-open');
         }
 
+        var doSearch = PlatformJS.debounce(function(query){
+            PlatformJS.fetchJSON('api/entity-search?query=' + encodeURIComponent(query)).then(render);
+        }, 200);
         input.addEventListener('input', function(){
-            clearTimeout(debounceTimer);
             var query = input.value.trim();
             if (!query) { results.classList.remove('platform-entity-search-open'); results.innerHTML = ''; return; }
-            debounceTimer = setTimeout(function(){
-                fetch('api/entity-search?query=' + encodeURIComponent(query))
-                    .then(function(res){ return res.json(); })
-                    .then(render);
-            }, 200);
+            doSearch(query);
         });
-        document.addEventListener('click', function(e){
-            if (e.target !== input && !results.contains(e.target)) {
-                results.classList.remove('platform-entity-search-open');
-            }
+        PlatformJS.onOutsideClick(input, function(){ return results; }, function(){
+            results.classList.remove('platform-entity-search-open');
         });
         input.addEventListener('keydown', function(e){
             if (e.key === 'Escape') { results.classList.remove('platform-entity-search-open'); }
@@ -3990,7 +3857,7 @@ function html.render_document_tree(rows, can_create, nonce)
                 results.innerHTML = '<div class="platform-document-search-empty">No matching documents.</div>';
             } else {
                 results.innerHTML = scored.map(function(s){
-                    var title = s.item.title.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                    var title = PlatformJS.escapeHtml(s.item.title);
                     return '<a href="document?entity_id=' + s.item.id + '">' + title + '</a>';
                 }).join('');
             }
@@ -3999,10 +3866,8 @@ function html.render_document_tree(rows, can_create, nonce)
 
         input.addEventListener('input', function(){ renderResults(input.value); });
         input.addEventListener('focus', function(){ if (input.value) renderResults(input.value); });
-        document.addEventListener('click', function(e){
-            if (e.target !== input && !results.contains(e.target)) {
-                results.classList.remove('platform-document-search-open');
-            }
+        PlatformJS.onOutsideClick(input, function(){ return results; }, function(){
+            results.classList.remove('platform-document-search-open');
         });
         input.addEventListener('keydown', function(e){
             if (e.key === 'Enter') {
@@ -4234,10 +4099,12 @@ CHAT_ROLE_LABELS = {
 -- compaction (dimmed, not hidden) -- transparency about what the model
 -- can/can't currently see, matching this system's own "nothing is ever
 -- hidden, only marked" stance elsewhere (archived_at, in_context).
--- Shared `.platform-chat-*` thread rules -- used by both html.render_chat
--- and the inline "Edit with AI" panel on a document page (see
--- html.render_document_ai_panel below), same de-duplication reasoning
--- as platform_container_css/platform_button_css above.
+-- Shared `.platform-chat-*` thread rules -- was defined here but never
+-- actually called; html.render_chat hand-copied this same CSS inline
+-- instead (confirmed byte-for-byte identical), the same "define once,
+-- forget to actually call it" bug class this session already fixed for
+-- .platform-entity-ref/platform_button_css. Now wired into
+-- html.render_chat for real.
 function platform_chat_thread_css()
     return """
         .platform-chat-messages { max-height: 55vh; overflow-y: auto; margin-bottom: 16px; padding: 12px; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); background: var(--platform-bg, #f8fafc); }
@@ -4400,19 +4267,7 @@ function html.render_chat(sessions, session, messages, pending, csrf_token, nonc
         .platform-chat-session-started { font-size: 0.75rem; color: var(--platform-muted, #64748b); }
         .platform-chat-new-form { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
         .platform-chat-new-form input[type=text] { flex: 1; min-width: 0; padding: 6px 8px; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-sm, 8px); }
-        .platform-chat-messages { max-height: 55vh; overflow-y: auto; margin-bottom: 16px; padding: 12px; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); background: var(--platform-bg, #f8fafc); }
-        .platform-chat-msg { margin-bottom: 10px; padding: 8px 10px; border-radius: var(--platform-radius-sm, 8px); background: #fff; border: 1px solid var(--platform-border, #e2e8f0); }
-        .platform-chat-msg a { color: var(--platform-accent, #4f46e5); text-decoration: none; }
-        .platform-chat-msg a:hover { text-decoration: underline; }
-        .platform-chat-user { background: #eef2ff; }
-        .platform-chat-tool_result { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85rem; }
-        .platform-chat-compaction_summary { font-style: italic; color: var(--platform-muted, #64748b); }
-        .platform-chat-self_check { font-style: italic; color: var(--platform-muted, #64748b); border-left: 3px solid #fbbf24; }
-        .platform-chat-out-of-context { opacity: 0.45; }
-        .platform-chat-input-form { display: flex; gap: 8px; }
-        .platform-chat-input-form input[type=text] { flex: 1; padding: 8px 10px; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-sm, 8px); }
-        .platform-chat-pending { padding: 14px; border: 1px solid #fde68a; background: #fffbeb; border-radius: var(--platform-radius-md, 12px); }
-        .platform-chat-pending-form { display: inline-block; margin-right: 8px; margin-top: 8px; }
+%s
     </style>
     <div class="platform-container">
         <div class="platform-header"><h2>Chat</h2></div>
@@ -4431,7 +4286,7 @@ function html.render_chat(sessions, session, messages, pending, csrf_token, nonc
         </div>
     </div>
 </div>
-""", platform_container_css(1200), platform_button_css(), html.html_escape(csrf_token), sessions_html, main_html)
+""", platform_container_css(1200), platform_button_css(), platform_chat_thread_css(), html.html_escape(csrf_token), sessions_html, main_html)
 end
 
 --------------------------------------------------------------------------
@@ -4536,11 +4391,6 @@ function html.render_chat_widget(nonce)
     var form = document.getElementById('platform-chat-widget-form');
     var input = document.getElementById('platform-chat-widget-text');
 
-    function getCsrfToken() {
-        var match = document.cookie.match(/(?:^|;\\s*)csrf=([^;]*)/);
-        return match ? match[1] : "";
-    }
-
     // Builds a short, readable description from whatever page_shell
     // (see its own header comment) put in window.PLATFORM_PAGE_CONTEXT
     // for the current page -- every page sets at least page_type/title
@@ -4567,9 +4417,6 @@ function html.render_chat_widget(nonce)
     // (which would just show the literal tags) or re-implementing
     // Markdown rendering client-side.
     var MARKDOWN_ROLES = {assistant: true, self_check: true, compaction_summary: true};
-    function escapeHtml(s) {
-        return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-    }
     function render(state) {
         if (!state || !state.messages || state.messages.length === 0) {
             messagesEl.innerHTML = '<p class="platform-chat-widget-empty">Ask something, or ask the assistant to search or create a document...</p>';
@@ -4577,8 +4424,8 @@ function html.render_chat_widget(nonce)
             var html = '';
             state.messages.forEach(function(msg){
                 var label = ROLE_LABELS[msg.role] || msg.role;
-                var body = MARKDOWN_ROLES[msg.role] ? msg.content : escapeHtml(msg.content);
-                html += '<div class="platform-chat-msg platform-chat-' + msg.role + '"><strong>' + escapeHtml(label) + ':</strong> ' + body + '</div>';
+                var body = MARKDOWN_ROLES[msg.role] ? msg.content : PlatformJS.escapeHtml(msg.content);
+                html += '<div class="platform-chat-msg platform-chat-' + msg.role + '"><strong>' + PlatformJS.escapeHtml(label) + ':</strong> ' + body + '</div>';
                 // task #87: feedback only makes sense on a real answer --
                 // not on the user's own message, a tool result, or a
                 // compaction summary the user never actually sees as a
@@ -4594,8 +4441,8 @@ function html.render_chat_widget(nonce)
         }
         if (state && state.pending) {
             var argsLines = '';
-            for (var k in state.pending.args) { argsLines += '<div>' + escapeHtml(k) + ' = ' + escapeHtml(state.pending.args[k]) + '</div>'; }
-            messagesEl.innerHTML += '<div class="platform-chat-pending"><p><strong>Run:</strong> ' + escapeHtml(state.pending.tool) + '.' + escapeHtml(state.pending.method) + '</p>' + argsLines +
+            for (var k in state.pending.args) { argsLines += '<div>' + PlatformJS.escapeHtml(k) + ' = ' + PlatformJS.escapeHtml(state.pending.args[k]) + '</div>'; }
+            messagesEl.innerHTML += '<div class="platform-chat-pending"><p><strong>Run:</strong> ' + PlatformJS.escapeHtml(state.pending.tool) + '.' + PlatformJS.escapeHtml(state.pending.method) + '</p>' + argsLines +
                 '<button type="button" class="btn btn-primary" data-approve="' + state.pending.id + '">Approve</button> ' +
                 '<button type="button" class="btn btn-danger" data-deny="' + state.pending.id + '">Deny</button></div>';
             form.style.display = 'none';
@@ -4625,18 +4472,10 @@ function html.render_chat_widget(nonce)
         if (queryBox) { queryBox.value = state.last_query_sql; }
     }
 
-    function post(url, body) {
-        return fetch(url, {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json', 'X-CSRF-Token': getCsrfToken()},
-            body: JSON.stringify(body)
-        }).then(function(res){ return res.json(); });
-    }
-
     function ensureSession() {
         var sessionId = localStorage.getItem(STORAGE_KEY);
         if (sessionId) return Promise.resolve(sessionId);
-        return post('api/chat-widget-start', {}).then(function(state){
+        return PlatformJS.postJSON('api/chat-widget-start', {}).then(function(state){
             localStorage.setItem(STORAGE_KEY, state.session_id);
             return state.session_id;
         });
@@ -4752,7 +4591,7 @@ function html.render_chat_widget(nonce)
         }
         var thinkingEl = showThinking();
         ensureSession().then(function(sessionId){
-            return post('api/chat-widget-send', {session_id: sessionId, message: text});
+            return PlatformJS.postJSON('api/chat-widget-send', {session_id: sessionId, message: text});
         }).then(function(state){ thinkingEl.remove(); render(state); })
           .catch(function(){ thinkingEl.remove(); showFetchError(); input.value = typedText; });
     });
@@ -4761,11 +4600,11 @@ function html.render_chat_widget(nonce)
         var sessionId = localStorage.getItem(STORAGE_KEY);
         if (e.target.hasAttribute('data-approve')) {
             var thinkingEl = showThinking();
-            post('api/chat-widget-approve', {pending_id: e.target.getAttribute('data-approve'), session_id: sessionId})
+            PlatformJS.postJSON('api/chat-widget-approve', {pending_id: e.target.getAttribute('data-approve'), session_id: sessionId})
                 .then(function(state){ thinkingEl.remove(); render(state); })
                 .catch(function(){ thinkingEl.remove(); showFetchError(); });
         } else if (e.target.hasAttribute('data-deny')) {
-            post('api/chat-widget-deny', {pending_id: e.target.getAttribute('data-deny'), session_id: sessionId}).then(render);
+            PlatformJS.postJSON('api/chat-widget-deny', {pending_id: e.target.getAttribute('data-deny'), session_id: sessionId}).then(render);
         } else if (e.target.hasAttribute('data-feedback')) {
             var messageId = e.target.getAttribute('data-feedback-message');
             var feedback = e.target.getAttribute('data-feedback');
@@ -4782,7 +4621,7 @@ function html.render_chat_widget(nonce)
             function showFeedbackError() {
                 if (container) { container.innerHTML = '<span class="platform-chat-feedback-error">Couldn\'t record feedback.</span>'; }
             }
-            post('api/chat-widget-feedback', {message_id: messageId, feedback: feedback}).then(function(result){
+            PlatformJS.postJSON('api/chat-widget-feedback', {message_id: messageId, feedback: feedback}).then(function(result){
                 if (!container) return;
                 if (result && result.ok) {
                     container.innerHTML = feedback === 'up' ? 'Thanks for the feedback 👍' : 'Thanks for the feedback 👎';
