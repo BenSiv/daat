@@ -1,9 +1,9 @@
 -- The chat/agent subsystem: real per-user sessions and DB-backed
--- conversation history (not brain-ex's hardcoded single 'default'
--- session -- every session belongs to a specific login, and every
--- lookup checks that ownership), context-window compaction, and (see
--- the tool-use section further down) a bounded turn loop that can act
--- on the platform's own data through a small, explicit tool registry.
+-- conversation history -- every session belongs to a specific login,
+-- and every lookup checks that ownership -- context-window
+-- compaction, and (see the tool-use section further down) a bounded
+-- turn loop that can act on the platform's own data through a small,
+-- explicit tool registry.
 --
 -- Nothing here is ever deleted. Compacting history marks old messages
 -- out-of-context (in_context = 0) rather than removing them -- the
@@ -24,23 +24,21 @@ view = require("view")
 
 agent = {}
 
--- The right value for any of this file's own turn-budget/size
--- constants genuinely depends on things a deployer chooses, not this
--- codebase -- which AGENT_MODEL is configured, that provider's own
--- latency, how much data a given deployment actually holds -- so none
--- of them stay bare hardcoded literals; each is read fresh from
--- config.platform_config() every time (not resolved once at load).
--- Confirmed live why this matters: a self-check loop needing 6 rounds
--- on a real production turn took long enough to exceed the load
--- balancer's own (separately configurable) timeout -- MAX_TURNS and
--- friends are the same class of "depends on your model/hardware, not
--- on this code" setting.
+-- Turn-budget/size constants in this file are read fresh from
+-- config.platform_config() every time rather than hardcoded (see
+-- doc/architecture.md's "Chat" config table for the full list and
+-- defaults) -- the right value genuinely depends on deployment
+-- choices (which model is configured, that provider's own latency,
+-- how much data a deployment actually holds), and a slow-to-converge
+-- self-check loop that runs long enough to exceed the load balancer's
+-- own timeout is a real, current reason a fixed constant would be
+-- wrong here.
 
--- Same default cgi.lua's own chat routes already use (AGENT_MODEL,
--- config.platform_config() -- a real model name is a deployment
--- choice, never hardcoded) -- exposed here too so main.lua's CLI
--- dispatch (task #87's `platform knowledge review`) doesn't need its
--- own copy of the fallback.
+-- Same default cgi.lua's own chat routes already use (a real model
+-- name is a deployment choice, never hardcoded, read fresh from
+-- config.platform_config()) -- exposed here too so main.lua's CLI
+-- dispatch (`platform knowledge distill`, `platform agent
+-- run-pending-background`) doesn't need its own copy of the fallback.
 function agent.default_model()
     return config.platform_config().agent_model
 end
@@ -117,8 +115,8 @@ end
 -- pending action -- needed to correlate the eventual approved/denied
 -- result back to it via a real toolResult message. This codebase's own
 -- bookkeeping, not something Vertex's real wire protocol requires or
--- even has a concept of (confirmed live: functionCall/functionResponse
--- carry no id at all, correlation there is by name) -- each provider
+-- even has a concept of (functionCall/functionResponse carry no id at
+-- all there -- correlation is by name instead) -- each provider
 -- synthesizes one fresh per response purely so this correlation works.
 -- Added via migration, not AGENT_SCHEMA, so an existing production
 -- agent_pending_action table gets it without a destructive rebuild --
@@ -245,15 +243,14 @@ end
 -- Messages
 --------------------------------------------------------------------------
 
--- Fixed (task #87, in passing): this used to re-derive the new
--- message's id via SELECT MAX(id), the exact same real concurrent-CGI
--- race ledger.lua's append_create/append_update already had fixed
--- under task #77 -- two simultaneous chat-message requests could both
--- read the same MAX(id) and collide. db.exec's own second return
--- value (last_insert_rowid()/insert_id) is read on the very same
--- connection the insert itself just ran on, so it can't see another
--- connection's insert regardless of timing. Needed correctly now that
--- knowledge_context/knowledge_chat_eval key off this id directly.
+-- Uses db.exec's own second return value (last_insert_rowid()/
+-- insert_id), read on the very same connection the insert itself just
+-- ran on -- not a SELECT MAX(id) after the fact, which two
+-- simultaneous chat-message requests could both read identically and
+-- collide on (the same class of race ledger.lua's own
+-- append_create/append_update guard against). Needed correctly here
+-- since knowledge_context/knowledge_chat_eval key off this id
+-- directly.
 function agent.add_message(db_path, session_id, role, content, in_context)
     if in_context == nil then
         in_context = true
@@ -399,13 +396,13 @@ end
 -- user to see restated back to them.
 --
 -- `role` picks how `content` is decoded: assistant/tool_result rows
--- store JSON (see build_history_messages) since the pi-ai migration;
--- json.decode on anything else (plain user text, or a pre-migration
--- row still holding the old <done>/<tool> tag text -- nothing here is
--- ever deleted, see this file's header) simply fails to find the
--- expected shape and falls through to the legacy tag-parsing/plain-text
--- path below, so old sessions keep rendering correctly with no
--- separate migration step needed.
+-- store JSON (see build_history_messages); json.decode on anything
+-- else (plain user text, or an older row still holding the pre-JSON
+-- <done>/<tool> tag text -- nothing here is ever deleted, see this
+-- file's header) simply fails to find the expected shape and falls
+-- through to the legacy tag-parsing/plain-text path below, so old
+-- sessions keep rendering correctly with no separate migration step
+-- needed.
 function agent.display_content(content, role, include_tool_calls)
     if content == nil then
         return content
@@ -440,13 +437,11 @@ function agent.display_content(content, role, include_tool_calls)
     return content
 end
 
--- Every message, active or compacted-away -- the full, never-deleted
--- transcript, for a "show full history" view.
--- task #87: which session a message belongs to, so /api/chat-widget-
--- feedback can check ownership (via agent.get_session) before
--- recording feedback -- without this, any authenticated user could
--- submit feedback against any message_id, not just their own
--- conversations, just by guessing/incrementing the id.
+-- Which session a message belongs to, so /api/chat-widget-feedback can
+-- check ownership (via agent.get_session) before recording feedback --
+-- without this, any authenticated user could submit feedback against
+-- any message_id, not just their own conversations, just by
+-- guessing/incrementing the id.
 function agent.message_session_id(db_path, message_id)
     rows = db.query(db_path, string.format(
         "SELECT session_id FROM agent_message WHERE id = %d;", tonumber(message_id)
@@ -503,8 +498,8 @@ end
 
 -- Extracts a SQL statement from the model's own plain-text final answer --
 -- for when a "write me a query" request gets answered as prose/a fenced
--- code block instead of an actual entity.query tool call (real production
--- case: the model called entity.list_types(), then wrote back
+-- code block instead of an actual entity.query tool call (e.g. the model
+-- calls entity.list_types(), then writes back
 -- "```sql\nSELECT * FROM sampling\n```" as its own text, never calling
 -- entity.query at all). Deliberately conservative: a fenced ```sql block
 -- or a fenced block starting with a SQL keyword is trusted outright; an
@@ -607,10 +602,10 @@ end
 -- Context-window compaction
 --------------------------------------------------------------------------
 
--- A simple chars/4 heuristic, not a real tokenizer -- ported as-is
--- from brain-ex: cheap, no model-specific vocabulary to keep in sync,
--- and only needs to be roughly right (the threshold check it feeds has
--- headroom built in, not a hard model context limit).
+-- A simple chars/4 heuristic, not a real tokenizer -- cheap, no
+-- model-specific vocabulary to keep in sync, and only needs to be
+-- roughly right (the threshold check it feeds has headroom built in,
+-- not a hard model context limit).
 function agent.estimate_tokens(text)
     if text == nil then
         return 0
@@ -621,10 +616,8 @@ end
 -- Summarizes everything except the last `keep_last` active messages
 -- into one new 'compaction_summary' message once the active window's
 -- estimated token count crosses the threshold, then marks the
--- summarized originals in_context = 0 -- ported from brain-ex's
--- agent_engine.run_agent, same threshold/keep-last defaults. Never
--- deletes anything; the summary is itself just another additive
--- message.
+-- summarized originals in_context = 0. Never deletes anything; the
+-- summary is itself just another additive message.
 function agent.compact_if_needed(db_path, session_id, system_prompt, model)
     active = agent.active_messages(db_path, session_id)
 
@@ -664,10 +657,10 @@ function agent.compact_if_needed(db_path, session_id, system_prompt, model)
     end
 
     summary_message_id = agent.add_message(db_path, session_id, "compaction_summary", summary, true)
-    -- task #87: a real model call, same audit-trail bar as any chat
-    -- turn -- but not a knowledge_chat_eval candidate, since that
-    -- table classifies conversational *replies* the user actually
-    -- sees, and a compaction summary is never shown as one.
+    -- A real model call, same audit-trail bar as any chat turn -- but
+    -- not a knowledge_chat_eval candidate, since that table classifies
+    -- conversational *replies* the user actually sees, and a
+    -- compaction summary is never shown as one.
     knowledge.record_context(db_path, session_id, summary_message_id, summary_prompt, model, nil, usage)
 
     ids = {}
@@ -688,46 +681,41 @@ end
 -- exactly what's listed here, with no escape hatch. Each entry is
 -- marked destructive or not; the turn loop below auto-executes
 -- non-destructive calls and pauses destructive ones for a human to
--- approve, replacing brain-ex's blocking terminal y/N prompt (which
--- assumes a synchronous, long-lived process -- CGI has neither) with a
--- real two-phase state machine: a destructive request is persisted as
--- an agent_pending_action row and the turn loop returns immediately;
--- a *separate* later request (agent.approve_pending/deny_pending)
--- executes it (or records the denial) and resumes the loop from there.
+-- approve via a real two-phase state machine (see doc/architecture.md's
+-- "Chat" section for why a blocking prompt doesn't work under CGI): a
+-- destructive request is persisted as an agent_pending_action row and
+-- the turn loop returns immediately; a *separate* later request
+-- (agent.approve_pending/deny_pending) executes it (or records the
+-- denial) and resumes the loop from there.
 
 -- `parameters` is platform-wip's own neutral tool-calling protocol
--- (see doc/agent-protocol.md), not any one vendor's dialect: plain,
--- standard JSON Schema -- lowercase `type` ("object"/"string"/
--- "integer"/etc.), standard `properties`/`required`. Each
--- agent_provider_<name>.lua is responsible for translating this into
--- whatever its own vendor actually requires on the wire (e.g.
+-- (see doc/agent-protocol.md) -- plain, standard JSON Schema, not any
+-- one vendor's dialect. Each agent_provider_<name>.lua translates this
+-- into whatever its own vendor actually requires on the wire (e.g.
 -- agent_provider_vertex.lua converts to Gemini's uppercase proto enum,
 -- "OBJECT"/"STRING"/"INTEGER", before calling Vertex -- this file
--- never speaks that dialect directly). This was NOT always true: this
--- schema used to be authored directly in Vertex's own uppercase
--- convention with zero translation layer, i.e. Vertex was silently
--- "home" and every other provider a guest -- fixed to make every
--- provider a symmetric, equal implementation of one shared contract.
--- `additionalProperties = true` genuinely works for the open-ended
--- "one arg per field" tools (entity.create/update) -- confirmed with a
--- real Vertex call that produced exactly the extra fields asked for
--- alongside the declared ones. `description` here is what the model
--- actually sees per tool (replacing the old hand-written system-prompt
--- bullet list); `destructive` is unchanged, still gates the
--- pending-approval flow below.
+-- never speaks that dialect directly; see agent-protocol.md for why
+-- this schema is vendor-neutral rather than Vertex's own convention).
+-- `additionalProperties = true` works for the open-ended "one arg per
+-- field" tools (entity.create/update) -- a real Vertex call produces
+-- exactly the extra fields asked for alongside the declared ones.
+-- `description` here is what the model actually sees per tool
+-- (replacing the old hand-written system-prompt bullet list);
+-- `destructive` is unchanged, still gates the pending-approval flow
+-- below.
+--
 -- properties = {} (a plain empty Lua table) is genuinely ambiguous to
--- dkjson.encode -- confirmed live: it comes out as a JSON array ("[]"),
--- not an object ("{}"), the same empty-table-encoding ambiguity that
--- bit schema.lua's own JSON columns elsewhere in this codebase -- and a
--- real Vertex AI call rejects the resulting {"type":"OBJECT",
--- "properties":[]} with a 400 INVALID_ARGUMENT (confirmed live, not
--- assumed: every no-arg tool -- entity.list_types/template.list/
--- knowledge.stats -- broke every real tool-calling turn merely by
--- being *declared*, before the model even chose one). dkjson's own
--- __jsontype = "object" metatable marker forces object encoding
--- regardless of emptiness -- this is a dkjson serialization quirk, not
--- a Vertex-specific concern, so it stays regardless of which
--- provider's translation runs afterward.
+-- dkjson.encode: it comes out as a JSON array ("[]"), not an object
+-- ("{}") -- the same empty-table-encoding ambiguity that bit
+-- schema.lua's own JSON columns elsewhere in this codebase. A real
+-- Vertex AI call rejects the resulting {"type":"OBJECT",
+-- "properties":[]} with a 400 INVALID_ARGUMENT -- every no-arg tool
+-- (entity.list_types/template.list/knowledge.stats) would break every
+-- real tool-calling turn merely by being *declared*, before the model
+-- even chose one. dkjson's own __jsontype = "object" metatable marker
+-- forces object encoding regardless of emptiness -- this is a dkjson
+-- serialization quirk, not a Vertex-specific concern, so it stays
+-- regardless of which provider's translation runs afterward.
 EMPTY_OBJECT_SCHEMA = {type = "object", properties = setmetatable({}, {__jsontype = "object"})}
 
 AGENT_TOOLS = {
@@ -920,9 +908,9 @@ AGENT_TOOLS = {
         },
     },
     -- Read-only introspection into the knowledge pool's own tiering/
-    -- retrieval activity (see knowledge.lua), plus one destructive tool
-    -- (task #107): `distill` writes a genuinely new, single-idea
-    -- document extracted from a source -- a real write (a new
+    -- retrieval activity (see knowledge.lua), plus one destructive
+    -- tool: `distill` writes a genuinely new, single-idea document
+    -- extracted from a source -- a real write (a new
     -- document/entity_event row), so it needs the same human-approval
     -- gate every other destructive tool has.
     knowledge = {
@@ -1045,10 +1033,10 @@ end
 
 -- Flattens AGENT_TOOLS into the function-declaration list the real
 -- Vertex/Gemini function-calling API expects -- one entry per method,
--- named "toolname.methodname" (dots are valid in
--- a Gemini function name, verified live) so agent.execute_tool's own
--- tool_name/method_name split-on-dot dispatch needs no remapping table
--- at all in either direction.
+-- named "toolname.methodname" (dots are valid in a Gemini function
+-- name) so agent.execute_tool's own tool_name/method_name
+-- split-on-dot dispatch needs no remapping table at all in either
+-- direction.
 function agent.tool_declarations()
     declarations = {}
     for tool_name, methods in pairs(AGENT_TOOLS) do
@@ -1079,15 +1067,14 @@ function issues_summary(issues)
     return table.concat(parts, "; ")
 end
 
--- Grounds the agent's own answers in real document content (found live:
--- document.search's tool result used to return only "#id title" lines
--- -- document.search itself already fetches full content for scoring,
--- but the tool wrapper around it threw that away, so the model could
--- learn *which* documents might be relevant but never actually read one
--- before answering). Bounded per result (not the full document verbatim)
--- so a search that matches several long documents doesn't balloon every
--- turn's prompt/token cost -- trimmed to the last whole word rather
--- than cutting mid-word.
+-- Grounds the agent's own answers in real document content --
+-- document.search already fetches full content for scoring, so the
+-- tool result surfaces an excerpt of it too, not just "#id title"
+-- lines, letting the model actually read a document before answering
+-- rather than only learning which ones might be relevant. Bounded per
+-- result (not the full document verbatim) so a search that matches
+-- several long documents doesn't balloon every turn's prompt/token
+-- cost -- trimmed to the last whole word rather than cutting mid-word.
 function excerpt(text, max_length)
     if text == nil or text == "" then
         return ""
@@ -1117,20 +1104,12 @@ end
 
 -- Whether the agent is allowed to write to entity_type, *on behalf of
 -- `login`* -- the agent's authority is exactly the delegating user's
--- own capability, never more and never less. Intentionally reverses an
--- earlier design here: this used to check one fixed, reserved
--- "chat-agent" api_key row, independent of whoever was chatting (per
--- auth.lua's general principle for api_key rows, "a key's capabilities
--- are its own, not derived from whoever created it") -- but that meant
--- a baseline user's chat session could reach an admin_write_only write
--- their own /register form would refuse (if that key had "a"), and an
--- actual Admin's own chat session could be blocked from the same write
--- if no such key existed at all -- confirmed live, both directions, not
--- hypothetical. Delegating to the real chatting user's own `user.cap`
--- instead (the same row/column require_write_capability, cgi.lua,
--- already checks for a direct form submission) makes the agent's
--- authority a strict function of the real account acting through it --
--- fails closed the same way: no such user row (or no "a" on it) means
+-- own capability, never more and never less (see doc/architecture.md's
+-- "Chat" section, "Attribution and authorization are both the
+-- chatting user's own", for why this checks the real chatting user's
+-- `user.cap` -- the same row/column require_write_capability, cgi.lua,
+-- already checks for a direct form submission -- rather than a fixed
+-- api_key row). Fails closed: no such user row (or no "a" on it) means
 -- no admin-gated writes, not a silent default.
 --
 -- `login` is always a real, session-authenticated user.login here --
@@ -1420,8 +1399,8 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
         if agent.check_write_capability(db_path, args.entity_type, author) == false then
             return nil, "Forbidden: " .. tostring(args.entity_type) .. " requires your own Admin capability -- ask an admin to grant it to your account."
         end
-        -- reason (task #93) is metadata about the change, not a field
-        -- being changed on the entity itself -- pulled out the same way
+        -- `reason` is metadata about the change, not a field being
+        -- changed on the entity itself -- pulled out the same way
         -- entity_type/entity_id already are, so it never ends up as a
         -- literal column update.
         values = {}
@@ -1512,13 +1491,13 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
         )
     end
 
-    -- Read-only listing (task #87, updated #106/#107) -- surfaces the
-    -- pool's real document ids/tiers/content shape to the model. Content
-    -- shape (task #107) is what the distillation pass reads to decide
-    -- what's actually worth distilling from -- only "developed"
-    -- (long/multi-section) content has something worth extracting; an
-    -- already-"atomic"/"thin"/"simple" document doesn't. Optional
-    -- args.tier filters, same as the CLI.
+    -- Read-only listing -- surfaces the pool's real document ids/tiers/
+    -- content shape to the model. Content shape is what the
+    -- distillation pass reads to decide what's actually worth
+    -- distilling from -- only "developed" (long/multi-section) content
+    -- has something worth extracting; an already-"atomic"/"thin"/
+    -- "simple" document doesn't. Optional args.tier filters, same as
+    -- the CLI.
     if tool_name == "knowledge" and method_name == "list" then
         rows = knowledge.list_documents(db_path, tonumber(args.tier))
         if #rows == 0 then
@@ -1539,8 +1518,8 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
         return table.concat(lines, "\n")
     end
 
-    -- Destructive (task #107): writes a new, concise, single-idea
-    -- document distilled from a source the agent has read -- the real
+    -- Destructive: writes a new, concise, single-idea document
+    -- distilled from a source the agent has read -- the real
     -- counterpart to knowledge.create_document_note's reasoning-note
     -- path. A genuine write (a new document/entity_event row), so this
     -- goes through the same pending-action approval flow as
@@ -1658,25 +1637,20 @@ end
 
 -- Builds the real, structured message list agent_provider.converse
 -- sends to the model (this codebase's own canonical shape -- see
--- agent_provider_vertex.lua's own header for how a provider translates
--- it to/from its real wire format) from this session's agent_message
--- rows, replacing the old build_history_prompt's single flattened text
--- blob. This is the actual fix for both bugs that motivated moving to
--- real structured tool-calling in the first place: no text protocol to
--- mis-parse means no multi-line-content truncation and no
--- tool-name-splitting confusion, structurally.
+-- doc/agent-protocol.md, and agent_provider_vertex.lua's own header
+-- for how a provider translates it to/from its real wire format) from
+-- this session's agent_message rows.
 --
 -- assistant/tool_result rows store JSON (see agent.add_message's
 -- callers below and agent.add_tool_result_message) -- decoded back
 -- into real content blocks / a toolResult message here. A row that
--- fails to decode into the expected shape is a pre-migration row still
--- holding the old <done>/<tool> tag text (nothing here is ever
+-- fails to decode into the expected shape is an older row still
+-- holding the pre-JSON <done>/<tool> tag text (nothing here is ever
 -- deleted): degraded gracefully rather than dropped -- an old assistant
 -- reply becomes a single text block (via agent.display_content's own
 -- legacy-tag rendering), an old tool_result becomes a plain user-role
 -- note, since Gemini's own toolResult message requires a toolCallId to
--- correlate against a prior toolCall that a pre-migration row never
--- had.
+-- correlate against a prior toolCall that an old row never had.
 function build_history_messages(messages)
     result = {}
     for _, msg in ipairs(messages) do
@@ -1708,18 +1682,16 @@ function build_history_messages(messages)
             -- Fed back as a user turn (Gemini's own wire protocol
             -- strictly alternates user/model turns -- there's no third
             -- "aside" role to inject mid-conversation), but explicitly
-            -- marked as automated, not the real person. Confirmed live
-            -- this genuinely matters, not just theoretical: without the
-            -- marker, a model facing several of these in a row (a
-            -- slow-to-converge self-check loop) started reading its own
-            -- prior critiques as if the real user kept repeating things
-            -- back to it ("I'm stuck in a loop, the user keeps
-            -- confirming..."), spiraling into confused, self-referential
-            -- reasoning about a back-and-forth that never actually
-            -- happened -- which made the loop take *longer* to
-            -- converge, not shorter, on a real production turn that
-            -- needed 6 rounds and ran past the load balancer's own
-            -- timeout as a direct result.
+            -- marked as automated, not the real person. This genuinely
+            -- matters: without the marker, a model facing several of
+            -- these in a row (a slow-to-converge self-check loop) starts
+            -- reading its own prior critiques as if the real user kept
+            -- repeating things back to it ("I'm stuck in a loop, the
+            -- user keeps confirming..."), spiraling into confused,
+            -- self-referential reasoning about a back-and-forth that
+            -- never actually happened -- which makes the loop take
+            -- *longer* to converge, not shorter, and risks running past
+            -- the load balancer's own timeout as a result.
             table.insert(result, {role = "user", content = "[Automated self-check, not the real user -- your own prior reply was just reviewed against the conversation and found lacking. The note below is that review, not new information from the person you're talking to; read it as your own continued investigation, then act on it.]\n\n" .. msg.content})
         end
     end
@@ -1727,10 +1699,10 @@ function build_history_messages(messages)
 end
 
 -- Every toolCall block in a reply, in the order the model proposed
--- them -- Gemini/Vertex can and does emit more than one per turn
--- (confirmed live). An earlier version of this only ever acted on the
--- first and silently dropped the rest; real multi-step reasoning needs
--- every call it made to get a real result, not a dropped one.
+-- them -- Gemini/Vertex can and does emit more than one per turn, and
+-- every one needs to actually run to get a real result: multi-step
+-- reasoning in a single turn depends on none of them being silently
+-- dropped.
 function all_tool_calls(blocks)
     if blocks == nil then
         return {}
@@ -1760,18 +1732,18 @@ end
 
 -- The default system prompt: domain/behavior guidance only -- the
 -- tools themselves are no longer enumerated here in hand-written text.
--- Since the pi-ai migration, the model gets the real tool list as
--- native function declarations (agent.tool_declarations(), passed to
--- agent_provider.converse's own `tools` argument) with structured
--- JSON-Schema parameters and per-tool descriptions (AGENT_TOOLS' own
--- `description` field) -- Gemini/Vertex decides on its own when to
--- call one and returns a real structured toolCall block, no tag
--- protocol for the model to get right or for this code to parse.
+-- The model gets the real tool list as native function declarations
+-- (agent.tool_declarations(), passed to agent_provider.converse's own
+-- `tools` argument) with structured JSON-Schema parameters and
+-- per-tool descriptions (AGENT_TOOLS' own `description` field) --
+-- Gemini/Vertex decides on its own when to call one and returns a real
+-- structured toolCall block, no tag protocol for the model to get
+-- right or for this code to parse.
 --
 -- Appends theme.lua's own system_prompt_extra, if a deployment set
--- one (task #70) -- deployment-specific instructions (domain
--- vocabulary, house style, use-case reminders) without editing
--- platform-wip's own source. Every real call site (run_turn's own
+-- one -- deployment-specific instructions (domain vocabulary, house
+-- style, use-case reminders) without editing platform-wip's own
+-- source. Every real call site (run_turn's own
 -- fallback, approve_pending, deny_pending) already reaches this
 -- function exactly when no caller-supplied system_prompt was given,
 -- so this is the one place that needs to change for every one of them
@@ -1845,14 +1817,14 @@ end
 
 ROLE_LABELS = {user = "User", assistant = "Assistant", tool_result = "Tool result", self_check = "Self-check"}
 
--- A human-readable transcript of a session's full message history (task
--- #108 follow-up, explicit user direction: "every conversation with the
--- agent is itself saved as a document" -- full session persistence, not
--- just the individual prompt/reasoning audit rows knowledge_context
--- already keeps per turn). Reuses agent.all_messages' own display_
--- content cleanup (strips the [Current user:...]/[Current page:...]
--- annotations, renders a tool call as "-> tool.method(...)") rather
--- than a second rendering path.
+-- A human-readable transcript of a session's full message history --
+-- full session persistence, not just the individual prompt/reasoning
+-- audit rows knowledge_context already keeps per turn (see
+-- doc/architecture.md's "Knowledge pool" section, "Whole chat sessions
+-- are themselves documents"). Reuses agent.all_messages' own
+-- display_content cleanup (strips the [Current user:...]/[Current
+-- page:...] annotations, renders a tool call as "-> tool.method(...)")
+-- rather than a second rendering path.
 function build_session_transcript(messages)
     lines = {}
     for _, msg in ipairs(messages) do
@@ -1866,15 +1838,14 @@ function build_session_transcript(messages)
 end
 
 -- Keeps this session's own document (knowledge.sync_session_document)
--- in sync with its current transcript -- find-or-create, then update in
--- place every time a turn concludes, so it always reflects the
+-- in sync with its current transcript -- find-or-create, then update
+-- in place every time a turn concludes, so it always reflects the
 -- conversation so far, not a one-time snapshot. Filed under the
--- Knowledge Pool folder like any other system-derived document, so a
--- heavily-revisited conversation naturally becomes part of the same
--- tiered/searchable pool as everything else, and can itself cross into
--- distillation (knowledge.maybe_distill) the same way any other
--- document does -- no separate "combine what a conversation touched
--- into something durable" mechanism needed on top.
+-- Knowledge Pool folder like any other system-derived document (see
+-- doc/architecture.md's "Knowledge pool" section) so a
+-- heavily-revisited conversation participates in the same
+-- tiered/searchable/distillation pipeline as everything else, with no
+-- separate mechanism needed on top.
 function sync_session_document(db_path, login, session_id)
     session = agent.get_session(db_path, session_id, login)
     title = "Untitled chat"
@@ -1901,17 +1872,16 @@ Otherwise, do not repeat the reply -- just say what to check next, as if continu
 -- reminder -- runs on every proposed final answer, unconditionally.
 -- Generalizes across any class of premature-answer mistake (a wrong
 -- guess taken at face value, an unverified zero/not-found conclusion,
--- a skipped obvious next step) instead of hardcoding a fix for
--- whichever specific mistake was last observed (found live: the model
--- once guessed a plain-English plural table name for entity.query
--- without checking first -- the fix isn't "detect plural guesses,"
--- it's "always double-check your own conclusion before it goes out,"
--- which catches that and any other class of mistake the same way,
--- because it's judged by the same reasoning engine, not a hardcoded
--- pattern list). Reuses the exact message history the real turn
--- already built, plus one more directive message, so the critique
--- sees everything the original answer saw -- no separate context to
--- keep in sync.
+-- a skipped obvious next step) instead of hardcoding a fix for one
+-- specific mistake (e.g. the model guessing a plain-English plural
+-- table name for entity.query without checking first) -- the fix
+-- isn't "detect plural guesses," it's "always double-check your own
+-- conclusion before it goes out," which catches that and any other
+-- class of mistake the same way, because it's judged by the same
+-- reasoning engine, not a hardcoded pattern list. Reuses the exact
+-- message history the real turn already built, plus one more
+-- directive message, so the critique sees everything the original
+-- answer saw -- no separate context to keep in sync.
 --
 -- Fails OPEN, not closed: if the critique call itself errors (bridge/
 -- network issue), this returns true (confirmed) so the user's real
@@ -1937,20 +1907,17 @@ function run_self_check(db_path, session_id, system_prompt, model, active_messag
         content_blocks = {}
     end
     critique_text = display_blocks(content_blocks)
-    -- Real regression, caught live in production: once display_blocks
-    -- started always including thinking text (so a human reading a
-    -- self-check's own critique can see its reasoning, not just its
-    -- verdict), a self-check call that dutifully replied with exactly
-    -- "CONFIRM" as its real answer still got treated as a rejection --
-    -- its own thinking text, narrated first, meant the combined string
-    -- no longer started with "confirm", so the anchor check below never
-    -- matched. Self-check silently stopped ever confirming at all,
-    -- looping every single turn out to the full MAX_TURNS budget
-    -- regardless of whether the answer was actually fine. The verdict
-    -- has to be judged from the model's real answer alone -- text_only_
-    -- blocks strips thinking back out for this one check, while
-    -- critique_text (thinking included) is still what actually gets
-    -- stored/shown when a self-check finds something worth saying.
+    -- The verdict must be judged from the model's real answer alone,
+    -- not from display_blocks' combined text (which includes thinking,
+    -- so a human reading a self-check's own critique can see its
+    -- reasoning, not just its verdict) -- thinking text narrated ahead
+    -- of a literal "CONFIRM" answer would otherwise mean the combined
+    -- string no longer starts with "confirm", so the anchor check below
+    -- would never match and a genuinely confirmed answer would loop for
+    -- the full MAX_TURNS budget instead. text_only_blocks strips
+    -- thinking back out for this one check, while critique_text
+    -- (thinking included) is still what actually gets stored/shown when
+    -- a self-check finds something worth saying.
     answer_text = text_only_blocks(content_blocks)
     trimmed = string.gsub(answer_text, "^%s+", "")
 
@@ -2270,15 +2237,16 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
 
         response, err, usage = agent_provider.converse(model, system_prompt, history_messages, agent.tool_declarations())
         if response == nil then
-            -- Persisted, not just returned -- every run_turn call site
-            -- (chat-message, chat-widget-send/approve/deny) previously
-            -- discarded this return value entirely, so a provider
-            -- failure was completely invisible: the turn just vanished
-            -- with no trace in the transcript.
+            -- Persisted, not just returned -- so a provider failure is
+            -- never silently invisible: without a recorded row, the
+            -- turn would just vanish with no trace in the transcript
+            -- for any call site (chat-message, chat-widget-send/
+            -- approve/deny) that doesn't happen to inspect this
+            -- specific return value.
             error_message_id = agent.add_message(db_path, session_id, "tool_result", "ERROR: " .. tostring(err), true)
-            -- task #87: still recorded even on failure -- what was
-            -- actually sent is exactly as much an audit fact as what
-            -- came back, and usage/reasoning simply don't apply here.
+            -- Still recorded even on failure -- what was actually sent
+            -- is exactly as much an audit fact as what came back, and
+            -- usage/reasoning simply don't apply here.
             context_id = knowledge.record_context(db_path, session_id, error_message_id, audit_prompt, model, nil, nil)
             knowledge.record_chat_eval(db_path, session_id, context_id, error_message_id, agent_provider.name(), model, true, nil)
             return {status = "error", message = tostring(err)}
@@ -2311,19 +2279,20 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
         message_id = agent.add_message(db_path, session_id, "assistant", json.encode({blocks = content_blocks}), true)
         display_text = display_blocks(content_blocks)
 
-        -- task #87: persist the exact prompt/reasoning/tokens for this
-        -- turn. Real thinking content (Gemini 2.5's own thought-summary
-        -- blocks, see extract_thinking_text) gets split out into its
-        -- own document (source_type='reasoning', task #106: a real
-        -- document under the Knowledge Pool folder, not a
-        -- separate knowledge_note) -- it then goes through the same
-        -- tiering/retrieval/decay pipeline as every other pool
-        -- document, rather than sitting in a second, parallel log only
-        -- this table can see. Falls back to the legacy text-pattern
-        -- check (knowledge.reply_has_visible_reasoning) only when
-        -- there's no real thinking block at all -- some other
-        -- provider/model might still leak reasoning as plain text
-        -- instead of a real structured block.
+        -- Persist the exact prompt/reasoning/tokens for this turn (see
+        -- doc/architecture.md's "Knowledge pool" section, "Full
+        -- prompt/reasoning/token persistence"). Real thinking content
+        -- (Gemini 2.5's own thought-summary blocks, see
+        -- extract_thinking_text) gets split out into its own document
+        -- (source_type='reasoning', a real document under the
+        -- Knowledge Pool folder, not a separate table) -- it then goes
+        -- through the same tiering/retrieval/decay pipeline as every
+        -- other pool document, rather than sitting in a second,
+        -- parallel log only this table can see. Falls back to the
+        -- legacy text-pattern check (knowledge.reply_has_visible_
+        -- reasoning) only when there's no real thinking block at all
+        -- -- some other provider/model might still leak reasoning as
+        -- plain text instead of a real structured block.
         reasoning_document_id = nil
         thinking_text = extract_thinking_text(content_blocks)
         if thinking_text != nil then
@@ -2343,14 +2312,13 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
             -- A plain reply (stopReason "stop"/"length") is a PROPOSED
             -- final answer -- the provider's own stopReason already
             -- distinguishes "the model wants to call a tool" (toolUse)
-            -- from "the model is finished" (stop/length), which is
-            -- what native function-calling gets for free over the old
-            -- text protocol, but "finished" isn't the same as
-            -- "correct." run_self_check gets one more real turn to
-            -- verify it before it actually goes out -- skipped only on
-            -- the very last allowed turn, where there's no budget left
-            -- to act on a critique anyway, so a real answer shouldn't
-            -- be downgraded into a generic turn-limit failure instead.
+            -- from "the model is finished" (stop/length), but
+            -- "finished" isn't the same as "correct." run_self_check
+            -- gets one more real turn to verify it before it actually
+            -- goes out -- skipped only on the very last allowed turn,
+            -- where there's no budget left to act on a critique anyway,
+            -- so a real answer shouldn't be downgraded into a generic
+            -- turn-limit failure instead.
             confirmed = true
             if turn < max_turns then
                 active_after_answer = agent.active_messages(db_path, session_id)
@@ -2444,17 +2412,18 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
     return {status = "turn_limit", message = "Unable to complete tool-assisted run in " .. tostring(max_turns) .. " turns."}
 end
 
--- task #107: the agent-driven distillation pass -- unlike knowledge.
+-- The agent-driven distillation pass -- unlike knowledge.
 -- review_retrieval (rule-based, runs automatically after every real
 -- search), this is a genuine model call: actually read a candidate
 -- document's full content (via entity.get, not just knowledge.list's
 -- own summary) and write a new, concise, single-idea document distilled
--- from it, rather than just promoting a tier number the way the old
--- (task #106-removed) materialize pass did. Not automatic on every
+-- from it (see doc/architecture.md's "Knowledge pool" section for the
+-- older materialize/review pass this replaced). Not automatic on every
 -- search -- a real, ongoing LLM cost for something that isn't
--- time-critical -- triggered explicitly (CLI `platform knowledge
--- distill`; task #108's queue is the actual automated trigger once it
--- exists).
+-- time-critical -- triggered explicitly via the CLI (`platform
+-- knowledge distill`); knowledge.maybe_distill (see architecture.md's
+-- "Reactive distillation" bullet) is the separate, automatic trigger
+-- tied to real retrieval.
 --
 -- Deliberately just a normal chat session/turn, not a separate
 -- pipeline: knowledge.distill is a destructive tool, so a call to it

@@ -332,10 +332,27 @@ and a small, explicit tool registry the model can act through.
   waiting on a person's real-world response time, so a destructive
   request instead gets recorded as a pending action and the request
   returns immediately; a separate, later request (clicking Approve or
-  Deny in the chat UI) executes it -- or records the refusal -- and
-  only then resumes the conversation. Read-only calls (search) run
-  immediately with no approval step; nothing about the mechanism
-  distinguishes "asking" from "changing data" except that one fact.
+  Deny in the floating chat widget) executes it -- or records the
+  refusal -- and only then resumes the conversation. Read-only calls
+  (search) run immediately with no approval step; nothing about the
+  mechanism distinguishes "asking" from "changing data" except that one
+  fact.
+- **`/chat` and the floating widget are not two equal ways to chat.**
+  `/chat` is a read-only, full-width session picker -- a plain list of
+  every session's title and start time, nothing else: no transcript
+  preview, no message input, no "new chat" control, no Approve/Deny
+  buttons. There is exactly one place a conversation is ever previewed
+  or continued: the floating widget (`html.render_chat_widget`), which
+  `page_shell` renders on every authenticated page, including `/chat`
+  itself. Clicking a session in the list pops the widget open right
+  onto it: the route hands the selected `session_id` to the page via
+  `page_context.open_chat_session_id`, and the widget's own init script
+  seeds its localStorage-held session id from that field (overriding
+  whatever it had cached), forces the panel open, then does its normal
+  history rehydrate. The widget's own JSON API (`/api/chat-widget-
+  start/-send/-approve/-deny/-history`, `chat_widget_state` in
+  `cgi.lua`) is the only way any of this actually happens server-side --
+  there is no form-POST equivalent.
 - **Every tool call is attributed to the real, authenticated user
   driving that conversation, never a separate "agent" identity** --
   a document the assistant creates or updates shows up in that document's own

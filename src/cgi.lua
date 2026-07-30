@@ -69,10 +69,10 @@ function chat_widget_state(db_path, session_id)
     -- the complete record is untouched in agent_message and in the
     -- synced session document.
     messages = agent.all_messages(db_path, session_id, false)
-    -- Same Markdown rendering render_chat_message (html.lua) applies for
-    -- the full /chat page -- the widget's own JS trusts and embeds this
-    -- directly (see html.page_shell's render()), rather than re-escaping
-    -- already-rendered HTML or re-implementing Markdown rendering in JS.
+    -- Rendered server-side so the widget's own JS can trust and embed
+    -- this directly (see html.page_shell's render()), rather than
+    -- re-escaping already-rendered HTML or re-implementing Markdown
+    -- rendering in JS.
     for _, msg in ipairs(messages) do
         if html.CHAT_MARKDOWN_ROLES[msg.role] == true then
             msg.content = document.render_markdown(msg.content)
@@ -829,16 +829,14 @@ function cgi.handle_request()
             return print_response("403 Forbidden", "text/html", "<h3>Forbidden: requires Setup or Admin capability</h3>")
         end
         stats = knowledge.stats(db_path)
-        recent = knowledge.recent_retrievals(db_path, 10)
-        body = html.render_knowledge_pool(stats, recent)
+        body = html.render_knowledge_pool(stats)
         return print_response("200 OK", "text/html",
             html.page_shell("Knowledge Pool", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
     end
 
-    -- Backing view for /knowledge's stat cards (task: make "N pool
-    -- records" and each tier tile clickable instead of plain divs) --
-    -- reuses knowledge.list_documents (already existed for the CLI's
-    -- `platform knowledge list`) rather than /browse: "document" has no
+    -- Backing view for /knowledge's stat cards -- reuses
+    -- knowledge.list_documents (already existed for the CLI's `platform
+    -- knowledge list`) rather than /browse: "document" has no
     -- schemas/document.lua file, and tier/retrieval_count/heat are
     -- migration-added columns, not part of DOCUMENT_SCHEMA.fields, so
     -- /browse's filter_field validation (must match a registered field)
@@ -850,6 +848,32 @@ function cgi.handle_request()
         tier = tonumber(params.tier)
         rows = knowledge.list_documents(db_path, tier)
         body = html.render_knowledge_documents(rows, tier)
+        return print_response("200 OK", "text/html",
+            html.page_shell("Knowledge Pool", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
+    end
+
+    -- Backing view for /knowledge's "N reviewed notes" stat.
+    if path_info == "/knowledge-reviewed" then
+        if show_sql_nav == false and show_admin_nav == false then
+            return print_response("403 Forbidden", "text/html", "<h3>Forbidden: requires Setup or Admin capability</h3>")
+        end
+        rows = knowledge.reviewed_documents(db_path)
+        body = html.render_knowledge_documents(rows, nil, "Reviewed notes")
+        return print_response("200 OK", "text/html",
+            html.page_shell("Knowledge Pool", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
+    end
+
+    -- Backing view for /knowledge's "N retrieval runs" stat -- replaces
+    -- the old inline "Recent Retrievals" preview panel (capped at 10)
+    -- with a real full listing, same reasoning as /knowledge-documents:
+    -- one obvious place to drill into the number, not a second,
+    -- truncated copy on the landing page itself.
+    if path_info == "/knowledge-retrievals" then
+        if show_sql_nav == false and show_admin_nav == false then
+            return print_response("403 Forbidden", "text/html", "<h3>Forbidden: requires Setup or Admin capability</h3>")
+        end
+        rows = knowledge.recent_retrievals(db_path, 500)
+        body = html.render_knowledge_retrievals(rows)
         return print_response("200 OK", "text/html",
             html.page_shell("Knowledge Pool", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
     end
@@ -1144,9 +1168,15 @@ function cgi.handle_request()
         if params.embed == "1" then
             return print_response("200 OK", "text/html", body)
         end
+        -- query_ran: true exactly when this page load itself came from
+        -- running a query (?q= present) -- lets the chat widget's own
+        -- syncSqlConsole (html.lua) tell "the user just ran this and is
+        -- looking at its results" apart from "a fresh /sql visit, safe
+        -- to prefill from the agent's last query" (see that function's
+        -- own comment for the bug this fixes).
         return print_response("200 OK", "text/html",
             html.page_shell("SQL", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author,
-                {page_type = "sql", title = "SQL"}))
+                {page_type = "sql", title = "SQL", query_ran = (params.q != nil)}))
     end
 
     if path_info == "/admin-users" then
@@ -1385,33 +1415,27 @@ function cgi.handle_request()
         return print_response("302 Found", "text/plain", "", {"Location: settings"})
     end
 
-    -- Read-only chat-history browser (task: only the floating widget
-    -- actually chats, see html.render_chat_widget) -- the old chat-start/
-    -- chat-message/chat-approve/chat-deny form-POST routes that used to
-    -- live here are gone; /api/chat-widget-* below is the only surviving
-    -- way to mutate a chat session. open_chat_session_id in page_context
-    -- lets the widget's own init script (html.lua) resume this exact
-    -- session -- session_id is already ownership-checked (agent.get_session
-    -- requires login == author) before it's handed off, and the widget's
-    -- own /api/chat-widget-history re-checks ownership independently anyway.
+    -- Read-only chat-history browser (see doc/architecture.md's "Chat"
+    -- section) -- /api/chat-widget-* below is the only way to mutate a
+    -- chat session; this route only lists sessions and validates
+    -- ownership of the one selected via ?session_id=, so the widget's
+    -- own init script (html.lua) can be handed it via page_context.
+    -- open_chat_session_id and pop open onto it. Never fetches messages/
+    -- pending itself -- the page never displays a transcript, only the
+    -- widget does (via its own /api/chat-widget-history).
     if path_info == "/chat" then
         session_id = params.session_id
         sessions = agent.list_sessions(db_path, author)
-        session = nil
-        messages = {}
-        pending = nil
+        current_session_id = nil
         if session_id != nil and session_id != "" then
             session = agent.get_session(db_path, session_id, author)
             if session == nil then
                 return print_response("404 Not Found", "text/html", "<h3>Error: no such chat session</h3>")
             end
-            -- false: same human-facing filtering as chat_widget_state --
-            -- tool calls/raw results dropped, thinking kept.
-            messages = agent.all_messages(db_path, session_id, false)
-            pending = agent.latest_pending(db_path, session_id)
+            current_session_id = session_id
         end
-        body = html.render_chat(sessions, session, messages, pending, nonce)
-        page_context = {page_type = "chat", open_chat_session_id = session_id}
+        body = html.render_chat(sessions, current_session_id, nonce)
+        page_context = {page_type = "chat", open_chat_session_id = current_session_id}
         return print_response("200 OK", "text/html",
             html.page_shell("Chat", "chat", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author, page_context))
     end

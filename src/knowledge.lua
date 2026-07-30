@@ -1011,6 +1011,26 @@ function knowledge.list_documents(db_path, tier)
     return rows
 end
 
+-- Documents with at least one review recorded against them (distinct
+-- document_id in knowledge_review) -- backs /knowledge's "reviewed
+-- notes" stat, same reused table view as tier documents
+-- (html.render_knowledge_documents).
+function knowledge.reviewed_documents(db_path)
+    rows = db.query(db_path, """
+        SELECT * FROM document
+        WHERE id IN (SELECT DISTINCT document_id FROM knowledge_review)
+          AND (archived_at IS NULL OR archived_at = '')
+        ORDER BY heat DESC, retrieval_count DESC;
+    """)
+    if rows == nil then
+        return {}
+    end
+    for _, row in ipairs(rows) do
+        row.effective_heat = document.effective_heat(tonumber(row.heat), row.last_retrieved_at)
+    end
+    return rows
+end
+
 function knowledge.set_tier(db_path, document_id, tier)
     db.exec(db_path, string.format(
         "UPDATE document SET tier = %d, updated_at = %s WHERE id = %d;",

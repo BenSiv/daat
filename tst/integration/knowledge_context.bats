@@ -104,12 +104,15 @@ send_message() {
     run sqlite3 .store/store.db "SELECT content FROM document WHERE source_type='reasoning';"
     [[ "$output" =~ "the user said hi" ]]
 
-    # ...and the live chat transcript shows both the reasoning and the
-    # final answer (only tool calls/raw tool results are filtered out of
-    # the human-facing view -- see display_blocks' own comment; thinking
-    # is real, useful reasoning a person reading the conversation wants
-    # to see, not plumbing).
-    run env GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/chat" \
+    # ...and the live chat transcript (now only ever shown by the
+    # floating widget, via its own /api/chat-widget-history -- /chat
+    # itself is a read-only session-list page with no transcript of its
+    # own) shows both the reasoning and the final answer (only tool
+    # calls/raw tool results are filtered out of the human-facing view --
+    # see display_blocks' own comment; thinking is real, useful
+    # reasoning a person reading the conversation wants to see, not
+    # plumbing).
+    run env GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/api/chat-widget-history" \
         QUERY_STRING="session_id=${chat_session}" HTTP_COOKIE="session=${session}; csrf=${csrf}" "$BIN"
     [[ "$output" =~ "Hello there!" ]]
     [[ "$output" =~ "the user said hi" ]]

@@ -68,7 +68,7 @@ start_chat() {
     run raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"What is 2+2?\"}" "$COOKIE" "$CSRF" "$(done_response "2+2 is 4.")"
     [[ "$output" =~ "200 OK" ]]
 
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    run raw_get "/api/chat-widget-history" "session_id=${session_id}" "$COOKIE"
     [[ "$output" =~ "What is 2+2?" ]]
     [[ "$output" =~ "2+2 is 4." ]]
 }
@@ -116,7 +116,7 @@ EOF
     run raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"[Current user: alice]\\n[Current page: home \\\"Home\\\"]\\n\\nwhat page am I on?\"}" "$COOKIE" "$CSRF" "$(done_response "You are on the Home page.")"
     [[ "$output" =~ "200 OK" ]]
 
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    run raw_get "/api/chat-widget-history" "session_id=${session_id}" "$COOKIE"
     [[ "$output" =~ "what page am I on?" ]]
     # Not a bare substring check -- the widget's own JS source
     # legitimately contains the literal text "Current user: " on every
@@ -145,12 +145,12 @@ EOF
     # literal string "Tool result" here -- the floating widget's own
     # static ROLE_LABELS JS on every page defines that label regardless
     # of whether anything actually uses it.)
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    run raw_get "/api/chat-widget-history" "session_id=${session_id}" "$COOKIE"
     [[ ! "$output" =~ "Bioreactor Notes" ]]
     [[ "$output" =~ "Found it." ]]
 
     # Auto-executed and done -- no pending approval left behind.
-    [[ ! "$output" =~ "wants to run" ]]
+    [[ "$(json_body "$output" | jq -r '.pending')" = "null" ]]
 
     # The document.search tool routes through knowledge.search_and_log:
     # every search is logged, and the retrieved document itself accrues
@@ -185,9 +185,9 @@ EOF
     run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM document WHERE title = 'New Page';"
     [ "$output" -eq 0 ]
 
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
-    [[ "$output" =~ "document.create" ]]
-    [[ "$output" =~ "is awaiting approval" ]]
+    run raw_get "/api/chat-widget-history" "session_id=${session_id}" "$COOKIE"
+    [[ "$(json_body "$output" | jq -r '.pending.tool')" = "document" ]]
+    [[ "$(json_body "$output" | jq -r '.pending.method')" = "create" ]]
 }
 
 @test "approving a pending action executes it, attributes it to the real user, and resumes the loop" {
@@ -213,8 +213,8 @@ EOF
     [[ "$output" =~ "New Page" ]]
     [[ "$output" =~ created_by[[:space:]]+alice ]]
 
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
-    [[ ! "$output" =~ "wants to run" ]]
+    run raw_get "/api/chat-widget-history" "session_id=${session_id}" "$COOKIE"
+    [[ "$(json_body "$output" | jq -r '.pending')" = "null" ]]
     [[ "$output" =~ "Created it." ]]
 }
 
@@ -291,7 +291,13 @@ EOF
     scripted="$(tool_call_response "entity.list_types" '{}')"$'\1'"$(done_response "Listed.")"
     raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"what entity types exist\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    # The real listing only ever lands in the raw tool_result row --
+    # it's filtered out of every human-facing view (this session's own
+    # transcript never showed it either, even before /chat dropped its
+    # transcript entirely: see agent.all_messages' include_tool_calls
+    # comment), so check the real row directly, same as every other
+    # tool-result-content assertion in this file.
+    run latest_tool_result "$session_id"
     [[ "$output" =~ "document" ]]
     [[ "$output" =~ "task" ]]
 }
@@ -308,7 +314,7 @@ EOF
     [[ "$output" =~ "document" ]]
     [[ "$output" =~ "task" ]]
     [[ "$output" =~ "title (text, required)" ]]
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    run raw_get "/api/chat-widget-history" "session_id=${session_id}" "$COOKIE"
     [[ "$output" =~ "Got both." ]]
 }
 
@@ -322,8 +328,8 @@ EOF
         "entity.create" '{"entity_type":"task","title":"Second task","status":"open"}')"
     raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"create two tasks\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
-    [[ "$output" =~ "is awaiting approval" ]]
+    run raw_get "/api/chat-widget-history" "session_id=${session_id}" "$COOKIE"
+    [[ "$(json_body "$output" | jq -r '.pending')" != "null" ]]
     run latest_tool_result "$session_id"
     [[ "$output" =~ "skipped" ]]
 
@@ -476,7 +482,7 @@ SELECT * FROM task
     scripted="$(tool_call_response "research.investigate" '{"question":"how many task_notes reference the Ship it task"}')"$'\1'"$(tool_call_response "entity.query" "$(printf '{"sql":"%s"}' "$sql")")"$'\1'"$(done_response "Found note_count=2 via a join on task_note.task = task.id.")"$'\1'"$(done_response "The Ship it task has 2 notes.")"
     raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"dig into how many notes the Ship it task has\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    run raw_get "/api/chat-widget-history" "session_id=${session_id}" "$COOKIE"
     [[ "$output" =~ "The Ship it task has 2 notes." ]]
     run latest_tool_result "$session_id"
     [[ "$output" =~ "Found note_count=2" ]]
@@ -496,7 +502,7 @@ SELECT * FROM task
     scripted="$(tool_call_response "research.investigate" '{"question":"create a task"}')"$'\1'"$(tool_call_response "entity.create" '{"entity_type":"task","title":"Sneaky","status":"open"}')"$'\1'"$(done_response "I could not create anything -- research is read-only.")"$'\1'"$(done_response "Research reported it cannot write data.")"
     raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"try to sneak in a write via research\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    run raw_get "/api/chat-widget-history" "session_id=${session_id}" "$COOKIE"
     [[ "$output" =~ "Research reported it cannot write data." ]]
 
     # Never actually created, and never even paused for approval -- the
@@ -532,7 +538,7 @@ SELECT * FROM task
     scripted="$(tool_call_response "clarify.ask" '{"question":"There are two open tasks -- did you mean Ship it or Draft plan?"}')"
     raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"archive the task\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    run raw_get "/api/chat-widget-history" "session_id=${session_id}" "$COOKIE"
     [[ "$output" =~ "did you mean" ]]
     [[ "$output" =~ "Ship it" ]]
     [[ "$output" =~ "Draft plan" ]]
@@ -547,7 +553,7 @@ SELECT * FROM task
     # /chat-message continues this same session with no special resume
     # endpoint, unlike a destructive pending action.
     raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"Ship it\"}" "$COOKIE" "$CSRF" "$(done_response "Archived Ship it.")" >/dev/null
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    run raw_get "/api/chat-widget-history" "session_id=${session_id}" "$COOKIE"
     [[ "$output" =~ "Archived Ship it." ]]
 }
 
@@ -561,7 +567,7 @@ SELECT * FROM task
         "entity.create" '{"entity_type":"task","title":"Ambiguous","status":"open"}')"
     raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"create a task\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    run raw_get "/api/chat-widget-history" "session_id=${session_id}" "$COOKIE"
     [[ "$output" =~ "What status should the new task have?" ]]
 
     # Never created, and never even queued as a pending approval -- the
@@ -588,7 +594,7 @@ SELECT * FROM task
 
     run latest_tool_result "$session_id"
     [[ "$output" =~ "Started background task" ]]
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    run raw_get "/api/chat-widget-history" "session_id=${session_id}" "$COOKIE"
     [[ "$output" =~ "I will dig into that and let you know." ]]
 
     # Enqueued, not executed inline -- the turn already returned.
@@ -607,7 +613,7 @@ SELECT * FROM task
     # The finding is appended to the same conversation as a new message --
     # no separate resume endpoint, the user just sees it next time they
     # look at this chat.
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    run raw_get "/api/chat-widget-history" "session_id=${session_id}" "$COOKIE"
     [[ "$output" =~ "There are 2 notes on the Ship it task." ]]
 }
 
@@ -661,8 +667,8 @@ SELECT * FROM task
     raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"list tasks\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
     run latest_tool_result "$session_id"
     [[ "$output" =~ "Ship it" ]]
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
-    [[ ! "$output" =~ "wants to run" ]]
+    run raw_get "/api/chat-widget-history" "session_id=${session_id}" "$COOKIE"
+    [[ "$(json_body "$output" | jq -r '.pending')" = "null" ]]
 
     scripted2="$(tool_call_response "entity.get" '{"entity_type":"task","entity_id":1}')"$'\1'"$(done_response "Here it is.")"
     raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"show task 1\"}" "$COOKIE" "$CSRF" "$scripted2" >/dev/null
@@ -804,9 +810,9 @@ SELECT * FROM task
         GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/chat-widget-send" QUERY_STRING="" \
         HTTP_COOKIE="$COOKIE" HTTP_X_CSRF_TOKEN="$CSRF" "$BIN" >/dev/null
 
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    run raw_get "/api/chat-widget-history" "session_id=${session_id}" "$COOKIE"
     [[ "$output" =~ "There are 0." ]]
-    [[ "$output" =~ 'class="platform-chat-msg platform-chat-self_check"' ]]
+    [[ "$output" =~ '"role":"self_check"' ]]
     [[ "$output" =~ "Did you verify that" ]]
     [[ "$output" =~ "Actually there are 5" ]]
 }
@@ -843,9 +849,9 @@ SELECT * FROM task
 
     raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"hi\"}" "$COOKIE" "$CSRF" "$(done_response "Hello!")" >/dev/null
 
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    run raw_get "/api/chat-widget-history" "session_id=${session_id}" "$COOKIE"
     [[ "$output" =~ "Hello!" ]]
-    [[ ! "$output" =~ 'class="platform-chat-msg platform-chat-self_check"' ]]
+    [[ ! "$output" =~ '"role":"self_check"' ]]
 
     run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM agent_message WHERE role = 'self_check';"
     [ "$output" -eq 0 ]
@@ -869,9 +875,9 @@ SELECT * FROM task
         GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/chat-widget-send" QUERY_STRING="" \
         HTTP_COOKIE="$COOKIE" HTTP_X_CSRF_TOKEN="$CSRF" "$BIN" >/dev/null
 
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    run raw_get "/api/chat-widget-history" "session_id=${session_id}" "$COOKIE"
     [[ "$output" =~ "Hello!" ]]
-    [[ ! "$output" =~ 'class="platform-chat-msg platform-chat-self_check"' ]]
+    [[ ! "$output" =~ '"role":"self_check"' ]]
 
     run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM agent_message WHERE role = 'self_check';"
     [ "$output" -eq 0 ]
@@ -883,7 +889,7 @@ SELECT * FROM task
 
     raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"hi\"}" "$COOKIE" "$CSRF" "$(done_response "This is **bold** text.")" >/dev/null
 
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
+    run raw_get "/api/chat-widget-history" "session_id=${session_id}" "$COOKIE"
     [[ "$output" =~ "<strong>bold</strong>" ]]
     [[ ! "$output" =~ "**bold**" ]]
 
@@ -945,9 +951,16 @@ SELECT * FROM task
             "$COOKIE" "$CSRF" "$(done_response "ok")" >/dev/null
     done
 
-    run raw_get "/chat" "session_id=${session_id}" "$COOKIE"
-    [[ "$output" =~ "platform-chat-out-of-context" ]]
-    [[ "$output" =~ "Compacted summary" ]]
+    run raw_get "/api/chat-widget-history" "session_id=${session_id}" "$COOKIE"
+    # "platform-chat-out-of-context" and the "Compacted summary" label
+    # are both built client-side in JS from in_context/role (see
+    # html.lua's own render() -- ROLE_LABELS, and
+    # 'platform-chat-' + msg.role) -- raw_get never runs that JS, so
+    # check the real fields the JSON actually carries instead: at least
+    # one compacted-out message (in_context = 0) and a real
+    # compaction_summary row.
+    [[ "$output" =~ '"in_context":0' ]]
+    [[ "$output" =~ '"role":"compaction_summary"' ]]
 
     # Nothing deleted -- the full transcript is still all there.
     [[ "$output" =~ "message number 1" ]]

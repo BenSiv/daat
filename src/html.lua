@@ -32,13 +32,11 @@ end
 -- `const layout = ` .. json_for_script(json.encode(layout)) .. `;`. A
 -- JSON encoder has no reason to escape "<" (not required by the JSON
 -- spec), but a literal "</script>" sequence inside a JSON string value
--- terminates the surrounding <script> tag at the HTML-parser level --
--- before any JS engine even looks at the content -- letting whatever
--- follows execute as newly-opened markup. Confirmed as a real, working
--- injection, not theoretical: a schema field's own `label` containing
--- "</script><script>alert(1)</script>" did exactly this, unescaped,
--- reaching the live page. < parses back to a literal "<" in
--- JSON/JS, so this changes nothing about the decoded value.
+-- (e.g. a schema field's own `label`) terminates the surrounding
+-- <script> tag at the HTML-parser level -- before any JS engine even
+-- looks at the content -- letting whatever follows execute as
+-- newly-opened markup. < parses back to a literal "<" in JSON/JS,
+-- so this changes nothing about the decoded value.
 function json_for_script(json_string)
     return (string.gsub(json_string, "<", "\\u003c"))
 end
@@ -63,10 +61,10 @@ end
 -- The ".platform-container" shell (card look: padding/shadow/border/
 -- rounded corners) was copy-pasted, identically byte-for-byte except
 -- max_width, into every render_* function's own inline <style> block --
--- ten separate copies, confirmed by grepping the file directly. One
--- shared definition instead; each caller supplies just the max-width
--- its own page already used (1200/1100/900/800), so this is a pure
--- de-duplication, not a visual change anywhere.
+-- ten separate copies. One shared definition instead; each caller
+-- supplies just the max-width its own page already used (1200/1100/
+-- 900/800), so this is a pure de-duplication, not a visual change
+-- anywhere.
 function platform_container_css(max_width)
     if max_width == nil then
         max_width = 1200
@@ -92,13 +90,11 @@ end
 -- render_sql()'s never picked up the shared .btn base at all (no
 -- flex-centering, no shared transition/padding token), and its
 -- .btn-secondary was a whole font-size step smaller (0.85rem vs the
--- others' inherited 0.9rem) -- confirmed via a real rendered-page diff,
--- not just reading the CSS. One copy now, used everywhere a button
--- appears. .btn-danger (button-audit follow-up) is for a genuinely
--- one-way negative action -- Archive, Deny -- as opposed to .btn-delete's
--- own narrower "remove this not-yet-saved row" icon-button use, or a
--- reversible toggle like Unarchive/Approve, which stay .btn-secondary/
--- .btn-primary.
+-- others' inherited 0.9rem). One copy now, used everywhere a button
+-- appears. .btn-danger is for a genuinely one-way negative action --
+-- Archive, Deny -- as opposed to .btn-delete's own narrower "remove
+-- this not-yet-saved row" icon-button use, or a reversible toggle like
+-- Unarchive/Approve, which stay .btn-secondary/.btn-primary.
 function platform_button_css()
     return """
         .btn {
@@ -112,18 +108,17 @@ function platform_button_css()
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            /* !important on both of these: a real bug found live -- a
-               generic "a { color: var(--platform-accent) }"/"a:hover {
-               text-decoration: underline }" rule scoped to some
-               surrounding wrapper (.platform-header a and friends,
-               hand-copied across ~18 render_* functions) has higher
-               specificity than a bare .btn-* class, so a <a class="btn
-               btn-primary"> sitting inside one silently lost its own
-               white text to the wrapper's accent-color rule -- on this
-               deployment's own amber accent, that made the button's
-               text exactly match its own background: completely
-               invisible, not just low-contrast. Centralized here
-               (the one shared place every .btn already comes from)
+            /* !important on both of these: a generic "a { color:
+               var(--platform-accent) }"/"a:hover { text-decoration:
+               underline }" rule scoped to some surrounding wrapper
+               (.platform-header a and friends, hand-copied across ~18
+               render_* functions) has higher specificity than a bare
+               .btn-* class, so a <a class="btn btn-primary"> sitting
+               inside one can silently lose its own white text to the
+               wrapper's accent-color rule -- on an amber accent theme,
+               that makes the button's text exactly match its own
+               background: invisible, not just low-contrast. Centralized
+               here (the one shared place every .btn already comes from)
                instead of chasing down every current and future
                wrapper-link rule with its own :not(.btn) exception. */
             text-decoration: none !important;
@@ -164,12 +159,12 @@ function platform_button_css()
 end
 
 -- Shared "sitemap" card-grid CSS -- was hand-copied identically across
--- render_home/render_system (task: whole-card clickability). The whole
--- card is now the hit target, not just the title text -- same mechanism
--- html.render_index's own .platform-index-list already uses for /data's
--- entity-type cards (put everything inside the one <a>, then stretch
--- that <a> to fill its parent via display:block, rather than a sibling
--- <a>+<p> where only the <a> was ever clickable).
+-- render_home/render_system. The whole card is now the hit target, not
+-- just the title text -- same mechanism html.render_index's own
+-- .platform-index-list already uses for /data's entity-type cards (put
+-- everything inside the one <a>, then stretch that <a> to fill its
+-- parent via display:block, rather than a sibling <a>+<p> where only
+-- the <a> was ever clickable).
 function platform_sitemap_css()
     return """
         .platform-sitemap { list-style: none !important; margin: 16px 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
@@ -189,13 +184,12 @@ function render_sitemap_item(href, title, description)
 end
 
 -- Shared page-header CSS -- was hand-copied, with real drift, across
--- ~19 separate render_* functions in this file (confirmed live:
--- margin-bottom 20px vs 24px depending which function you looked at,
--- some missing the flex/space-between layout entirely, render_document
--- missing the h2's own bottom margin). Centralized here the same way
--- platform_button_css/platform_sitemap_css/html.popover_css already
--- centralize their own components -- see render_page_header for the
--- matching markup helper.
+-- ~19 separate render_* functions in this file: margin-bottom 20px vs
+-- 24px depending which function you looked at, some missing the flex/
+-- space-between layout entirely, render_document missing the h2's own
+-- bottom margin. Centralized here the same way platform_button_css/
+-- platform_sitemap_css/html.popover_css already centralize their own
+-- components -- see render_page_header for the matching markup helper.
 function platform_page_header_css()
     return """
         .platform-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px; margin-bottom: 20px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; }
@@ -311,16 +305,16 @@ function html.popover_js(nonce)
         var timer = null;
         var loaded = false;
         trigger.addEventListener('mouseenter', function(){
-            // task #111: .platform-popover's default CSS is `position:
-            // absolute` relative to the trigger -- fine standalone, but
-            // a long result table is wrapped in `.platform-table-wrapper
+            // .platform-popover's default CSS is `position: absolute`
+            // relative to the trigger -- fine standalone, but a long
+            // result table is wrapped in `.platform-table-wrapper
             // { overflow-x: auto }`, and per the CSS Overflow spec
             // setting only one axis forces the *other* axis to compute
             // as auto too (an explicit `overflow-y: visible` on the
-            // wrapper would still get overridden back to auto by that
-            // same rule -- confirmed, not a viable CSS-only fix), so
-            // the wrapper clips/traps the popover instead of letting it
-            // float free. Repositioned to `position: fixed` with real
+            // wrapper gets overridden back to auto by that same rule,
+            // so it's not a viable CSS-only fix), so the wrapper clips/
+            // traps the popover instead of letting it float free.
+            // Repositioned to `position: fixed` with real
             // viewport coordinates here escapes that clipping
             // entirely, since a fixed-position element is placed
             // relative to the viewport, not any scrolling ancestor.
@@ -460,11 +454,6 @@ window.PlatformJS = (function(){
         // appends `input` into the DOM (both addRow() and buildFields()
         // build the whole cell before attaching it), so a captured
         // `const wrapper = input.parentElement` would be null forever.
-        // Confirmed live: this exact bug already existed, on both pages,
-        // before this consolidation -- the debounced fetch would resolve
-        // fine, then `wrapper.appendChild(...)` threw a TypeError,
-        // silently swallowed by the existing .catch(), so the dropdown
-        // never actually rendered at all.
         var resultsContainer = null;
         function closeResults() {
             if (resultsContainer) { resultsContainer.remove(); resultsContainer = null; }
@@ -572,7 +561,7 @@ window.PlatformJS = (function(){
     // edit form's buildFields()); the only real difference between the
     // two pages was whether a field has an existing value to prefill
     // (opts.value) -- register's blank rows simply never pass one.
-    // opts.locked (register-only, task #112) short-circuits everything
+    // opts.locked (register-only) short-circuits everything
     // else for a `?lock_<field>=<value>` field.
     function buildFieldInput(field, container, opts) {
         opts = opts || {};
@@ -728,9 +717,7 @@ ICON_CHAT_BUBBLE = "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\
 -- which skips page_shell entirely (see its own comment on why) but still
 -- needs these variables defined somewhere in its own document, or every
 -- var(--platform-*, fallback) in its styles silently resolves to the
--- generic fallback instead of the deployment's real palette -- confirmed
--- live: the embedded SQL widget on /data was rendering in the default
--- indigo/slate colors instead of Celleste's real brown/gold theme.
+-- generic fallback instead of the deployment's real palette.
 function html.theme_root_css(theme)
     root_vars = {}
     for _, key in ipairs(THEME_COLOR_KEYS) do
@@ -747,19 +734,19 @@ function html.theme_root_css(theme)
 end
 
 -- page_context: what the chat widget/agent is told about "where the
--- user currently is" (see render_chat_widget's script and
--- agent.default_system_prompt). Callers that know more than the bare
--- nav section (a document's own id, an entity's type+id, a view's
--- name) should pass their own richer table; nil falls back to just
--- {page_type = active, title = title} -- still real signal (which nav
--- section, what the page is titled), just not entity-specific.
+-- user currently is" (see doc/architecture.md's "Chat" section,
+-- render_chat_widget's script, and agent.default_system_prompt).
+-- Callers that know more than the bare nav section (a document's own
+-- id, an entity's type+id, a view's name) should pass their own richer
+-- table; nil falls back to just {page_type = active, title = title} --
+-- still real signal (which nav section, what the page is titled), just
+-- not entity-specific.
 --
--- current_user is merged in here unconditionally (every caller gets
--- it for free, not just the ones that already pass a rich context) --
--- found missing live: the model had no way to know who it was talking
--- to, so it left owner/assignee-style fields blank instead of
--- defaulting to the current user the way a human filling out the same
--- form naturally would.
+-- current_user is merged in here unconditionally (every caller gets it
+-- for free, not just the ones that already pass a rich context) -- so
+-- the model always knows who it's talking to and can default owner/
+-- assignee-style fields to the current user, the way a human filling
+-- out the same form naturally would.
 function html.page_shell(title, active, body, nonce, show_sql, show_admin, has_tasks_view, theme, author, page_context)
     if theme == nil then
         theme = {site_name = "Platform", colors = {}}
@@ -782,9 +769,8 @@ function html.page_shell(title, active, body, nonce, show_sql, show_admin, has_t
     --
     -- No real nav items at all when nobody's authenticated (author ==
     -- nil, e.g. /login) -- every one of them just bounces back to
-    -- /login anyway (found live: the nav rail was fully visible and
-    -- clickable on the login page itself after task #89's /login fix
-    -- started wrapping it in this same page_shell).
+    -- /login anyway, so a fully visible, clickable nav rail on the
+    -- login page itself would just be confusing.
     nav_items = {}
     if author != nil then
         nav_items = {
@@ -794,7 +780,7 @@ function html.page_shell(title, active, body, nonce, show_sql, show_admin, has_t
         }
         -- Only a real rail icon when a deployment actually seeded a
         -- "prioritized_tasks" view -- see the matching comment in
-        -- render_home (task #101).
+        -- render_home.
         if has_tasks_view == true then
             table.insert(nav_items, {key = "tasks", href = "view?view_name=prioritized_tasks", label = "Tasks", icon = ICON_TASKS})
         end
@@ -827,10 +813,10 @@ function html.page_shell(title, active, body, nonce, show_sql, show_admin, has_t
         ))
     end
 
-    -- Single clickable entry point (task: replace two separate sidebar
-    -- links with one) -- the username itself links to /account, which
-    -- hosts both password-change and log-out. Keeps the sidebar minimal
-    -- rather than growing it with more per-feature links.
+    -- Single clickable entry point -- the username itself links to
+    -- /account, which hosts both password-change and log-out. Keeps
+    -- the sidebar minimal rather than growing it with more per-feature
+    -- links.
     user_box = ""
     if author != nil then
         user_box = string.format("""
@@ -844,11 +830,10 @@ function html.page_shell(title, active, body, nonce, show_sql, show_admin, has_t
     -- reasoning as nav_items above. The backend already rejects an
     -- unauthenticated /api/chat-widget-start or /api/chat-widget-send
     -- before it ever reaches the agent/Vertex AI call (cgi.handle_request's
-    -- own session check runs first, confirmed live), so this isn't a
-    -- billing/security gap by itself -- but showing a chat box nobody
-    -- can actually use is confusing UX, and only ever produces a
-    -- confusing JSON error response its own JS isn't expecting, not a
-    -- real conversation.
+    -- own session check runs first), so this isn't a billing/security
+    -- gap by itself -- but showing a chat box nobody can actually use
+    -- is confusing UX, and only ever produces a confusing JSON error
+    -- response its own JS isn't expecting, not a real conversation.
     chat_widget_html = ""
     if author != nil then
         chat_widget_html = html.render_chat_widget(nonce)
@@ -1187,8 +1172,8 @@ function html.render(entity_type, layout_json, nonce, locked_fields)
                 const wrapper = document.createElement("div");
                 wrapper.classList.add("cell-input-wrapper");
 
-                // task #112: a locked field (?lock_<name>=<value>) shows
-                // a fixed, read-only display -- e.g. which mixture these
+                // A locked field (?lock_<name>=<value>) shows a fixed,
+                // read-only display -- e.g. which mixture these
                 // ingredients belong to -- plus a same-named hidden
                 // input so submitBatch()'s existing
                 // querySelector(`[name="..."]`) collection picks up the
@@ -1247,10 +1232,10 @@ function html.render(entity_type, layout_json, nonce, locked_fields)
                     if (el) {
                         let val = el.value;
                         if (field.type === "number" && val !== "") { val = parseFloat(val); }
-                        // task #84: both multivalue types send a real
-                        // JSON array in the payload, not a joined string
-                        // -- /api/submit's body is already JSON, so
-                        // there's no wire-format reason to flatten one.
+                        // Both multivalue types send a real JSON array
+                        // in the payload, not a joined string -- /api/
+                        // submit's body is already JSON, so there's no
+                        // wire-format reason to flatten one.
                         if (field.type === "multi_select") {
                             val = Array.from(el.selectedOptions).map(o => o.value);
                         } else if (field.type === "multi_reference" || field.type === "multi_polymorphic_reference") {
@@ -1312,8 +1297,7 @@ end
 -- per-field-type input rendering (select/multi_select/number/date/
 -- reference/multi_reference with autocomplete) since that logic is
 -- exactly what's needed here too, just for one row instead of many,
--- submitting to /api/update (already exists, task #93) instead of
--- /api/submit.
+-- submitting to /api/update instead of /api/submit.
 function html.render_entity_edit(entity_type, layout_json, row_json, entity_id, nonce)
     escaped_type = html.html_escape(entity_type)
     escaped_entity_id = tostring(entity_id)
@@ -1459,7 +1443,7 @@ function html.render_entity_edit(entity_type, layout_json, row_json, entity_id, 
      nonce, json_for_script(layout_json), json_for_script(row_json), js_string_literal(entity_type), tostring(entity_id))
 end
 
--- A multivalue field's value (task #84) is a plain Lua array, not a
+-- A multivalue field's value is a plain Lua array, not a
 -- scalar -- both a row's own current value (entity.get attaches it) and
 -- a ledger history change's old/new (json-decoded from field_changes).
 -- html.html_escape on a raw table would misbehave, so this renders an
@@ -1493,14 +1477,11 @@ function display_value(value)
     return html.html_escape(value)
 end
 
--- Reference-type field values are a raw entity id -- platform has no
--- general "display name" concept for entities (confirmed directly:
--- entity tables carry no "name" column at all, only whatever fields
--- each schema declares; /browse and /detail already only ever show
--- "#<id>" for the row's own identity too), so this can't resolve to a
--- human-readable name -- it renders the id as a real, styled link to
--- the referenced entity's own detail page instead of a disconnected
--- bare number, matching how the row's own id already links out in
+-- Reference-type field values are a raw entity id -- not every entity
+-- type has a human-readable label for it (see the two sources below),
+-- so this always renders the id as a real, styled link to the
+-- referenced entity's own detail page instead of a disconnected bare
+-- number, matching how the row's own id already links out in
 -- render_browse below. The link is relative ("detail...", no leading
 -- slash) so it resolves correctly regardless of where this app is
 -- mounted -- every route lives at the same top-level directory, so a
@@ -1509,9 +1490,6 @@ end
 --   1. The builtin "name" column (schema.lua's BUILTIN_COLUMNS) -- a
 --      real name assigned by an external source like Benchling (e.g. a
 --      container literally named "50L stainless steel bioreactor").
---      Confirmed live: an importer already fetched this value but only
---      used it transiently for dedup matching, never persisting it --
---      fixed separately, but this is the whole reason the column exists.
 --   2. A schema author's own {display = true} field (entity_field.display),
 --      for entity types with no such external source at all. A
 --      heuristic like "first text field" was considered and rejected: a
@@ -1682,10 +1660,10 @@ function html.render_browse(db_path, entity_type, layout, rows, page, page_size,
     end
     escaped_type = html.html_escape(entity_type)
 
-    -- task #112: preserves an active ?filter_field=&filter_value=
-    -- across Prev/Next -- otherwise paging past page 1 on a filtered
-    -- view (e.g. "this mixture's ingredients") would silently drop
-    -- back to the unfiltered list.
+    -- Preserves an active ?filter_field=&filter_value= across Prev/Next
+    -- -- otherwise paging past page 1 on a filtered view (e.g. "this
+    -- mixture's ingredients") would silently drop back to the
+    -- unfiltered list.
     filter_query_suffix = ""
     if filter_field != nil then
         filter_query_suffix = "&filter_field=" .. html.html_escape(filter_field) .. "&filter_value=" .. html.html_escape(tostring(filter_value))
@@ -1798,18 +1776,6 @@ function html.render_browse(db_path, entity_type, layout, rows, page, page_size,
 %s
 """, escaped_type, platform_container_css(1200), platform_page_header_css(), platform_button_css(), html.popover_css(), browse_header, table_or_empty, pager, html.popover_js(nonce))
 end
-
--- Real bug found while extracting platform_container_css above, unrelated
--- to that refactor: the args list here previously started with
--- `html.popover_css()` where the FIRST %s in the template
--- (`data-title="Browse %s"`) actually is -- meaning every /browse page's
--- data-title (which Fossil's own doc.c reads to set the real page
--- title, confirmed directly in fossil-scm's source) rendered as raw CSS
--- text instead of "Browse <type>". The visible <h2> heading used a
--- *different*, correctly-positioned escaped_type and was always fine --
--- an easy thing to miss since the page looked completely normal, only
--- the browser tab title was ever wrong. Fixed above by reordering the
--- args to match where each %s actually is.
 
 -- Detail view: current field values plus the full ledger history for
 -- one entity. Also pure server-rendered HTML, no JS.
@@ -1944,7 +1910,7 @@ function html.render_detail(db_path, entity_type, layout, row, history, nonce, h
 """, escaped_type, title_id_part, platform_container_css(1200), platform_button_css(), platform_page_header_css(), html.popover_css(), detail_header, fields_html, related_html, history_rows, html.popover_js(nonce), print_label_js_block)
 end
 
--- task #112: "Related records" -- every real, plain `reference` field
+-- "Related records" -- every real, plain `reference` field
 -- elsewhere that points back at this row (e.g. ingredient.mixture ->
 -- this mixture), computed generically by cgi.lua's related_records
 -- (schema.relationships(), not specific to any one pair of types).
@@ -1990,8 +1956,8 @@ function related_records_html(db_path, related, entity_id)
     return "<h3 class=\"platform-subheading\">Related records</h3><div class=\"platform-related\">" .. groups_html .. "</div>"
 end
 
--- task #73: markup for the print-label control, only ever emitted when
--- a label_template row exists for this entity_type (has_label_template,
+-- Markup for the print-label control, only ever emitted when a
+-- label_template row exists for this entity_type (has_label_template,
 -- computed by cgi.lua's /detail route -- see label.has_template).
 function label_print_button_html()
     return """
@@ -2005,8 +1971,8 @@ end
 
 -- Discovers local Zebra printers via the vendored Browser Print SDK
 -- (loaded separately, see render_detail) and sends this entity's
--- rendered ZPL (fetched from /label, task #73) to whichever one is
--- selected. `nonce` must be Fossil's own per-request CSP nonce (see
+-- rendered ZPL (fetched from /label) to whichever one is selected.
+-- `nonce` must be Fossil's own per-request CSP nonce (see
 -- html.popover_js's own comment) since this emits an inline <script>.
 function label_print_js(nonce, entity_type, entity_id)
     return string.format("""
@@ -2214,7 +2180,7 @@ function html.expand_inline_views(db_path, content)
     end))
 end
 
--- ERD box geometry (task #86) -- fixed width rather than measured text,
+-- ERD box geometry -- fixed width rather than measured text,
 -- since computing real SVG text metrics server-side isn't available;
 -- 200px comfortably fits "some_field_name : multi_reference", the
 -- longest realistic name:type pair in this codebase's own schemas.
@@ -2579,10 +2545,9 @@ end
 -- way /admin-users-password's admin-only form does) and requires the
 -- current password to verify before setting a new one. No broader
 -- account-settings page, no other fields -- just this.
--- The single destination for the nav's username link (task: replace two
--- separate "Change password"/"Log out" sidebar links with one minimal
--- entry point) -- hosts both self-service password change and log out,
--- so no new sidebar links are ever needed for account-level actions.
+-- The single destination for the nav's username link -- hosts both
+-- self-service password change and log out, so no new sidebar links
+-- are ever needed for account-level actions.
 function html.render_account(username, csrf_token, message, is_error)
     render_lib = require("render")
 
@@ -2746,7 +2711,7 @@ function html.render_admin_users(users, csrf_token, message, is_error)
 """, platform_container_css(1000), platform_button_css(), platform_page_header_css(), render_page_header("Manage users", nil, nil), message_html, escaped_csrf, rows_html)
 end
 
--- Admin UI for task #114's api_key table, mirroring render_admin_users
+-- Admin UI for the api_key table, mirroring render_admin_users
 -- exactly. `new_raw_key` is only ever set immediately after a
 -- successful create -- the raw key is never stored, so this is the one
 -- and only time it can be shown; it's rendered in its own prominent,
@@ -2854,7 +2819,7 @@ function html.render_admin_api_keys(keys, csrf_token, message, is_error, new_raw
 """, platform_container_css(1000), platform_button_css(), platform_page_header_css(), render_page_header("Manage API keys", nil, nil), message_html, new_key_html, escaped_csrf, rows_html)
 end
 
--- Settings (task #89): a real UI for theme.lua's own fields, instead
+-- Settings: a real UI for theme.lua's own fields, instead
 -- of hand-editing the file and redeploying. Covers every field
 -- config.load_theme/save_theme round-trip -- site_name, the color
 -- overrides, hide_home_heading, system_prompt_extra, and logo/favicon
@@ -3020,8 +2985,8 @@ function html.render_home(theme, show_sql, show_admin, has_tasks_view)
 
     -- Only a real link when a deployment actually seeded a
     -- "prioritized_tasks" view -- a fresh/generic install has no
-    -- views/ at all, so this used to be a nav item that 404'd on
-    -- "cannot open view: ./views/prioritized_tasks.lua" (task #101).
+    -- views/ at all, and without this guard it would be a nav item
+    -- that 404'd on "cannot open view: ./views/prioritized_tasks.lua".
     tasks_link = ""
     if has_tasks_view == true then
         tasks_link = render_sitemap_item("view?view_name=prioritized_tasks", "Tasks", "Open tasks, ranked by priority.")
@@ -3121,9 +3086,12 @@ KNOWLEDGE_TIER_CAPTIONS = {
 
 -- Landing page for src/knowledge.lua's tiering/retrieval-logging
 -- system (see that module's own header) -- linked from System, not
--- given its own sidebar icon; chat session browsing lives at /chat,
--- linked from here rather than a dedicated nav-rail entry.
-function html.render_knowledge_pool(stats, recent_retrievals)
+-- given its own sidebar icon. Every stat/tier tile is a link to its
+-- own backing table (html.render_knowledge_documents/-retrievals) --
+-- deliberately the ONLY navigation on this page (no inline retrieval
+-- preview, no second link to /chat) so there's one obvious way to
+-- drill into each number, not several redundant ones.
+function html.render_knowledge_pool(stats)
     tier_tiles = ""
     for tier = 0, 3 do
         tier_tiles = tier_tiles .. string.format(
@@ -3132,17 +3100,6 @@ function html.render_knowledge_pool(stats, recent_retrievals)
             tier, html.html_escape(KNOWLEDGE_TIER_LABELS[tier]), stats.tier_counts[tier],
             html.html_escape(KNOWLEDGE_TIER_CAPTIONS[tier])
         )
-    end
-
-    retrieval_rows = ""
-    for _, r in ipairs(recent_retrievals) do
-        retrieval_rows = retrieval_rows .. string.format(
-            '<div class="platform-knowledge-retrieval"><strong>#%s</strong> %s <span class="dimmed">[%s, %s hit(s)]</span></div>',
-            tostring(r.id), html.html_escape(r.query_text), html.html_escape(r.created_at), tostring(r.hit_count)
-        )
-    end
-    if retrieval_rows == "" then
-        retrieval_rows = '<p class="dimmed">No retrievals yet.</p>'
     end
 
     return string.format("""
@@ -3156,42 +3113,27 @@ function html.render_knowledge_pool(stats, recent_retrievals)
         .platform-knowledge-stats a { display: block; text-decoration: none !important; transition: var(--platform-transition, all 0.2s cubic-bezier(0.4, 0, 0.2, 1)); }
         .platform-knowledge-stats a:hover { border-color: var(--platform-accent, #4f46e5); box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
         .platform-knowledge-stats strong { display: block; font-size: 1.4rem; color: var(--platform-heading, #0f172a); }
-        .platform-knowledge-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; }
         .platform-knowledge-tiers { display: grid; grid-template-columns: repeat(2, minmax(14em, 1fr)); gap: 12px; }
         .platform-knowledge-tier { display: block; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-item, 10px); padding: 12px 14px; background: var(--platform-bg, #f8fafc); text-decoration: none !important; transition: var(--platform-transition, all 0.2s cubic-bezier(0.4, 0, 0.2, 1)); }
         .platform-knowledge-tier:hover { border-color: var(--platform-accent, #4f46e5); box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
         .platform-knowledge-tier strong { display: block; margin-bottom: 4px; color: var(--platform-heading, #0f172a); }
         .platform-knowledge-tier-caption { margin: 6px 0 0 0; font-size: 0.82rem; color: var(--platform-muted, #64748b); }
-        .platform-knowledge-panel { border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-item, 10px); padding: 14px 16px; background: var(--platform-bg, #f8fafc); margin-bottom: 14px; }
+        .platform-knowledge-panel { border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-item, 10px); padding: 14px 16px; background: var(--platform-bg, #f8fafc); }
         .platform-knowledge-panel h4 { margin: 0 0 10px 0; font-size: 0.95rem; color: var(--platform-muted, #64748b); }
-        .platform-knowledge-retrieval { margin: 6px 0; font-size: 0.9rem; }
         .dimmed { color: var(--platform-muted, #64748b); font-size: 0.85rem; }
     </style>
     <div class="platform-container">
         %s
         <div class="platform-knowledge-stats">
             <a href="knowledge-documents"><strong>%d</strong><span class="dimmed">pool records</span></a>
-            <div><strong>%d</strong><span class="dimmed">retrieval runs</span></div>
-            <div><strong>%d</strong><span class="dimmed">reviewed notes</span></div>
+            <a href="knowledge-retrievals"><strong>%d</strong><span class="dimmed">retrieval runs</span></a>
+            <a href="knowledge-reviewed"><strong>%d</strong><span class="dimmed">reviewed notes</span></a>
             <a href="chat"><strong>%d</strong><span class="dimmed">chat sessions</span></a>
         </div>
-        <div class="platform-knowledge-grid">
-            <div>
-                <div class="platform-knowledge-panel">
-                    <h4>Processing Tiers</h4>
-                    <div class="platform-knowledge-tiers">
+        <div class="platform-knowledge-panel">
+            <h4>Processing Tiers</h4>
+            <div class="platform-knowledge-tiers">
 %s
-                    </div>
-                </div>
-            </div>
-            <div>
-                <div class="platform-knowledge-panel">
-                    <h4>Recent Retrievals</h4>
-%s
-                </div>
-                <div class="platform-knowledge-panel">
-                    <a class="btn btn-secondary" href="chat">Browse chat sessions</a>
-                </div>
             </div>
         </div>
     </div>
@@ -3199,7 +3141,7 @@ function html.render_knowledge_pool(stats, recent_retrievals)
 """, platform_container_css(1200), platform_button_css(), platform_page_header_css(),
      render_page_header("Knowledge Pool", "<p>Notes promote through processing tiers as they're retrieved and reinforced; every retrieval is logged.</p>", nil),
      stats.note_count, stats.retrieval_count, stats.reviewed_note_count,
-     stats.session_count, tier_tiles, retrieval_rows)
+     stats.session_count, tier_tiles)
 end
 
 -- Backing table for /knowledge's "N pool records" stat and each tier
@@ -3208,13 +3150,16 @@ end
 -- "tier" field to reuse /browse's ?filter_field= mechanism against).
 -- `tier` is nil for the unfiltered "all pool records" link, 0-3 for a
 -- single tier tile.
-function html.render_knowledge_documents(rows, tier)
+function html.render_knowledge_documents(rows, tier, title_override)
     title = "Pool records"
     if tier != nil then
         title = KNOWLEDGE_TIER_LABELS[tier]
         if title == nil then
             title = "Pool records"
         end
+    end
+    if title_override != nil then
+        title = title_override
     end
 
     body_rows = ""
@@ -3260,6 +3205,48 @@ function html.render_knowledge_documents(rows, tier)
     </div>
 </div>
 """, escaped_title, platform_container_css(1200), platform_button_css(), platform_page_header_css(), kd_header, table_or_empty)
+end
+
+-- Backing table for /knowledge's "N retrieval runs" stat -- reuses
+-- knowledge.recent_retrievals (already existed for the CLI/the old
+-- inline "Recent Retrievals" preview), just without a small cap.
+function html.render_knowledge_retrievals(rows)
+    body_rows = ""
+    for _, r in ipairs(rows) do
+        body_rows = body_rows .. string.format(
+            "<tr><td>#%s</td><td>%s</td><td>%s</td><td>%s</td></tr>",
+            tostring(r.id), html.html_escape(r.query_text), html.html_escape(r.created_at), tostring(r.hit_count)
+        )
+    end
+
+    table_or_empty = "<p class=\"platform-empty\">No retrievals yet.</p>"
+    if #rows > 0 then
+        table_or_empty = "<div class=\"platform-table-wrapper\"><table class=\"platform-view-table\"><thead><tr>" ..
+            "<th>ID</th><th>Query</th><th>When</th><th>Hits</th>" ..
+            "</tr></thead><tbody>" .. body_rows .. "</tbody></table></div>"
+    end
+
+    header = render_page_header("Retrieval runs", "<p>" .. tostring(#rows) .. " run(s)</p>",
+        "<a class=\"btn btn-secondary\" href=\"knowledge\">&larr; Back to Knowledge Pool</a>")
+    return string.format("""
+<div class="fossil-doc" data-title="Retrieval runs">
+    <style>
+%s
+%s
+%s
+        .platform-table-wrapper { overflow-x: auto; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); background: var(--platform-bg, #f8fafc); }
+        .platform-view-table { width: 100%%; border-collapse: separate; border-spacing: 0; min-width: 600px; }
+        .platform-view-table th, .platform-view-table td { padding: 12px 16px; text-align: left; border-bottom: 1px solid var(--platform-border, #e2e8f0); font-size: 0.9rem; }
+        .platform-view-table th { background: var(--platform-bg-2, #f1f5f9); font-weight: 600; font-size: 0.78rem; color: var(--platform-th-text, #475569); text-transform: uppercase; letter-spacing: 0.06em; }
+        .platform-view-table td { background: #ffffff; }
+        .platform-empty { padding: 32px; text-align: center; color: var(--platform-muted, #64748b); background: var(--platform-bg, #f8fafc); border: 1px dashed var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); }
+    </style>
+    <div class="platform-container">
+        %s
+        %s
+    </div>
+</div>
+""", platform_container_css(1200), platform_button_css(), platform_page_header_css(), header, table_or_empty)
 end
 
 function html.render_index(db_path, entity_types, edges, nonce)
@@ -3537,8 +3524,7 @@ function html.render_sql(db_path, sql_text, column_names, rows, err, ref_columns
         -- block a real theme compiles to -- without it, every
         -- var(--platform-*, fallback) below silently resolves to the
         -- generic fallback color instead of the deployment's real
-        -- palette. Confirmed live: the embedded widget on /data was
-        -- rendering in the default indigo/slate, not Celleste's brown/gold.
+        -- palette.
         if theme != nil then
             embed_css = html.theme_root_css(theme) .. " " .. embed_css
         end
@@ -3558,14 +3544,13 @@ function html.render_sql(db_path, sql_text, column_names, rows, err, ref_columns
             table.insert(header_parts, "<th>" .. html.html_escape(name) .. "</th>")
         end
         header_cells = table.concat(header_parts)
-        -- Real bug found live: repeated ".." string concatenation in
-        -- this loop is O(n^2) in Lua (each ".." copies the whole
-        -- accumulated string so far) -- fine for a handful of rows, but
-        -- a genuinely unbounded query (/sql has no LIMIT/pagination at
-        -- all, unlike /browse's own BROWSE_PAGE_SIZE cap) against a
-        -- real production table confirmed this taking 54 real seconds
-        -- for ~3800 rows of full document content. table.insert +
-        -- table.concat is O(n).
+        -- Repeated ".." string concatenation in this loop is O(n^2) in
+        -- Lua (each ".." copies the whole accumulated string so far) --
+        -- fine for a handful of rows, but a genuinely unbounded query
+        -- (/sql has no LIMIT/pagination at all, unlike /browse's own
+        -- BROWSE_PAGE_SIZE cap) against a real production table took 54
+        -- seconds for ~3800 rows of full document content. table.insert
+        -- + table.concat is O(n).
         body_row_parts = {}
         for _, row in ipairs(rows) do
             cell_parts = {}
@@ -3608,10 +3593,9 @@ function html.render_sql(db_path, sql_text, column_names, rows, err, ref_columns
             width: 100%%;
             /* max-width explicit, not left to inherit: Fossil's own base
             ** CSS (src/default.css) has a bare "textarea { max-width:
-            ** 95%% }" rule that otherwise wins over nothing here -- a
-            ** real, confirmed-live gap (measured 1045px vs the intended
-            ** 1100px). This class selector's higher specificity
-            ** overrides it. */
+            ** 95%% }" rule that otherwise wins over nothing here
+            ** (measured 1045px vs the intended 1100px). This class
+            ** selector's higher specificity overrides it. */
             max-width: 100%%;
             min-height: 140px;
             box-sizing: border-box;
@@ -3682,8 +3666,8 @@ end
 -- own render() comment on why an inline <script> would need one).
 -- Previously always fully expanded, every level, in one shot -- fine
 -- for a handful of pages, unusable once real content brought hundreds
--- of folders (confirmed against real production data: 376 folder
--- nodes). depth 0 (top level) starts open so the overall shape is
+-- of folders (376 folder nodes in real production data). depth 0
+-- (top level) starts open so the overall shape is
 -- visible immediately; everything nested starts closed, since a
 -- fully-expanded deep tree is exactly the problem being fixed here.
 -- The link and the disclosure triangle are deliberately separate
@@ -3704,8 +3688,8 @@ function render_document_tree_level(by_parent, key, depth)
             items = items .. "<li class=\"platform-tree-leaf\">" .. link .. "</li>"
         else
             -- Collapsed by default at every depth, including the top
-            -- level (task: Ben's own explicit ask, prompted by the tree
-            -- getting long after a real bulk import). Was "open" at
+            -- level -- the tree got long enough after a real bulk
+            -- import that leaving it open was unusable. Was "open" at
             -- depth 0 only; the user navigates inward as needed instead.
             items = items .. "<li><details><summary>" .. link .. "</summary><ul>" ..
                 nested .. "</ul></details></li>"
@@ -3721,9 +3705,9 @@ end
 -- by document.would_create_cycle, with a real error message rather than
 -- the option silently not being offered.
 --
--- Duplicate titles are real and already fairly common (task: found
--- live, 293 titles with duplicates in production, mostly "Experiment
--- N" documents resynced from Benchling more than once) -- picking a parent
+-- Duplicate titles are real and already fairly common (293 titles with
+-- duplicates in production, mostly "Experiment N" documents resynced
+-- from Benchling more than once) -- picking a parent
 -- by title alone is ambiguous whenever that happens, and the person
 -- doing it has no way to tell the options apart. Never shown as a bare
 -- internal id (meaningless to a human, and the whole point of this
@@ -4122,82 +4106,36 @@ end
 -- Chat/agent (src/agent.lua)
 --------------------------------------------------------------------------
 
-CHAT_ROLE_LABELS = {
-    user = "You",
-    assistant = "Assistant",
-    tool_result = "Tool result",
-    compaction_summary = "Compacted summary",
-    self_check = "Self-check",
-}
-
--- Every message renders, including ones marked out-of-context by
--- compaction (dimmed, not hidden) -- transparency about what the model
--- can/can't currently see, matching this system's own "nothing is ever
--- hidden, only marked" stance elsewhere (archived_at, in_context).
--- Shared `.platform-chat-*` thread rules -- was defined here but never
--- actually called; html.render_chat hand-copied this same CSS inline
--- instead (confirmed byte-for-byte identical), the same "define once,
--- forget to actually call it" bug class this session already fixed for
--- .platform-entity-ref/platform_button_css. Now wired into
--- html.render_chat for real.
-function platform_chat_thread_css()
-    return """
-        .platform-chat-messages { max-height: 55vh; overflow-y: auto; margin-bottom: 16px; padding: 12px; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); background: var(--platform-bg, #f8fafc); }
-        .platform-chat-msg { margin-bottom: 10px; padding: 8px 10px; border-radius: var(--platform-radius-sm, 8px); background: #fff; border: 1px solid var(--platform-border, #e2e8f0); }
-        .platform-chat-msg a { color: var(--platform-accent, #4f46e5); text-decoration: none; }
-        .platform-chat-msg a:hover { text-decoration: underline; }
-        .platform-chat-user { background: #eef2ff; }
-        .platform-chat-tool_result { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85rem; }
-        .platform-chat-compaction_summary { font-style: italic; color: var(--platform-muted, #64748b); }
-        .platform-chat-self_check { font-style: italic; color: var(--platform-muted, #64748b); border-left: 3px solid #fbbf24; }
-        .platform-chat-out-of-context { opacity: 0.45; }
-        .platform-chat-pending { padding: 14px; border: 1px solid #fde68a; background: #fffbeb; border-radius: var(--platform-radius-md, 12px); }
-        .platform-chat-pending-note { margin: 0; color: var(--platform-muted, #64748b); font-style: italic; }
-"""
-end
-
 -- Roles whose content is real model output (often Markdown -- headings,
--- bold, lists) rather than plain human-typed text -- found live: a
--- real reply came back with **bold** section headers and the chat page
--- just showed the literal asterisks, since everything was plain
--- html-escaped text before this. Rendered through the exact same
--- cmark-gfm pipeline document pages already use (document.render_markdown),
--- not a separate one -- its own non-`--unsafe` mode already strips raw
--- HTML/scripts, so this is exactly as safe to embed unescaped as any
--- other rendered-Markdown HTML this codebase already trusts.
+-- bold, lists) rather than plain human-typed text -- without this, a
+-- reply with **bold** section headers would show the literal asterisks
+-- to the user, since everything else here is plain html-escaped text.
+-- Rendered through the exact same cmark-gfm pipeline document pages
+-- already use (document.render_markdown), not a separate one -- its
+-- own non-`--unsafe` mode already strips raw HTML/scripts, so this is
+-- exactly as safe to embed unescaped as any other rendered-Markdown
+-- HTML this codebase already trusts.
 -- A field on the `html` table, not a bare global -- cgi.lua's own
 -- chat_widget_state (a different required module, its own separate
 -- environment in this runtime) needs this same set too, and only
 -- values actually returned by require() (table fields like this one,
--- not bare globals) cross that boundary. Confirmed live: a bare global
--- here crashed cgi.lua outright ("attempt to index global
--- 'CHAT_MARKDOWN_ROLES' (a nil value)") the moment a route that isn't
--- html.lua's own tried to read it.
+-- not bare globals) cross that boundary. A bare global here crashes
+-- cgi.lua outright ("attempt to index global 'CHAT_MARKDOWN_ROLES' (a
+-- nil value)") the moment a route that isn't html.lua's own tries to
+-- read it.
 html.CHAT_MARKDOWN_ROLES = {assistant = true, self_check = true, compaction_summary = true}
 
-function render_chat_message(msg)
-    label = CHAT_ROLE_LABELS[msg.role]
-    if label == nil then
-        label = msg.role
-    end
-    css_class = "platform-chat-msg platform-chat-" .. msg.role
-    if tonumber(msg.in_context) == 0 then
-        css_class = css_class .. " platform-chat-out-of-context"
-    end
-    body = html.html_escape(msg.content)
-    if html.CHAT_MARKDOWN_ROLES[msg.role] == true then
-        body = document.render_markdown(msg.content)
-    end
-    return "<div class=\"" .. css_class .. "\"><strong>" .. html.html_escape(label) .. ":</strong> " ..
-        body .. "</div>"
-end
-
+-- Full-width, one-row-per-session list -- clicking a session hands it
+-- off to the floating widget (see html.render_chat's own comment) and
+-- pops the widget open right onto that conversation, so this list's
+-- only job is picking which one, not previewing it (see doc/
+-- architecture.md's "Chat" section).
 function render_chat_sessions_list(sessions, current_session_id)
     items = ""
     for _, s in ipairs(sessions) do
-        css_class = ""
+        css_class = "platform-chat-session-row"
         if current_session_id != nil and s.id == current_session_id then
-            css_class = " class=\"platform-chat-session-active\""
+            css_class = css_class .. " platform-chat-session-active"
         end
         label = s.title
         if label == nil or label == "" then
@@ -4207,8 +4145,9 @@ function render_chat_sessions_list(sessions, current_session_id)
         if s.created_at != nil then
             started_at = "<span class=\"platform-chat-session-started\">" .. html.html_escape(s.created_at) .. "</span>"
         end
-        items = items .. "<li" .. css_class .. "><a href=\"chat?session_id=" .. s.id .. "\">" ..
-            html.html_escape(label) .. "</a>" .. started_at .. "</li>"
+        items = items .. "<li><a class=\"" .. css_class .. "\" href=\"chat?session_id=" .. s.id .. "\">" ..
+            "<span class=\"platform-chat-session-title\">" .. html.html_escape(label) .. "</span>" ..
+            started_at .. "</a></li>"
     end
     if items == "" then
         return "<p class=\"platform-empty\">No chats yet.</p>"
@@ -4216,85 +4155,38 @@ function render_chat_sessions_list(sessions, current_session_id)
     return "<ul class=\"platform-chat-sessions\">" .. items .. "</ul>"
 end
 
--- `pending`, if not nil, blocks the plain message input and shows an
--- approve/deny prompt instead -- a destructive tool call has to be
--- resolved before the conversation can continue.
--- /chat is a read-only history browser (task: only the floating widget
--- chats) -- no approve/deny forms here anymore, just an honest note
--- that something needs a response, same "never hidden, only marked"
--- principle render_chat_message already applies to out-of-context
--- messages.
-function render_chat_pending_note(pending)
-    return string.format(
-        "<div class=\"platform-chat-pending\"><p class=\"platform-chat-pending-note\"><strong>%s.%s</strong> is awaiting approval -- respond via the chat widget.</p></div>",
-        html.html_escape(pending.tool), html.html_escape(pending.method)
-    )
-end
-
--- Read-only chat-history browser (task: only the floating widget
--- actually chats -- see html.render_chat_widget). Shows the session
--- list and, once one's picked via ?session_id=, its transcript --
--- no "+ New chat" form, no message-send form, no approve/deny buttons;
--- a session with a pending action gets a plain note instead (see
--- render_chat_pending_note). Selecting a session here also hands its
--- id to the widget (cgi.lua's /chat route sets page_context.
--- open_chat_session_id, which render_chat_widget's own init script
--- picks up), so continuing the conversation is one click into the
--- widget away, not a dead end.
-function html.render_chat(sessions, session, messages, pending, nonce)
-    current_session_id = nil
-    if session != nil then
-        current_session_id = session.id
-    end
+-- Read-only, full-width chat-history browser (see doc/architecture.md's
+-- "Chat" section -- only the floating widget, html.render_chat_widget,
+-- ever actually shows a transcript or sends/approves/denies anything).
+-- This page's only job is picking a session: clicking one hands its id
+-- to the widget (cgi.lua's /chat route sets page_context.
+-- open_chat_session_id) and pops the widget open right onto it, so
+-- there's exactly one place a conversation is ever previewed or
+-- continued, never two.
+function html.render_chat(sessions, current_session_id, nonce)
     sessions_html = render_chat_sessions_list(sessions, current_session_id)
-
-    main_html = "<p class=\"platform-empty\">Pick a chat from the list to view its transcript.</p>"
-    if session != nil then
-        messages_html = ""
-        for _, msg in ipairs(messages) do
-            messages_html = messages_html .. render_chat_message(msg)
-        end
-        if messages_html == "" then
-            messages_html = "<p class=\"platform-empty\">No messages in this chat.</p>"
-        end
-
-        pending_html = ""
-        if pending != nil then
-            pending_html = render_chat_pending_note(pending)
-        end
-
-        main_html = "<div class=\"platform-chat-messages\">" .. messages_html .. "</div>" .. pending_html
-    end
 
     return string.format("""
 <div class="fossil-doc" data-title="Chat">
     <style>
 %s
 %s
-%s
-        .platform-chat-layout { display: grid; grid-template-columns: 220px 1fr; gap: 20px; }
-        .platform-chat-sessions { list-style: none !important; margin: 0; padding: 0; }
-        .platform-chat-sessions li { margin: 4px 0; display: flex; flex-direction: column; }
-        .platform-chat-sessions a { color: var(--platform-accent, #4f46e5); text-decoration: none; font-weight: 600; }
-        .platform-chat-session-active a { text-decoration: underline; }
-        .platform-chat-session-started { font-size: 0.75rem; color: var(--platform-muted, #64748b); }
-%s
+        .platform-chat-sessions { list-style: none !important; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+        .platform-chat-session-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 18px; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-item, 10px); background: var(--platform-bg, #f8fafc); text-decoration: none !important; transition: var(--platform-transition, all 0.2s cubic-bezier(0.4, 0, 0.2, 1)); }
+        .platform-chat-session-row:hover { border-color: var(--platform-accent, #4f46e5); box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
+        .platform-chat-session-title { color: var(--platform-heading, #0f172a); font-weight: 600; }
+        .platform-chat-session-active { border-color: var(--platform-accent, #4f46e5); }
+        .platform-chat-session-active .platform-chat-session-title { color: var(--platform-accent, #4f46e5); }
+        .platform-chat-session-started { font-size: 0.8rem; color: var(--platform-muted, #64748b); flex-shrink: 0; }
     </style>
     <div class="platform-container">
         %s
-        <div class="platform-chat-layout">
-            <div>
-                %s
-            </div>
-            <div>
-                %s
-            </div>
-        </div>
+        %s
     </div>
 </div>
-""", platform_container_css(1200), platform_button_css(), platform_page_header_css(), platform_chat_thread_css(),
-     render_page_header("Chat", "<p>Past conversations -- send messages via the chat button.</p>", nil),
-     sessions_html, main_html)
+""", platform_container_css(1200), platform_page_header_css(),
+     render_page_header("Chat", "<p>Pick a conversation to continue it in the chat widget.</p>", nil),
+     sessions_html)
 end
 
 --------------------------------------------------------------------------
@@ -4353,7 +4245,19 @@ function platform_chat_widget_css()
 }
 .platform-chat-widget-new:hover { background: var(--platform-bg-2, #f1f5f9); }
 .platform-chat-widget-messages { flex: 1; overflow-y: auto; padding: 10px; }
-.platform-chat-widget-messages .platform-chat-msg { font-size: 0.85rem; }
+/* Base message/pending-action styling -- shared with nothing else now
+   that /chat itself is a read-only session list (html.render_chat),
+   not a transcript viewer; this is the only place a chat message or
+   pending-approval prompt ever actually renders. */
+.platform-chat-msg { margin-bottom: 10px; padding: 8px 10px; border-radius: var(--platform-radius-sm, 8px); background: #fff; border: 1px solid var(--platform-border, #e2e8f0); font-size: 0.85rem; }
+.platform-chat-msg a { color: var(--platform-accent, #4f46e5); text-decoration: none; }
+.platform-chat-msg a:hover { text-decoration: underline; }
+.platform-chat-user { background: #eef2ff; }
+.platform-chat-tool_result { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.platform-chat-compaction_summary { font-style: italic; color: var(--platform-muted, #64748b); }
+.platform-chat-self_check { font-style: italic; color: var(--platform-muted, #64748b); border-left: 3px solid #fbbf24; }
+.platform-chat-out-of-context { opacity: 0.45; }
+.platform-chat-pending { padding: 14px; border: 1px solid #fde68a; background: #fffbeb; border-radius: var(--platform-radius-md, 12px); }
 .platform-chat-widget-input {
     display: flex; gap: 6px; padding: 10px; border-top: 1px solid var(--platform-border, #e2e8f0);
 }
@@ -4436,8 +4340,8 @@ function html.render_chat_widget(nonce)
                 var label = ROLE_LABELS[msg.role] || msg.role;
                 var body = MARKDOWN_ROLES[msg.role] ? msg.content : PlatformJS.escapeHtml(msg.content);
                 html += '<div class="platform-chat-msg platform-chat-' + msg.role + '"><strong>' + PlatformJS.escapeHtml(label) + ':</strong> ' + body + '</div>';
-                // task #87: feedback only makes sense on a real answer --
-                // not on the user's own message, a tool result, or a
+                // Feedback only makes sense on a real answer -- not on
+                // the user's own message, a tool result, or a
                 // compaction summary the user never actually sees as a
                 // "reply".
                 if (msg.role === 'assistant') {
@@ -4467,17 +4371,34 @@ function html.render_chat_widget(nonce)
     // most recent entity.query call this session (chat_widget_state,
     // cgi.lua) -- only on this specific page (page_type "sql", set by
     // page_shell), and only once per new value, so re-renders after an
-    // unrelated turn (or the initial page-load fetch) don't keep
-    // clobbering text the user is actively editing by hand. Writes the
-    // query text only -- running it is still a deliberate click on
-    // /sql's own Run button, through its own real capability check and
-    // row cap, not something this widget ever does itself.
+    // unrelated turn don't keep clobbering text the user is actively
+    // editing by hand. Writes the query text only -- running it is
+    // still a deliberate click on /sql's own Run button, through its
+    // own real capability check and row cap, not something this widget
+    // ever does itself.
+    //
+    // /sql's own "Run" button is a plain GET form submit, a full page
+    // reload -- which re-runs this whole script, including the initial
+    // history-rehydrate fetch below. That fetch's own state always
+    // carries whatever last_query_sql the chat agent produced, which
+    // could be from an entirely unrelated conversation -- with no
+    // guard, it would silently overwrite the query the user JUST ran
+    // and is looking at results for, seconds after the page finished
+    // loading. page_context.query_ran (cgi.lua's /sql route)
+    // is true exactly when this page load itself came from running a
+    // query (?q= present) -- suppress exactly that one rehydrate-
+    // triggered sync in that case, so the box keeps showing what the
+    // user actually ran. A live chat message sent *after* this page
+    // loaded still prefills normally -- only the automatic history
+    // rehydrate is suppressed, and only once.
     var lastAppliedQuerySql = null;
+    var suppressNextSqlSync = !!(window.PLATFORM_PAGE_CONTEXT && window.PLATFORM_PAGE_CONTEXT.query_ran);
     function syncSqlConsole(state) {
         if (!window.PLATFORM_PAGE_CONTEXT || window.PLATFORM_PAGE_CONTEXT.page_type !== 'sql') { return; }
         if (!state || !state.last_query_sql) { return; }
         if (state.last_query_sql === lastAppliedQuerySql) { return; }
         lastAppliedQuerySql = state.last_query_sql;
+        if (suppressNextSqlSync) { suppressNextSqlSync = false; return; }
         var queryBox = document.getElementById('platform-sql-query');
         if (queryBox) { queryBox.value = state.last_query_sql; }
     }
@@ -4563,15 +4484,13 @@ function html.render_chat_widget(nonce)
     }
 
     // A rejected fetch (network drop, a request landing mid-server-
-    // restart, CORS, whatever) previously vanished completely -- the
-    // thinking indicator was removed and nothing else happened, so a
-    // real failure looked identical to "nothing was typed" (confirmed
-    // live: reported as "showed thinking, then nothing, my message
-    // wasn't even in the chat"). This is a different gap than
-    // agent.execute_tool's own errors (agent.lua, server-persisted,
-    // shows as a real transcript row) -- a fetch that never reaches
-    // the server has nothing for the server to persist, so this has
-    // to be a client-side-only message instead.
+    // restart, CORS, whatever) would otherwise vanish completely -- the
+    // thinking indicator removed and nothing else happening, so a real
+    // failure looks identical to "nothing was typed". This is a
+    // different gap than agent.execute_tool's own errors (agent.lua,
+    // server-persisted, shows as a real transcript row) -- a fetch that
+    // never reaches the server has nothing for the server to persist,
+    // so this has to be a client-side-only message instead.
     function showFetchError() {
         var el = document.createElement('div');
         el.className = 'platform-chat-widget-error';
@@ -4619,11 +4538,11 @@ function html.render_chat_widget(nonce)
             var messageId = e.target.getAttribute('data-feedback-message');
             var feedback = e.target.getAttribute('data-feedback');
             var container = e.target.closest('.platform-chat-feedback');
-            // task #115: mark the clicked button as pressed and disable
-            // both immediately, before the request even resolves --
-            // previously nothing happened visually until (and unless)
-            // the async call both succeeded and resolved, which read as
-            // "the button does nothing" even when it was working.
+            // Mark the clicked button as pressed and disable both
+            // immediately, before the request even resolves -- otherwise
+            // nothing happens visually until (and unless) the async call
+            // both succeeds and resolves, which reads as "the button
+            // does nothing" even when it's working.
             if (container) {
                 container.querySelectorAll('button').forEach(function(b){ b.disabled = true; });
                 e.target.classList.add('platform-feedback-pressed');
@@ -4644,12 +4563,14 @@ function html.render_chat_widget(nonce)
 
     // A page can hand off a specific session to resume (currently only
     // /chat's history browser does this, via cgi.lua's page_context.
-    // open_chat_session_id -- clicking a past session there should
-    // continue it here, not leave the widget on whatever it had cached).
-    // Wins over an existing cached session id, since the user just
-    // explicitly picked this one.
+    // open_chat_session_id -- clicking a past session there should pop
+    // the widget open onto that exact conversation, not leave it
+    // closed or on whatever it had cached). Wins over an existing
+    // cached session id, since the user just explicitly picked this one.
     if (window.PLATFORM_PAGE_CONTEXT && window.PLATFORM_PAGE_CONTEXT.open_chat_session_id) {
         localStorage.setItem(STORAGE_KEY, window.PLATFORM_PAGE_CONTEXT.open_chat_session_id);
+        root.classList.add('platform-chat-widget-open');
+        localStorage.setItem(OPEN_KEY, '1');
     }
 
     var existingSessionId = localStorage.getItem(STORAGE_KEY);

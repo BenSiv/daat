@@ -62,12 +62,11 @@ CREATE TABLE IF NOT EXISTS document_link (
 );
 """
 
--- task #109: distinguishes a real `[[title]]` link a user actually
--- wrote from one this codebase created itself (co-retrieval ->
--- explicit link) -- see ensure_document_link_source_column and
--- document.sync_links' own DELETE below for why this matters: without
--- it, re-saving either document's content would silently wipe an
--- auto-created link the next time sync_links reruns.
+-- Distinguishes a real `[[title]]` link a user actually wrote from one
+-- this codebase created itself (co-retrieval -> explicit link) -- see
+-- document.sync_links' own DELETE below: without this column, saving
+-- either document's content would wipe an auto-created link the next
+-- time sync_links reruns.
 function ensure_document_link_source_column(db_path)
     existing = db.get_columns(db_path, "document_link")
     have = {}
@@ -80,19 +79,15 @@ function ensure_document_link_source_column(db_path)
 end
 
 -- A document's cached semantic-search embedding. Recomputed on every
--- create_page/update_page (task #105) -- one embedding API call per
--- save, not a corpus reindex, cheap in both latency and cost (the same
--- order of magnitude as any other external API call this codebase
--- already makes synchronously). Best-effort: document.reindex_embedding
--- already returns nil/err rather than throwing on failure (an
--- unconfigured provider, a network hiccup, ...), and create_page/
--- update_page ignore that return value entirely -- a document save must
--- never fail just because the embedding call did. document.reindex_all_
--- embeddings/the CLI's own `reindex-embeddings` command still exist for
--- bulk backfilling a store whose documents predate this (or after a
--- provider outage), not as the only way to populate this cache anymore.
--- Search itself only ever *reads* this cache; it never computes a
--- document's embedding on the fly.
+-- create_page/update_page -- one embedding API call per save, not a
+-- corpus reindex. Best-effort: document.reindex_embedding returns
+-- nil/err rather than throwing on failure (an unconfigured provider, a
+-- network hiccup, ...), and create_page/update_page ignore that return
+-- value entirely -- a document save must never fail just because the
+-- embedding call did. document.reindex_all_embeddings/the CLI's own
+-- `reindex-embeddings` command exist for bulk backfill (a provider
+-- outage, or documents saved before this cache existed). Search itself
+-- only ever *reads* this cache; it never computes an embedding on the fly.
 DOCUMENT_EMBEDDING_SCHEMA = """
 CREATE TABLE IF NOT EXISTS document_embedding (
     document_id INTEGER PRIMARY KEY,
@@ -104,14 +99,12 @@ CREATE TABLE IF NOT EXISTS document_embedding (
 
 EMBEDDING_MODEL = "text-embedding-005"
 
--- task #106: the knowledge pool merged directly into `document` -- one
--- unified, tier/heat-scored pool instead of a separate knowledge_note
--- table that mirrored a document's own title/content (see knowledge.
--- lua's header for the full reasoning). These are system/derived
--- bookkeeping columns a user never edits directly, so they're added
--- via migration rather than DOCUMENT_SCHEMA.fields (which would wrongly
--- expose them as user-editable/required form fields) -- same pattern as
--- ledger.lua's ensure_entity_event_reason_column.
+-- Knowledge Pool scoring columns live directly on `document` (see
+-- doc/architecture.md's "Knowledge pool" section for why) -- these are
+-- system/derived bookkeeping a user never edits directly, so they're
+-- added via migration rather than DOCUMENT_SCHEMA.fields (which would
+-- wrongly expose them as user-editable/required form fields) -- same
+-- pattern as ledger.lua's ensure_entity_event_reason_column.
 function ensure_document_knowledge_columns(db_path)
     existing = db.get_columns(db_path, "document")
     have = {}
@@ -178,11 +171,10 @@ function document.init_schema(db_path)
 end
 
 -- The single top-level folder every system/agent-derived document
--- (reasoning notes, and future distilled notes -- task #107) lives
--- under. Visible and browsable like any other folder (task #106's
--- explicit direction: organized, not hidden), never containing a
--- user's own authored documents. Created lazily on first use, not at
--- init time; idempotent -- a second call reuses the existing folder.
+-- (reasoning notes, distilled notes) lives under. Visible and
+-- browsable like any other folder, never containing a user's own
+-- authored documents. Created lazily on first use, not at init time;
+-- idempotent -- a second call reuses the existing folder.
 KNOWLEDGE_POOL_FOLDER_TITLE = "Knowledge Pool"
 
 function document.ensure_knowledge_pool_folder(db_path)
@@ -218,10 +210,9 @@ end
 
 -- Every active document's id/title/parent_id, for building the full
 -- tree view in one query rather than one query per level. created_at/
--- external_id (task: duplicate-title disambiguation in the parent
--- picker, html.document_parent_options) ride along here rather than a
--- second query -- cheap, and every existing caller already ignores
--- columns it doesn't use.
+-- external_id ride along here rather than a second query (used by
+-- html.document_parent_options to disambiguate duplicate titles) --
+-- cheap, and every existing caller already ignores columns it doesn't use.
 function document.all_active(db_path)
     rows = db.query(db_path,
         "SELECT id, title, parent_id, created_at, external_id FROM document WHERE archived_at IS NULL OR archived_at = '' ORDER BY title ASC;")
@@ -323,11 +314,11 @@ end
 -- Recomputes every outgoing link for `document_id` from `content`:
 -- delete the old set, re-parse, re-resolve, reinsert. Idempotent, safe
 -- to call on every save regardless of whether content actually changed.
--- task #109: only wipes/resyncs *authored* links (parsed fresh from
--- this save's own [[...]] markup below) -- an auto-created co-retrieval
--- link (source='co-retrieval') isn't derived from this document's
--- content at all, so it would otherwise get silently deleted the next
--- time either document's content changes.
+-- Only wipes/resyncs *authored* links (parsed fresh from this save's
+-- own [[...]] markup below) -- an auto-created co-retrieval link
+-- (source='co-retrieval') isn't derived from this document's content
+-- at all, so it would otherwise get deleted the next time either
+-- document's content changes.
 function document.sync_links(db_path, document_id, content)
     db.exec(db_path, string.format(
         "DELETE FROM document_link WHERE from_document_id = %d AND source = 'authored';", tonumber(document_id)
@@ -353,9 +344,8 @@ end
 -- UNION, self never included since document_link never stores a
 -- self-loop) -- the graph knowledge.lua's spreading-activation pass
 -- reinforces when a document is actually retrieved, on top of the
--- retrieved document's own heat bump (task #106 follow-up, explicit
--- user direction: fold the existing link graph into context/retrieval
--- scoring, not just tier/heat in isolation).
+-- retrieved document's own heat bump (see doc/architecture.md's
+-- "Knowledge pool" section, "Spreading activation").
 function document.linked_neighbors(db_path, document_id)
     rows = db.query(db_path, string.format("""
         SELECT to_document_id AS id FROM document_link WHERE from_document_id = %d AND to_document_id IS NOT NULL
@@ -458,14 +448,12 @@ end
 -- (not statically linked into this binary the way bcrypt/hmac are --
 -- a real external dependency, not bundled).
 --
--- task #117: plain `cmark` (the bare CommonMark reference
--- implementation) was used here originally -- confirmed directly
--- (piped a real pipe-table through it) that it has no table support at
--- all, table syntax being a GFM *extension*, not core CommonMark, and
--- that specific binary has no `-e`/extension flag available to add it.
--- `cmark-gfm` is a strict superset (full CommonMark compatible, same
--- default output for everything already relied on) that adds table/
--- strikethrough/autolink support when explicitly enabled via `-e`.
+-- `cmark-gfm`, not plain `cmark` (the bare CommonMark reference
+-- implementation): table syntax is a GFM *extension*, not core
+-- CommonMark, and plain `cmark` has no `-e`/extension flag to add it.
+-- `cmark-gfm` is a strict superset (same default output for everything
+-- else already relied on) that adds table/strikethrough/autolink
+-- support when explicitly enabled via `-e`.
 --
 -- Extensions deliberately NOT enabled: `--unsafe` (raw HTML rendering)
 -- and its own `tagfilter` extension (which only filters *within*
@@ -513,13 +501,13 @@ function document.render_html(db_path, content)
 end
 
 --------------------------------------------------------------------------
--- Knowledge-pool scoring: tier/heat/dedup pure functions (task #106)
+-- Knowledge-pool scoring: tier/heat/dedup pure functions
 --------------------------------------------------------------------------
 --
--- Ported here (not left in knowledge.lua) because tier/heat/content_hash
--- are now columns on `document` itself -- these are the pure,
--- DB-free heuristics document.search_score/knowledge.lua's review pass
--- both need, kept alongside the data they score. knowledge.lua depends
+-- Kept here, not in knowledge.lua, because tier/heat/content_hash are
+-- columns on `document` itself -- these are the pure, DB-free
+-- heuristics document.search_score/knowledge.lua's review pass both
+-- need, kept alongside the data they score. knowledge.lua depends
 -- on document.lua, never the reverse, so anything document.search
 -- itself needs has to live here.
 
@@ -550,8 +538,7 @@ function document.content_hash(body)
     return string.format("%08x", hash)
 end
 
--- Exact port of ai_note_record_retrieval's reinforcement formula: a
--- flat 0.15 plus the retrieved document's own tier weight, added to
+-- A flat 0.15 plus the retrieved document's own tier weight, added to
 -- heat on every retrieval hit. No decay -- heat is monotonic; see
 -- document.effective_heat for the read-time decayed view.
 function document.reinforcement_delta(tier)
@@ -610,19 +597,15 @@ function document.effective_heat(heat, last_retrieved_at)
     return heat * (0.5 ^ (days / half_life))
 end
 
--- Adapted from ai_promotion_target_tier -- originally a pure function of
--- retrieval_count/effective_heat/atomicity, redesigned (explicit
--- platform-owner direction) around content-processing maturity instead:
--- retrieval_count/effective_heat now only decide whether a document is
--- *due for review* at all (knowledge.due_for_review) -- once it is, the
--- tier itself is decided by whether the document has actually been
--- worked on (`revised`) and what shape that work produced
--- (`content_shape`), not by how often it's been looked up. Still
--- bidirectional: recomputed from scratch against the CURRENT body every
--- review, so a document edited back down to a smaller/thinner shape
--- genuinely drops back down, the same "never ratcheted" property the
--- old heat-based version had, just driven by content now instead of
--- usage decay. Duplicates never move.
+-- Tier is decided by content-processing maturity, not retrieval
+-- frequency -- retrieval_count/effective_heat only decide whether a
+-- document is *due for review* at all (knowledge.due_for_review); once
+-- due, the tier depends on whether it's actually been worked on
+-- (`revised`) and what shape that work produced (`content_shape`), not
+-- how often it's been looked up (see doc/architecture.md's "Knowledge
+-- pool" section). Bidirectional: recomputed from scratch against the
+-- CURRENT body every review, so a document edited back down to a
+-- smaller/thinner shape genuinely drops back down. Duplicates never move.
 function document.promotion_target_tier(tier, is_duplicate, revised, content_shape)
     if is_duplicate == true then
         return tier
@@ -772,28 +755,16 @@ end
 -- Semantic search
 --------------------------------------------------------------------------
 --
--- SQLite FTS5 was evaluated first, per the original plan's lean --
--- confirmed directly (not assumed) that Luam's bundled sqlite3 binding
--- does not have FTS5 compiled in ("no such module: fts5"). Scores every
--- active document directly in Lua instead: simpler, no index/trigger
--- machinery to keep in sync, and an entirely reasonable tradeoff at the
--- scale this is built for -- revisit only if a real deployment's
--- document count makes an O(n)-per-search scan actually show up.
---
--- The scoring formula is adapted from brain-ex's
--- knowledge_pool.search_score -- ported the reusable core (field-
--- weighted lexical matching, a whole-query substring bonus, blended
--- embedding cosine-similarity, a relevance floor). Originally dropped
--- curation-tier/heat-retrieval reinforcement and duplicate-suppression
--- as not applicable to Documents -- task #106 added them back in, once
--- tier/heat/duplicate_of/merged_into became real columns on `document`
--- itself (see this section's own tier/heat block in search_score/
--- search below).
+-- Scores every active document directly in Lua rather than a real
+-- search index (see doc/architecture.md's "Documents" section for why
+-- -- no FTS5 support in this project's SQLite binding) -- revisit only
+-- if a real deployment's document count makes an O(n)-per-search scan
+-- actually show up.
 
 -- Computes and caches one document's embedding -- best-effort, called
--- from create_page/update_page on every save (task #105) as well as
--- explicitly via the CLI/document.reindex_all_embeddings for bulk
--- backfill (see DOCUMENT_EMBEDDING_SCHEMA's own comment).
+-- from create_page/update_page on every save, as well as explicitly
+-- via the CLI/document.reindex_all_embeddings for bulk backfill (see
+-- DOCUMENT_EMBEDDING_SCHEMA's own comment).
 function document.reindex_embedding(db_path, document_id)
     agent_provider = require("agent_provider")
     json = require("dkjson")
@@ -925,10 +896,10 @@ function document.search_score(row, terms, query_text, query_vector)
         final_score = final_score + (similarity * 8.0)
     end
 
-    -- task #106: tier/heat reinforcement, folded in only after the
-    -- relevance floor above -- a heavily-reinforced document that's
-    -- actually irrelevant to this query is still excluded outright,
-    -- never ranked highly just because it's "hot".
+    -- Tier/heat reinforcement, folded in only after the relevance floor
+    -- above -- a heavily-reinforced document that's actually irrelevant
+    -- to this query is still excluded outright, never ranked highly
+    -- just because it's "hot".
     tier_weight = document.tier_weight(row.tier)
     heat = tonumber(row.heat)
     if heat == nil then
@@ -940,15 +911,15 @@ function document.search_score(row, terms, query_text, query_vector)
     return final_score
 end
 
--- Searches active documents by blended relevance -- tier/heat
--- reinforcement now included (task #106), since tier/heat live directly
--- on `document`. `use_semantic` (default true) computes the *query's*
--- own embedding fresh each call (one cheap, real-time API call) -- but
--- a document only contributes semantic score if it was already indexed
--- via document.reindex_embedding/_all; nothing here computes a
--- document's own embedding on the fly. Documents already folded into a
--- canonical duplicate (merged_into set) are excluded outright -- they'd
--- otherwise compete with their own canonical for the same result slot.
+-- Searches active documents by blended lexical+embedding relevance,
+-- including tier/heat reinforcement. `use_semantic` (default true)
+-- computes the *query's* own embedding fresh each call (one cheap,
+-- real-time API call) -- but a document only contributes semantic
+-- score if it was already indexed via document.reindex_embedding/_all;
+-- nothing here computes a document's own embedding on the fly.
+-- Documents already folded into a canonical duplicate (merged_into
+-- set) are excluded outright -- they'd otherwise compete with their
+-- own canonical for the same result slot.
 function document.search(db_path, query_text, limit, use_semantic)
     if limit == nil then
         limit = 20
@@ -966,14 +937,13 @@ function document.search(db_path, query_text, limit, use_semantic)
         query_vector = vector
     end
 
-    -- Chat sessions are saved as their own searchable documents (task
-    -- #108, source_type = 'chat_session', knowledge.sync_session_document)
-    -- but excluded here from ordinary content search -- confirmed live
-    -- that they otherwise pollute real results (a "standard experiment
-    -- template" search turned up old chat transcripts full of tool-call
-    -- noise and a stale error message instead of real experiment docs).
-    -- Still reachable directly (entity.get/detail), just not surfaced by
-    -- document.search's relevance ranking against real content.
+    -- Chat sessions are saved as their own searchable documents
+    -- (source_type = 'chat_session', knowledge.sync_session_document)
+    -- but excluded here from ordinary content search -- a transcript
+    -- full of tool-call noise would otherwise pollute results for
+    -- unrelated real-content queries. Still reachable directly
+    -- (entity.get/detail), just not surfaced by document.search's
+    -- relevance ranking.
     rows = db.query(db_path, """
         SELECT d.id, d.title, d.content, d.tier, d.heat, d.retrieval_count, d.last_retrieved_at,
                d.source_type, d.source_id, d.content_hash, d.created_at, d.external_id, e.vector_json
@@ -1018,9 +988,9 @@ function document.search(db_path, query_text, limit, use_semantic)
 end
 
 -- CLI entry point: `platform document <create-json|reindex-embeddings [entity_id]>`
--- -- for bulk backfill (documents saved before task #105, or after a
--- provider outage silently dropped some best-effort saves) now that
--- create_page/update_page already reindex on every save.
+-- -- `reindex-embeddings` is for bulk backfill (documents saved before
+-- this cache existed, or after a provider outage silently dropped some
+-- best-effort saves).
 function document.do_document(cmd_args, db_path)
     action = cmd_args[1]
 
@@ -1049,13 +1019,11 @@ function document.do_document(cmd_args, db_path)
         failed = {}
         for i, values in ipairs(rows_values) do
             -- pcalled: db.exec/db.query raise a hard Lua error() on a
-            -- genuine SQL failure (e.g. "Data too long for column",
-            -- found live importing a literature corpus before the
-            -- underlying column was widened) rather than returning
-            -- nil+issues -- without this, one such row would crash the
-            -- whole create-json process, silently losing every other
-            -- row already queued in the same invocation, not just the
-            -- bad one.
+            -- genuine SQL failure (e.g. "Data too long for column")
+            -- rather than returning nil+issues -- without this, one
+            -- such row would crash the whole create-json process,
+            -- losing every other row already queued in the same
+            -- invocation, not just the bad one.
             ok, id_or_err, issues = pcall(document.create_page, db_path, author, values.title, values.parent_id, values.content, nil)
             if ok == false then
                 table.insert(failed, {row_index = i, title = values.title, issues = tostring(id_or_err)})
