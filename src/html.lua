@@ -792,13 +792,15 @@ function html.page_shell(title, active, body, nonce, show_sql, show_admin, has_t
         ))
     end
 
+    -- Single clickable entry point (task: replace two separate sidebar
+    -- links with one) -- the username itself links to /account, which
+    -- hosts both password-change and log-out. Keeps the sidebar minimal
+    -- rather than growing it with more per-feature links.
     user_box = ""
     if author != nil then
         user_box = string.format("""
 <div class="platform-nav-user">
-    <div class="platform-nav-user-name">%s</div>
-    <a href="account-password">Change password</a>
-    <a href="logout">Log out</a>
+    <a class="platform-nav-user-name" href="account">%s</a>
 </div>
 """, html.html_escape(author))
     end
@@ -2593,7 +2595,11 @@ end
 -- way /admin-users-password's admin-only form does) and requires the
 -- current password to verify before setting a new one. No broader
 -- account-settings page, no other fields -- just this.
-function html.render_account_password(csrf_token, message, is_error)
+-- The single destination for the nav's username link (task: replace two
+-- separate "Change password"/"Log out" sidebar links with one minimal
+-- entry point) -- hosts both self-service password change and log out,
+-- so no new sidebar links are ever needed for account-level actions.
+function html.render_account(username, csrf_token, message, is_error)
     render_lib = require("render")
 
     message_html = ""
@@ -2609,12 +2615,14 @@ function html.render_account_password(csrf_token, message, is_error)
     end
 
     return string.format("""
-<div class="fossil-doc" data-title="Change password">
+<div class="fossil-doc" data-title="Account">
     <style>
 %s
 %s
         .platform-account-card { max-width: 360px; margin: 60px auto; padding: 28px; background: var(--platform-bg, #f8fafc); border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); }
-        .platform-account-card h2 { margin: 0 0 18px 0; font-size: 1.4rem; font-weight: 700; color: var(--platform-heading, #0f172a); }
+        .platform-account-card h2 { margin: 0 0 4px 0; font-size: 1.4rem; font-weight: 700; color: var(--platform-heading, #0f172a); }
+        .platform-account-card h3 { margin: 24px 0 12px 0; font-size: 1rem; font-weight: 700; color: var(--platform-heading, #0f172a); }
+        .platform-account-username { margin: 0 0 18px 0; font-size: 0.88rem; color: var(--platform-muted, #64748b); }
         .platform-account-card label { display: block; margin-bottom: 4px; font-size: 0.88rem; color: var(--platform-muted, #64748b); }
         .platform-account-card input[type=password] {
             width: 100%%; box-sizing: border-box; padding: 8px 10px; margin-bottom: 14px;
@@ -2623,19 +2631,28 @@ function html.render_account_password(csrf_token, message, is_error)
         .platform-account-message { color: #166534; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: var(--platform-radius-item, 10px); padding: 10px 12px; margin-bottom: 14px; font-size: 0.88rem; }
         .platform-account-message-error { color: #991b1b; background: #fef2f2; border-color: #fecaca; }
         .platform-account-card .btn { width: 100%%; }
+        .platform-account-logout-form { margin: 0; }
     </style>
-    <form class="platform-account-card" method="POST" action="account-password">
-        <h2>Change password</h2>
+    <div class="platform-account-card">
+        <h2>Account</h2>
+        <p class="platform-account-username">Signed in as <strong>%s</strong></p>
         %s
-        <input type="hidden" name="csrf_token" value="%s">
-        <label for="current_password">Current password</label>
-        <input type="password" id="current_password" name="current_password" autocomplete="current-password" required>
-        <label for="new_password">New password</label>
-        <input type="password" id="new_password" name="new_password" autocomplete="new-password" required>
-        <button type="submit" class="btn btn-primary">Change password</button>
-    </form>
+        <h3>Change password</h3>
+        <form method="POST" action="account">
+            <input type="hidden" name="csrf_token" value="%s">
+            <label for="current_password">Current password</label>
+            <input type="password" id="current_password" name="current_password" autocomplete="current-password" required>
+            <label for="new_password">New password</label>
+            <input type="password" id="new_password" name="new_password" autocomplete="new-password" required>
+            <button type="submit" class="btn btn-primary">Change password</button>
+        </form>
+        <h3>Log out</h3>
+        <form class="platform-account-logout-form" method="GET" action="logout">
+            <button type="submit" class="btn btn-secondary">Log out</button>
+        </form>
+    </div>
 </div>
-""", platform_container_css(800), platform_button_css(), message_html, html.html_escape(csrf_token))
+""", platform_container_css(800), platform_button_css(), html.html_escape(username), message_html, html.html_escape(csrf_token))
 end
 
 -- Minimal admin-only user management page -- Admin ("a") capability
