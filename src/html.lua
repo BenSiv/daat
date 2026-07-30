@@ -1094,7 +1094,7 @@ function html.render(entity_type, layout_json, nonce, locked_fields)
         <div class="platform-header">
             <h2>Register %s</h2>
             <p>Fill out the sheet. Fields marked with <span class="req-dot">*</span> are required.</p>
-            <p><a href="browse?type=%s">Browse existing %s entities &rarr;</a></p>
+            <p><a class="btn btn-secondary" href="browse?type=%s">Browse %s</a></p>
         </div>
 
         <div class="platform-table-wrapper">
@@ -1862,6 +1862,7 @@ function html.render_detail(db_path, entity_type, layout, row, history, nonce, h
 <div class="fossil-doc" data-title="%s %s">
     <style>
 %s
+%s
         .platform-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; }
         .platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
         .platform-header a { color: var(--platform-accent, #4f46e5); text-decoration: none; font-weight: 600; font-size: 0.9rem; }
@@ -1947,7 +1948,7 @@ function html.render_detail(db_path, entity_type, layout, row, history, nonce, h
 </div>
 %s
 %s
-""", escaped_type, title_id_part, platform_container_css(1200), html.popover_css(), escaped_type, title_id_part, escaped_type, edit_link, print_label_html, fields_html, related_html, history_rows, html.popover_js(nonce), print_label_js_block)
+""", escaped_type, title_id_part, platform_container_css(1200), platform_button_css(), html.popover_css(), escaped_type, title_id_part, escaped_type, edit_link, print_label_html, fields_html, related_html, history_rows, html.popover_js(nonce), print_label_js_block)
 end
 
 -- task #112: "Related records" -- every real, plain `reference` field
@@ -1983,10 +1984,10 @@ function related_records_html(db_path, related, entity_id)
 
         view_all = ""
         if group.total > #group.rows then
-            view_all = "<a href=\"browse?type=" .. escaped_from .. "&filter_field=" .. escaped_field ..
+            view_all = "<a class=\"btn btn-secondary\" href=\"browse?type=" .. escaped_from .. "&filter_field=" .. escaped_field ..
                 "&filter_value=" .. tostring(entity_id) .. "\">View all " .. tostring(group.total) .. "</a>"
         end
-        add_link = "<a href=\"register?type=" .. escaped_from .. "&lock_" .. escaped_field .. "=" .. tostring(entity_id) ..
+        add_link = "<a class=\"btn btn-primary\" href=\"register?type=" .. escaped_from .. "&lock_" .. escaped_field .. "=" .. tostring(entity_id) ..
             "\">+ Add " .. escaped_from .. "</a>"
 
         groups_html = groups_html .. "<div class=\"platform-related-group\"><h4>" .. escaped_from .. " (" ..
@@ -3152,6 +3153,7 @@ function html.render_knowledge_pool(stats, recent_retrievals)
 <div class="fossil-doc" data-title="Knowledge Pool">
     <style>
 %s
+%s
         .platform-header { margin-bottom: 20px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; }
         .platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
         .platform-header p { color: var(--platform-muted, #64748b); margin: 0; font-size: 0.95rem; }
@@ -3194,13 +3196,13 @@ function html.render_knowledge_pool(stats, recent_retrievals)
 %s
                 </div>
                 <div class="platform-knowledge-panel">
-                    <a href="chat">Browse chat sessions &rarr;</a>
+                    <a class="btn btn-secondary" href="chat">Browse chat sessions</a>
                 </div>
             </div>
         </div>
     </div>
 </div>
-""", platform_container_css(1200), stats.note_count, stats.retrieval_count, stats.reviewed_note_count,
+""", platform_container_css(1200), platform_button_css(), stats.note_count, stats.retrieval_count, stats.reviewed_note_count,
      stats.session_count, tier_tiles, retrieval_rows)
 end
 
@@ -3361,7 +3363,7 @@ function html.render_templates_list(entries)
             escaped_desc = html.html_escape(description)
             items = items .. "<li><a href=\"template?template_name=" .. escaped_name .. "\">" ..
                 escaped_label .. "</a><p>" .. escaped_desc .. "</p>" ..
-                "<p><a href=\"document-edit?from_template=" .. escaped_name .. "\">+ New document from this&rarr;</a></p></li>"
+                "<p><a class=\"btn btn-primary\" href=\"document-edit?from_template=" .. escaped_name .. "\">+ New document</a></p></li>"
         end
     end
 
@@ -3373,6 +3375,7 @@ function html.render_templates_list(entries)
     return string.format("""
 <div class="fossil-doc" data-title="Entry templates">
     <style>
+%s
 %s
         .platform-header { margin-bottom: 20px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; }
         .platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
@@ -3401,7 +3404,7 @@ function html.render_templates_list(entries)
         %s
     </div>
 </div>
-""", platform_container_css(800), list_or_empty)
+""", platform_container_css(800), platform_button_css(), list_or_empty)
 end
 
 -- The rendered Markdown snippet for one template, in a read-only
