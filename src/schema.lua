@@ -14,10 +14,11 @@ FIELD_TYPES = {"text", "number", "date", "select", "reference", "multi_select", 
 
 -- Field types stored in a companion junction table (schema.
 -- ensure_multi_field_table) instead of as a column on the entity's own
--- projected table -- task #84. Mirrors the singular select/reference
--- split (a fixed-list value vs. a real link to another entity type),
--- not one generic "multivalue" flag, since the junction table's second
--- column differs (a literal value vs. a real FK).
+-- projected table (see doc/schema.md's "Multivalue fields" section).
+-- Mirrors the singular select/reference split (a fixed-list value vs.
+-- a real link to another entity type), not one generic "multivalue"
+-- flag, since the junction table's second column differs (a literal
+-- value vs. a real FK).
 MULTI_FIELD_TYPES = {multi_select = true, multi_reference = true}
 
 function is_multi_field_type(t)
@@ -57,7 +58,8 @@ function is_multivalue_polymorphic_field_type(t)
 end
 
 --------------------------------------------------------------------------
--- task #84: named, reusable dropdown value lists
+-- Named, reusable dropdown value lists (see doc/schema.md's "Named
+-- dropdown lists" section)
 --------------------------------------------------------------------------
 --
 -- A select/multi_select field can either inline its own `values` list
@@ -86,10 +88,10 @@ CREATE TABLE IF NOT EXISTS dropdown_value (
     FOREIGN KEY (list_name) REFERENCES dropdown_list(name)
 );
 
--- task #118: single-row table recording a cheap signature of the
--- schemas/dropdowns directories' content as of the last real
--- schema.sync_all pass -- see schema.content_signature's own comment
--- for why this exists at all.
+-- Single-row table recording a cheap signature of the schemas/
+-- dropdowns directories' content as of the last real schema.sync_all
+-- pass -- see schema.content_signature's own comment for why this
+-- exists at all.
 CREATE TABLE IF NOT EXISTS schema_sync_state (
     id INTEGER PRIMARY KEY,
     content_signature TEXT
@@ -145,9 +147,8 @@ end
 -- "recompute wholesale" pattern document.sync_links already uses for
 -- document_link), so removing a value from the schema file actually
 -- removes it here too, not just additive drift.
--- task #118: one multi-row INSERT for every value, not one INSERT per
--- value -- confirmed directly against a real MariaDB backend that the
--- per-value form is the dominant cost in schema.sync_all's own
+-- One multi-row INSERT for every value, not one INSERT per value --
+-- the per-value form is the dominant cost in schema.sync_all's own
 -- per-request overhead once a deployment has enough dropdowns/values.
 -- schema.validate_dropdown already requires a non-empty `values` list,
 -- so the #def.values == 0 guard here is just defensive, not a real
@@ -212,9 +213,7 @@ end
 -- Every generated entity table's own columns (builtin_columns below,
 -- plus "id" itself) -- a field sharing one of these names fails at
 -- `schema add` time with a raw "duplicate column name" SQL error
--- instead of a clear message (found directly while writing an example
--- schema for task #89: a field named "name" collided with the builtin
--- "name" column). Listed here, not derived from builtin_columns()
+-- instead of a clear message. Listed here, not derived from builtin_columns()
 -- itself, since that function needs a live db_path (for
 -- db.now_expr's backend-specific default) that schema.validate itself
 -- is never given, and every name in it is a plain string literal
@@ -233,23 +232,22 @@ function is_reserved_field_name(name)
     return false
 end
 
--- "text" is LONGTEXT, not TEXT (task: found live, bulk-importing a
--- literature corpus -- MariaDB's plain TEXT caps at 65,535 *bytes*,
--- not characters, so real multi-KB paper text routinely exceeded it
--- ("Data too long for column"), silently correct on SQLite the whole
--- time since it has no such cap regardless of the declared type name.
--- Safe to change unconditionally rather than branch per backend:
--- SQLite's type-affinity rules key off the substring "TEXT" in the
--- declared type name, so a LONGTEXT column behaves identically to a
--- plain TEXT one there (verified directly: stores 500KB with no
--- truncation, `pragma_table_info` reports the type as declared).
+-- "text" is LONGTEXT, not TEXT -- MariaDB's plain TEXT caps at 65,535
+-- *bytes*, not characters, so multi-KB content routinely exceeds it
+-- ("Data too long for column"); SQLite has no such cap regardless of
+-- the declared type name. Safe to change unconditionally rather than
+-- branch per backend: SQLite's type-affinity rules key off the
+-- substring "TEXT" in the declared type name, so a LONGTEXT column
+-- behaves identically to a plain TEXT one there (verified directly:
+-- stores 500KB with no truncation, `pragma_table_info` reports the
+-- type as declared).
 SQL_TYPE = {
     text = "LONGTEXT",
     number = "REAL",
     date = "TEXT",
     select = "TEXT",
     reference = "INTEGER",
-    -- task #73: a plain TEXT column like "text" -- the only difference
+    -- A plain TEXT column like "text" -- the only difference
     -- is entity.validate's value check (must be a single plain SELECT,
     -- see view.is_select_only), not storage.
     sql_select = "TEXT",
@@ -302,23 +300,22 @@ function schema.validate(def)
     if type(def.fields) != "table" then
         return "schema '" .. tostring(def.name) .. "' must have a 'fields' list"
     end
-    -- Type-level (not per-field) opt-in flags, task #93: a schema can
-    -- require entity.update/entity.archive be given a non-empty
-    -- `reason` before either is allowed to proceed for this type.
-    -- Optional, default false either way -- most schemas set neither.
-    -- Checked via direct true/false comparison, not type(x) ==
-    -- "boolean" -- confirmed directly that this Luam dialect's type()
-    -- reports a real boolean as "flag", not "boolean" (matches how
-    -- every other boolean-ish field in this file -- required, display
-    -- -- is already checked elsewhere: == true/== false, never by type
-    -- name).
+    -- Type-level (not per-field) opt-in flags: a schema can require
+    -- entity.update/entity.archive be given a non-empty `reason`
+    -- before either is allowed to proceed for this type. Optional,
+    -- default false either way -- most schemas set neither. Checked
+    -- via direct true/false comparison, not type(x) == "boolean" --
+    -- this Luam dialect's type() reports a real boolean as "flag", not
+    -- "boolean" (matches how every other boolean-ish field in this
+    -- file -- required, display -- is already checked elsewhere: ==
+    -- true/== false, never by type name).
     if def.require_reason_on_update != nil and def.require_reason_on_update != true and def.require_reason_on_update != false then
         return string.format("schema '%s': 'require_reason_on_update' must be true or false", def.name)
     end
     if def.require_reason_on_archive != nil and def.require_reason_on_archive != true and def.require_reason_on_archive != false then
         return string.format("schema '%s': 'require_reason_on_archive' must be true or false", def.name)
     end
-    -- task #73: another type-level opt-in flag, same shape as the two
+    -- Another type-level opt-in flag, same shape as the two
     -- above -- a schema can require Admin capability to create/update/
     -- archive rows of this type (e.g. label_template, whose `sql_select`
     -- field is genuinely executable). Anyone can still read/view rows
@@ -413,8 +410,8 @@ function ensure_entity_field_display_column(db_path)
 end
 
 -- entity_type predates the require_reason_on_update/require_reason_on_
--- archive flags (task #93) and admin_write_only (task #73) -- same
--- reasoning/pattern as ensure_entity_field_display_column just above.
+-- archive flags and admin_write_only -- same reasoning/pattern as
+-- ensure_entity_field_display_column just above.
 function ensure_entity_type_reason_flag_columns(db_path)
     existing = db.get_columns(db_path, "entity_type")
     have = {}
@@ -541,11 +538,12 @@ function builtin_columns(db_path)
 end
 
 --------------------------------------------------------------------------
--- task #84: multivalue fields -- a companion junction table per
--- (entity_type, field_name) instead of a column on the entity's own
--- table. Mirrors document_link's own shape (a real many-to-many table,
--- composite PK, no surrogate id) -- the pattern this codebase already
--- uses for "this row connects to several others."
+-- Multivalue fields -- a companion junction table per (entity_type,
+-- field_name) instead of a column on the entity's own table (see
+-- doc/schema.md's "Multivalue fields" section). Mirrors document_link's
+-- own shape (a real many-to-many table, composite PK, no surrogate id)
+-- -- the pattern this codebase already uses for "this row connects to
+-- several others."
 --------------------------------------------------------------------------
 
 function schema.multi_field_table_name(entity_type, field_name)
@@ -833,7 +831,7 @@ end
 -- Creates the projected table if it doesn't exist, or adds any columns
 -- for fields/builtins that aren't present yet. Never drops or renames a
 -- column -- that's a deliberately manual, reviewed operation, not an
--- automatic one. Multivalue fields (task #84) never become a column
+-- automatic one. Multivalue fields never become a column
 -- here at all -- schema.ensure_multi_field_table gives them their own
 -- companion junction table instead.
 function schema.sync_table(db_path, def)
@@ -899,16 +897,16 @@ function schema.sync_table(db_path, def)
     end
 end
 
--- task #118: a cheap-to-compute stand-in for "have the schemas/
--- dropdowns directories changed at all since the last real sync" --
--- name + mtime + size per .lua file (sorted, so file iteration order
--- never matters), concatenated. Confirmed directly that actually
--- re-running the sync (schema.sync_all's own loops below) costs real,
--- multi-second time once a deployment has enough schema/dropdown
--- files against a real remote database -- a plain filesystem stat of
--- every file is negligible by comparison, so this lets sync_all skip
--- the expensive work entirely on the overwhelming majority of requests
--- in steady-state traffic (nothing changed since last time).
+-- A cheap-to-compute stand-in for "have the schemas/dropdowns
+-- directories changed at all since the last real sync" -- name +
+-- mtime + size per .lua file (sorted, so file iteration order never
+-- matters), concatenated. Re-running the sync (schema.sync_all's own
+-- loops below) costs real, multi-second time once a deployment has
+-- enough schema/dropdown files against a real remote database -- a
+-- plain filesystem stat of every file is negligible by comparison, so
+-- this lets sync_all skip the expensive work entirely on the
+-- overwhelming majority of requests in steady-state traffic (nothing
+-- changed since last time).
 function schema.content_signature(root)
     config = require("config")
     parts = {}
@@ -957,7 +955,7 @@ end
 -- entirely is fine (no dropdowns defined yet) -- only schemas/ missing
 -- is a real error, since every deployment has at least that directory.
 --
--- task #118: skipped entirely when content_signature matches what was
+-- Skipped entirely when content_signature matches what was
 -- stored after the last real pass -- see that function's own comment.
 function schema.sync_all(db_path, root)
     config = require("config")
@@ -1022,16 +1020,16 @@ function schema.layout(db_path, name)
         -- own in the raw file -- schema sync resolves the dropdown's
         -- current values into this field's own `entity_field.enum_values`
         -- column (see schema.sync_all), which is the only place they
-        -- live for a dropdown-referencing field. Real bug found live:
-        -- this loop used to check only the raw file's own `field.values`
-        -- (set for a field that inlines its own literal list), so a
-        -- dropdown-referencing select field got no `values` array sent
-        -- to the browser at all -- the register page's own client-side
-        -- JS (addRow(), html.lua) crashes on `field.values.forEach` the
-        -- instant it reaches the first such field, breaking the whole
-        -- batch-entry table for any entity type with a dropdown-based
-        -- select (e.g. cell_line's required `tissue_code`), not just
-        -- that one field.
+        -- live for a dropdown-referencing field. This loop must check
+        -- both the raw file's own `field.values` (a field that inlines
+        -- its own literal list) AND the resolved dropdown values --
+        -- checking only the former sends no `values` array at all for
+        -- a dropdown-referencing select field, and the register page's
+        -- own client-side JS (addRow(), html.lua) crashes on
+        -- `field.values.forEach` the instant it reaches one, breaking
+        -- the whole batch-entry table for any entity type with a
+        -- dropdown-based select (e.g. cell_line's required
+        -- `tissue_code`), not just that one field.
         dkjson = require("dkjson")
         db_fields_by_name = {}
         for _, f in ipairs(schema.fields(db_path, name)) do
@@ -1173,7 +1171,7 @@ function schema.reason_flags(db_path, entity_type)
     }
 end
 
--- task #73: whether writes (create/update/archive) to this entity type
+-- Whether writes (create/update/archive) to this entity type
 -- require Admin capability -- checked in cgi.lua, which has the HTTP
 -- session's capabilities in scope (schema.lua/entity.lua don't).
 function schema.admin_write_only(db_path, entity_type)
@@ -1211,7 +1209,7 @@ function schema.relationships(db_path)
         fields = schema.fields(db_path, t.name)
         for _, field in ipairs(fields) do
             if (field.type == "reference" or field.type == "multi_reference") and field.ref_entity_type != nil and field.ref_entity_type != "" then
-                -- task #112: field_type lets a caller tell a plain
+                -- field_type lets a caller tell a plain
                 -- `reference` (a real column on from_type -- reverse-
                 -- queryable directly, see cgi.lua's related_records)
                 -- apart from `multi_reference` (stored in a separate

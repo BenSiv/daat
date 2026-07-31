@@ -56,9 +56,6 @@ function default_value(value, fallback)
     return value
 end
 
--- Collapses entity.create/update's issues list into one human-readable
--- string, for a plain-form page (document-edit) that has nowhere to
--- show per-field errors the way the JS-driven registration table does.
 -- The current state of one chat session as a JSON-safe table -- shared
 -- by every /api/chat-widget-* route (start/send/approve/deny/history)
 -- below, all of which end by returning "here's the state now" so the
@@ -100,6 +97,9 @@ function chat_widget_state(db_path, session_id)
     return {session_id = session_id, messages = messages, pending = pending_out, last_query_sql = last_query_sql}
 end
 
+-- Collapses entity.create/update's issues list into one human-readable
+-- string, for a plain-form page (document-edit) that has nowhere to
+-- show per-field errors the way the JS-driven registration table does.
 function issues_to_message(issues)
     if issues == nil or #issues == 0 then
         return "Could not save."
@@ -154,7 +154,7 @@ function filter_layout_columns(layout, columns_param)
     return {name = layout.name, fields = filtered_fields}
 end
 
--- task #112: a `?lock_<field_name>=<value>` query param fixes that
+-- A `?lock_<field_name>=<value>` query param fixes that
 -- field's value across every row of the batch-entry table (e.g.
 -- `?lock_mixture=5` when adding several ingredients for one mixture)
 -- -- generic, not specific to any one schema/field. Only single-value
@@ -170,8 +170,8 @@ function collect_locked_fields(db_path, layout, params)
             for _, field in ipairs(layout.fields) do
                 if field.name == field_name and field.type != "multi_select" and field.type != "multi_reference" then
                     -- NOT named `label` -- that bare global is the
-                    -- required `label` module (src/label.lua, task
-                    -- #73); reassigning it here would silently break
+                    -- required `label` module (src/label.lua);
+                    -- reassigning it here would silently break
                     -- any later `label.xxx` call in this same request.
                     display_label = value
                     if field.type == "reference" and field.ref_entity_type != nil then
@@ -188,7 +188,7 @@ function collect_locked_fields(db_path, layout, params)
     return locked
 end
 
--- task #112: how many preview rows (mixture -> its own ingredients,
+-- How many preview rows (mixture -> its own ingredients,
 -- etc.) render inline on /detail before pointing at the full,
 -- paginated /browse view instead.
 RELATED_RECORDS_PREVIEW_LIMIT = 10
@@ -198,7 +198,7 @@ RELATED_RECORDS_PREVIEW_LIMIT = 10
 -- short preview of the actual rows. Fully generic: computed from
 -- schema.relationships(), not specific to any one pair of types.
 -- multi_reference edges are skipped -- those live in a companion
--- junction table (task #84), not a plain column on the referencing
+-- junction table, not a plain column on the referencing
 -- type's own table, so entity.list_by_field's WHERE <field> = <id>
 -- wouldn't apply to them the same way.
 function related_records(db_path, entity_type, entity_id)
@@ -286,12 +286,10 @@ end
 -- routes. The token travels as a custom request header (arrives as
 -- HTTP_X_CSRF_TOKEN via the standard CGI header<->env-var mapping),
 -- set client-side by JS reading its own non-HttpOnly csrf cookie --
--- see html.lua's getCsrfToken() helper.
--- Checks the double-submit CSRF token, from either a request header
--- (JS fetch() callers, e.g. /api/submit -- see html.lua's
--- getCsrfToken()) or a hidden form field (a plain HTML <form> POST,
--- e.g. the /admin/users pages below, has no way to attach a custom
--- header at all). `form_token` is only read if the header is absent.
+-- see html.lua's getCsrfToken() helper -- or, for a plain HTML <form>
+-- POST that can't attach a custom header at all (e.g. the /admin/users
+-- pages below), a hidden form field instead. `form_token` is only read
+-- if the header is absent.
 function require_csrf(cookies, form_token)
     submitted = os.getenv("HTTP_X_CSRF_TOKEN")
     if submitted == nil or submitted == "" then
@@ -300,7 +298,7 @@ function require_csrf(cookies, form_token)
     return auth.verify_csrf(cookies.csrf, submitted)
 end
 
--- task #73: a schema can declare admin_write_only = true (checked the
+-- A schema can declare admin_write_only = true (checked the
 -- same way any other entity type could -- schema.admin_write_only
 -- isn't special-cased to a specific type name here). Applied at every
 -- entity-write route (create/update/archive/unarchive), not just
@@ -425,13 +423,11 @@ function handle_preview(db_path, params)
             -- A multi_reference/(multi_)polymorphic_reference field's
             -- value is a plain Lua array (see entity.apply_computed_
             -- field_overrides above), not a scalar -- tostring(value)
-            -- on one of those is "table: 0x...", not "". Real bug hit
-            -- live: this preview showed a sample's polymorphic_reference
-            -- source field that way instead of the real linked record.
+            -- on one of those is "table: 0x...", not "".
             -- html.display_field_value (same dispatcher /browse and
             -- /detail already use) renders every field type correctly
             -- and already HTML-escapes/links as needed, so it isn't
-            -- re-escaped here the way the old bare tostring() was.
+            -- re-escaped here the way a bare tostring() would need.
             is_empty = value == nil
             if type(value) == "table" then
                 is_empty = #value == 0
@@ -461,18 +457,13 @@ end
 -- readable-by-JS CSRF token -- before redirecting to "/". Deliberately
 -- not gated behind the session-verification block below (it runs
 -- before that block in handle_request) since an unauthenticated caller
--- reaching /login is the expected case, not an error.
--- Wraps render_login in the real page_shell -- until this fix, /login
--- printed html.render_login's bare content fragment directly, with no
--- <head>/<title>/favicon <link>/theme :root{} block at all (every
--- other route already went through page_shell for exactly this).
--- Visible live: the login page never picked up a deployment's
--- theme.lua colors/site name, and the browser tab fell back to
--- whatever favicon it had cached from a previous origin instead of
--- this deployment's own theme-assets/favicon.png. show_sql/show_admin
--- are always false here (nobody is authenticated yet, so no
--- capabilities apply); has_tasks_view is still real, not hardcoded --
--- cheap to check directly, same as every other route.
+-- reaching /login is the expected case, not an error. Rendered through
+-- the real page_shell (not a bare content fragment), so the login page
+-- still picks up the deployment's theme.lua colors/site name and
+-- favicon like every other page. show_sql_nav/show_admin_nav are
+-- always false here (nobody is authenticated yet, so no capabilities
+-- apply); has_tasks_view is still real, not hardcoded -- cheap to
+-- check directly, same as every other route.
 function handle_login(root, db_path, method, nonce, theme)
     has_tasks_view = view.load(config.views_dir(root), "prioritized_tasks") != nil
 
@@ -578,7 +569,6 @@ function cgi.handle_request()
         allowed_vendor_assets = {
             ["toastui-editor-all.min.js"] = {path = "toastui/toastui-editor-all.min.js", content_type = "application/javascript"},
             ["toastui-editor.min.css"] = {path = "toastui/toastui-editor.min.css", content_type = "text/css"},
-            -- task #73
             ["BrowserPrint-3.0.216.min.js"] = {path = "browserprint/BrowserPrint-3.0.216.min.js", content_type = "application/javascript"},
         }
         asset = allowed_vendor_assets[params.name]
@@ -599,7 +589,7 @@ function cgi.handle_request()
         return handle_login(root, db_path, method, nonce, theme)
     end
 
-    -- task #114: API-key auth for external/programmatic clients, as an
+    -- API-key auth for external/programmatic clients, as an
     -- alternative to the session cookie below. A custom X-Api-Key
     -- header, not "Authorization: Bearer" -- Apache's mod_cgid (the
     -- real production front end, per doc/architecture.md) does NOT
@@ -648,9 +638,8 @@ function cgi.handle_request()
     show_admin_nav = cgi.has_capability(capabilities, "a")
     -- Nav-rail "Tasks" icon and Home's matching quick-link are only
     -- real links when this deployment actually seeded a
-    -- "prioritized_tasks" view (task #101 -- a fresh/generic install
-    -- has no views/ at all, so this used to be a nav item every
-    -- deployment got that 404'd with a raw internal path).
+    -- "prioritized_tasks" view -- a fresh/generic install has no
+    -- views/ at all, and would otherwise 404 on a raw internal path.
     has_tasks_view = view.load(config.views_dir(root), "prioritized_tasks") != nil
 
     if path_info == "/logout" then
@@ -742,7 +731,7 @@ function cgi.handle_request()
             return print_response("404 Not Found", "text/html", "<h3>Error: " .. tostring(err) .. "</h3>")
         end
 
-        -- task #112: optional generic filter, e.g.
+        -- Optional generic filter, e.g.
         -- ?filter_field=mixture&filter_value=5 for "this mixture's
         -- ingredients" -- reuses /browse's own existing pagination
         -- rather than a bespoke list inside /detail. filter_field must
@@ -908,10 +897,8 @@ function cgi.handle_request()
             html.page_shell(entity_type .. " #" .. tostring(entity_id), "data", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author, page_context))
     end
 
-    -- Single-row edit form for any entity type (task: no UI existed to
-    -- update a generic entity at all, only /register's create-only
-    -- sheet -- found live when asked how to mark a task done in the
-    -- UI). GET-only rendering here, same as /register: the write
+    -- Single-row edit form for any entity type -- /register only ever
+    -- creates. GET-only rendering here, same as /register: the write
     -- capability check happens at submit time via /api/update (below),
     -- not here, matching /register's own existing precedent of not
     -- gating the form's mere display.
@@ -944,8 +931,8 @@ function cgi.handle_request()
             html.page_shell("Edit " .. entity_type .. " #" .. tostring(entity_id), "data", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author, page_context))
     end
 
-    -- task #73: same visibility as /detail (viewing/printing a label
-    -- isn't a data mutation -- only creating/editing the template
+    -- Same visibility as /detail (viewing/printing a label isn't a
+    -- data mutation -- only creating/editing the template
     -- itself needs Admin, enforced on the label_template entity's own
     -- write routes above). Plain text, not HTML -- the client JS fetches
     -- this as a raw string and hands it straight to the printer, never
@@ -995,10 +982,9 @@ function cgi.handle_request()
         page_context = {page_type = "view", view_name = view_name, title = view_name}
         -- The Tasks nav-rail icon links here with view_name=
         -- prioritized_tasks specifically (html.lua's own nav_items) --
-        -- found live: every /view page, including this one, always
-        -- highlighted "Data" as the active rail icon instead, since
-        -- this literally hardcoded "data" regardless of which view was
-        -- being shown.
+        -- without this check every /view page, including this one,
+        -- would highlight "Data" as the active rail icon regardless of
+        -- which view is actually being shown.
         active_section = "data"
         if view_name == "prioritized_tasks" then
             active_section = "tasks"
@@ -1240,8 +1226,8 @@ function cgi.handle_request()
         return print_response("302 Found", "text/plain", "", {"Location: admin-users"})
     end
 
-    -- task #114: admin UI for the api_key table, mirroring /admin-users
-    -- above exactly, with one difference -- a successful create renders
+    -- Admin UI for the api_key table, mirroring /admin-users above
+    -- exactly, with one difference -- a successful create renders
     -- the list directly (not a redirect) so the one-time raw key can be
     -- shown; a redirect would lose it, since it's never stored anywhere
     -- to retrieve on a later request.
@@ -1320,7 +1306,7 @@ function cgi.handle_request()
         end
 
         -- multipart, not parse_query -- the form's own enctype, needed
-        -- for the logo/favicon file fields to arrive at all (task #89).
+        -- for the logo/favicon file fields to arrive at all.
         raw_body = io.read("*all")
         form = multipart.parse(os.getenv("CONTENT_TYPE"), raw_body)
 
@@ -1494,7 +1480,7 @@ function cgi.handle_request()
         return print_response("200 OK", "application/json", json.encode(chat_widget_state(db_path, body_data.session_id)))
     end
 
-    -- task #87: the user-feedback half of knowledge_chat_eval. Ownership-
+    -- The user-feedback half of knowledge_chat_eval. Ownership-
     -- checked the same way every other chat-widget route already is
     -- (agent.get_session requires session.login == author) -- without
     -- this, any authenticated user could record feedback against any
@@ -1675,7 +1661,7 @@ function cgi.handle_request()
             return print_response("400 Bad Request", "application/json", json.encode({error = "Invalid JSON: " .. tostring(err)}))
         end
 
-        -- Optional (task #93) -- a plain query/form param, not nested
+        -- Optional -- a plain query/form param, not nested
         -- in the JSON body, so this doesn't change /api/update's own
         -- existing request-body contract (that body IS the values
         -- object directly, not a {values=..., reason=...} wrapper).
@@ -1746,17 +1732,11 @@ function cgi.handle_request()
         return print_response("200 OK", "application/json", json.encode(response))
     end
 
-    -- task #114: versioned, external-facing API -- deliberately
-    -- separate from the unversioned /api/* routes above (the browser
-    -- UI's own internal contract, not meant for outside consumers).
-    -- Every response shape mirrors those routes exactly (`{error=...}`
-    -- on failure; `{success, issues, ...}` on writes) -- no new
-    -- convention invented. Key-authed requests (via_api_key, set above
-    -- alongside the session-cookie check) skip CSRF -- a bearer key is
-    -- deliberately attached by the client, not ambient like a cookie,
-    -- so the exact property CSRF protection guards against doesn't
-    -- apply; a session-cookie caller hitting these routes still needs
-    -- CSRF, same as every other write route in this file.
+    -- Versioned, external-facing API -- see doc/api.md for the full
+    -- contract (response shapes, CSRF-skip reasoning for key-authed
+    -- requests). Deliberately separate from the unversioned /api/*
+    -- routes above, which are the browser UI's own internal contract,
+    -- not meant for outside consumers.
     v1_type, v1_id, v1_action = string.match(path_info, "^/api/v1/([a-z_][a-z0-9_]*)/(%d+)/([a-z_]+)$")
     if v1_type == nil then
         v1_type, v1_id = string.match(path_info, "^/api/v1/([a-z_][a-z0-9_]*)/(%d+)$")
@@ -1779,8 +1759,8 @@ function cgi.handle_request()
             v1_source = {api_key = author}
         end
 
-        -- GET /api/v1/<type> -- list, optionally filtered (task #112's
-        -- own list_by_field/count_by_field mechanism, used as-is).
+        -- GET /api/v1/<type> -- list, optionally filtered (reuses
+        -- entity.list_by_field/count_by_field as-is).
         if v1_id == nil and method == "GET" then
             layout = schema.layout(db_path, v1_type)
             v1_filter_field = nil

@@ -263,6 +263,46 @@ holding expires on its own schedule.
   attached to each request directly, not carried ambiently the way a
   cookie is. See `doc/api.md`.
 
+## Data ownership: shared vs. per-user vs. deployment config
+
+Three distinct categories, not two -- worth keeping straight when
+reasoning about who can see or touch what:
+
+- **Shared, no ownership check anywhere.** Every registered entity type
+  (`sample`, `cell_line`, `task`, ...) and Documents/the Knowledge Pool
+  -- access is gated purely by capability (`user.cap`), never by who
+  created a row. This extends to the Knowledge Pool's own event logs
+  too (`knowledge_retrieval`, `knowledge_review` carry no `login`
+  column at all) and to the ledger/audit history (`entity_event`):
+  every entry is *tagged* with who made it, but reading history isn't
+  restricted to that person. Schemas, views, templates, dropdowns,
+  extensions, and label templates are deployment-managed structure, not
+  user data, so the question doesn't apply to them at all. API keys
+  are their own account-like credential (a `label` + capability set,
+  `auth.lua`) -- not tied to any user login, closer to a service
+  credential than something a person owns.
+- **User-specific, ownership enforced on every route.** `agent_session`/
+  `agent_message` (see "Chat" below) are the one place `login == author`
+  is actually checked before a read or write proceeds. Everything that
+  hangs off a session inherits that scoping transitively rather than
+  carrying its own `login` column: pending destructive-action approvals
+  (`agent_pending_action`, scoped via its parent session), chat feedback
+  (`/api/chat-widget-feedback`, scoped via message -> session), and
+  background agent tasks (`background.start/status`, scoped via
+  session). A synced chat-session *document* (see "Chat") is the one
+  exception worth naming explicitly: once a conversation is projected
+  into a document, that projection is fully shared like any other
+  document -- anyone can read a transcript, even though only the
+  original owner can ever continue that live conversation. There is
+  deliberately no "resume someone else's session" affordance; the only
+  way to build on another user's past conversation is to have your own
+  agent read their synced document as context in a session of your own.
+- **Deployment config, not really a per-user axis at all.** `theme.lua`/
+  `platform.lua` (branding, `agent_provider`/`agent_model`, turn
+  budgets, DB backend, ...) apply uniformly to every user on a given
+  deployment -- not shared *among* users so much as a fixed constant
+  none of them can vary individually.
+
 ## Chat
 
 A built-in assistant, not a bolted-on integration: real per-user
