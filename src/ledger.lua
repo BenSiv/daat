@@ -48,8 +48,7 @@ CREATE TABLE IF NOT EXISTS entity_event (
     -- full old/new value of whatever changed, so any "text"-typed field
     -- (schema.lua's own SQL_TYPE.text, same reasoning) can make this
     -- exceed MariaDB's real TEXT cap (65,535 bytes) just as easily as
-    -- the column it's recording a change to. Found live importing a
-    -- literature corpus: real paper text routinely blew past it.
+    -- the column it's recording a change to.
     field_changes LONGTEXT NOT NULL,
     author TEXT,
     created_at TEXT DEFAULT (%s),
@@ -59,8 +58,8 @@ CREATE TABLE IF NOT EXISTS entity_event (
 );
 """
 
--- CREATE TABLE IF NOT EXISTS never retrofits an existing table (task
--- #93) -- same reasoning/pattern as schema.lua's own
+-- CREATE TABLE IF NOT EXISTS never retrofits an existing table -- same
+-- reasoning/pattern as schema.lua's own
 -- ensure_entity_field_display_column. A brand-new store gets `reason`
 -- straight from ledger.SCHEMA above; an existing one needs this to
 -- pick it up.
@@ -101,16 +100,11 @@ function ledger.append_create(db_path, entity_type, values, author, source)
         db.literal(source.notebook_entry_id),
         db.literal(source.row_id)
     )
-    -- Fixed 2026-07-20 (task #77): this used to re-derive entity_id via
-    -- SELECT MAX(event_id), on the (false, for a real concurrent CGI
-    -- deployment) assumption that nothing else could insert between
-    -- this connection's own insert and that read -- two simultaneous
-    -- creates could both read the same MAX and collide on one entity_id
-    -- while the other's row silently kept entity_id NULL forever.
     -- db.exec's second return value is last_insert_rowid(), read on the
-    -- very same connection the insert itself just ran on -- inherently
-    -- connection-scoped, so it can't see another connection's insert
-    -- regardless of timing.
+    -- same connection the insert itself just ran on -- inherently
+    -- connection-scoped, so two concurrent creates can never collide on
+    -- the same entity_id (see doc/mariadb-migration.md's "Bug found
+    -- during this investigation" for the race this replaced).
     _, entity_id = db.exec(db_path, statement)
     db.exec(db_path, string.format(
         "UPDATE entity_event SET entity_id = %d WHERE event_id = %d;", entity_id, entity_id
@@ -121,9 +115,9 @@ end
 -- Appends an 'update' event for an existing entity_id. `field_changes`
 -- is a plain {field_name = {old = ..., new = ...}} table -- callers
 -- compute the diff themselves, since only they know the entity's
--- current projected values. `reason` (task #93) is optional -- nil
--- for the common case, a schema can require entity.update supply one
--- via its own require_reason_on_update flag before ever reaching here.
+-- current projected values. `reason` is optional -- nil for the common
+-- case, a schema can require entity.update supply one via its own
+-- require_reason_on_update flag before ever reaching here.
 function ledger.append_update(db_path, entity_type, entity_id, field_changes, author, source, reason)
     if source == nil then
         source = {}
@@ -138,10 +132,9 @@ function ledger.append_update(db_path, entity_type, entity_id, field_changes, au
         db.literal(source.row_id),
         db.literal(reason)
     )
-    -- Same fix as append_create above (task #77): return the
-    -- connection-scoped insert_id directly instead of a separate
-    -- SELECT MAX(event_id) that another concurrent writer's own insert
-    -- could race ahead of.
+    -- Same as append_create above: the connection-scoped insert_id,
+    -- immune to a concurrent writer's own insert racing ahead of a
+    -- separate SELECT MAX(event_id).
     _, event_id = db.exec(db_path, statement)
     return event_id
 end
@@ -149,8 +142,8 @@ end
 -- Appends an 'archive' event -- never a delete. Returns the new
 -- event_id, same as append_update, so callers can stamp
 -- last_event_id on the projected table consistently either way.
--- `reason` (task #93) is optional, same as append_update's own --
--- archiving is the stronger candidate for a schema to actually
+-- `reason` is optional, same as append_update's own -- archiving is
+-- the stronger candidate for a schema to actually
 -- require one (see entity.archive), but the ledger itself doesn't
 -- enforce that; validation happens one layer up.
 function ledger.append_archive(db_path, entity_type, entity_id, author, source, reason)
@@ -175,10 +168,10 @@ function ledger.history(db_path, entity_id)
     return rows
 end
 
--- A multivalue field's old/new (task #84) decodes from JSON as a plain
--- Lua array, not a scalar -- tostring() on that gives an unreadable
--- "table: 0x..." pointer, so this renders it as a real bracketed list
--- instead. Scalars pass straight through unchanged.
+-- A multivalue field's old/new decodes from JSON as a plain Lua array,
+-- not a scalar -- tostring() on that gives an unreadable "table: 0x..."
+-- pointer, so this renders it as a real bracketed list instead. Scalars
+-- pass straight through unchanged.
 function format_change_value(v)
     if type(v) == "table" then
         parts = {}

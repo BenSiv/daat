@@ -34,8 +34,8 @@ do_knowledge = knowledge.do_knowledge
 -- own require) since knowledge.lua can't require agent.lua back itself
 -- (agent.lua already requires knowledge.lua; a real circular require,
 -- not just an ordering nuisance) -- the one thing that needs both,
--- `platform knowledge distill` (task #107), is dispatched from here
--- instead of inside knowledge.do_knowledge.
+-- `platform knowledge distill`, is dispatched from here instead of
+-- inside knowledge.do_knowledge.
 agent = require("agent")
 
 cgi = require("cgi")
@@ -126,8 +126,8 @@ function main()
 
     db_path = config.db_path(".")
 
-    -- task #107: dispatched here, not inside knowledge.do_knowledge --
-    -- see the require("agent") comment above for why.
+    -- Dispatched here, not inside knowledge.do_knowledge -- see the
+    -- require("agent") comment above for why.
     if command == "knowledge" and cmd_args[1] == "distill" then
         session_id, result = agent.run_knowledge_distillation(db_path, os.getenv("USER"), agent.default_model())
         if session_id == nil then

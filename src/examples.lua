@@ -1,10 +1,9 @@
--- Example config-as-code content for `platform init --with-examples`
--- (task #89) -- a fresh, truly empty install (confirmed by task #101)
--- gives a new user zero indication of what a schema/view/extension/
--- template file actually looks like or how to write one. This module
--- is the opt-in alternative: one small, realistic, working example of
--- each kind, so there's something real to read and copy rather than
--- an empty directory and a doc page.
+-- Example config-as-code content for `platform init --with-examples` --
+-- a fresh, truly empty install gives a new user zero indication of what
+-- a schema/view/extension/template file actually looks like or how to
+-- write one. This module is the opt-in alternative: one small,
+-- realistic, working example of each kind, so there's something real to
+-- read and copy rather than an empty directory and a doc page.
 --
 -- Every writer here skips a destination that already exists rather
 -- than overwriting it -- safe to run against an existing store too
@@ -24,8 +23,7 @@ EXAMPLE_CATEGORY_SCHEMA = """-- Example entity type (see doc/schema.md for the f
 -- The field is named "label", not "name" -- every generated entity
 -- table already has a builtin "name" column (schema.lua's own
 -- builtin_columns), so a field also called "name" collides with it
--- ("duplicate column name" on `schema add`, confirmed directly while
--- writing this example).
+-- ("duplicate column name" on `schema add`).
 return {
     name = "category",
     fields = {
@@ -141,10 +139,10 @@ return {
 
 EXAMPLE_THEME_LUA = """-- Every field here is optional -- delete this file entirely for the
 -- plain generic default (indigo/slate, no logo, no extra chat
--- instructions). Edit through Settings once the store is initialized
--- (task #89), or by hand here before first boot -- config.save_theme
--- overwrites this comment the first time it's saved through the UI,
--- same as it always did.
+-- instructions). Edit through Settings once the store is initialized,
+-- or by hand here before first boot -- config.save_theme overwrites
+-- this comment the first time it's saved through the UI, same as it
+-- always did.
 return {
   site_name = "My Deployment",
   has_logo = false,

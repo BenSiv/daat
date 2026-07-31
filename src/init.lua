@@ -26,17 +26,16 @@ function describe_db_target(target)
     return target
 end
 
--- --with-examples (task #89): a plain `platform init` deliberately
--- stays the truly empty, generic install task #101 verified and
--- fixed -- no seed content forced on every deployment. This is the
--- opt-in alternative: one small, realistic, working example of each
--- config-as-code kind (schemas/extensions/views/templates) plus an
--- example theme.lua and a documented, fully commented-out platform.lua
--- reference, so a new user has something real to read and copy instead
--- of an empty directory. Safe to pass again later, even
--- against an already-initialized store (e.g. after deleting one
--- example to see it regenerate) -- examples.write_all skips any
--- destination that already exists rather than overwriting it.
+-- --with-examples: a plain `platform init` deliberately stays a truly
+-- empty, generic install -- no seed content forced on every deployment.
+-- This is the opt-in alternative: one small, realistic, working example
+-- of each config-as-code kind (schemas/extensions/views/templates) plus
+-- an example theme.lua and a documented, fully commented-out
+-- platform.lua reference, so a new user has something real to read and
+-- copy instead of an empty directory. Safe to pass again later, even
+-- against an already-initialized store (e.g. after deleting one example
+-- to see it regenerate) -- examples.write_all skips any destination
+-- that already exists rather than overwriting it.
 function has_with_examples_flag(cmd_args)
     for _, arg in ipairs(cmd_args) do
         if arg == "--with-examples" then

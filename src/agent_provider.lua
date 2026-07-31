@@ -11,8 +11,8 @@
 --   embeddings(model, text) -> (vector, err), optional.
 -- Loaded dynamically by name (config.platform_config().agent_provider,
 -- default "vertex" -- agent_provider_vertex.lua's own native structured
--- tool-calling, direct Vertex REST calls, no separate Node/pi-ai bridge
--- process) rather than required directly, so swapping providers -- or,
+-- tool-calling, direct Vertex REST calls) rather than required
+-- directly, so swapping providers -- or,
 -- just as importantly, swapping in the deterministic test provider for
 -- repeatable, cost-free test runs -- is a config change, not a code
 -- change.
@@ -22,9 +22,9 @@ config = require("config")
 agent_provider = {}
 
 -- Same default-resolution as agent_provider.load() itself, split out
--- so a caller that just wants the *name* (task #87's knowledge_chat_eval
--- recording, e.g.) doesn't need to load/require the actual provider
--- module to get it.
+-- so a caller that just wants the *name* (knowledge_chat_eval recording,
+-- e.g.) doesn't need to load/require the actual provider module to get
+-- it.
 function agent_provider.name()
     return config.platform_config().agent_provider
 end

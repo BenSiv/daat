@@ -20,9 +20,8 @@ function is_mariadb(db_path)
 end
 
 -- Public alias -- other modules that need to branch on backend (e.g.
--- view.lua's parameterized-query dispatch, task #73) go through this
--- rather than each re-deriving db_path's shape convention for
--- themselves.
+-- view.lua's parameterized-query dispatch) go through this rather than
+-- each re-deriving db_path's shape convention for themselves.
 function db.is_mariadb(db_path)
     return is_mariadb(db_path)
 end
@@ -44,10 +43,10 @@ end
 -- database.get_tables/get_columns go through a different sqlite binding
 -- entry point (sqlite.rows(db, query), a db-level convenience call) than
 -- sqlite_query's sqlite.prepare + stmt.rows/nrows -- and that path returns
--- no rows even when the query is correct (confirmed: entity_field/entity
--- tables are visibly populated via sqlite3 directly, but database.get_tables
--- reports none). Reimplemented here against the sqlite_query path, which
--- is the one actually verified working throughout this codebase.
+-- no rows even when the query is correct (entity_field/entity tables are
+-- visibly populated via sqlite3 directly, but database.get_tables reports
+-- none). Reimplemented here against the sqlite_query path instead, the
+-- one actually verified working throughout this codebase.
 
 function db.get_tables(db_path)
     query = "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%';"
@@ -105,21 +104,19 @@ end
 -- word list is much larger than SQLite's or MariaDB's own extensions
 -- allow around, so a field genuinely named e.g. "usage" (a real
 -- production field, culture_medium.lua) breaks CREATE TABLE/INSERT/UPDATE
--- outright without this -- found running a real production schema
--- against a live Cloud SQL for MySQL instance. Backtick quoting is valid
--- MySQL/MariaDB syntax and SQLite's own MySQL-compatibility extension, so
--- this is a single, unified fix needing no per-backend branch.
+-- outright without this. Backtick quoting is valid MySQL/MariaDB syntax
+-- and SQLite's own MySQL-compatibility extension, so this is a single,
+-- unified fix needing no per-backend branch.
 function db.quote_ident(name)
     return "`" .. tostring(name) .. "`"
 end
 
 -- Real MySQL (unlike MariaDB, and unlike MySQL's own CREATE TABLE) has no
 -- "IF NOT EXISTS" clause for CREATE INDEX at all -- a syntax error, not a
--- no-op. Found running tst/integration/mariadb_backend.bats against a real
--- Cloud SQL for MySQL instance. Every CREATE INDEX call site now checks
--- this first instead of relying on IF NOT EXISTS, same "check, then
--- conditionally create" shape as db.table_exists/schema.sync_table already
--- use for tables/columns.
+-- no-op. Every CREATE INDEX call site now checks this first instead of
+-- relying on IF NOT EXISTS, same "check, then conditionally create"
+-- shape as db.table_exists/schema.sync_table already use for
+-- tables/columns.
 function db.index_exists(db_path, table_name, index_name)
     query = string.format(
         "SELECT name FROM sqlite_master WHERE type = 'index' AND name = %s;", db.quote(index_name)
@@ -213,9 +210,9 @@ end
 -- safe to use on a TEXT column of unbounded length. MariaDB/InnoDB
 -- refuses a bare TEXT/BLOB column in ANY index (not just a primary
 -- key) without an explicit prefix length ("BLOB/TEXT column ... used
--- in key specification without a key length") -- confirmed live. A
--- 255-char prefix is plenty for this codebase's actual indexed TEXT
--- columns (content hashes, external ids). SQLite has no equivalent
+-- in key specification without a key length"). A 255-char prefix is
+-- plenty for this codebase's actual indexed TEXT columns (content
+-- hashes, external ids). SQLite has no equivalent
 -- prefix-length syntax at all (it would be a syntax error there), so
 -- this can't be unified into one string the way VARCHAR(255) unified
 -- the primary-key case -- has to branch.

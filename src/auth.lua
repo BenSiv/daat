@@ -37,10 +37,11 @@ CREATE TABLE IF NOT EXISTS user (
     archived_at TEXT
 );
 
--- task #114: external-integration auth, independent of any human user
--- -- a key's capabilities are its own, not derived from whoever created
--- it. `label` (not a synthetic id) is the primary key, same convention
--- as user.login -- an operator-chosen, human-meaningful, unique name.
+-- External-integration auth, independent of any human user -- a key's
+-- capabilities are its own, not derived from whoever created it (see
+-- doc/architecture.md's "Auth" section). `label` (not a synthetic id)
+-- is the primary key, same convention as user.login -- an
+-- operator-chosen, human-meaningful, unique name.
 CREATE TABLE IF NOT EXISTS api_key (
     label VARCHAR(255) PRIMARY KEY,
     key_hash TEXT NOT NULL,
@@ -241,7 +242,7 @@ function auth.unarchive_user(db_path, login)
 end
 
 --------------------------------------------------------------------------
--- API keys (task #114)
+-- API keys
 --------------------------------------------------------------------------
 
 -- auth.create_api_key(db_path, label, cap) -> raw_key_string | nil, err

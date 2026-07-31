@@ -1,6 +1,7 @@
--- Label printing (task #73): renders a ZPL string for one entity row,
--- ready to hand to a Zebra printer via the client-side Browser Print
--- SDK (see html.lua/cgi.lua's own pieces of this feature).
+-- Label printing: renders a ZPL string for one entity row, ready to
+-- hand to a Zebra printer via the client-side Browser Print SDK (see
+-- html.lua/cgi.lua's own pieces of this feature, and doc/schema.md's
+-- own "Label printing" section for the full design).
 --
 -- The template itself is a real, user-created, ledgered entity row
 -- (schemas/label_template.lua), not a config file -- so "editing a
@@ -39,8 +40,7 @@ function find_template(db_path, entity_type)
     end
     -- `sql` is a reserved word in MariaDB (fine on SQLite, which has no
     -- such restriction) -- quoted as an identifier so this runs on both
-    -- backends. Confirmed live: this 500'd on first real use against
-    -- MariaDB-backed platform-prod.
+    -- backends.
     rows = db.query(db_path, string.format(
         "SELECT %s, zpl FROM label_template WHERE for_entity_type = %s AND archived_at IS NULL LIMIT 1;",
         db.quote_ident("sql"), db.quote(entity_type)

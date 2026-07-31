@@ -5,36 +5,33 @@
 -- Application Default Credentials access token -- not a vendored
 -- HTTP/TLS client or a Google client library, matching the "bind to an
 -- existing, battle-tested tool" stance already used for bcrypt/HMAC/
--- cmark. Verified directly against a real project (not assumed):
--- gemini-2.5-flash for generation, text-embedding-005 for embeddings,
--- both in us-central1.
+-- cmark. Verified against a real project: gemini-2.5-flash for
+-- generation, text-embedding-005 for embeddings, both in us-central1.
 --
--- .converse() (native structured tool-calling, replacing the pi-ai
--- Node bridge that used to do this same job as a separate subprocess)
--- translates agent.lua's own provider-agnostic canonical shape (see
--- agent_provider.lua's own header -- roles user/assistant/toolResult,
+-- .converse() (native structured tool-calling) translates agent.lua's
+-- own provider-agnostic canonical shape (see agent_provider.lua's own
+-- header and doc/agent-protocol.md -- roles user/assistant/toolResult,
 -- block types text/toolCall/thinking) into Vertex's real wire shapes and
 -- back. All of that translation is contained in this one file --
 -- vertex_contents_from_messages/vertex_blocks_from_parts below -- agent.lua
--- itself never changes and never learns anything Vertex-specific, the
--- same way it already doesn't need to know anything pi-ai-specific.
--- Real wire shapes here are verified live against the actual API, not
--- assumed: functionCall/functionResponse parts carry no id of their own
--- on the wire at all (correlation is by name, not id -- confirmed via a
--- real multi-turn round trip with no id echoed back), thinking parts are
--- {text, thought=true}, a tool-call part's thoughtSignature (Gemini
--- 2.5's own reasoning-continuity token, that exact camelCase name since
--- it's Vertex's own wire field, not this codebase's choice) is confirmed
--- optional for correctness but preserved anyway on our own toolCall
--- block as a plain snake_case thinking_signature -- self-contained
--- round-trip plumbing between this file's own vertex_blocks_from_parts/
+-- itself never changes and never learns anything Vertex-specific.
+-- Real wire shapes here, verified live against the actual API:
+-- functionCall/functionResponse parts carry no id of their own on the
+-- wire at all (correlation is by name, not id -- none is ever echoed
+-- back across a multi-turn round trip), thinking parts are {text,
+-- thought=true}, and a tool-call part's thoughtSignature (Gemini 2.5's
+-- own reasoning-continuity token, that exact camelCase name since it's
+-- Vertex's own wire field, not this codebase's choice) is optional for
+-- correctness but preserved anyway on our own toolCall block as a plain
+-- snake_case thinking_signature -- self-contained round-trip plumbing
+-- between this file's own vertex_blocks_from_parts/
 -- vertex_contents_from_messages, not part of the pre-existing
 -- stopReason/toolCallId-style canonical contract agent.lua actually
--- reads, so it follows this codebase's own Lua naming, not pi-ai's
--- TypeScript-flavored one. finishReason is "STOP" identically whether a
--- turn ends in a tool call or a final answer -- stopReason has to be
--- derived from whether a functionCall part is actually present, not
--- from finishReason alone.
+-- reads, so it follows this codebase's own Lua naming rather than
+-- Vertex's own. finishReason is "STOP" identically whether a turn ends
+-- in a tool call or a final answer -- stopReason has to be derived from
+-- whether a functionCall part is actually present, not from finishReason
+-- alone.
 --
 -- Requires `gcloud` on PATH, already authenticated (`gcloud auth
 -- application-default login`), and two platform.lua fields (see
@@ -140,12 +137,12 @@ function vertex_post(model_and_method_path, payload_table)
 end
 
 -- `usageMetadata` (promptTokenCount/candidatesTokenCount/totalTokenCount)
--- is a real field on every generateContent response -- task #87 needs
--- real token accounting for knowledge_context, not just
--- agent.estimate_tokens' char/4 heuristic (still used for compaction
--- thresholding, unrelated). Absent entirely just means a nil-valued
--- table, not an error -- older API versions or a malformed response
--- shouldn't fail generation over accounting metadata.
+-- is a real field on every generateContent response -- knowledge_context
+-- (see doc/architecture.md's "Knowledge pool" section) needs real token
+-- accounting, not just agent.estimate_tokens' char/4 heuristic (still
+-- used for compaction thresholding, unrelated). Absent entirely just
+-- means a nil-valued table, not an error -- older API versions or a
+-- malformed response shouldn't fail generation over accounting metadata.
 function usage_from_response(response)
     meta = response.usageMetadata
     if meta == nil then
@@ -162,10 +159,10 @@ end
 -- `parameters` as plain, standard JSON Schema -- lowercase `type`
 -- ("object"/"string"/"integer"/etc.) -- platform-wip's own neutral
 -- contract, not any one vendor's dialect. Vertex/Gemini's real
--- functionDeclarations Schema requires the uppercase proto enum
--- instead ("OBJECT"/"STRING"/"INTEGER") -- confirmed live, a real
--- Vertex call rejects lowercase `type` outright. This function is
--- this file's own half of that translation (agent_provider_claude.lua
+-- functionDeclarations Schema requires the uppercase proto enum instead
+-- ("OBJECT"/"STRING"/"INTEGER") -- a real Vertex call rejects lowercase
+-- `type` outright. This function is this file's own half of that
+-- translation (agent_provider_claude.lua
 -- has the equivalent, much smaller, translation for Claude's dialect,
 -- which is already lowercase JSON Schema) -- recurses into `properties`
 -- (each value) and `items` (for arrays); every other key (description,
@@ -260,21 +257,21 @@ function vertex_contents_from_messages(messages)
             part = {functionResponse = {name = msg.toolName, response = {content = text}}}
             -- Gemini requires every functionResponse part answering one
             -- functionCall turn to arrive together, in the SAME
-            -- contents[] entry -- confirmed live: a parallel-tool-call
-            -- turn (2+ toolCall blocks in one assistant turn) produces
-            -- consecutive canonical toolResult messages, one per call
-            -- (see agent.lua's run_turn/run_research_loop), which used
-            -- to become one separate {role="user",...} entry each right
-            -- here -- a real research.investigate run hit exactly this,
-            -- failing with "Please ensure that the number of function
-            -- response parts is equal to the number of function call
-            -- parts of the function call turn." `is_tool_response_group`
-            -- is a purely internal marker distinguishing a merged-
-            -- responses entry from an ordinary plain-text user message
-            -- (both map to Vertex role "user", so checking `.role` alone
-            -- would wrongly merge a genuine new user message into a
-            -- preceding tool-response group too) -- stripped before
-            -- this function returns, never sent to Vertex.
+            -- contents[] entry: a parallel-tool-call turn (2+ toolCall
+            -- blocks in one assistant turn) produces consecutive
+            -- canonical toolResult messages, one per call (see
+            -- agent.lua's run_turn/run_research_loop) -- splitting these
+            -- into separate {role="user",...} entries makes Vertex
+            -- reject the next request outright ("Please ensure that the
+            -- number of function response parts is equal to the number
+            -- of function call parts of the function call turn.").
+            -- `is_tool_response_group` is a purely internal marker
+            -- distinguishing a merged-responses entry from an ordinary
+            -- plain-text user message (both map to Vertex role "user",
+            -- so checking `.role` alone would wrongly merge a genuine
+            -- new user message into a preceding tool-response group too)
+            -- -- stripped before this function returns, never sent to
+            -- Vertex.
             previous = contents[#contents]
             if previous != nil and previous.is_tool_response_group == true then
                 table.insert(previous.parts, part)
@@ -294,9 +291,9 @@ end
 -- whether any part was a tool call (stopReason has to be derived from
 -- this, not from finishReason alone -- see this file's own header).
 -- Tool-call ids are synthesized here, fresh per response -- Vertex's
--- own wire protocol has no id concept for function calls at all
--- (confirmed live), so these only ever need to be unique within this
--- one turn, for agent.lua's own tool_result correlation.
+-- own wire protocol has no id concept for function calls at all, so
+-- these only ever need to be unique within this one turn, for
+-- agent.lua's own tool_result correlation.
 function vertex_blocks_from_parts(parts)
     blocks = {}
     has_tool_call = false
@@ -337,7 +334,7 @@ end
 -- should record and act on. `nil, err` is reserved for a genuine
 -- connectivity/auth-level failure (vertex_post's own existing
 -- behavior, unchanged, shared with .generate()/.embeddings() below) --
--- the bridge/network call itself couldn't be completed at all, nothing
+-- the network call itself couldn't be completed at all, nothing
 -- structured to return.
 function agent_provider_vertex.converse(model, system_prompt, messages, tools)
     payload = {contents = vertex_contents_from_messages(messages)}
@@ -347,11 +344,10 @@ function agent_provider_vertex.converse(model, system_prompt, messages, tools)
     if tools != nil and #tools > 0 then
         payload.tools = {{functionDeclarations = vertex_tools_from_canonical(tools)}}
     end
-    -- Gemini 2.5's own thought-summary feature -- unconditional, same as
-    -- the old pi-ai bridge did for every call; response content then
-    -- includes real {type:"thinking",...} blocks alongside text/toolCall
-    -- ones, same as before (agent.lua's own extract_thinking_text/
-    -- display_blocks are unchanged either way).
+    -- Gemini 2.5's own thought-summary feature -- unconditional;
+    -- response content then includes real {type:"thinking",...} blocks
+    -- alongside text/toolCall ones (agent.lua's own
+    -- extract_thinking_text/display_blocks handle both).
     payload.generationConfig = {thinkingConfig = {includeThoughts = true}}
 
     response, err = vertex_post(model .. ":generateContent", payload)

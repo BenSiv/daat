@@ -39,7 +39,7 @@ TEST_RESPONSE_INDEX = 0
 -- Same char/4 heuristic as agent.estimate_tokens (not cross-required
 -- here to avoid coupling this standalone test provider to agent.lua's
 -- own load order) -- deterministic stand-in usage numbers so
--- knowledge_context recording (task #87) has real, testable
+-- knowledge_context recording has real, testable
 -- prompt_tokens/completion_tokens even under the test provider,
 -- instead of nils that would silently skip assertions.
 function estimate_tokens_for_test(text)
@@ -51,7 +51,7 @@ end
 
 function agent_provider_test.generate(model, system_prompt, prompt)
     -- Optional: write the exact system_prompt this call received to a
-    -- file, for tests asserting on it directly (e.g. task #70's
+    -- file, for tests asserting on it directly (e.g. theme.lua's
     -- deployment-configurable system_prompt_extra) rather than
     -- indirectly through model behavior. Off unless a test opts in --
     -- never touches the normal (no env var) test path.

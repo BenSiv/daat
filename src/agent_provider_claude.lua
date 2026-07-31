@@ -2,8 +2,7 @@
 -- embeddings interface. Calls the Messages API directly
 -- (https://api.anthropic.com/v1/messages) via a curl shell-out --
 -- same "bind to an existing, battle-tested tool" stance as
--- agent_provider_vertex.lua, no vendored HTTP/TLS client, no Node/pi-ai
--- bridge process.
+-- agent_provider_vertex.lua, no vendored HTTP/TLS client.
 --
 -- .converse() translates agent.lua's own provider-agnostic canonical
 -- shape (see agent_provider.lua's own header, and doc/agent-protocol.md
