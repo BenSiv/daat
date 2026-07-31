@@ -1302,7 +1302,7 @@ function html.render_entity_edit(entity_type, layout_json, row_json, entity_id, 
     escaped_type = html.html_escape(entity_type)
     escaped_entity_id = tostring(entity_id)
     edit_header = render_page_header("Edit " .. escaped_type .. " #" .. escaped_entity_id,
-        "<a href=\"detail?type=" .. escaped_type .. "&entity_id=" .. escaped_entity_id .. "\">&larr; Back to detail</a>", nil)
+        "<a class=\"btn btn-secondary\" href=\"detail?type=" .. escaped_type .. "&entity_id=" .. escaped_entity_id .. "\">&larr; Back to detail</a>", nil)
     return string.format("""
 <div class="fossil-doc" data-title="Edit %s #%s">
     <style>
@@ -1827,7 +1827,7 @@ function html.render_detail(db_path, entity_type, layout, row, history, nonce, h
     end
 
     detail_header = render_page_header(escaped_type .. " " .. title_id_part,
-        "<a href=\"browse?type=" .. escaped_type .. "\">&larr; Back to browse</a>",
+        "<a class=\"btn btn-secondary\" href=\"browse?type=" .. escaped_type .. "\">&larr; Back to browse</a>",
         "<div class=\"platform-header-actions\">" .. edit_link .. print_label_html .. "</div>")
     return string.format("""
 <div class="fossil-doc" data-title="%s %s">
@@ -1933,7 +1933,7 @@ function related_records_html(db_path, related, entity_id)
             if own_label != nil then
                 link_text = html.html_escape(own_label) .. " (#" .. tostring(r.id) .. ")"
             end
-            rows_html = rows_html .. "<li><a href=\"detail?type=" .. escaped_from .. "&entity_id=" .. tostring(r.id) .. "\">" .. link_text .. "</a></li>"
+            rows_html = rows_html .. "<li><a class=\"btn btn-secondary\" href=\"detail?type=" .. escaped_from .. "&entity_id=" .. tostring(r.id) .. "\">" .. link_text .. "</a></li>"
         end
         if rows_html == "" then
             rows_html = "<p class=\"platform-related-empty\">None yet.</p>"
@@ -3462,7 +3462,7 @@ function html.render_template(def, rendered_markdown, nonce)
     escaped_name = html.html_escape(def.name)
 
     template_header = render_page_header(escaped_label,
-        "<p>" .. escaped_desc .. "</p><p><a href=\"templates\">&larr; All templates</a></p>",
+        "<p>" .. escaped_desc .. "</p><p><a class=\"btn btn-secondary\" href=\"templates\">&larr; All templates</a></p>",
         "<a class=\"btn btn-primary\" href=\"document-edit?from_template=" .. escaped_name .. "\">+ New document from template</a>")
     return string.format("""
 <div class="fossil-doc" data-title="Template: %s">
@@ -3926,7 +3926,7 @@ function html.render_document(doc, rendered_html, breadcrumbs, children, backlin
 
     children_html = ""
     for _, child in ipairs(children) do
-        children_html = children_html .. "<li><a href=\"document?entity_id=" .. tostring(child.id) .. "\">" ..
+        children_html = children_html .. "<li><a class=\"btn btn-secondary\" href=\"document?entity_id=" .. tostring(child.id) .. "\">" ..
             html.html_escape(child.title) .. "</a></li>"
     end
     children_block = ""
@@ -3936,7 +3936,7 @@ function html.render_document(doc, rendered_html, breadcrumbs, children, backlin
 
     backlinks_html = ""
     for _, link in ipairs(backlinks) do
-        backlinks_html = backlinks_html .. "<li><a href=\"document?entity_id=" .. tostring(link.id) .. "\">" ..
+        backlinks_html = backlinks_html .. "<li><a class=\"btn btn-secondary\" href=\"document?entity_id=" .. tostring(link.id) .. "\">" ..
             html.html_escape(link.title) .. "</a></li>"
     end
     backlinks_block = ""
