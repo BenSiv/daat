@@ -1,23 +1,17 @@
 -- The knowledge pool: retrieval activity logging, tiering, and
--- rule-based review, adapted from a Fossil SCM fork's much larger
--- ai_note/ai_retrieval/ai_review system (not copied verbatim -- see
--- doc/architecture.md's "Knowledge pool" section for the mapping).
--- Deliberately dropped from the source system: per-source-type
--- authority weighting, a metadata-quality gate (tied to fields this
--- codebase's notes don't have), and heat decay (the source system has
--- none either -- heat only ever grows; this port added lazy decay, see
--- document.effective_heat).
+-- rule-based review (see doc/architecture.md's "Knowledge pool" section
+-- for the full design, including what this was adapted from and
+-- deliberately dropped).
 --
--- task #106: `knowledge_note` no longer exists as a separate table.
 -- Tier/heat/retrieval_count/source_*/content_hash/duplicate_of/
--- merged_into are columns directly on `document` (see document.lua's
--- ensure_document_knowledge_columns) -- one unified pool, not two
--- concepts mirroring each other's content. A document that gets
--- searched IS the record that accrues heat/tier; there's no separate
--- "note" created to shadow it. The only thing still created fresh here
--- is a genuinely new document (e.g. a chat's leaked reasoning text, or
--- a future distilled note -- task #107) that has no existing document
--- to attach to -- those land under document.ensure_knowledge_pool_folder,
+-- merged_into are columns directly on `document` itself (see
+-- document.lua's ensure_document_knowledge_columns) -- one unified
+-- pool, not two concepts mirroring each other's content. A document
+-- that gets searched IS the record that accrues heat/tier; there's no
+-- separate "note" created to shadow it. The only thing still created
+-- fresh here is a genuinely new document (e.g. a chat's leaked
+-- reasoning text, or a distilled note) that has no existing document to
+-- attach to -- those land under document.ensure_knowledge_pool_folder,
 -- visible and browsable like any other document folder, never hidden.
 --
 -- The pure tier/heat/dedup heuristics (content_hash, effective_heat,
@@ -46,11 +40,10 @@ CREATE TABLE IF NOT EXISTS knowledge_retrieval (
 );
 
 -- `rank` (backtick-quoted, not a bare identifier): a genuine reserved
--- word in MySQL 8.0 (window functions), though not in MariaDB -- found
--- running tst/integration/mariadb_backend.bats against a real Cloud SQL
--- for MySQL instance. Backtick quoting is valid MySQL/MariaDB syntax and
--- SQLite's own MySQL-compatibility extension, so this is a single,
--- unified fix needing no per-backend branch.
+-- word in MySQL 8.0 (window functions), though not in MariaDB (see
+-- doc/mariadb-migration.md). Backtick quoting is valid MySQL/MariaDB
+-- syntax and SQLite's own MySQL-compatibility extension, so this is a
+-- single, unified fix needing no per-backend branch.
 CREATE TABLE IF NOT EXISTS knowledge_retrieval_document (
     retrieval_id INTEGER NOT NULL,
     document_id INTEGER NOT NULL,
@@ -73,14 +66,12 @@ CREATE TABLE IF NOT EXISTS knowledge_review (
     created_at TEXT DEFAULT (%s)
 );
 
--- task #87: the actual prompt/reasoning/token record per chat turn --
--- adapted from a Fossil fork's own `ai_context` (see doc/architecture.md).
--- Linked to `agent_message` (the assistant response this context
--- produced), not a commit/rid the way the source system's version-
--- control-centric design was -- platform-wip's own immutable,
--- append-only chat log is the natural anchor here, not a Fossil-style
--- checkin. `reasoning_document_id` (task #106: renamed from
--- reasoning_note_id) points at a document (source_type='reasoning')
+-- The actual prompt/reasoning/token record per chat turn (see
+-- doc/architecture.md's "Knowledge pool" section, "Full prompt/
+-- reasoning/token persistence"). Linked to `agent_message` (the
+-- assistant response this context produced) -- platform-wip's own
+-- immutable, append-only chat log is the natural anchor here.
+-- `reasoning_document_id` points at a document (source_type='reasoning')
 -- rather than storing reasoning text inline -- reasoning goes through
 -- the exact same tiering/retrieval/decay pipeline as everything else,
 -- not a second parallel log.
@@ -88,12 +79,11 @@ CREATE TABLE IF NOT EXISTS knowledge_context (
     id INTEGER PRIMARY KEY %s,
     session_id TEXT NOT NULL,
     message_id INTEGER,
-    -- LONGTEXT, not TEXT -- MariaDB's plain TEXT caps at 65,535 bytes;
-    -- since the pi-ai migration this column stores the full JSON-encoded
-    -- message history sent to the model, not a short flattened prompt,
-    -- so it hits that cap far more easily than before (same bug class
-    -- already fixed for document.content/entity_event.field_changes --
-    -- see schema.lua's SQL_TYPE.text).
+    -- LONGTEXT, not TEXT -- this column stores the full JSON-encoded
+    -- message history sent to the model, which routinely exceeds
+    -- MariaDB's plain TEXT's 65,535-byte cap (same bug class as
+    -- document.content/entity_event.field_changes -- see schema.lua's
+    -- SQL_TYPE.text).
     prompt LONGTEXT,
     model_id TEXT,
     reasoning_document_id INTEGER,
@@ -103,10 +93,10 @@ CREATE TABLE IF NOT EXISTS knowledge_context (
     created_at TEXT DEFAULT (%s)
 );
 
--- task #87: per-reply classification + user feedback -- adapted from
--- the same fork's `ai_chat_eval`. `message_id` is denormalized here
--- (also reachable via context_id -> knowledge_context.message_id) so
--- the feedback route can look a row up directly from what the chat
+-- Per-reply classification + user feedback (see doc/architecture.md's
+-- "Chat-reply evaluation + user feedback"). `message_id` is denormalized
+-- here (also reachable via context_id -> knowledge_context.message_id)
+-- so the feedback route can look a row up directly from what the chat
 -- widget already has rendered, without a join.
 CREATE TABLE IF NOT EXISTS knowledge_chat_eval (
     id INTEGER PRIMARY KEY %s,
@@ -124,12 +114,12 @@ CREATE TABLE IF NOT EXISTS knowledge_chat_eval (
     created_at TEXT DEFAULT (%s)
 );
 
--- task #109: one row per *pair* of documents whose co-retrieval has
--- been evaluated (linked or declined) -- document_a_id is always the
--- smaller id, so (a,b) and (b,a) are always the same row. What makes
--- "don't re-ask on every shared retrieval" and "re-ask once
--- co-occurrence has grown enough since a decline" both possible without
--- re-running the same model call over and over.
+-- One row per *pair* of documents whose co-retrieval has been evaluated
+-- (linked or declined) -- document_a_id is always the smaller id, so
+-- (a,b) and (b,a) are always the same row. What makes "don't re-ask on
+-- every shared retrieval" and "re-ask once co-occurrence has grown
+-- enough since a decline" both possible without re-running the same
+-- model call over and over.
 CREATE TABLE IF NOT EXISTS knowledge_link_review (
     document_a_id INTEGER NOT NULL,
     document_b_id INTEGER NOT NULL,
@@ -156,13 +146,11 @@ function knowledge_schema_sql(db_path)
 end
 
 -- Real MySQL has no "CREATE INDEX IF NOT EXISTS" at all (a syntax error,
--- not a no-op, unlike MariaDB) -- found running tst/integration/
--- mariadb_backend.bats against a real Cloud SQL for MySQL instance. These
--- indexes used to live inside KNOWLEDGE_SCHEMA's own semicolon batch;
--- pulled out into their own guarded execs (db.index_exists first, same
--- "check, then conditionally create" shape schema.lua's own CREATE INDEX
--- call sites use) since a single bad statement fails the whole batch on
--- MySQL, not just that one statement.
+-- not a no-op, unlike MariaDB -- see doc/mariadb-migration.md). Pulled
+-- out of KNOWLEDGE_SCHEMA's own semicolon batch into their own guarded
+-- execs (db.index_exists first, same "check, then conditionally create"
+-- shape schema.lua's own CREATE INDEX call sites use) since a single bad
+-- statement fails the whole batch on MySQL, not just that one statement.
 function ensure_knowledge_indexes(db_path)
     indexes = {
         {name = "knowledge_retrieval_document_document_idx", table = "knowledge_retrieval_document",
@@ -203,13 +191,13 @@ function knowledge.get_document(db_path, document_id)
     return doc
 end
 
--- Creates a genuinely new document (chat reasoning today; future
--- distilled notes -- task #107) under the Knowledge Pool folder --
--- there's no existing document to attach this content to, unlike a search
--- hit against a document that already exists. Attributed to the real
--- logged-in user, same as any other document, not a synthetic actor --
--- the Knowledge Pool folder itself is the only thing authored as
--- "system" (see document.ensure_knowledge_pool_folder).
+-- Creates a genuinely new document (chat reasoning, a distilled note)
+-- under the Knowledge Pool folder -- there's no existing document to
+-- attach this content to, unlike a search hit against a document that
+-- already exists. Attributed to the real logged-in user, same as any
+-- other document, not a synthetic actor -- the Knowledge Pool folder
+-- itself is the only thing authored as "system" (see
+-- document.ensure_knowledge_pool_folder).
 function knowledge.create_document_note(db_path, author, title, body, source_type, source_id, source_ref)
     folder_id = document.ensure_knowledge_pool_folder(db_path)
     document_id, issues = document.create_page(db_path, author, title, folder_id, body, nil)
@@ -235,21 +223,14 @@ function knowledge.session_document_for(db_path, session_id)
     return rows[1]
 end
 
--- task #108 follow-up, explicit user direction ("full ai thinking and
--- chat session persistence in the knowledge pool... every conversation
--- with the agent is itself saved as a document"): one document per chat
--- session, kept in sync with its own transcript rather than a one-time
--- snapshot -- find-or-create, then update in place on every call (agent.
--- lua's sync_session_document calls this at the end of every real
--- turn). Filed under the Knowledge Pool folder, tagged source_type =
--- 'chat_session' / source_ref = the session's own id (not source_id --
--- agent_session ids are opaque hex text, not the integer source_id
--- column). Becomes part of the same tiered/searchable pool as every
--- other document -- a heavily-revisited conversation can cross into
--- distillation (knowledge.maybe_distill) exactly the same way any other
--- document does, so "combine what a conversation touched into
--- something durable" falls out of the existing pipeline instead of
--- needing its own separate mechanism.
+-- One document per chat session, kept in sync with its own transcript
+-- rather than a one-time snapshot -- find-or-create, then update in
+-- place on every call (agent.lua's sync_session_document calls this at
+-- the end of every real turn). Filed under the Knowledge Pool folder,
+-- tagged source_type = 'chat_session' / source_ref = the session's own
+-- id (not source_id -- agent_session ids are opaque hex text, not the
+-- integer source_id column). See doc/architecture.md's "Whole chat
+-- sessions are themselves documents" for the full design and why.
 function knowledge.sync_session_document(db_path, author, session_id, title, transcript)
     existing = knowledge.session_document_for(db_path, session_id)
     if existing != nil then
@@ -268,16 +249,15 @@ function knowledge.sync_session_document(db_path, author, session_id, title, tra
     return document_id
 end
 
--- task #107: the agent-driven counterpart to knowledge.create_document_
--- note's reasoning-note path -- a genuinely new, concise, single-idea
--- document distilled from a source (an existing document, a chat
--- exchange), not a raw mirror of it. Always starts at tier 0 like any
--- new pool document -- earns its way up through the same heat/
--- retrieval mechanism as everything else, never pre-promoted just
--- because an agent wrote it. Flattens entity.create's own {field,
--- severity, message} issues shape into a plain string, same as the old
--- materialize_note did -- both the CLI and the agent tool dispatch
--- just want a message, not that shape.
+-- The agent-driven counterpart to knowledge.create_document_note's
+-- reasoning-note path -- a genuinely new, concise, single-idea document
+-- distilled from a source (an existing document, a chat exchange), not
+-- a raw mirror of it. Always starts at tier 0 like any new pool
+-- document -- earns its way up through the same heat/retrieval
+-- mechanism as everything else, never pre-promoted just because an
+-- agent wrote it. Flattens entity.create's own {field, severity,
+-- message} issues shape into a plain string -- both the CLI and the
+-- agent tool dispatch just want a message, not that shape.
 function knowledge.distill_document(db_path, author, source_document_id, title, body)
     document_id, issues = knowledge.create_document_note(db_path, author, title, body, "distilled", source_document_id, nil)
     if document_id == nil then
@@ -301,11 +281,10 @@ end
 -- Retrieval logging
 --------------------------------------------------------------------------
 
--- Fixed (task #87, in passing): same real concurrent-CGI race as
--- ledger.lua's append_create/agent.add_message had (see their own
--- comments) -- SELECT MAX(id) can collide with another connection's
--- own insert; db.exec's own connection-scoped second return value
--- can't.
+-- Same real concurrent-CGI race as ledger.lua's append_create/agent.
+-- add_message (see their own comments) -- SELECT MAX(id) can collide
+-- with another connection's own insert; db.exec's own connection-scoped
+-- second return value can't.
 function knowledge.begin_retrieval(db_path, session_id, query_text, hit_count)
     _, retrieval_id = db.exec(db_path, string.format(
         "INSERT INTO knowledge_retrieval (session_id, query_text, hit_count) VALUES (%s, %s, %d);",
@@ -314,12 +293,11 @@ function knowledge.begin_retrieval(db_path, session_id, query_text, hit_count)
     return tonumber(retrieval_id)
 end
 
--- Bumps the document's heat/retrieval_count by the ported reinforcement
--- formula and records the per-hit row audit-style, mirroring
--- ai_note_record_retrieval exactly (see document.reinforcement_delta).
--- content_hash is refreshed on every hit (not just at creation) so
--- dedup review stays accurate even as a document's content is edited over
--- time.
+-- Bumps the document's heat/retrieval_count by the reinforcement
+-- formula and records the per-hit row audit-style (see
+-- document.reinforcement_delta). content_hash is refreshed on every hit
+-- (not just at creation) so dedup review stays accurate even as a
+-- document's content is edited over time.
 function knowledge.record_retrieval_hit(db_path, retrieval_id, document_id, tier, rank, score, content_hash)
     delta = document.reinforcement_delta(tier)
     tier_weight = document.tier_weight(tier)
@@ -370,17 +348,16 @@ function knowledge.duplication_status(db_path, document_id, content_hash, source
     return "unique"
 end
 
--- Runs once per retrieval, after all hits are logged (mirrors
--- ai_retrieval_review's invocation point): for every document this
--- retrieval touched, computes the review gates, applies any resulting
--- mutation (retitle, dedup, tier promotion), and records one
--- knowledge_review row per document for audit. Retitling only ever
+-- Runs once per retrieval, after all hits are logged: for every
+-- document this retrieval touched, computes the review gates, applies
+-- any resulting mutation (retitle, dedup, tier promotion), and records
+-- one knowledge_review row per document for audit. Retitling only ever
 -- applies to system/agent-derived documents (source_type set) -- a
 -- real user-authored document's title is never rewritten out from under
 -- them, even if it happens to look generic ("note", "untitled", ...).
--- `author` (task #108) attributes any resulting distillation
--- (knowledge.maybe_distill) to the real user whose retrieval actually
--- triggered it -- reactive, tied to real usage, not a synthetic actor.
+-- `author` attributes any resulting distillation (knowledge.
+-- maybe_distill) to the real user whose retrieval actually triggered it
+-- -- reactive, tied to real usage, not a synthetic actor.
 function knowledge.review_retrieval(db_path, retrieval_id, author)
     rows = db.query(db_path, string.format(
         "SELECT document_id FROM knowledge_retrieval_document WHERE retrieval_id = %d;", tonumber(retrieval_id)
@@ -437,15 +414,14 @@ function knowledge.review_retrieval(db_path, retrieval_id, author)
                 tonumber(retrieval_id), doc.id, db.quote(content_shape), db.quote(connectivity), db.quote(duplication), db.quote(title_status)
             ))
 
-            -- task #108: reactive distillation -- decoupled from
-            -- target_tier and from the source's own revised/tier state
-            -- (fixes a real dead-code bug: the old gate required
-            -- atomicity != "needs-split" to reach tier 2 at all, which
-            -- made maybe_distill's own "only distill from needs-split"
-            -- guard unreachable). Distillation cares whether the SOURCE
-            -- is worth extracting a card from -- a "developed",
-            -- multi-section document -- not whether it's been processed
-            -- itself. See knowledge.maybe_distill's own comment for why
+            -- Reactive distillation -- decoupled from target_tier and
+            -- from the source's own revised/tier state, since
+            -- distillation cares whether the SOURCE is worth extracting
+            -- a card from -- a "developed", multi-section document --
+            -- not whether it's been processed itself (see
+            -- doc/architecture.md's "Reactive distillation" for the
+            -- full design, including a dead-code bug this decoupling
+            -- fixed). See knowledge.maybe_distill's own comment for why
             -- this is a direct one-shot model call rather than a full
             -- agent session, and why its own guard keeps this a rare,
             -- at-most-once-per-document cost, not a per-search tax.
@@ -455,9 +431,9 @@ function knowledge.review_retrieval(db_path, retrieval_id, author)
         end
     end
 
-    -- task #109: co-retrieval -> agent-evaluated explicit link. Needs
-    -- the *whole batch* (to form pairs), so this runs once here rather
-    -- than inside the per-document loop above like the other gates.
+    -- Co-retrieval -> agent-evaluated explicit link. Needs the *whole
+    -- batch* (to form pairs), so this runs once here rather than inside
+    -- the per-document loop above like the other gates.
     document_ids = {}
     for _, row in ipairs(rows) do
         table.insert(document_ids, row.document_id)
@@ -466,15 +442,14 @@ function knowledge.review_retrieval(db_path, retrieval_id, author)
 end
 
 --------------------------------------------------------------------------
--- task #87: full prompt/reasoning/token persistence + chat evaluation
+-- Full prompt/reasoning/token persistence + chat evaluation
 --------------------------------------------------------------------------
 
--- Same detection ai_chat_eval_has_visible_reasoning used: a model that
--- leaks its own step-by-step thinking into the visible reply (rather
--- than keeping it internal) instead of a clean final answer. Plain
--- string.find (not a pattern), since none of these markers need
--- pattern matching and a reply's own content is arbitrary text that
--- shouldn't ever be interpreted as one.
+-- Detects a model that leaks its own step-by-step thinking into the
+-- visible reply (rather than keeping it internal) instead of a clean
+-- final answer. Plain string.find (not a pattern), since none of these
+-- markers need pattern matching and a reply's own content is arbitrary
+-- text that shouldn't ever be interpreted as one.
 function knowledge.reply_has_visible_reasoning(text)
     if text == nil or text == "" then
         return false
@@ -492,8 +467,7 @@ function knowledge.reply_has_visible_reasoning(text)
 end
 
 -- Classifies one reply into (reply_kind, quality_status,
--- reasoning_status) -- same four-way split as the source system's
--- ai_chat_eval_record: error / reasoning-visible / final / empty.
+-- reasoning_status): error / reasoning-visible / final / empty.
 function knowledge.classify_reply(is_error, text)
     if is_error == true then
         return "error", "error", "none"
@@ -532,8 +506,8 @@ function knowledge.record_context(db_path, session_id, message_id, prompt, model
 end
 
 -- Records one chat-reply evaluation row -- classification is rule-based
--- today (knowledge.classify_reply), same as the source system's own
--- ai_chat_eval_record; nothing here requires an extra model call.
+-- today (knowledge.classify_reply); nothing here requires an extra
+-- model call.
 function knowledge.record_chat_eval(db_path, session_id, context_id, message_id, provider, model, is_error, reply_text)
     reply_kind, quality_status, reasoning_status = knowledge.classify_reply(is_error, reply_text)
     action_summary = string.format("reply_kind=%s; quality=%s; reasoning=%s", reply_kind, quality_status, reasoning_status)
@@ -547,14 +521,14 @@ function knowledge.record_chat_eval(db_path, session_id, context_id, message_id,
     return eval_id
 end
 
--- The user-feedback half of ai_chat_eval -- looked up by message_id
+-- The user-feedback half of chat evaluation -- looked up by message_id
 -- (what the chat widget already has rendered for each reply), not an
 -- eval id the frontend was never told about. Checks existence with a
 -- real SELECT first, not db.exec's own return value -- sqlite_update
 -- and mariadb_update disagree on what their first return value even
--- means (plain `true` vs. a real affected-row count, confirmed
--- directly in luam's lib/database.lua), which is exactly why every
--- other UPDATE call site in this codebase already ignores it too.
+-- means (plain `true` vs. a real affected-row count), which is exactly
+-- why every other UPDATE call site in this codebase already ignores it
+-- too.
 function knowledge.record_chat_feedback(db_path, message_id, feedback)
     rows = db.query(db_path, string.format(
         "SELECT id FROM knowledge_chat_eval WHERE message_id = %d;", tonumber(message_id)
@@ -570,32 +544,33 @@ function knowledge.record_chat_feedback(db_path, message_id, feedback)
 end
 
 --------------------------------------------------------------------------
--- task #108: reactive distillation, tied to real usage/review activity
+-- Reactive distillation, tied to real usage/review activity
 --------------------------------------------------------------------------
 --
--- Explicit user direction: not a periodic full-pool scan on a cron/
--- systemd-timer schedule (this codebase has none anyway -- no in-app
--- background scheduler exists at all) -- distillation should fall out
--- of "general usage processing" itself. A document that's frequently
--- retrieved and has been reviewed (crossed into tier 2, "Curated
--- Draft", the same bar knowledge.promotion_target_tier already applies)
--- and doesn't already have a distilled derivative gets one generated
--- right here, inline in the same request that pushed it over that bar
--- -- not queued for a separate process. This fires at most ONCE per
--- source document ever (gated on "no existing distilled derivative"),
--- so the added latency is a rare, one-time cost per document crossing
--- the bar, not a per-search tax.
+-- Not a periodic full-pool scan on a cron/systemd-timer schedule (this
+-- codebase has none anyway -- no in-app background scheduler exists at
+-- all) -- distillation falls out of "general usage processing" itself.
+-- A document that's frequently retrieved and has been reviewed (crossed
+-- into tier 2, "Curated Draft", the same bar knowledge.
+-- promotion_target_tier already applies) and doesn't already have a
+-- distilled derivative gets one generated right here, inline in the
+-- same request that pushed it over that bar -- not queued for a
+-- separate process. This fires at most ONCE per source document ever
+-- (gated on "no existing distilled derivative"), so the added latency
+-- is a rare, one-time cost per document crossing the bar, not a
+-- per-search tax. See doc/architecture.md's "Reactive distillation" for
+-- the full design.
 --
 -- Deliberately a single, direct model call (agent_provider.generate),
 -- not a full tool-calling agent session/pending-approval flow like
--- knowledge.distill/AGENT_TOOLS.knowledge.distill (task #107, still the
--- right shape for an explicitly human- or agent-initiated distillation
+-- knowledge.distill/AGENT_TOOLS.knowledge.distill (still the right
+-- shape for an explicitly human- or agent-initiated distillation
 -- request) -- this path is a rule-triggered side effect of review, not
 -- a model deciding to act, so there's no proposal for a human to
 -- approve in the first place. Best-effort like everything else that
--- calls an external API from a save/review path (document.
--- reindex_embedding, task #105) -- a provider hiccup here must never
--- fail the review pass, let alone the search request that triggered it.
+-- calls an external API from a save/review path (e.g. document.
+-- reindex_embedding) -- a provider hiccup here must never fail the
+-- review pass, let alone the search request that triggered it.
 DISTILL_MODEL = "gemini-2.5-flash"
 
 DISTILL_SYSTEM_PROMPT = """
@@ -648,16 +623,16 @@ function knowledge.maybe_distill(db_path, author, doc, content_shape)
 end
 
 --------------------------------------------------------------------------
--- task #109: co-retrieval -> agent-evaluated explicit link
+-- Co-retrieval -> agent-evaluated explicit link
 --------------------------------------------------------------------------
 --
 -- Retrieval already surfaces an *implicit* similarity signal: documents
 -- that keep showing up together in the same search. Once a pair
 -- crosses a real, repeated pattern (not a one-off coincidence), it's
 -- worth asking whether that's a genuinely meaningful connection --
--- if so, make it an explicit document_link, which then feeds task
--- #106's spreading activation for free (no separate change needed in
--- document.search's own ranking).
+-- if so, make it an explicit document_link, which then feeds spreading
+-- activation (see doc/architecture.md's "Knowledge pool" section) for
+-- free, no separate change needed in document.search's own ranking.
 --
 -- Same shape as knowledge.maybe_distill just above: a deterministic
 -- rule (threshold + hub-ratio guard crossed) triggers one direct,
@@ -697,12 +672,11 @@ Two documents from the same knowledge pool have repeatedly been retrieved togeth
 -- unit-testable.
 --
 -- Ratio is against the *larger* of the two retrieval_counts, not the
--- smaller -- caught by this function's own unit test before shipping:
--- a hub document (retrieval_count=50) that happens to share 3
+-- smaller: a hub document (retrieval_count=50) that happens to share 3
 -- retrievals with a rarely-retrieved one (retrieval_count=4) must be
 -- rejected (3/50 = 0.06, well under the guard), but checking against
--- the *smaller* count (3/4 = 0.75) would have let it straight through
--- -- exactly backwards from what the guard is for.
+-- the *smaller* count (3/4 = 0.75) would let it straight through --
+-- exactly backwards from what the guard is for.
 function knowledge.co_retrieval_eligible(co_count, retrieval_count_a, retrieval_count_b)
     if co_count < CO_RETRIEVAL_LINK_THRESHOLD then
         return false
@@ -861,24 +835,23 @@ end
 -- The one integration point every retrieval path goes through
 --------------------------------------------------------------------------
 
--- ACT-R's "spreading activation" (explicit user direction: fold the
--- existing document_link graph into retrieval/context scoring): a
--- retrieved document's linked neighbors get a smaller, fan-diluted heat
--- reinforcement too, not just the document that actually matched the
--- query. Skips any neighbor that was ALSO a direct hit this retrieval
--- -- it already got the full direct-hit treatment via
--- record_retrieval_hit, and the two writes would otherwise fight over
--- the same knowledge_retrieval_document audit row (PRIMARY KEY
--- (retrieval_id, document_id)) for no benefit. retrieval_count is
--- deliberately NOT bumped for a spread neighbor -- it measures direct
--- retrieval hits specifically (promotion_target_tier's thresholds read
--- it that way); only heat/last_retrieved_at, the shared reinforcement
--- signal, moves. If the same neighbor is shared by more than one hit
--- document in the same retrieval, its real heat still accumulates both
--- bumps (that UPDATE is cumulative), but only the last-applied bump
--- writes the audit row -- an accepted, documented imprecision, same
--- category as knowledge.list_documents' own approximate raw-heat
--- ordering.
+-- ACT-R's "spreading activation": folds the existing document_link
+-- graph into retrieval/context scoring -- a retrieved document's linked
+-- neighbors get a smaller, fan-diluted heat reinforcement too, not just
+-- the document that actually matched the query. Skips any neighbor that
+-- was ALSO a direct hit this retrieval -- it already got the full
+-- direct-hit treatment via record_retrieval_hit, and the two writes
+-- would otherwise fight over the same knowledge_retrieval_document audit
+-- row (PRIMARY KEY (retrieval_id, document_id)) for no benefit.
+-- retrieval_count is deliberately NOT bumped for a spread neighbor -- it
+-- measures direct retrieval hits specifically (promotion_target_tier's
+-- thresholds read it that way); only heat/last_retrieved_at, the shared
+-- reinforcement signal, moves. If the same neighbor is shared by more
+-- than one hit document in the same retrieval, its real heat still
+-- accumulates both bumps (that UPDATE is cumulative), but only the
+-- last-applied bump writes the audit row -- an accepted, documented
+-- imprecision, same category as knowledge.list_documents' own
+-- approximate raw-heat ordering.
 function knowledge.spread_activation(db_path, retrieval_id, document_id, base_delta, hit_ids)
     neighbors = document.linked_neighbors(db_path, document_id)
     if #neighbors == 0 then
@@ -907,10 +880,10 @@ end
 
 -- Wraps document.search rather than modifying it -- document.search
 -- stays pure/reusable, knowledge.lua depends on document.lua, never
--- the reverse. Every result IS already the record that accrues heat/
--- tier (task #106) -- no separate note to create or look up first.
--- `author` (task #108) is threaded through to review_retrieval, purely
--- for attributing any reactive distillation it triggers.
+-- the reverse. Every result IS already the record that accrues
+-- heat/tier -- no separate note to create or look up first. `author`
+-- is threaded through to review_retrieval, purely for attributing any
+-- reactive distillation it triggers.
 function knowledge.search_and_log(db_path, query_text, limit, use_semantic, session_id, author)
     results = document.search(db_path, query_text, limit, use_semantic)
     retrieval_id = knowledge.begin_retrieval(db_path, session_id, query_text, #results)

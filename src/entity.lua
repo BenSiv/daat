@@ -1,11 +1,10 @@
--- Entity CRUD on top of the ledger: this is where "all-or-nothing per
--- submit" validation happens (doc/project_plan.md M1, and the earlier
--- validation-rules design) -- nothing is written to the ledger or the
--- projected table unless every value passes.
+-- Entity CRUD on top of the ledger: "all-or-nothing per submit"
+-- validation -- nothing is written to the ledger or the projected table
+-- unless every value passes.
 --
--- v0 validates structurally (required/type/enum/reference-exists) only.
--- Scriptable before-hooks (extension-authored validation rules) are M1;
--- this is the contract they'll plug into, not a separate mechanism.
+-- Validates structurally (required/type/enum/reference-exists) here;
+-- scriptable before-hooks (extension-authored validation rules, see
+-- doc/extensibility.md) plug into the same contract, run after.
 
 db = require("db")
 ledger = require("ledger")
@@ -248,11 +247,11 @@ function entity.validate(db_path, entity_type, values, old)
                 end
             end
 
-            -- task #73: genuinely executable field (label_template.sql
-            -- and any future schema that reuses this type) -- reject
-            -- anything but a single plain SELECT before it ever reaches
-            -- the ledger. Re-checked again at render time (label.lua),
-            -- not trusted from storage alone.
+            -- A genuinely executable field (label_template.sql and any
+            -- future schema that reuses this type) -- reject anything
+            -- but a single plain SELECT before it ever reaches the
+            -- ledger. Re-checked again at render time (label.lua), not
+            -- trusted from storage alone.
             if field.type == "sql_select" and view.is_select_only(value) == false then
                 table.insert(issues, {field = field.name, severity = "error",
                     message = "must be a single, plain SELECT statement (no ';', no DDL/DML/pragma)"})
@@ -281,12 +280,12 @@ function has_error(issues)
 end
 
 -- Creates an entity. Returns (entity_id, issues) on success, or
--- (nil, issues) if validation failed. Multivalue fields (task #84)
--- never become a column in the main INSERT -- they're written to their
--- own companion junction table (schema.write_multi_field) once the
--- row's own id exists. A create's own field_changes (ledger.
--- append_create, below) needs no special handling for them: JSON
--- already represents an array fine as the "new" value.
+-- (nil, issues) if validation failed. Multivalue fields never become a
+-- column in the main INSERT -- they're written to their own companion
+-- junction table (schema.write_multi_field) once the row's own id
+-- exists. A create's own field_changes (ledger.append_create, below)
+-- needs no special handling for them: JSON already represents an array
+-- fine as the "new" value.
 function entity.create(db_path, entity_type, values, author, source)
     issues = entity.validate(db_path, entity_type, values)
     if has_error(issues) then
@@ -390,17 +389,16 @@ function polymorphic_values_equal(a, b)
 end
 
 -- Updates an entity. Computes the old/new diff itself (from the current
--- projected row). `reason` (task #93) is optional unless this type's
--- schema set require_reason_on_update -- checked here, not in
--- ledger.lua, since the ledger itself has no opinion on any particular
--- type's own policy.
+-- projected row). `reason` is optional unless this type's schema set
+-- require_reason_on_update -- checked here, not in ledger.lua, since
+-- the ledger itself has no opinion on any particular type's own policy.
 --
--- Multivalue fields (task #84) are diffed as real old/new *sets* here,
--- not just a scalar inequality check, and resynced into their own
--- companion junction table (schema.write_multi_field) after the row's
--- own UPDATE -- without this, editing a multi_reference/multi_select
--- field would be completely invisible to ledger history, undermining
--- this platform's core "every change is ledgered" guarantee.
+-- Multivalue fields are diffed as real old/new *sets* here, not just a
+-- scalar inequality check, and resynced into their own companion
+-- junction table (schema.write_multi_field) after the row's own UPDATE
+-- -- without this, editing a multi_reference/multi_select field would
+-- be completely invisible to ledger history, undermining this
+-- platform's core "every change is ledgered" guarantee.
 function entity.update(db_path, entity_type, entity_id, values, author, source, reason)
     current = entity.get(db_path, entity_type, entity_id)
     if current == nil then
@@ -495,10 +493,10 @@ end
 -- default (pass include_archived=true to see it). Full ledger history
 -- (ledger.history) is untouched either way -- this only ever adds an
 -- 'archive' event, on top of whatever create/update events already
--- exist for this entity. `reason` (task #93) is optional unless this
--- type's schema set require_reason_on_archive -- archiving is the
--- stronger candidate for a schema to actually require one (rarer,
--- more consequential than a routine field edit).
+-- exist for this entity. `reason` is optional unless this type's schema
+-- set require_reason_on_archive -- archiving is the stronger candidate
+-- for a schema to actually require one (rarer, more consequential than
+-- a routine field edit).
 function entity.archive(db_path, entity_type, entity_id, author, source, reason)
     current = entity.get(db_path, entity_type, entity_id)
     if current == nil then
@@ -602,11 +600,10 @@ end
 -- one from a plain column type (e.g. sample.source: text ->
 -- polymorphic_reference) -- schema sync is additive-only and never
 -- drops the old column, so a raw row still carries that column's old,
--- stale value under the same key. Confirmed live: /browse crashed
--- rendering sample.source ("bad argument #1 to 'ipairs' (table
--- expected, got string)") because entity.list's rows were never run
--- through this override the way entity.get's already were -- only
--- entity.get had it, so /detail worked and /browse didn't.
+-- stale value under the same key. Skipping this override for any new
+-- raw-row reader reproduces the exact crash class this guards against:
+-- a polymorphic column's stale string value reaching code that expects
+-- the real {type=,id=} table shape (e.g. `ipairs` on a plain string).
 function entity.apply_computed_field_overrides(db_path, entity_type, rows)
     multi_fields = schema.multi_fields_by_name(db_path, entity_type)
     polymorphic_fields = schema.polymorphic_fields_by_name(db_path, entity_type)
@@ -621,15 +618,15 @@ function entity.apply_computed_field_overrides(db_path, entity_type, rows)
     return rows
 end
 
--- Attaches every multivalue field's current set to the returned row
--- (task #84) -- one extra schema.fields lookup plus one query per
--- multivalue field on this entity type, on every single call, including
--- the "does this referenced row exist" checks entity.validate itself
--- makes. Accepted as-is for correctness (a caller reading a row should
--- see its true complete shape) rather than optimized away -- revisit
--- only if this entity type's real read volume makes it actually show
--- up, the same "no premature optimization" bar this codebase already
--- applies elsewhere (e.g. document.search's own O(n) scan).
+-- Attaches every multivalue field's current set to the returned row --
+-- one extra schema.fields lookup plus one query per multivalue field on
+-- this entity type, on every single call, including the "does this
+-- referenced row exist" checks entity.validate itself makes. Accepted
+-- as-is for correctness (a caller reading a row should see its true
+-- complete shape) rather than optimized away -- revisit only if this
+-- entity type's real read volume makes it actually show up, the same
+-- "no premature optimization" bar this codebase already applies
+-- elsewhere (e.g. document.search's own O(n) scan).
 function entity.get(db_path, entity_type, entity_id)
     if db.table_exists(db_path, entity_type) == false then
         return nil
@@ -690,11 +687,11 @@ function entity.count(db_path, entity_type, include_archived)
     return tonumber(rows[1].n)
 end
 
--- task #112: filtered siblings of entity.list/entity.count, for
--- "every X that references this Y" (e.g. a mixture's ingredients) --
--- field_name/value are trusted the same way entity_type already is
--- throughout this file (schema-registered names from cgi.lua, not raw
--- user input), quoted for safety regardless.
+-- Filtered siblings of entity.list/entity.count, for "every X that
+-- references this Y" (e.g. a mixture's ingredients) -- field_name/value
+-- are trusted the same way entity_type already is throughout this file
+-- (schema-registered names from cgi.lua, not raw user input), quoted
+-- for safety regardless.
 function entity.list_by_field(db_path, entity_type, field_name, value, limit, offset, include_archived)
     if db.table_exists(db_path, entity_type) == false then
         return {}
@@ -747,10 +744,9 @@ function display_field_name(db_path, entity_type)
     return nil
 end
 
--- Cross-type "find this row" search for /data's own search box (task:
--- /documents already has a fuzzy title search, /data had nothing --
--- Ben's own explicit ask). A single client-side index across every
--- entity type doesn't scale the way /documents' title index does
+-- Cross-type "find this row" search for /data's own search box. A
+-- single client-side index across every entity type doesn't scale the
+-- way /documents' title index does
 -- (many types, some already in the hundreds of rows each), so this is
 -- a server-side query instead: one bounded, indexable LIKE per type,
 -- against the builtin "name" column (populated for e.g. Benchling-
@@ -847,9 +843,9 @@ function entity.run_pending_jobs(db_path, limit)
     return {ran = ran, failed = failed}
 end
 
--- A multivalue field's value (task #84) is a plain Lua array -- tostring()
--- on that gives an unreadable "table: 0x..." pointer, so this renders it
--- as a real bracketed, comma-joined list instead. Scalars pass through.
+-- A multivalue field's value is a plain Lua array -- tostring() on that
+-- gives an unreadable "table: 0x..." pointer, so this renders it as a
+-- real bracketed, comma-joined list instead. Scalars pass through.
 -- A single polymorphic-reference item ({type=, id=}) as "type:id" --
 -- matches the same CLI-facing convention entity create/update already
 -- accept for these fields, so what a user sees here is exactly what
@@ -1030,17 +1026,9 @@ function entity.do_entity(cmd_args, db_path)
     -- a real, backend-agnostic (SQLite or MariaDB, via db.lua's own
     -- dispatch) read path an external importer can use to detect "does
     -- a row for this source record already exist" and upsert instead of
-    -- blindly re-creating it every run. Added because a prior version
-    -- of that dedup logic (import_data_rest.py's own
-    -- load_existing_external_ids) read a hardcoded, stale SQLite file
-    -- path left over from before the fossci->platform-wip rename --
-    -- that path never existed once this deployment moved to MariaDB,
-    -- silently breaking dedup and causing every entity type to be
-    -- re-created wholesale on every sync run (confirmed live: ~4x
-    -- duplication of every table over 4 days before this was found).
-    -- Every row regardless of archived_at -- an archived row's
-    -- external_id is still "already imported," not fair game to
-    -- recreate.
+    -- blindly re-creating it every run. Every row regardless of
+    -- archived_at -- an archived row's external_id is still "already
+    -- imported," not fair game to recreate.
     if action == "external-ids" then
         entity_type = cmd_args[2]
         if entity_type == nil then
@@ -1065,10 +1053,7 @@ function entity.do_entity(cmd_args, db_path)
     -- {field_value: id} for every row of `entity_type` with a non-null,
     -- non-empty value for `field_name` -- same backend-agnostic lookup
     -- as external-ids, for an importer keying off some other natural
-    -- column instead of (or in addition to) external_id -- e.g.
-    -- convert_entries_to_pages.py's own experiment.number -> id lookup,
-    -- which had the exact same hardcoded-SQLite-file bug external-ids
-    -- was added to fix, just never updated to use it.
+    -- column instead of (or in addition to) external_id.
     if action == "field-map" then
         entity_type = cmd_args[2]
         field_name = cmd_args[3]
@@ -1093,13 +1078,13 @@ function entity.do_entity(cmd_args, db_path)
         return
     end
 
-    -- task #113: lets an external importer find every existing row
-    -- referencing a given parent (e.g. an entity_type with no stable
-    -- per-row external_id of its own, like a Mixture ingredient line
-    -- item) so it can archive-then-recreate them safely instead of
-    -- accumulating duplicates on every re-sync. Thin CLI wrapper
-    -- around the existing entity.list_by_field (task #112) -- no new
-    -- logic, just a new entry point for it.
+    -- Lets an external importer find every existing row referencing a
+    -- given parent (e.g. an entity_type with no stable per-row
+    -- external_id of its own, like a Mixture ingredient line item) so
+    -- it can archive-then-recreate them safely instead of accumulating
+    -- duplicates on every re-sync. Thin CLI wrapper around the existing
+    -- entity.list_by_field -- no new logic, just a new entry point for
+    -- it.
     if action == "list-by-field" then
         entity_type = cmd_args[2]
         field_name = cmd_args[3]

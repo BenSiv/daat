@@ -122,13 +122,12 @@ function view.validate(def)
     if view.is_select_only(def.sql) == false then
         return "view '" .. tostring(def.name) .. "': sql must be a single, plain SELECT statement (no ';', no DDL/DML/pragma)"
     end
-    -- task #116: an optional MariaDB-specific variant, for the rare
-    -- view whose SQL genuinely can't be written as one expression
-    -- valid on both backends (e.g. SQLite's julianday() vs. MariaDB's
-    -- DATEDIFF() -- no common function/operator exists for real
-    -- date-difference arithmetic across the two dialects). Absent for
-    -- every other view; only needed when a portable expression
-    -- doesn't exist at all, not as a general escape hatch.
+    -- An optional MariaDB-specific variant, for the rare view whose SQL
+    -- genuinely can't be written as one expression valid on both
+    -- backends (e.g. SQLite's julianday() vs. MariaDB's DATEDIFF() --
+    -- see doc/mariadb-migration.md). Absent for every other view; only
+    -- needed when a portable expression doesn't exist at all, not as a
+    -- general escape hatch.
     if def.sql_mariadb != nil then
         if type(def.sql_mariadb) != "string" or def.sql_mariadb == "" then
             return "view '" .. tostring(def.name) .. "': sql_mariadb must be a non-empty string if present"
@@ -149,11 +148,10 @@ function view.validate(def)
         if type(def.param.name) != "string" or def.param.name == "" then
             return "view '" .. tostring(def.name) .. "': param must have a non-empty string 'name'"
         end
-        -- "id" and "name" are confirmed to collide with Fossil's own
-        -- /ext dispatch parameters (see doc/deployment.md) -- a query
-        -- param with either of these names never reaches platform at
-        -- all, so reject them here rather than let an author discover
-        -- it as a mysterious 404 later.
+        -- "id" and "name" collide with Fossil's own /ext dispatch
+        -- parameters -- a query param with either of these names never
+        -- reaches platform at all, so reject them here rather than let
+        -- an author discover it as a mysterious 404 later.
         if def.param.name == "id" or def.param.name == "name" then
             return "view '" .. tostring(def.name) .. "': param name can't be 'id' or 'name' -- both collide with Fossil's own /ext dispatch (see doc/deployment.md)"
         end
@@ -200,10 +198,10 @@ function view.all(views_dir)
     return result
 end
 
--- task #116: the SQL text that actually runs for this backend --
--- def.sql_mariadb when running under MariaDB and present, def.sql
--- otherwise. The one place `def.sql` gets read directly for execution
--- is replaced by this everywhere below.
+-- The SQL text that actually runs for this backend -- def.sql_mariadb
+-- when running under MariaDB and present, def.sql otherwise. The one
+-- place `def.sql` gets read directly for execution is replaced by this
+-- everywhere below.
 function view.effective_sql(db_path, def)
     if db.is_mariadb(db_path) and def.sql_mariadb != nil then
         return def.sql_mariadb
@@ -270,8 +268,7 @@ end
 -- exactly one literal '?' placeholder if `param_type` is non-nil.
 -- Returns (rows, err) -- rows is a list of {column_name = value}
 -- tables. Shared by view.run (named/approved views) and label.lua's
--- label.render (task #73) -- one dual-backend-safe implementation,
--- not two.
+-- label.render -- one dual-backend-safe implementation, not two.
 --
 -- SQLite: real bind-parameter execution via sqlite3's own prepared-
 -- statement API -- never string-interpolated into the SQL text (db.
@@ -282,19 +279,17 @@ end
 -- same require), so it's pulled in locally here rather than assumed
 -- available.
 --
--- MariaDB: no equivalent path exists. Confirmed directly in luam/lib/
--- mariadb/lmariadb.c's own header comment -- the binding "deliberately
--- does NOT expose a prepared-statement/cursor object" at all. Falls
--- back to safely-encoded substitution instead: param_type is
+-- MariaDB: no equivalent path exists -- luam's own mariadb binding
+-- (lib/mariadb/lmariadb.c) deliberately does NOT expose a
+-- prepared-statement/cursor object at all (see its own header comment).
+-- Falls back to safely-encoded substitution instead: param_type is
 -- restricted to integer/number/text (view.validate already enforces
 -- this on param.type), so the substituted value is either a
 -- tonumber()-coerced literal (a number can never carry an injection
 -- payload, regardless of quoting) or db.quote()'d text (the same
 -- escaping helper trusted everywhere else in this codebase) --
 -- genuinely safe for these specific types, just not a real prepared
--- statement. A real gap until this fix: parameterized views/label
--- templates silently had no working path on MariaDB at all, and
--- platform-prod is MariaDB-only.
+-- statement.
 function view.run_sql(db_path, sql_text, param_type, param_value)
     if view.is_select_only(sql_text) == false then
         return nil, "refusing to run: not a plain SELECT"
@@ -458,30 +453,20 @@ function view.reference_columns(db_path, table_names)
     return columns
 end
 
--- Fixed (found live in real production, MariaDB backend): this used
--- to call sqlite3.open(db_path) directly, completely bypassing db.lua's
--- own backend dispatch -- worked fine when db_path was always a SQLite
--- file path, but a MariaDB descriptor is a table, not a string, so
--- every single /sql query has been a hard 500 ("bad argument #1 to
--- 'open' (string expected, got table)") since the MariaDB cutover,
--- with no automated test ever exercising this path against that
--- backend to catch it. db.query already dispatches correctly to
--- either backend and already returns (rows, column_names) -- both
--- vendored query functions (luam's sqlite_query/mariadb_query) throw
--- via error() on invalid SQL rather than returning nil+err, so this is
--- pcalled to keep converting a typo'd ad-hoc query into this page's own
--- inline error message instead of a generic 500.
--- A query with no LIMIT of its own gets one added automatically (task:
--- found live, a real unrestricted query against ~3800 rows of full
--- document content took 54 seconds and produced a 5.7MB page --
--- html.render_sql's own O(n^2) string-concat was the dominant cost,
--- fixed separately, but even at O(n) an unbounded admin power-query
--- against a real production table has no reason to ever render
--- thousands of full rows at once). Same word-boundary convention
--- is_select_only's own FORBIDDEN_SQL_WORDS check uses, so "LIMIT"
--- inside a string literal or column alias isn't mistaken for a real
--- clause keyword -- and isn't mistaken the other way either (a
--- query that only *mentions* limit without one is still capped).
+-- Uses db.query (not sqlite3.open directly) so this dispatches
+-- correctly to either backend and returns (rows, column_names) either
+-- way -- both vendored query functions (luam's sqlite_query/
+-- mariadb_query) throw via error() on invalid SQL rather than returning
+-- nil+err, so this is pcalled to convert a typo'd ad-hoc query into
+-- this page's own inline error message instead of a generic 500.
+-- A query with no LIMIT of its own gets one added automatically -- an
+-- unbounded admin power-query against a real production table has no
+-- reason to ever render thousands of full rows at once. Same
+-- word-boundary convention is_select_only's own FORBIDDEN_SQL_WORDS
+-- check uses, so "LIMIT" inside a string literal or column alias isn't
+-- mistaken for a real clause keyword -- and isn't mistaken the other
+-- way either (a query that only *mentions* limit without one is still
+-- capped).
 -- Fetches one extra row past the cap, not to display it, just to tell
 -- "exactly N rows" apart from "N rows, and more exist" for the UI's
 -- own truncation notice -- a second COUNT(*) query would double the
@@ -536,10 +521,9 @@ function view.run_adhoc(db_path, sql_text)
 end
 
 --------------------------------------------------------------------------
--- Read-only SQL for the chat agent (task: multi-step reasoning --
--- entity.list's own single-table exact-match filter can't express
--- joins/aggregates/grouping, which real questions genuinely need --
--- see agent.lua's entity.query tool)
+-- Read-only SQL for the chat agent -- entity.list's own single-table
+-- exact-match filter can't express joins/aggregates/grouping, which
+-- real questions genuinely need (see agent.lua's entity.query tool)
 --------------------------------------------------------------------------
 --
 -- A materially stricter boundary than the admin-only /sql console

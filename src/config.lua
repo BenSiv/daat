@@ -1,16 +1,8 @@
--- Resolves the store location: a `.store/` directory (renamed once the
--- project itself has a name) holding the ledger database, alongside
--- `schemas/`/`extensions/`/`views/`/`templates/` directories.
---
--- Root resolution no longer walks up looking for a Fossil checkout
--- marker (`.fslckout`/`_FOSSIL_`) -- there is no Fossil checkout to
--- find. `DOCUMENT_ROOT` is a standard CGI env var most web servers set
--- natively (not Fossil-specific, even though Fossil's own /ext relay
--- also happened to set it), so it's kept as the CGI-mode signal; CLI
--- mode still just uses the current directory. No more "which of two
--- possibly-different root markers wins" -- there's exactly one root
--- now, matching the single-SQLite-file storage consolidation this
--- migration is also doing.
+-- Resolves the store location: a `.store/` directory holding the
+-- ledger database, alongside `schemas/`/`extensions/`/`views/`/
+-- `templates/` directories. `DOCUMENT_ROOT` (a standard CGI env var
+-- most web servers set natively) is the CGI-mode signal for where that
+-- root is; CLI mode just uses the current directory.
 
 paths = require("paths")
 sandbox = require("sandbox")
@@ -125,10 +117,10 @@ function config.templates_dir(root)
     return paths.joinpath(root, "templates")
 end
 
--- task #84: named, reusable value lists a select/multi_select field can
--- reference (`dropdown = "work_process"`) instead of inlining its own
--- `values` list -- so several fields (or several entity types) can
--- share one list and a single edit updates every field referencing it.
+-- Named, reusable value lists a select/multi_select field can reference
+-- (`dropdown = "work_process"`) instead of inlining its own `values`
+-- list -- so several fields (or several entity types) can share one
+-- list and a single edit updates every field referencing it.
 function config.dropdowns_dir(root)
     if root == nil then
         root = config.find_root()
@@ -136,8 +128,8 @@ function config.dropdowns_dir(root)
     return paths.joinpath(root, "dropdowns")
 end
 
--- task #73: one file per entity type, each a `view`-shaped SQL query
--- (see src/label.lua) plus a `zpl` template string. Lazily looked up by
+-- One file per entity type, each a `view`-shaped SQL query (see
+-- src/label.lua) plus a `zpl` template string. Lazily looked up by
 -- entity_type on /detail and /label, not eagerly scanned at boot the
 -- way dropdowns/schemas are -- nothing else references a label
 -- template the way a schema field references a dropdown.
@@ -378,10 +370,10 @@ function config.load_theme(root)
         theme.hide_home_heading = true
     end
     -- Deployment-specific instructions appended to the chat agent's own
-    -- system prompt (task #70) -- e.g. domain vocabulary, house style,
-    -- or reminders specific to this deployment's use case, without
-    -- editing platform-wip's own source. A generic hook (any deployment
-    -- can set it), same split as every other theme.lua field here.
+    -- system prompt -- e.g. domain vocabulary, house style, or
+    -- reminders specific to this deployment's use case, without editing
+    -- platform-wip's own source. A generic hook (any deployment can set
+    -- it), same split as every other theme.lua field here.
     if type(parsed.system_prompt_extra) == "string" and parsed.system_prompt_extra != "" then
         theme.system_prompt_extra = parsed.system_prompt_extra
     end
@@ -413,13 +405,13 @@ function lua_string_literal(s)
     return "\"" .. escaped .. "\""
 end
 
--- Writes theme.lua back out -- the settings UI's save path (task #89),
--- symmetric to load_theme above rather than a one-off ad hoc writer.
--- `theme` is the same shape load_theme returns; only non-empty/
--- non-default values are actually written, so a field left blank in
--- the settings form round-trips back to "absent from theme.lua"
--- (load_theme's own generic fallback) instead of being persisted as an
--- explicit empty string.
+-- Writes theme.lua back out -- the settings UI's save path, symmetric
+-- to load_theme above rather than a one-off ad hoc writer. `theme` is
+-- the same shape load_theme returns; only non-empty/non-default values
+-- are actually written, so a field left blank in the settings form
+-- round-trips back to "absent from theme.lua" (load_theme's own
+-- generic fallback) instead of being persisted as an explicit empty
+-- string.
 function config.save_theme(root, theme)
     lines = {"return {"}
     if theme.site_name != nil and theme.site_name != "" and theme.site_name != "Platform" then
