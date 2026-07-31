@@ -1298,6 +1298,94 @@ EOF
     [[ "$output" =~ "200 OK" ]]
 }
 
+@test "view.list shows an approved view as runnable and an unapproved one as not" {
+    mkdir -p views
+    cat > views/samples.lua <<'EOF'
+return {name = "samples", title = "All samples", sql = "SELECT 1 AS id;", columns = {{name = "id", label = "ID"}}}
+EOF
+    cat > views/approved_one.lua <<'EOF'
+return {name = "approved_one", title = "Approved One", sql = "SELECT 1 AS id;", columns = {{name = "id", label = "ID"}}}
+EOF
+    "$BIN" view approve approved_one
+
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(tool_call_response "view.list" "{}")"$'\1'"$(done_response "Here are the views.")"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"what views are there\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "approved_one -- Approved One" ]]
+    [[ "$output" =~ "samples -- All samples" ]]
+    [[ "$output" =~ "approved, runnable" ]]
+    [[ "$output" =~ "not approved" ]]
+}
+
+@test "view.run against an approved view returns real rows" {
+    mkdir -p views
+    cat > views/counts.lua <<'EOF'
+return {name = "counts", title = "Counts", sql = "SELECT 42 AS answer;", columns = {{name = "answer", label = "Answer"}}}
+EOF
+    "$BIN" view approve counts
+
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(tool_call_response "view.run" '{"name":"counts"}')"$'\1'"$(done_response "42.")"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"run the counts view\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "answer=42" ]]
+}
+
+@test "view.run refuses an unapproved view, never returns its rows" {
+    mkdir -p views
+    cat > views/secret.lua <<'EOF'
+return {name = "secret", title = "Secret", sql = "SELECT 99 AS answer;", columns = {{name = "answer", label = "Answer"}}}
+EOF
+
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(tool_call_response "view.run" '{"name":"secret"}')"$'\1'"$(done_response "Can't run that.")"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"run the secret view\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "not approved" ]]
+    [[ ! "$output" =~ "99" ]]
+}
+
+@test "document.children lists top-level documents, then a folder's own children" {
+    parent_id=$("$BIN" entity create document title="Folder" | grep -o '[0-9]\+')
+    "$BIN" entity create document title="Child A" parent_id="$parent_id" >/dev/null
+    "$BIN" entity create document title="Child B" parent_id="$parent_id" >/dev/null
+
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(tool_call_response "document.children" "$(printf '{"parent_id":%s}' "$parent_id")")"$'\1'"$(done_response "Two children.")"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"what's under Folder\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "Child A" ]]
+    [[ "$output" =~ "Child B" ]]
+    [[ ! "$output" =~ "Folder" ]]
+}
+
+@test "document.breadcrumbs returns a nested document's root-to-self path" {
+    parent_id=$("$BIN" entity create document title="Folder" | grep -o '[0-9]\+')
+    child_id=$("$BIN" entity create document title="Child" parent_id="$parent_id" | grep -o '[0-9]\+')
+
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(tool_call_response "document.breadcrumbs" "$(printf '{"document_id":%s}' "$child_id")")"$'\1'"$(done_response "It's under Folder.")"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"where does Child live\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "Folder / Child" ]]
+}
+
 @test "entity.archive and entity.unarchive are destructive: pause for approval, then really apply once approved" {
     write_task_schema
     "$BIN" entity create task title="Old task" status=open >/dev/null

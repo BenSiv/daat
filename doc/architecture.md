@@ -336,7 +336,9 @@ and a small, explicit tool registry the model can act through.
   itself just a thin wrapper over the same `entity.lua` functions the
   registry already calls directly -- widening the registry, not adding
   a transport hop, is the real lever). Today: `document.search/create/
-  update` (documents); `entity.list_types/fields/list/get/create/update/
+  update/children/breadcrumbs` (documents -- `children`/`breadcrumbs`
+  browse the folder tree by structure, as an alternative to `search`'s
+  content matching); `entity.list_types/fields/list/get/create/update/
   archive/unarchive` (any registered entity type, with `filter_field`/
   `filter_value`/`limit`/`offset` on `list` -- `entity.list_types`/
   `fields` exist so the model discovers real types and field names
@@ -345,8 +347,13 @@ and a small, explicit tool registry the model can act through.
   templates `/templates` exposes to a human -- a separate,
   filesystem-based system from `document`, otherwise invisible to the
   model; `template.get`'s rendered output is meant to be handed
-  straight to `document.create`'s own `content` argument); and
-  `knowledge.stats/list/distill` (the knowledge pool, see below).
+  straight to `document.create`'s own `content` argument);
+  `knowledge.stats/list/distill` (the knowledge pool, see below); and
+  `view.list/run` (admin-*approved* saved queries, src/view.lua -- a
+  safer alternative to `entity.query` for anything a curated report
+  already covers, since a view only ever runs once a human has
+  explicitly approved its exact SQL text, not whatever the model
+  constructs on the fly; `view.run` refuses an unapproved view outright).
 - **A deployment can append its own instructions to the system
   prompt** without editing platform-wip's own source --
   `theme.lua`'s `system_prompt_extra` field (`agent.default_system_

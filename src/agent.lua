@@ -756,6 +756,23 @@ AGENT_TOOLS = {
                 required = {"entity_id"},
             },
         },
+        children = {
+            destructive = false,
+            description = "List the immediate sub-documents (folder contents) under a document, or every top-level document/folder if parent_id is omitted. Use this to browse the document tree by structure, as an alternative to document.search's content-based matching.",
+            parameters = {
+                type = "object",
+                properties = {parent_id = {type = "integer", description = "optional: omit for top-level documents"}},
+            },
+        },
+        breadcrumbs = {
+            destructive = false,
+            description = "Get a document's full path from the root (root first) -- use this to tell the user where a document sits in the folder structure.",
+            parameters = {
+                type = "object",
+                properties = {document_id = {type = "integer"}},
+                required = {"document_id"},
+            },
+        },
     },
     -- Generic entity access -- any registered schema, not a curated
     -- subset (schema.lua/entity.lua's own validation is the safety
@@ -938,6 +955,30 @@ AGENT_TOOLS = {
                     source_document_id = {type = "integer", description = "optional: the existing document this was distilled from"},
                 },
                 required = {"title", "content"},
+            },
+        },
+    },
+    -- Admin-approved saved queries (src/view.lua) -- a safer alternative
+    -- to entity.query for anything a curated report already covers,
+    -- since a view only ever runs once a human has explicitly approved
+    -- its exact SQL text (view.approve/view.is_approved), not whatever
+    -- the model constructs on the fly.
+    view = {
+        list = {
+            destructive = false,
+            description = "List admin-approved saved views (name, title, description, and whether it takes a parameter) available to run. Only approved views can actually be run -- see view.run.",
+            parameters = EMPTY_OBJECT_SCHEMA,
+        },
+        run = {
+            destructive = false,
+            description = "Run an approved saved view by name and return its rows. Pass param_value if view.list said this view takes a parameter. Refuses to run an unapproved view -- ask the user to approve it via /view first, or use entity.query instead if no approved view covers this.",
+            parameters = {
+                type = "object",
+                properties = {
+                    name = {type = "string", description = "view name, from view.list"},
+                    param_value = {type = "string", description = "optional, only if the view declares a param"},
+                },
+                required = {"name"},
             },
         },
     },
@@ -1208,6 +1249,33 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
             return nil, issues_summary(issues)
         end
         return "Updated document #" .. tostring(updated_id)
+    end
+
+    if tool_name == "document" and method_name == "children" then
+        rows = document.children(db_path, tonumber(args.parent_id))
+        if #rows == 0 then
+            return "No sub-documents."
+        end
+        lines = {}
+        for _, r in ipairs(rows) do
+            table.insert(lines, "#" .. tostring(r.id) .. " " .. r.title)
+        end
+        return table.concat(lines, "\n")
+    end
+
+    if tool_name == "document" and method_name == "breadcrumbs" then
+        if args.document_id == nil then
+            return nil, "breadcrumbs requires document_id"
+        end
+        crumbs = document.breadcrumbs(db_path, tonumber(args.document_id))
+        if #crumbs == 0 then
+            return nil, "no such document (or it has no resolvable path)"
+        end
+        parts = {}
+        for _, c in ipairs(crumbs) do
+            table.insert(parts, c.title)
+        end
+        return table.concat(parts, " / ")
     end
 
     if tool_name == "entity" and method_name == "list_types" then
@@ -1533,6 +1601,62 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
             return nil, tostring(err)
         end
         return "Distilled document #" .. tostring(document_id) .. " (source #" .. tostring(args.source_document_id) .. ")"
+    end
+
+    if tool_name == "view" and method_name == "list" then
+        entries = view.all(config.views_dir())
+        if #entries == 0 then
+            return "No views defined."
+        end
+        lines = {}
+        for _, e in ipairs(entries) do
+            if e.def != nil then
+                approved_note = "not approved"
+                if view.is_approved(db_path, e.def) == true then
+                    approved_note = "approved, runnable"
+                end
+                param_note = ""
+                if e.def.param != nil then
+                    param_note = " (takes param: " .. e.def.param.name .. ")"
+                end
+                table.insert(lines, e.name .. " -- " .. tostring(e.def.title) .. param_note .. " [" .. approved_note .. "]")
+            end
+        end
+        return table.concat(lines, "\n")
+    end
+
+    if tool_name == "view" and method_name == "run" then
+        if args.name == nil then
+            return nil, "run requires name"
+        end
+        view_def, view_err = view.load(config.views_dir(), args.name)
+        if view_def == nil then
+            return nil, "no such view: " .. tostring(args.name) .. " (" .. tostring(view_err) .. ")"
+        end
+        if view.is_approved(db_path, view_def) == false then
+            return nil, "view '" .. args.name .. "' is not approved -- ask the user to approve it via /view first"
+        end
+        rows, run_err = view.run(db_path, view_def, args.param_value)
+        if rows == nil then
+            return nil, run_err
+        end
+        if #rows == 0 then
+            return "No rows."
+        end
+        cap = config.platform_config().agent_query_row_cap
+        lines = {}
+        for i = 1, math.min(cap, #rows) do
+            parts = {}
+            for k, v in pairs(rows[i]) do
+                table.insert(parts, tostring(k) .. "=" .. tostring(v))
+            end
+            table.insert(lines, table.concat(parts, ", "))
+        end
+        result = table.concat(lines, "\n")
+        if #rows > cap then
+            result = result .. "\n\n(truncated at " .. tostring(cap) .. " of " .. tostring(#rows) .. " rows -- add your own LIMIT or narrow the query for a complete result)"
+        end
+        return result
     end
 
     -- agent.default_model() here, not a model threaded through this
