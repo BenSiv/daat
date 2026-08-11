@@ -948,6 +948,13 @@ function entity.do_entity(cmd_args, db_path)
             print_issues(issues)
             return
         end
+        -- Lazy require, not a module-top-level one: entity.lua must
+        -- never require document.lua (document.lua already requires
+        -- entity.lua; the reverse would be circular). Safe here since
+        -- this only runs during real CLI dispatch, long after every
+        -- module has already loaded once.
+        document_pool_hook = require("document")
+        document_pool_hook.on_entity_archived(db_path, entity_type, archived_id)
         print(string.format("Archived %s #%d", entity_type, archived_id))
         return
     end
@@ -965,6 +972,8 @@ function entity.do_entity(cmd_args, db_path)
             print_issues(issues)
             return
         end
+        document_pool_hook = require("document")
+        document_pool_hook.on_entity_unarchived(db_path, entity_type, unarchived_id)
         print(string.format("Unarchived %s #%d", entity_type, unarchived_id))
         return
     end

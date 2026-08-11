@@ -1496,6 +1496,7 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
         if archived_id == nil then
             return nil, issues_summary(issues)
         end
+        document.on_entity_archived(db_path, args.entity_type, archived_id)
         return "Archived " .. tostring(args.entity_type) .. " #" .. tostring(archived_id)
     end
 
@@ -1511,6 +1512,7 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
         if unarchived_id == nil then
             return nil, issues_summary(issues)
         end
+        document.on_entity_unarchived(db_path, args.entity_type, unarchived_id)
         return "Unarchived " .. tostring(args.entity_type) .. " #" .. tostring(unarchived_id)
     end
 

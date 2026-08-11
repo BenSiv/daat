@@ -141,6 +141,16 @@ function ensure_document_knowledge_columns(db_path)
     if have["merged_into"] == nil then
         db.exec(db_path, "ALTER TABLE document ADD COLUMN merged_into INTEGER;")
     end
+    -- The conserved heat-pool model (see doc/heat-decay-redesign.md).
+    -- ADD COLUMN ... DEFAULT 1.0 backfills every existing row to
+    -- BASE_HEAT, which is exactly the "reset" migration decision from
+    -- that document -- no separate UPDATE needed.
+    if have["raw_heat"] == nil then
+        db.exec(db_path, "ALTER TABLE document ADD COLUMN raw_heat REAL DEFAULT 1.0;")
+    end
+    if have["scale_at_write"] == nil then
+        db.exec(db_path, "ALTER TABLE document ADD COLUMN scale_at_write REAL DEFAULT 1.0;")
+    end
 end
 
 -- Real MySQL has no "CREATE INDEX IF NOT EXISTS" (a syntax error, not a
@@ -161,6 +171,74 @@ function ensure_document_knowledge_indexes(db_path)
     end
 end
 
+-- The conserved heat-pool model (see doc/heat-decay-redesign.md). One
+-- shared row: `pool_scale` is the lazy multiplier every document's
+-- raw_heat is read against (see document.pool_effective_heat below);
+-- `document_count` is the active (non-archived, non-merged) count,
+-- maintained incrementally so no reinforcement event ever needs a
+-- COUNT(*) scan.
+KNOWLEDGE_POOL_STATE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS knowledge_pool_state (
+    id INTEGER PRIMARY KEY,
+    pool_scale REAL NOT NULL DEFAULT 1.0,
+    document_count INTEGER NOT NULL DEFAULT 0
+);
+"""
+
+-- Declared here, not down by the rest of the pool functions below,
+-- since Luam requires a top-level value to be declared before any
+-- function referencing it -- even one elsewhere in the same file (a
+-- stricter static-scoping check than vanilla Lua does; see
+-- document.register_pool_document just below, which needs this).
+BASE_HEAT = 1.0
+
+-- Seeds the single state row exactly once, from a one-time COUNT(*) --
+-- the only place this design scans the whole pool (see "Migration of
+-- existing values" in doc/heat-decay-redesign.md). A no-op every call
+-- after the first.
+function document.ensure_pool_state(db_path)
+    db.exec(db_path, KNOWLEDGE_POOL_STATE_SCHEMA)
+    rows = db.query(db_path, "SELECT id FROM knowledge_pool_state WHERE id = 1;")
+    if rows != nil and rows[1] != nil then
+        return
+    end
+    count_rows = db.query(db_path,
+        "SELECT COUNT(*) AS n FROM document WHERE (archived_at IS NULL OR archived_at = '') AND merged_into IS NULL;")
+    count = 0
+    if count_rows != nil and count_rows[1] != nil then
+        count = tonumber(count_rows[1].n)
+    end
+    db.exec(db_path, string.format(
+        "%s knowledge_pool_state (id, pool_scale, document_count) VALUES (1, 1.0, %d);",
+        db.insert_ignore(db_path), count
+    ))
+end
+
+-- Registers a document with the pool -- either genuinely new, or
+-- rejoining after an unarchive (see document.on_entity_unarchived
+-- below). Grows the total by exactly BASE_HEAT (see "Document
+-- creation" in doc/heat-decay-redesign.md) and pins the row's
+-- raw_heat/scale_at_write so it reads back as exactly BASE_HEAT right
+-- away, regardless of how far the shared multiplier has already
+-- drifted from 1.0 by this point. raw_heat is set explicitly rather
+-- than relied on from the column's own DEFAULT, since a rejoining row
+-- already has some stale value sitting in it from before it was
+-- archived -- its old heat was already returned to the pool at
+-- archive time (return_pool_heat), so reusing it here would double it.
+function document.register_pool_document(db_path, document_id)
+    document.ensure_pool_state(db_path)
+    state_rows = db.query(db_path, "SELECT pool_scale FROM knowledge_pool_state WHERE id = 1;")
+    if state_rows == nil or state_rows[1] == nil then
+        return
+    end
+    pool_scale = tonumber(state_rows[1].pool_scale)
+    db.exec(db_path, string.format(
+        "UPDATE document SET raw_heat = %.17g, scale_at_write = %.17g WHERE id = %d;",
+        BASE_HEAT, pool_scale, tonumber(document_id)
+    ))
+    db.exec(db_path, "UPDATE knowledge_pool_state SET document_count = document_count + 1 WHERE id = 1;")
+end
+
 function document.init_schema(db_path)
     schema.register(db_path, DOCUMENT_SCHEMA)
     db.exec(db_path, DOCUMENT_LINK_SCHEMA)
@@ -168,6 +246,7 @@ function document.init_schema(db_path)
     ensure_document_knowledge_columns(db_path)
     ensure_document_knowledge_indexes(db_path)
     ensure_document_link_source_column(db_path)
+    document.ensure_pool_state(db_path)
 end
 
 -- The single top-level folder every system/agent-derived document
@@ -391,6 +470,7 @@ function document.create_page(db_path, author, title, parent_id, content, source
     end
     document.sync_links(db_path, created_id, content)
     document.reindex_embedding(db_path, created_id)
+    document.register_pool_document(db_path, created_id)
     return created_id, issues
 end
 
@@ -538,9 +618,9 @@ function document.content_hash(body)
     return string.format("%08x", hash)
 end
 
--- A flat 0.15 plus the retrieved document's own tier weight, added to
--- heat on every retrieval hit. No decay -- heat is monotonic; see
--- document.effective_heat for the read-time decayed view.
+-- A flat 0.15 plus the retrieved document's own tier weight -- the
+-- amount a retrieval hit reinforces a document by, fed into
+-- document.reinforce_pool_heat below (see doc/heat-decay-redesign.md).
 function document.reinforcement_delta(tier)
     tier_weight = TIER_WEIGHT[tier]
     if tier_weight == nil then
@@ -549,52 +629,167 @@ function document.reinforcement_delta(tier)
     return 0.15 + tier_weight
 end
 
--- Heat decay: computed lazily wherever heat is actually used for a
--- decision (review's own promotion/demotion check, search's own
--- ranking) rather than a scheduled job rewriting every row -- matches
--- this codebase's "compute at request time" convention throughout (no
--- in-app background scheduler exists at all). The stored `heat` column
--- is left untouched -- it's the raw, monotonic reinforcement total;
--- effective_heat is the read-time view of it.
+--------------------------------------------------------------------------
+-- Conserved heat pool (see doc/heat-decay-redesign.md)
+--------------------------------------------------------------------------
 --
--- How fast "relevance heat" should decay plausibly tracks a
--- deployment's own real usage cadence (touched hourly vs. weekly) --
--- not a bare hardcoded literal; read fresh from
--- config.platform_config() per call rather than resolved once at load.
+-- The only heat/relevance model as of the Phase 3 cutover -- the old
+-- wall-clock decay (document.effective_heat/days_since,
+-- platform_heat_decay_half_life_days) is gone; document.search_score
+-- and knowledge.due_for_review both read pool_effective_heat below.
+-- Plain archival and merge (duplicate_of/merged_into) both return a
+-- departing document's heat to the pool -- see on_entity_archived/
+-- on_entity_unarchived below for archival's dispatch (entity.archive/
+-- unarchive are generic, so those are called from each call site, not
+-- from inside entity.lua itself). BASE_HEAT itself is declared earlier,
+-- alongside KNOWLEDGE_POOL_STATE_SCHEMA -- Luam requires a top-level
+-- value like this to be declared before any function referencing it,
+-- even elsewhere in the same file (a stricter static-scoping check
+-- than vanilla Lua does).
 
--- Days between `timestamp_str` (this codebase's "YYYY-MM-DD HH:MM:SS"
--- convention, whatever db.now_expr's own DEFAULT produced) and now.
--- nil (not 0) for anything unparseable -- callers treat that as "no
--- decay information, use heat as-is" rather than "decay as if just
--- retrieved," which would be the wrong direction to fail in.
-function document.days_since(timestamp_str)
-    if timestamp_str == nil or timestamp_str == "" then
-        return nil
-    end
-    year, month, day, hour, min, sec = string.match(timestamp_str, "(%d+)-(%d+)-(%d+)[ T](%d+):(%d+):(%d+)")
-    if year == nil then
-        return nil
-    end
-    then_time = os.time({
-        year = tonumber(year), month = tonumber(month), day = tonumber(day),
-        hour = tonumber(hour), min = tonumber(min), sec = tonumber(sec),
-    })
-    return (os.time() - then_time) / 86400
+-- Accessor for cross-file use, same reasoning as document.tier_weight
+-- above (a bare global isn't reliably shared across this codebase's
+-- per-module-isolated files).
+function document.base_heat()
+    return BASE_HEAT
 end
 
--- Exponential half-life decay: unchanged the instant a document is
--- retrieved, half its value after HEAT_DECAY_HALF_LIFE_DAYS of disuse,
--- a quarter after twice that, and so on -- never negative, never
--- demanding an exact "when did decay start" origin point the way a
--- linear decay would.
-function document.effective_heat(heat, last_retrieved_at)
-    days = document.days_since(last_retrieved_at)
-    if days == nil or days <= 0 then
-        return heat
+-- The read-time view of a document's true current heat: however much
+-- proportional shrink every *other* reinforcement/departure event has
+-- applied to the shared pool_scale since this document's own row was
+-- last written, captured in one multiplication. See "Avoiding an O(N)
+-- write per retrieval" in doc/heat-decay-redesign.md for the derivation.
+function document.pool_effective_heat(raw_heat, scale_at_write, pool_scale)
+    raw_heat = tonumber(raw_heat)
+    scale_at_write = tonumber(scale_at_write)
+    pool_scale = tonumber(pool_scale)
+    if raw_heat == nil or scale_at_write == nil or scale_at_write == 0 or pool_scale == nil then
+        return BASE_HEAT
     end
-    config = require("config")
-    half_life = config.platform_config().platform_heat_decay_half_life_days
-    return heat * (0.5 ^ (days / half_life))
+    return raw_heat * (pool_scale / scale_at_write)
+end
+
+-- Reinforces `document_id` by `delta`, funded by a proportional shrink
+-- of every *other* active document rather than manufacturing new heat.
+-- O(1): touches only this document's row and the single shared state
+-- row, never a scan across the rest of the pool.
+--
+-- Known, live residual race, not yet fixed: two concurrent
+-- reinforcements of the *same* document_id both read X_eff before
+-- either writes, so the second write can silently discard the first
+-- delta. Under low-to-moderate concurrent load on one document this is
+-- unlikely to matter much in practice, but it should still be closed --
+-- the shared pool_scale update below does not have this problem (it's
+-- a single atomic in-place multiply, safe under concurrency by
+-- construction -- see "Concurrency" in doc/heat-decay-redesign.md); the
+-- same-row case needs the same treatment, just not done yet.
+function document.reinforce_pool_heat(db_path, document_id, delta)
+    document.ensure_pool_state(db_path)
+    delta = tonumber(delta)
+    if delta == nil then
+        return nil
+    end
+
+    state_rows = db.query(db_path, "SELECT pool_scale, document_count FROM knowledge_pool_state WHERE id = 1;")
+    if state_rows == nil or state_rows[1] == nil then
+        return nil
+    end
+    pool_scale = tonumber(state_rows[1].pool_scale)
+    document_count = tonumber(state_rows[1].document_count)
+
+    doc_rows = db.query(db_path, string.format(
+        "SELECT raw_heat, scale_at_write FROM document WHERE id = %d;", tonumber(document_id)
+    ))
+    if doc_rows == nil or doc_rows[1] == nil then
+        return nil
+    end
+    x_eff = document.pool_effective_heat(doc_rows[1].raw_heat, doc_rows[1].scale_at_write, pool_scale)
+
+    total = document_count * BASE_HEAT
+    denominator = total - x_eff
+    f = 1.0
+    if denominator > 0 then
+        -- Degenerate pool (one document, or a badly drifted total)
+        -- falls through with f left at 1.0 -- redistributing
+        -- proportionally over nothing left to take from would divide
+        -- by zero or go negative. Skip the shared-pool shrink this
+        -- once; X still gets its own reinforcement below.
+        f = 1 - (delta / denominator)
+    end
+
+    new_pool_scale = pool_scale * f
+    db.exec(db_path, string.format(
+        "UPDATE knowledge_pool_state SET pool_scale = pool_scale * %.17g WHERE id = 1;", f
+    ))
+
+    new_raw_heat = x_eff + delta
+    db.exec(db_path, string.format(
+        "UPDATE document SET raw_heat = %.17g, scale_at_write = %.17g WHERE id = %d;",
+        new_raw_heat, new_pool_scale, tonumber(document_id)
+    ))
+
+    return new_raw_heat
+end
+
+-- The reverse of reinforce_pool_heat, for a document leaving the pool
+-- (the merge/duplicate path, and plain archival via
+-- on_entity_archived below). Returns the departing document's current
+-- heat to the survivors, proportionally, and decrements document_count
+-- -- both computed from the pre-departure state, per "Order matters
+-- here" in doc/heat-decay-redesign.md.
+function document.return_pool_heat(db_path, document_id)
+    document.ensure_pool_state(db_path)
+
+    state_rows = db.query(db_path, "SELECT pool_scale, document_count FROM knowledge_pool_state WHERE id = 1;")
+    if state_rows == nil or state_rows[1] == nil then
+        return
+    end
+    pool_scale = tonumber(state_rows[1].pool_scale)
+    document_count = tonumber(state_rows[1].document_count)
+
+    doc_rows = db.query(db_path, string.format(
+        "SELECT raw_heat, scale_at_write FROM document WHERE id = %d;", tonumber(document_id)
+    ))
+    if doc_rows == nil or doc_rows[1] == nil then
+        return
+    end
+    x_eff = document.pool_effective_heat(doc_rows[1].raw_heat, doc_rows[1].scale_at_write, pool_scale)
+
+    total = document_count * BASE_HEAT
+    denominator = total - x_eff
+    if document_count <= 1 or denominator <= 0 then
+        -- Last document leaving, or a degenerate pool -- nothing left
+        -- to redistribute onto. Just shrink the count.
+        db.exec(db_path, "UPDATE knowledge_pool_state SET document_count = document_count - 1 WHERE id = 1;")
+        return
+    end
+
+    f = 1 + ((x_eff - BASE_HEAT) / denominator)
+    db.exec(db_path, string.format(
+        "UPDATE knowledge_pool_state SET pool_scale = pool_scale * %.17g, document_count = document_count - 1 WHERE id = 1;",
+        f
+    ))
+end
+
+-- Plain archival returns heat to the pool / re-registers on unarchive,
+-- the same as the merge path above. entity.archive/unarchive are
+-- generic (any entity_type), so these are type-checking dispatchers,
+-- called from each call site right after a *successful* archive/
+-- unarchive -- never from inside entity.lua itself, which must never
+-- require document.lua (document.lua already requires entity.lua; the
+-- reverse would be circular).
+function document.on_entity_archived(db_path, entity_type, entity_id)
+    if entity_type != "document" then
+        return
+    end
+    document.return_pool_heat(db_path, entity_id)
+end
+
+function document.on_entity_unarchived(db_path, entity_type, entity_id)
+    if entity_type != "document" then
+        return
+    end
+    document.register_pool_document(db_path, entity_id)
 end
 
 -- Tier is decided by content-processing maturity, not retrieval
@@ -857,7 +1052,7 @@ end
 -- below 0.45 is excluded outright (the relevance floor) rather than
 -- ranked last -- an irrelevant result showing up at the bottom of a
 -- results list is still a wrong result.
-function document.search_score(row, terms, query_text, query_vector)
+function document.search_score(row, terms, query_text, query_vector, pool_scale)
     title = row.title
     if title == nil then
         title = ""
@@ -899,13 +1094,12 @@ function document.search_score(row, terms, query_text, query_vector)
     -- Tier/heat reinforcement, folded in only after the relevance floor
     -- above -- a heavily-reinforced document that's actually irrelevant
     -- to this query is still excluded outright, never ranked highly
-    -- just because it's "hot".
+    -- just because it's "hot". effective_heat is the conserved-pool
+    -- view (Phase 3 cutover, see doc/heat-decay-redesign.md) -- a
+    -- relative share of a total that scales with pool size, not a
+    -- wall-clock decayed absolute value.
     tier_weight = document.tier_weight(row.tier)
-    heat = tonumber(row.heat)
-    if heat == nil then
-        heat = 1.0
-    end
-    effective_heat = document.effective_heat(heat, row.last_retrieved_at)
+    effective_heat = document.pool_effective_heat(row.raw_heat, row.scale_at_write, pool_scale)
     final_score = final_score + (tier_weight * 10.0) + effective_heat
 
     return final_score
@@ -945,7 +1139,8 @@ function document.search(db_path, query_text, limit, use_semantic)
     -- (entity.get/detail), just not surfaced by document.search's
     -- relevance ranking.
     rows = db.query(db_path, """
-        SELECT d.id, d.title, d.content, d.tier, d.heat, d.retrieval_count, d.last_retrieved_at,
+        SELECT d.id, d.title, d.content, d.tier, d.retrieval_count,
+               d.raw_heat, d.scale_at_write,
                d.source_type, d.source_id, d.content_hash, d.created_at, d.external_id, e.vector_json
         FROM document d
         LEFT JOIN document_embedding e ON e.document_id = d.id
@@ -957,6 +1152,17 @@ function document.search(db_path, query_text, limit, use_semantic)
         return {}
     end
 
+    -- Phase 3 cutover (see doc/heat-decay-redesign.md): one shared
+    -- pool_scale read, reused for every row's effective_heat below,
+    -- rather than each row decaying independently against its own
+    -- last_retrieved_at.
+    document.ensure_pool_state(db_path)
+    pool_state_rows = db.query(db_path, "SELECT pool_scale FROM knowledge_pool_state WHERE id = 1;")
+    pool_scale = 1.0
+    if pool_state_rows != nil and pool_state_rows[1] != nil then
+        pool_scale = pool_state_rows[1].pool_scale
+    end
+
     json = require("dkjson")
     scored = {}
     for _, row in ipairs(rows) do
@@ -964,12 +1170,12 @@ function document.search(db_path, query_text, limit, use_semantic)
             decoded, _, _ = json.decode(row.vector_json)
             row.embedding_vector = decoded
         end
-        row_score = document.search_score(row, terms, query_text, query_vector)
+        row_score = document.search_score(row, terms, query_text, query_vector, pool_scale)
         if row_score > 0 then
             table.insert(scored, {
                 id = row.id, title = row.title, content = row.content, score = row_score,
-                tier = row.tier, heat = row.heat, retrieval_count = row.retrieval_count,
-                last_retrieved_at = row.last_retrieved_at, source_type = row.source_type,
+                tier = row.tier, retrieval_count = row.retrieval_count,
+                source_type = row.source_type,
                 source_id = row.source_id, content_hash = row.content_hash,
                 created_at = row.created_at, external_id = row.external_id,
             })

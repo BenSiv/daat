@@ -1699,6 +1699,7 @@ function cgi.handle_request()
         if archived_id != nil then
             response.archived_id = archived_id
             response.success = true
+            document.on_entity_archived(db_path, entity_type, archived_id)
         else
             response.success = false
         end
@@ -1726,6 +1727,7 @@ function cgi.handle_request()
         if unarchived_id != nil then
             response.unarchived_id = unarchived_id
             response.success = true
+            document.on_entity_unarchived(db_path, entity_type, unarchived_id)
         else
             response.success = false
         end
@@ -1877,6 +1879,7 @@ function cgi.handle_request()
             if archived_id != nil then
                 response.archived_id = archived_id
                 response.success = true
+                document.on_entity_archived(db_path, v1_type, archived_id)
             else
                 response.success = false
             end
@@ -1896,6 +1899,7 @@ function cgi.handle_request()
             if unarchived_id != nil then
                 response.unarchived_id = unarchived_id
                 response.success = true
+                document.on_entity_unarchived(db_path, v1_type, unarchived_id)
             else
                 response.success = false
             end

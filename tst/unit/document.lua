@@ -1,13 +1,14 @@
 -- tst/unit/document.lua
 -- Unit tests for src/document.lua's pure math/heuristics: the
 -- reinforcement formula, tier-promotion (content-maturity, not
--- retrieval/heat -- see promotion_target_tier's own comment), heat
--- decay, and the rule-based review heuristics (content_shape,
--- title-guessing, content hashing) -- all ported/adapted from a Fossil
--- SCM fork's ai_note/ai_retrieval system (see document.lua's own
--- header). Moved here from tst/unit/knowledge.lua under task #106,
--- when these columns/heuristics moved from a separate knowledge_note
--- table onto `document` itself.
+-- retrieval/heat -- see promotion_target_tier's own comment), the
+-- conserved-pool heat formula (see tst/unit/document_pool.lua for the
+-- DB-touching primitives built on top of it), and the rule-based review
+-- heuristics (content_shape, title-guessing, content hashing) -- all
+-- ported/adapted from a Fossil SCM fork's ai_note/ai_retrieval system
+-- (see document.lua's own header). Moved here from tst/unit/knowledge.lua
+-- under task #106, when these columns/heuristics moved from a separate
+-- knowledge_note table onto `document` itself.
 
 document = require("document")
 
@@ -142,38 +143,23 @@ function test_content_hash_is_deterministic()
     check(document.content_hash("hello world") != document.content_hash("hello there"), "different content should hash differently")
 end
 
-function timestamp_days_ago(days)
-    return os.date("%Y-%m-%d %H:%M:%S", os.time() - math.floor(days * 86400))
+function test_pool_effective_heat_reads_raw_heat_unchanged_when_pool_scale_matches()
+    print("Testing pool_effective_heat returns raw_heat unchanged when scale_at_write matches the current pool_scale")
+    check(document.pool_effective_heat(1.5, 1.0, 1.0) == 1.5, "matching scale should mean no adjustment, got " .. tostring(document.pool_effective_heat(1.5, 1.0, 1.0)))
 end
 
-function test_days_since_computes_elapsed_days()
-    print("Testing days_since computes elapsed days from a timestamp")
-    elapsed = document.days_since(timestamp_days_ago(10))
-    check(elapsed > 9.99 and elapsed < 10.01, "expected ~10 days, got " .. tostring(elapsed))
+function test_pool_effective_heat_applies_accumulated_shrink()
+    print("Testing pool_effective_heat applies whatever proportional shrink accumulated since this row was last written")
+    -- pool_scale halved since this row's own scale_at_write -- its true
+    -- current share is half of its stored raw_heat.
+    result = document.pool_effective_heat(2.0, 1.0, 0.5)
+    check(result == 1.0, "expected 2.0 * (0.5/1.0) = 1.0, got " .. tostring(result))
 end
 
-function test_days_since_nil_for_missing_or_unparseable()
-    print("Testing days_since returns nil for missing/unparseable timestamps")
-    check(document.days_since(nil) == nil, "nil timestamp should return nil")
-    check(document.days_since("") == nil, "empty timestamp should return nil")
-    check(document.days_since("not-a-date") == nil, "garbage timestamp should return nil")
-end
-
-function test_effective_heat_unchanged_with_no_last_retrieved()
-    print("Testing effective_heat returns heat unchanged when last_retrieved_at is nil")
-    check(document.effective_heat(2.5, nil) == 2.5, "no last_retrieved_at should mean no decay, got " .. tostring(document.effective_heat(2.5, nil)))
-end
-
-function test_effective_heat_halves_at_one_half_life()
-    print("Testing effective_heat halves heat after one half-life (14 days)")
-    result = document.effective_heat(2.0, timestamp_days_ago(14))
-    check(result > 0.99 and result < 1.01, "expected ~1.0 (half of 2.0) after one half-life, got " .. tostring(result))
-end
-
-function test_effective_heat_decays_heavily_over_many_half_lives()
-    print("Testing effective_heat decays heavily after many half-lives")
-    result = document.effective_heat(3.0, timestamp_days_ago(140))
-    check(result < 0.01, "expected heavily decayed heat after 10 half-lives, got " .. tostring(result))
+function test_pool_effective_heat_falls_back_to_base_heat_on_missing_data()
+    print("Testing pool_effective_heat falls back to BASE_HEAT for nil/zero inputs")
+    check(document.pool_effective_heat(nil, 1.0, 1.0) == document.base_heat(), "nil raw_heat should fall back to BASE_HEAT")
+    check(document.pool_effective_heat(1.0, 0, 1.0) == document.base_heat(), "zero scale_at_write should fall back to BASE_HEAT (would divide by zero otherwise)")
 end
 
 function test_tier_weight_known_and_unknown_tiers()
@@ -203,11 +189,9 @@ test_guess_title_strips_bullet_decoration()
 test_guess_title_truncates_long_lines_on_word_boundary()
 test_guess_title_empty_body_returns_untitled()
 test_content_hash_is_deterministic()
-test_days_since_computes_elapsed_days()
-test_days_since_nil_for_missing_or_unparseable()
-test_effective_heat_unchanged_with_no_last_retrieved()
-test_effective_heat_halves_at_one_half_life()
-test_effective_heat_decays_heavily_over_many_half_lives()
+test_pool_effective_heat_reads_raw_heat_unchanged_when_pool_scale_matches()
+test_pool_effective_heat_applies_accumulated_shrink()
+test_pool_effective_heat_falls_back_to_base_heat_on_missing_data()
 test_tier_weight_known_and_unknown_tiers()
 
 if FAILURES > 0 then

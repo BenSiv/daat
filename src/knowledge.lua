@@ -187,7 +187,15 @@ function knowledge.get_document(db_path, document_id)
     if doc == nil then
         return nil
     end
-    doc.effective_heat = document.effective_heat(tonumber(doc.heat), doc.last_retrieved_at)
+    -- Phase 3 cutover (see doc/heat-decay-redesign.md): effective_heat
+    -- is now the conserved-pool view, not the old wall-clock decay.
+    document.ensure_pool_state(db_path)
+    state_rows = db.query(db_path, "SELECT pool_scale FROM knowledge_pool_state WHERE id = 1;")
+    pool_scale = 1.0
+    if state_rows != nil and state_rows[1] != nil then
+        pool_scale = state_rows[1].pool_scale
+    end
+    doc.effective_heat = document.pool_effective_heat(doc.raw_heat, doc.scale_at_write, pool_scale)
     return doc
 end
 
@@ -302,10 +310,14 @@ function knowledge.record_retrieval_hit(db_path, retrieval_id, document_id, tier
     delta = document.reinforcement_delta(tier)
     tier_weight = document.tier_weight(tier)
     db.exec(db_path, string.format(
-        "UPDATE document SET heat = heat + %.17g, retrieval_count = retrieval_count + 1, " ..
-        "last_retrieved_at = %s, content_hash = %s, updated_at = %s WHERE id = %d;",
-        delta, db.now_expr(db_path), db.quote(content_hash), db.now_expr(db_path), tonumber(document_id)
+        "UPDATE document SET retrieval_count = retrieval_count + 1, " ..
+        "content_hash = %s, updated_at = %s WHERE id = %d;",
+        db.quote(content_hash), db.now_expr(db_path), tonumber(document_id)
     ))
+    -- Phase 3 cutover (see doc/heat-decay-redesign.md): the conserved
+    -- pool is now the only heat model -- the old `heat`/
+    -- `last_retrieved_at` wall-clock columns are no longer written.
+    document.reinforce_pool_heat(db_path, document_id, delta)
     db.exec(db_path, string.format(
         "%s knowledge_retrieval_document (retrieval_id, document_id, `rank`, score, tier_weight, reinforcement_delta) " ..
         "VALUES (%d, %d, %d, %.17g, %.17g, %.17g);",
@@ -342,6 +354,10 @@ function knowledge.duplication_status(db_path, document_id, content_hash, source
                 "UPDATE document SET duplicate_of = %d, merged_into = %d WHERE id = %d;",
                 canonical_id, canonical_id, tonumber(document_id)
             ))
+            -- See doc/heat-decay-redesign.md: the departing document's
+            -- heat gets returned to the survivors rather than just
+            -- vanishing from the pool's total.
+            document.return_pool_heat(db_path, document_id)
         end
         return "duplicate-of-" .. tostring(canonical_id)
     end
@@ -398,8 +414,10 @@ function knowledge.review_retrieval(db_path, retrieval_id, author)
             end
 
             target_tier = tonumber(doc.tier)
-            if knowledge.due_for_review(tonumber(doc.retrieval_count),
-                                         document.effective_heat(tonumber(doc.heat), doc.last_retrieved_at)) then
+            -- doc.effective_heat already comes from knowledge.get_document
+            -- (line 390 above) as the conserved-pool view -- no need to
+            -- recompute it here.
+            if knowledge.due_for_review(tonumber(doc.retrieval_count), doc.effective_heat) then
                 maturity = document.processing_maturity(db_path, doc.id, body, doc.source_type)
                 target_tier = document.promotion_target_tier(tonumber(doc.tier), is_duplicate, maturity.revised, content_shape)
             end
@@ -865,9 +883,17 @@ function knowledge.spread_activation(db_path, retrieval_id, document_id, base_de
             if neighbor_doc != nil then
                 tier_weight = document.tier_weight(neighbor_doc.tier)
                 db.exec(db_path, string.format(
-                    "UPDATE document SET heat = heat + %.17g, last_retrieved_at = %s, updated_at = %s WHERE id = %d;",
-                    delta, db.now_expr(db_path), db.now_expr(db_path), neighbor_id
+                    "UPDATE document SET updated_at = %s WHERE id = %d;",
+                    db.now_expr(db_path), neighbor_id
                 ))
+                -- Phase 3 cutover (see doc/heat-decay-redesign.md): same
+                -- conserved-reinforcement primitive record_retrieval_hit
+                -- uses above, so a spread-activation bump is funded by
+                -- the pool like any other reinforcement, not a second
+                -- place that manufactures heat. The old `heat`/
+                -- `last_retrieved_at` wall-clock columns are no longer
+                -- written.
+                document.reinforce_pool_heat(db_path, neighbor_id, delta)
                 db.exec(db_path, string.format(
                     "%s knowledge_retrieval_document (retrieval_id, document_id, `rank`, score, tier_weight, reinforcement_delta) " ..
                     "VALUES (%d, %d, NULL, NULL, %.17g, %.17g);",
@@ -966,6 +992,29 @@ end
 -- actually use. Restricted to documents that are actually "in the
 -- pool" (see KNOWLEDGE_MEMBER_WHERE) -- an ordinary, never-retrieved
 -- document doesn't show up here just because it exists.
+-- Attaches the conserved-pool effective_heat to every row and re-sorts
+-- descending by it -- SQL's own ORDER BY can no longer approximate this
+-- ranking (unlike the old wall-clock model, raw_heat alone isn't
+-- comparable across rows without each one's own scale_at_write, since
+-- that's stamped at a different moment per row). No LIMIT on either
+-- caller's query, so sorting the full result set in Lua after fetching
+-- loses nothing a SQL-side ORDER BY would have preserved.
+function attach_and_sort_by_pool_heat(db_path, rows)
+    document.ensure_pool_state(db_path)
+    state_rows = db.query(db_path, "SELECT pool_scale FROM knowledge_pool_state WHERE id = 1;")
+    pool_scale = 1.0
+    if state_rows != nil and state_rows[1] != nil then
+        pool_scale = state_rows[1].pool_scale
+    end
+    for _, row in ipairs(rows) do
+        row.effective_heat = document.pool_effective_heat(row.raw_heat, row.scale_at_write, pool_scale)
+    end
+    table.sort(rows, function(a, b)
+        return a.effective_heat > b.effective_heat
+    end)
+    return rows
+end
+
 function knowledge.list_documents(db_path, tier)
     query = string.format(
         "SELECT * FROM document WHERE %s AND (archived_at IS NULL OR archived_at = '')", KNOWLEDGE_MEMBER_WHERE
@@ -973,15 +1022,12 @@ function knowledge.list_documents(db_path, tier)
     if tier != nil then
         query = query .. " AND tier = " .. tostring(tonumber(tier))
     end
-    query = query .. " ORDER BY heat DESC, retrieval_count DESC;"
+    query = query .. " ORDER BY retrieval_count DESC;"
     rows = db.query(db_path, query)
     if rows == nil then
         return {}
     end
-    for _, row in ipairs(rows) do
-        row.effective_heat = document.effective_heat(tonumber(row.heat), row.last_retrieved_at)
-    end
-    return rows
+    return attach_and_sort_by_pool_heat(db_path, rows)
 end
 
 -- Documents with at least one review recorded against them (distinct
@@ -993,14 +1039,12 @@ function knowledge.reviewed_documents(db_path)
         SELECT * FROM document
         WHERE id IN (SELECT DISTINCT document_id FROM knowledge_review)
           AND (archived_at IS NULL OR archived_at = '')
-        ORDER BY heat DESC, retrieval_count DESC;
+        ORDER BY retrieval_count DESC;
     """)
     if rows == nil then
         return {}
     end
-    for _, row in ipairs(rows) do
-        row.effective_heat = document.effective_heat(tonumber(row.heat), row.last_retrieved_at)
-    end
+    rows = attach_and_sort_by_pool_heat(db_path, rows)
     return rows
 end
 
@@ -1031,8 +1075,8 @@ function knowledge.do_knowledge(cmd_args, db_path)
         tier = tonumber(cmd_args[2])
         rows = knowledge.list_documents(db_path, tier)
         for _, row in ipairs(rows) do
-            print(string.format("#%s [tier %s] %s (heat=%s, effective=%.2f, retrievals=%s)",
-                tostring(row.id), tostring(row.tier), tostring(row.title), tostring(row.heat),
+            print(string.format("#%s [tier %s] %s (raw_heat=%s, effective=%.2f, retrievals=%s)",
+                tostring(row.id), tostring(row.tier), tostring(row.title), tostring(row.raw_heat),
                 row.effective_heat, tostring(row.retrieval_count)))
         end
         return
@@ -1052,7 +1096,7 @@ function knowledge.do_knowledge(cmd_args, db_path)
         print("id: " .. tostring(doc.id))
         print("tier: " .. tostring(doc.tier))
         print("title: " .. tostring(doc.title))
-        print("heat: " .. tostring(doc.heat) .. " (effective: " .. string.format("%.2f", doc.effective_heat) .. ")")
+        print("raw_heat: " .. tostring(doc.raw_heat) .. " (effective: " .. string.format("%.2f", doc.effective_heat) .. ")")
         print("retrieval_count: " .. tostring(doc.retrieval_count))
         if doc.source_type != nil and doc.source_type != "" then
             print("source: " .. tostring(doc.source_type) .. " #" .. tostring(doc.source_id))

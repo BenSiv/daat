@@ -191,7 +191,6 @@ return {
   -- agent_compaction_threshold = 4000,
   -- platform_adhoc_row_cap = 1000,
   -- extension_max_job_attempts = 5,
-  -- platform_heat_decay_half_life_days = 14,
   -- db_backend = "sqlite",
   -- mariadb_host = "127.0.0.1",
   -- mariadb_port = 3306,

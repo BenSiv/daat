@@ -464,7 +464,6 @@ and a small, explicit tool registry the model can act through.
   | `agent_compaction_threshold` | 4000 | Estimated-token threshold that triggers context-window compaction |
   | `platform_adhoc_row_cap` | 1000 | Row cap on the admin-only `/sql` ad-hoc console (a human reading an HTML table, not a model's context budget) |
   | `extension_max_job_attempts` | 5 | Retries before an `extension_job` (after-hook write queue) is marked permanently `failed` |
-  | `platform_heat_decay_half_life_days` | 14 | Knowledge Pool document "relevance heat" decay half-life -- plausibly tracks a deployment's own real usage cadence |
   | `db_backend` | `"sqlite"` | `"sqlite"` or `"mariadb"` -- see doc/mariadb-migration.md |
   | `mariadb_host`/`mariadb_port`/`mariadb_user`/`mariadb_database` | `"127.0.0.1"`/`3306`/none/none | MariaDB connection descriptor -- the password is the one field here that stays a plain `PLATFORM_MARIADB_PASSWORD` env var, never written to a file this repo tracks |
 
@@ -504,7 +503,7 @@ single lazily-created, always-visible top-level folder
 organized separately from user-authored documents, per explicit user
 direction, but never hidden; browsable and searchable like any other
 document. The pure tier/heat/dedup heuristics
-(`content_hash`/`effective_heat`/`promotion_target_tier`/
+(`content_hash`/`pool_effective_heat`/`promotion_target_tier`/
 `content_shape`/`was_revised`/`title_is_generic`/`guess_title_from_body`/
 ...) live in `document.lua` now, alongside the columns they score --
 `knowledge.lua` depends on `document.lua`, never the reverse.
@@ -523,11 +522,17 @@ document. The pure tier/heat/dedup heuristics
   heat used to decide the tier directly, and had real problems: "Curated
   Drafts" implied manual curation when promotion was purely automatic,
   and "Atomic Records" captured only one of three thresholds a document
-  actually had to clear). A document's `heat` still starts at 1.0 and
-  grows by `0.15 + tier_weight` (0/0.10/0.20/0.35 for tiers 0-3) on every
-  retrieval hit, and still decays (task #87) with a 14-day half-life
-  computed lazily wherever it's used (`document.effective_heat`) -- but
-  `retrieval_count`/`effective_heat` now only decide
+  actually had to clear). A document's `raw_heat` still starts at
+  `BASE_HEAT` (1.0) and is still reinforced by `0.15 + tier_weight`
+  (0/0.10/0.20/0.35 for tiers 0-3) on every retrieval hit, but heat is
+  now a **conserved quantity across the whole pool** rather than a
+  wall-clock-decayed one (see `doc/heat-decay-redesign.md` for the full
+  design and derivation, task #118): the total across every active
+  document always equals `document_count * BASE_HEAT`, and reinforcing
+  one document draws that reinforcement proportionally from every other
+  active document rather than manufacturing new heat from nothing --
+  `document.pool_effective_heat` is the read-time view of a document's
+  current share. `retrieval_count`/`effective_heat` only decide
   `knowledge.due_for_review` (retrieval_count>=2 or effective_heat>=1.15
   -- a low bar: a single hit's minimum 0.15 delta already crosses it),
   i.e. whether it's worth spending a ledger round-trip re-checking a

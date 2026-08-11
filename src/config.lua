@@ -248,7 +248,6 @@ function config.platform_config()
         agent_compaction_threshold = 4000,
         platform_adhoc_row_cap = 1000,
         extension_max_job_attempts = 5,
-        platform_heat_decay_half_life_days = 14,
         db_backend = "sqlite",
         mariadb_host = "127.0.0.1",
         mariadb_port = 3306,
@@ -309,9 +308,6 @@ function config.platform_config()
     end
     if type(parsed.extension_max_job_attempts) == "number" then
         conf.extension_max_job_attempts = parsed.extension_max_job_attempts
-    end
-    if type(parsed.platform_heat_decay_half_life_days) == "number" then
-        conf.platform_heat_decay_half_life_days = parsed.platform_heat_decay_half_life_days
     end
     if parsed.db_backend == "mariadb" then
         conf.db_backend = "mariadb"

@@ -131,7 +131,7 @@ search_for_bioreactor_extra() {
 
     run "$BIN" knowledge list 0
     [[ "$output" =~ "Bioreactor Notes" ]]
-    [[ "$output" =~ "heat=1.15" ]]
+    [[ "$output" =~ "raw_heat=1.15" ]]
 }
 
 @test "searching for the same document twice reuses its own row (no duplicate), but retrieval alone never promotes it (content-maturity, not retrieval count)" {
