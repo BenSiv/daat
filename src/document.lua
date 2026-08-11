@@ -674,15 +674,26 @@ end
 -- O(1): touches only this document's row and the single shared state
 -- row, never a scan across the rest of the pool.
 --
--- Known, live residual race, not yet fixed: two concurrent
--- reinforcements of the *same* document_id both read X_eff before
--- either writes, so the second write can silently discard the first
--- delta. Under low-to-moderate concurrent load on one document this is
--- unlikely to matter much in practice, but it should still be closed --
--- the shared pool_scale update below does not have this problem (it's
--- a single atomic in-place multiply, safe under concurrency by
--- construction -- see "Concurrency" in doc/heat-decay-redesign.md); the
--- same-row case needs the same treatment, just not done yet.
+-- Same-row concurrency: the final UPDATE below writes `raw_heat` as a
+-- pure expression over the row's own *live* raw_heat/scale_at_write
+-- (read by the UPDATE itself, at lock time), never as a value computed
+-- once in Lua and written back absolute. Two concurrent reinforcements
+-- of the same document_id therefore serialize on that row exactly like
+-- any other `col = col + 1` update elsewhere in this codebase -- the
+-- second one to commit sees the first one's already-applied delta and
+-- adds its own on top, so neither delta is ever silently lost. The
+-- shared pool_scale update further below has the identical shape for
+-- the same reason (see "Concurrency" in doc/heat-decay-redesign.md).
+--
+-- What this does NOT make perfectly exact: `pool_scale` (the
+-- multiplicative correction applied to the row's stale raw_heat before
+-- adding delta) is still a snapshot read moments earlier, so under two
+-- truly concurrent reinforcements of the same document, the second one
+-- to commit may correct against a pool_scale that's a step behind the
+-- first one's own contribution. That's a small, bounded, self-correcting
+-- approximation (the next event against this row corrects it further),
+-- the same tolerance already accepted for the shared row -- not a lost
+-- reinforcement, which is the failure mode this fixes.
 function document.reinforce_pool_heat(db_path, document_id, delta)
     document.ensure_pool_state(db_path)
     delta = tonumber(delta)
@@ -722,13 +733,21 @@ function document.reinforce_pool_heat(db_path, document_id, delta)
         "UPDATE knowledge_pool_state SET pool_scale = pool_scale * %.17g WHERE id = 1;", f
     ))
 
-    new_raw_heat = x_eff + delta
+    -- raw_heat is written as an expression over the row's own live
+    -- columns (read by this UPDATE at lock time), not as a value
+    -- computed once above and written back absolute -- see the
+    -- function comment above for why that's what actually closes the
+    -- same-row concurrency gap.
     db.exec(db_path, string.format(
-        "UPDATE document SET raw_heat = %.17g, scale_at_write = %.17g WHERE id = %d;",
-        new_raw_heat, new_pool_scale, tonumber(document_id)
+        "UPDATE document SET raw_heat = (raw_heat * (%.17g / scale_at_write)) + %.17g, scale_at_write = %.17g WHERE id = %d;",
+        pool_scale, delta, new_pool_scale, tonumber(document_id)
     ))
 
-    return new_raw_heat
+    -- Best-effort return value for callers/logging -- reflects this
+    -- call's own read, which is exactly right in the common
+    -- uncontended case, but nothing in this codebase reads it for a
+    -- decision that depends on it being exact under a genuine race.
+    return x_eff + delta
 end
 
 -- The reverse of reinforce_pool_heat, for a document leaving the pool

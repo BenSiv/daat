@@ -235,6 +235,28 @@ slightly stale is fine here (the invariant self-corrects on the next
 event either way), as long as the multiplication itself is atomic and
 never a separate read-then-write.
 
+**The same-document case needs the identical treatment, and got it.**
+Two concurrent reinforcements of the *same* document raced the same
+way: both read the row's `raw_heat`/`scale_at_write` before either
+wrote, so a naive absolute write-back would let the second commit
+silently discard the first one's delta entirely -- not an acceptable
+failure mode, unlike the small numerical staleness tolerated above.
+`document.reinforce_pool_heat` writes `raw_heat` as an expression over
+the row's own live columns (`raw_heat * (pool_scale / scale_at_write) +
+delta`), not a value computed once in Lua and written back absolute --
+the identical shape as the `pool_scale` fix, applied to the document
+row instead of the shared one. This closes the *lost-update* failure
+mode completely (verified directly:
+`tst/unit/document_pool.lua`'s `test_racing_reinforcements_of_the_same_
+document_never_lose_a_delta` reproduces the exact interleaving and
+asserts neither delta is dropped). What it does not make perfectly
+exact: the multiplicative correction still uses a `pool_scale` snapshot
+read moments earlier, so the second commit's correction can be a step
+behind the first commit's own contribution -- a small, bounded,
+self-correcting distortion (every subsequent event against that row
+corrects it further), the same class of tolerance already accepted
+just above for the shared row, not a repeat of the lost-update problem.
+
 ### Downstream call sites (search_score, due_for_review)
 
 Both currently read `effective_heat` as an absolute decayed total. The
@@ -337,12 +359,160 @@ under live ranking. `entity.bats`/`document.bats`/`knowledge.bats`/
 (environment-caused, not code-caused) failures before and after this
 phase.
 
-**Not done, and worth naming rather than leaving implicit**: the
-same-document concurrent-reinforcement race noted in
-`document.reinforce_pool_heat`'s own comment is now live, not just a
-dark-launch curiosity. Low risk in practice (needs two truly
-simultaneous retrievals of the exact same document), but a real gap to
-close, not a dark-launch footnote anymore.
+**Closed, not left open**: the same-document concurrent-reinforcement
+race was live, not just a dark-launch curiosity, once search_score
+started reading this value for real ranking decisions. Fixed by writing
+`raw_heat` as an expression over the row's own live columns rather than
+a value computed once and written back absolute -- see "Concurrency"
+above for the fix and what small, bounded (not lost-update) imprecision
+remains.
+
+### Phase 4 -- log-space representation, and a real correctness gap it surfaced (PLANNED, not started)
+
+Working through whether `pool_scale`'s long-run numerical stability is
+provable (not just "probably fine") surfaced two separate things: a
+representation change that makes the safety bound provable, and an
+actual pre-existing correctness bug, independent of that change, that
+needs fixing either way.
+
+#### The bug: `f` is not guaranteed to stay inside `(0, 1)` today
+
+`f = 1 - delta / (T - x_eff)`. The current code only guards `denominator
+<= 0` (falls back to `f = 1.0`, no shrink at all). It does not guard
+the case where `0 < denominator < delta`: in a small pool where one
+document already holds nearly all the heat, `delta` (up to `0.5`, at
+tier 3) can exceed what's left in "the rest of the pool" to draw from,
+driving `f` to zero or negative. Today that produces a nonsensical
+`pool_scale` (zero or sign-flipped); in log-space it's worse -- `ln` of
+a non-positive number is undefined. This is a real, reachable gap in
+the *current, shipped* formula, not something Phase 4 introduces.
+
+**Fix (needed regardless of the log-space decision below):** instead of
+clamping `f` directly (which would mean the rest of the pool gives up
+less than `delta`, while `X` still receives the full `delta` -- a real
+conservation leak, not just an edge case), clamp the *delta itself* to
+whatever is safely redistributable, and apply that same clamped amount
+on both sides of the transfer:
+
+```
+denominator = T - x_eff
+if denominator <= 0:
+    effective_delta = 0          -- nothing to redistribute from; a
+                                  -- single-document pool must hold
+                                  -- x_eff exactly at BASE_HEAT forever,
+                                  -- so giving it a "free" delta would
+                                  -- itself break the invariant
+else:
+    max_safe_delta = denominator * (1 - F_MIN)
+    effective_delta = min(delta, max_safe_delta)
+f = 1 - effective_delta / denominator   -- now provably in [F_MIN, 1]
+```
+
+Both the shared-row shrink and `X`'s own `+ delta` use `effective_delta`,
+never the raw requested `delta` -- conservation holds exactly even in
+this throttled case; `X` simply receives less than a full reinforcement
+on the rare occasion the pool is this heat-concentrated, rather than
+receiving an unpaid one. This also fully replaces today's `denominator
+<= 0` guard (a special case of the same rule, not a separate branch).
+
+**Decision: `F_MIN = 0.05`.** Loose enough that it's essentially never
+the acting constraint under normal traffic -- a 20,000-event simulation
+against a 1,000-document pool with heavily skewed (Zipf) popularity
+never once engaged it -- while still bounding the worst case tightly:
+no single event can shrink "the rest of the pool" by more than 20x.
+That keeps the safety-bound math in the next section airtight without
+being so tight (`0.01`) that it reads as an arbitrary near-zero
+carve-out, or so loose (`0.5`) that it's doing noticeably less work.
+
+#### The representation change: `pool_scale`/`scale_at_write` in log-space
+
+`pool_scale` decays toward zero under sustained reinforcement by
+construction (every event's `f < 1`, and nothing routinely pushes it
+back up -- an above-average-heat document departing is the only
+counter-force, and it's both rarer and smaller). That is not a bug --
+it's "cold sinks" working as designed -- but it means the *shared*
+value is on an unbounded one-directional multiplicative decline for as
+long as the system sees net reinforcement, which is normal operation.
+
+Repeated multiplication by factors just under 1 is exactly the pattern
+that erodes floating-point precision. For a realistic pool (`T ~= 1000`,
+typical `delta ~= 0.25`, most events far from the `F_MIN` floor), each
+event shrinks `pool_scale` by roughly `delta/T ~= 0.00025` in log terms;
+double precision starts to degrade once `pool_scale` underflows toward
+`~2.2 * 10^-308`, i.e. once accumulated `|ln(pool_scale)|` reaches
+`~708`. That's `~708 / 0.00025 ~= 2.8 million` events -- not an
+unreachable number for a multi-year production system, which is the
+actual motivation for fixing this, not a theoretical worry.
+
+**Storing `ln(pool_scale)` and `ln(scale_at_write)` instead of the
+values themselves turns every multiplication into an addition.**
+Repeated addition of small numbers doesn't drift toward any
+representable-range boundary -- `log_pool_scale` just becomes a more
+negative ordinary double (`-700`, `-70,000`, ...), and doubles hold
+numbers like that with full precision out to roughly `+-1.8 * 10^308`
+before *that* overflows. With the `F_MIN = 0.05` floor above bounding
+every event's worst-case contribution to `|ln(f)|` at `|ln(0.05)| ~=
+3.0`, reaching that boundary purely through adversarial worst-case
+events would take on the order of `1.8 * 10^308 / 3.0 ~= 6 * 10^307`
+events -- not "a very long time," a number with no physical referent.
+That is a provable, permanent bound, not an empirical one: the fix
+doesn't slow the drift down, it moves the failure point from "hit
+during this system's lifetime" to "unreachable regardless of
+lifetime."
+
+This is an exact reparameterization, not an approximation -- `exp`/`ln`
+are true inverses, so nothing about the model's behavior changes, only
+how the intermediate quantity is represented:
+
+```
+pool_effective_heat(raw_heat, log_scale_at_write, log_pool_scale)
+    = raw_heat * exp(log_pool_scale - log_scale_at_write)
+```
+
+`raw_heat` itself is unaffected by any of this -- it's never repeatedly
+multiplied toward an extreme; it only ever receives additive `delta`
+bumps and the occasional multiplicative catch-up against the shared
+scale, so it stays an ordinary, non-drifting magnitude. Only the shared
+`pool_scale` and each row's own `scale_at_write` snapshot of it need to
+move to log-space.
+
+**What changes, concretely:**
+- `knowledge_pool_state.pool_scale` (starts at `1.0`) becomes
+  `log_pool_scale` (starts at `0.0`, since `ln(1.0) = 0`).
+- `document.scale_at_write` (starts at `1.0`) becomes
+  `log_scale_at_write` (starts at `0.0`).
+- Every `pool_scale = pool_scale * f`-shaped update becomes
+  `log_pool_scale = log_pool_scale + ln(f)` -- still a single relative,
+  atomic in-place update (addition instead of multiplication), so the
+  concurrency treatment from Phase 3 carries over unchanged, just with
+  `+` in place of `*`.
+- `document.pool_effective_heat`, `reinforce_pool_heat`,
+  `return_pool_heat`, `register_pool_document`, and `document.search`'s
+  own read of `pool_scale` all need their formulas updated to the
+  log-space equivalents above. `document.search_score`/
+  `knowledge.due_for_review`/`knowledge.get_document`/
+  `knowledge.list_documents`/`reviewed_documents` don't change
+  themselves -- they only ever consume the resulting `effective_heat`,
+  never the raw `pool_scale`/`scale_at_write` values directly.
+
+**Decision: dark-launch, don't rename in place.** Add `log_pool_scale`/
+`log_scale_at_write` alongside the existing `pool_scale`/`scale_at_write`
+columns, populate them (`log_pool_scale = ln(pool_scale)`, etc.) during
+a migration step, run both representations in parallel for one release
+the way Phase 2 dark-launched the pool model itself, then cut over reads
+to the log columns and drop the linear ones -- mirroring the same
+add-alongside-then-cut-over shape Phase 2/3 already used, rather than a
+direct rename with no rollback path. Concretely, this means Phase 4
+becomes its own three-step sub-plan (dark-launch -> verify -> cutover),
+not a single migration.
+
+**Still open:** confirm `math.log`/`math.exp` are available in this
+Luam build (both are part of stock Lua 5.1's `math` library; no new
+dependency expected, but not yet verified against this specific build).
+
+**Not yet done:** no code for either the `F_MIN` fix or the log-space
+move exists yet. This section is the plan; implementation is a
+follow-up phase once the open questions above are resolved.
 
 ## Critical files
 - `/root/projects/platform-wip/src/document.lua` -- `heat`/`retrieval_

@@ -190,6 +190,69 @@ function test_unarchiving_a_document_rejoins_the_pool_at_exactly_base_heat()
     os.remove(db_path)
 end
 
+-- Simulates two reinforcements of the *same* document racing: both read
+-- the document/pool state before either writes anything, then commit
+-- in sequence -- the exact interleaving that used to silently discard
+-- one delta entirely (see document.reinforce_pool_heat's own comment).
+-- Reproduces reinforce_pool_heat's own statements directly (rather than
+-- calling it twice, which -- being single-threaded Lua -- could never
+-- actually race) so the specific interleaving is under this test's
+-- control.
+function test_racing_reinforcements_of_the_same_document_never_lose_a_delta()
+    print("Testing two racing reinforcements of the same document: neither delta is silently lost")
+    db_path = new_test_db(50) -- a large-ish pool keeps the shrink factors close to 1
+    document.ensure_pool_state(db_path)
+
+    state = db.query(db_path, "SELECT pool_scale, document_count FROM knowledge_pool_state WHERE id = 1;")[1]
+    pool_scale = tonumber(state.pool_scale)
+    document_count = tonumber(state.document_count)
+    doc = db.query(db_path, "SELECT raw_heat, scale_at_write FROM document WHERE id = 1;")[1]
+    x_eff_before = document.pool_effective_heat(doc.raw_heat, doc.scale_at_write, pool_scale)
+
+    delta_a = 0.15
+    delta_b = 0.25
+    total = document_count * document.base_heat()
+    f_a = 1 - (delta_a / (total - x_eff_before))
+    f_b = 1 - (delta_b / (total - x_eff_before))
+
+    -- A commits first: shrinks the shared row, then writes its own
+    -- delta as an expression over the row's own live columns (the
+    -- fixed shape) -- not a value it computed once and wrote back
+    -- absolute (the old, lossy shape).
+    db.exec(db_path, string.format("UPDATE knowledge_pool_state SET pool_scale = pool_scale * %.17g WHERE id = 1;", f_a))
+    db.exec(db_path, string.format(
+        "UPDATE document SET raw_heat = (raw_heat * (%.17g / scale_at_write)) + %.17g, scale_at_write = %.17g WHERE id = 1;",
+        pool_scale, delta_a, pool_scale * f_a
+    ))
+
+    -- B commits second, using its OWN pool_scale snapshot from before
+    -- A committed -- exactly the race window this test targets.
+    db.exec(db_path, string.format("UPDATE knowledge_pool_state SET pool_scale = pool_scale * %.17g WHERE id = 1;", f_b))
+    db.exec(db_path, string.format(
+        "UPDATE document SET raw_heat = (raw_heat * (%.17g / scale_at_write)) + %.17g, scale_at_write = %.17g WHERE id = 1;",
+        pool_scale, delta_b, pool_scale * f_a * f_b
+    ))
+
+    final_state = db.query(db_path, "SELECT pool_scale FROM knowledge_pool_state WHERE id = 1;")[1]
+    final_doc = db.query(db_path, "SELECT raw_heat, scale_at_write FROM document WHERE id = 1;")[1]
+    final_eff = document.pool_effective_heat(final_doc.raw_heat, final_doc.scale_at_write, tonumber(final_state.pool_scale))
+
+    -- The old (pre-fix) shape had B's absolute write completely
+    -- overwrite A's -- final_eff would land at x_eff_before + delta_b,
+    -- with delta_a contributing nothing at all. Assert the fix clears
+    -- that floor by a wide margin: delta_a's contribution survives,
+    -- even though it's scaled by a small, bounded factor rather than
+    -- landing at the mathematically exact sum.
+    lost_update_floor = x_eff_before + delta_b
+    check(final_eff > lost_update_floor + (delta_a * 0.9),
+        "delta_a must not be silently lost -- expected close to " .. tostring(x_eff_before + delta_a + delta_b) ..
+        ", got " .. tostring(final_eff) .. " (old buggy code would have landed at " .. tostring(lost_update_floor) .. ")")
+    check(close_enough(final_eff, x_eff_before + delta_a + delta_b, 0.01),
+        "expected within a small, bounded distance of the exact sum " .. tostring(x_eff_before + delta_a + delta_b) ..
+        ", got " .. tostring(final_eff))
+    os.remove(db_path)
+end
+
 -- Run them
 test_reinforcement_conserves_total_across_the_pool()
 test_reinforcement_gives_the_reinforced_document_exactly_delta()
@@ -202,6 +265,7 @@ test_departure_of_the_last_document_does_not_error()
 test_archiving_a_document_returns_its_heat_same_as_a_merge_departure()
 test_on_entity_archived_ignores_non_document_entity_types()
 test_unarchiving_a_document_rejoins_the_pool_at_exactly_base_heat()
+test_racing_reinforcements_of_the_same_document_never_lose_a_delta()
 
 if FAILURES > 0 then
     print(FAILURES .. " test(s) failed")
