@@ -1,0 +1,49 @@
+# Minimal Podman development environment for platform-wip.
+#
+# Contains only what's needed to build and test this project itself:
+# the sibling luam checkout (built from source) plus the system
+# packages bld/build.sh and bld/test.sh require. No unrelated tooling,
+# credentials, or private repos -- see ../ONBOARDING.md for what each
+# dependency is for.
+
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update -y && apt-get install -y \
+        build-essential \
+        git \
+        curl \
+        sqlite3 \
+        libsqlite3-dev \
+        libreadline-dev \
+        libssl-dev \
+        libcrypt-dev \
+        cmark \
+        bats \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Optional MariaDB backend support (doc/mariadb-migration.md). Comment
+# out to build a SQLite-only toolchain -- bld/build.sh degrades
+# gracefully either way, so this is here for parity, not necessity.
+RUN apt-get update -y && apt-get install -y libmariadb-dev \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# luam is a required sibling checkout -- bld/build.sh looks for
+# ../luam by default. Public repo, no token needed.
+WORKDIR /root
+RUN git clone https://github.com/BenSiv/luam.git && \
+    cd luam && \
+    bash bld/build_lang.sh && \
+    bash bld/build_libs.sh
+
+COPY entrypoint.sh /root/entrypoint.sh
+RUN chmod +x /root/entrypoint.sh
+
+# platform-wip itself is bind-mounted here by deploy.sh, as a sibling
+# of /root/luam above -- this image only ever provides the toolchain,
+# never a baked-in copy of the source, so edits made on the host are
+# what actually gets built and tested.
+WORKDIR /root/platform-wip
+
+ENTRYPOINT ["/root/entrypoint.sh"]

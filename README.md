@@ -165,6 +165,9 @@ own test suite so routine test runs don't repeatedly hit a paid API.
 
 ## Docs
 
+- `doc/onboarding.md` -- start here if you're a new contributor to
+  the open-source project: prerequisites, repo layout, architecture
+  primer, and a `dev/` container for a one-command build/test setup.
 - `doc/architecture.md` -- the entity-history model, how entity types
   and extensions run sandboxed, and the auth/session design.
 - `doc/schema.md` -- defining entity types: field types, sandboxed
