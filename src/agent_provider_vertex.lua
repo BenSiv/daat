@@ -83,6 +83,21 @@ function vertex_access_token()
     return token
 end
 
+-- Every regional/multi-regional location uses a
+-- "{region}-aiplatform.googleapis.com" subdomain, but "global" (required
+-- for current-generation Gemini models not yet available in any
+-- regional location, e.g. the 3.x family as of 2026-08) has no such
+-- subdomain -- confirmed live: "global-aiplatform.googleapis.com" does
+-- not resolve as an API host at all, only the bare host does.
+function vertex_url(project, region, model_and_method_path)
+    host = "aiplatform.googleapis.com"
+    if region != "global" then
+        host = region .. "-" .. host
+    end
+    return "https://" .. host .. "/v1/projects/" .. project ..
+        "/locations/" .. region .. "/publishers/google/models/" .. model_and_method_path
+end
+
 -- POSTs `payload_table` (JSON-encoded) to
 -- .../publishers/google/models/<model_and_method_path>, via a temp
 -- file (curl -d @file) rather than shell-interpolating the payload
@@ -106,8 +121,7 @@ function vertex_post(model_and_method_path, payload_table)
     io.write(file, json.encode(payload_table))
     io.close(file)
 
-    url = "https://" .. region .. "-aiplatform.googleapis.com/v1/projects/" .. project ..
-        "/locations/" .. region .. "/publishers/google/models/" .. model_and_method_path
+    url = vertex_url(project, region, model_and_method_path)
 
     cmd = "curl -s -X POST " .. shell_quote(url) ..
         " -H " .. shell_quote("Authorization: Bearer " .. token) ..
