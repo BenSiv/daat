@@ -890,6 +890,29 @@ function parse_kv_args(args, start)
     return values
 end
 
+-- Builds a {key_field_value: id} map from `rows` (each carrying
+-- `key_field`, `id`, and `archived_at`), preferring an active row over
+-- an archived one whenever the same key value labels more than one row
+-- -- see external-ids/field-map's own comments in do_entity for why
+-- this matters: without it, the first (or last, depending on the
+-- backend's own row order) row found for a duplicated key wins
+-- arbitrarily, which can silently point an importer's upsert at an
+-- invisible archived duplicate while the real, visible row goes stale
+-- forever.
+function entity_id_map_prefer_active(rows, key_field)
+    result = {}
+    result_is_archived = {}
+    for _, row in ipairs(rows) do
+        key = tostring(row[key_field])
+        is_archived = row.archived_at != nil and row.archived_at != ""
+        if result[key] == nil or (result_is_archived[key] == true and is_archived == false) then
+            result[key] = tonumber(row.id)
+            result_is_archived[key] = is_archived
+        end
+    end
+    return result
+end
+
 -- CLI entry point: `platform entity <create|list|show|validate-json|create-json> [args]`
 function entity.do_entity(cmd_args, db_path)
     action = cmd_args[1]
@@ -1037,7 +1060,14 @@ function entity.do_entity(cmd_args, db_path)
     -- a row for this source record already exist" and upsert instead of
     -- blindly re-creating it every run. Every row regardless of
     -- archived_at -- an archived row's external_id is still "already
-    -- imported," not fair game to recreate.
+    -- imported," not fair game to recreate -- but when the same
+    -- external_id somehow labels more than one row (a prior duplicate-
+    -- creation bug, a race), an active row always wins over an archived
+    -- one via entity_id_map_prefer_active below: an importer upserting
+    -- by this map must land on the row a human can actually see, not
+    -- silently keep re-updating an invisible archived duplicate while
+    -- the real one goes stale forever -- confirmed live, exactly this
+    -- shape of bug (see also field-map below, same fix, same reason).
     if action == "external-ids" then
         entity_type = cmd_args[2]
         if entity_type == nil then
@@ -1047,12 +1077,10 @@ function entity.do_entity(cmd_args, db_path)
         result = {}
         if db.table_exists(db_path, entity_type) then
             rows = db.query(db_path, string.format(
-                "SELECT external_id, id FROM %s WHERE external_id IS NOT NULL AND external_id != '';", entity_type
+                "SELECT external_id, id, archived_at FROM %s WHERE external_id IS NOT NULL AND external_id != '';", entity_type
             ))
             if rows != nil then
-                for _, row in ipairs(rows) do
-                    result[row.external_id] = tonumber(row.id)
-                end
+                result = entity_id_map_prefer_active(rows, "external_id")
             end
         end
         print(json.encode(result))
@@ -1062,7 +1090,8 @@ function entity.do_entity(cmd_args, db_path)
     -- {field_value: id} for every row of `entity_type` with a non-null,
     -- non-empty value for `field_name` -- same backend-agnostic lookup
     -- as external-ids, for an importer keying off some other natural
-    -- column instead of (or in addition to) external_id.
+    -- column instead of (or in addition to) external_id. Same active-
+    -- over-archived preference as external-ids above, same reason.
     if action == "field-map" then
         entity_type = cmd_args[2]
         field_name = cmd_args[3]
@@ -1074,13 +1103,11 @@ function entity.do_entity(cmd_args, db_path)
         if db.table_exists(db_path, entity_type) then
             quoted_field = db.quote_ident(field_name)
             rows = db.query(db_path, string.format(
-                "SELECT %s AS field_value, id FROM %s WHERE %s IS NOT NULL AND %s != '';",
+                "SELECT %s AS field_value, id, archived_at FROM %s WHERE %s IS NOT NULL AND %s != '';",
                 quoted_field, entity_type, quoted_field, quoted_field
             ))
             if rows != nil then
-                for _, row in ipairs(rows) do
-                    result[tostring(row.field_value)] = tonumber(row.id)
-                end
+                result = entity_id_map_prefer_active(rows, "field_value")
             end
         end
         print(json.encode(result))

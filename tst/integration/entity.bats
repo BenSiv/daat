@@ -153,6 +153,34 @@ teardown() {
     [ "$output" = "{}" ] || [ "$output" = "[]" ]
 }
 
+@test "entity external-ids prefers an active row over an archived duplicate sharing the same external_id" {
+    # Real-world shape this reproduces: a prior duplicate-creation bug
+    # left two rows tagged with the same external_id, one archived, one
+    # not -- an importer upserting off this map must land on the row a
+    # human can actually see (confirmed live: without this fix, a
+    # re-sync silently kept updating an invisible archived duplicate
+    # while the real one went stale forever). IDs come from a shared
+    # ledger event sequence (archive appends its own event, see task
+    # #77's own comment above) -- captured from each command's own
+    # output rather than assumed, since archiving #1 means the second
+    # create doesn't land on #2.
+    stale_id=$("$BIN" entity create reagent lot_number=LOT-STALE concentration=1 external_id=ext-dup | grep -o '[0-9]\+')
+    "$BIN" entity archive reagent "$stale_id"
+    current_id=$("$BIN" entity create reagent lot_number=LOT-CURRENT concentration=2 external_id=ext-dup | grep -o '[0-9]\+')
+
+    run "$BIN" entity external-ids reagent
+    [[ "$output" =~ "\"ext-dup\":${current_id}" ]]
+    [[ ! "$output" =~ "\"ext-dup\":${stale_id}" ]]
+}
+
+@test "entity external-ids falls back to an archived row when it's the only one for that external_id" {
+    "$BIN" entity create reagent lot_number=LOT-1 concentration=1 external_id=ext-archived-only
+    "$BIN" entity archive reagent 1
+
+    run "$BIN" entity external-ids reagent
+    [[ "$output" =~ '"ext-archived-only":1' ]]
+}
+
 @test "entity field-map returns a real {field_value: id} map keyed on an arbitrary column, not just external_id" {
     "$BIN" entity create reagent lot_number=LOT-1 concentration=5
     "$BIN" entity create reagent lot_number=LOT-2 concentration=10
@@ -168,4 +196,14 @@ teardown() {
     run "$BIN" entity field-map nonexistent_type lot_number
     [ "$status" -eq 0 ]
     [ "$output" = "{}" ] || [ "$output" = "[]" ]
+}
+
+@test "entity field-map prefers an active row over an archived duplicate sharing the same field value" {
+    stale_id=$("$BIN" entity create reagent lot_number=LOT-DUP concentration=1 | grep -o '[0-9]\+')
+    "$BIN" entity archive reagent "$stale_id"
+    current_id=$("$BIN" entity create reagent lot_number=LOT-DUP concentration=2 | grep -o '[0-9]\+')
+
+    run "$BIN" entity field-map reagent lot_number
+    [[ "$output" =~ "\"LOT-DUP\":${current_id}" ]]
+    [[ ! "$output" =~ "\"LOT-DUP\":${stale_id}" ]]
 }
