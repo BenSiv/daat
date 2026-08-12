@@ -8,7 +8,7 @@ couple of the other files in this directory mention that in passing
 nothing about building, testing, or extending this project depends on
 it.
 
-There is no separate `CONTRIBUTING.md` today -- this is it.
+This doc is this project's contribution guide.
 
 ## What this is
 
