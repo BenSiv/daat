@@ -1005,6 +1005,29 @@ function document.reindex_embedding(db_path, document_id)
     return true
 end
 
+-- The document.sync_links equivalent of reindex_embedding above -- for
+-- the same reason: a document created/updated via the generic `entity
+-- create-json`/`update-json` path (see this file's own do_document
+-- comment) never runs document.sync_links at all, so any [[...]] links
+-- authored in its content are never registered until this runs.
+function document.resync_links(db_path, document_id)
+    doc = entity.get(db_path, "document", document_id)
+    if doc == nil then
+        return nil, "no such document"
+    end
+    document.sync_links(db_path, document_id, doc.content)
+    return true
+end
+
+function document.resync_all_links(db_path)
+    resynced = 0
+    for _, row in ipairs(document.all_active(db_path)) do
+        document.resync_links(db_path, row.id)
+        resynced = resynced + 1
+    end
+    return resynced
+end
+
 function document.reindex_all_embeddings(db_path)
     reindexed = 0
     failed = 0
@@ -1212,10 +1235,13 @@ function document.search(db_path, query_text, limit, use_semantic)
     return results
 end
 
--- CLI entry point: `platform document <create-json|reindex-embeddings [entity_id]>`
--- -- `reindex-embeddings` is for bulk backfill (documents saved before
--- this cache existed, or after a provider outage silently dropped some
--- best-effort saves).
+-- CLI entry point: `platform document <create-json|reindex-embeddings
+-- [entity_id]|resync-links [entity_id]>` -- `reindex-embeddings` and
+-- `resync-links` are for bulk backfill (documents saved before these
+-- caches existed, after a provider outage silently dropped some
+-- best-effort saves, or -- see the generic-entity-path warning below --
+-- created via a path that skips document.create_page's side effects
+-- entirely).
 function document.do_document(cmd_args, db_path)
     action = cmd_args[1]
 
@@ -1278,7 +1304,27 @@ function document.do_document(cmd_args, db_path)
         return
     end
 
-    print("Usage: platform document <create-json|reindex-embeddings [entity_id]>")
+    -- The document.sync_links half of the same backfill story
+    -- reindex-embeddings tells above -- a separate action (not folded
+    -- into reindex-embeddings) since either can fail/need a rerun
+    -- independently of the other.
+    if action == "resync-links" then
+        entity_id = tonumber(cmd_args[2])
+        if entity_id != nil then
+            ok, err = document.resync_links(db_path, entity_id)
+            if ok == nil then
+                print("Error: " .. tostring(err))
+                return
+            end
+            print("Resynced links for document #" .. tostring(entity_id))
+            return
+        end
+        resynced = document.resync_all_links(db_path)
+        print(string.format("Resynced links for %d document(s)", resynced))
+        return
+    end
+
+    print("Usage: platform document <create-json|reindex-embeddings [entity_id]|resync-links [entity_id]>")
 end
 
 return document

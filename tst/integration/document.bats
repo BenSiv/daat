@@ -387,3 +387,40 @@ EOF
     run bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db 'SELECT COUNT(*) FROM document_embedding;'"
     [ "$output" = "1" ]
 }
+
+@test "document resync-links CLI backfills [[...]] links for a document created via the generic entity path" {
+    # Uses `entity create-json document` (not `document create-json`)
+    # to reproduce the actual gap: entity.create_batch goes straight to
+    # entity.create, skipping document.create_page's own side effects
+    # (document.sync_links for backlinks, document.reindex_embedding for
+    # semantic search) entirely -- exactly what convert_entries_to_pages.py
+    # (software/benchling/migration/) does for every Benchling-synced
+    # document.
+    save_document "csrf_token=${CSRF}&title=Home&parent_id=&content=Welcome." >/dev/null
+
+    payload='[{"title": "Guide", "content": "Back to [[Home]]."}]'
+    run bash -c "printf '%s' '$payload' | '$BIN' entity create-json document"
+    [[ "$output" =~ '"created_ids":[2]' ]]
+
+    run bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db 'SELECT COUNT(*) FROM document_link;'"
+    [ "$output" = "0" ]
+
+    run "$BIN" document resync-links 2
+    [[ "$output" =~ "Resynced links for document #2" ]]
+
+    run bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db 'SELECT from_document_id, to_document_id FROM document_link;'"
+    [ "$output" = "2|1" ]
+}
+
+@test "document resync-links CLI with no id backfills every active document" {
+    save_document "csrf_token=${CSRF}&title=Home&parent_id=&content=Welcome." >/dev/null
+
+    payload='[{"title": "Guide", "content": "Back to [[Home]]."}]'
+    printf '%s' "$payload" | "$BIN" entity create-json document >/dev/null
+
+    run "$BIN" document resync-links
+    [[ "$output" =~ "Resynced links for 2 document(s)" ]]
+
+    run bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db 'SELECT COUNT(*) FROM document_link;'"
+    [ "$output" = "1" ]
+}
