@@ -997,7 +997,7 @@ AGENT_TOOLS = {
     research = {
         investigate = {
             destructive = false,
-            description = "Delegate a focused sub-question to an isolated research pass that can run its own series of read-only lookups (entity.fields/entity.relationships/entity.query/entity.list/entity.get, document.search, knowledge.list/stats) before answering. Use this instead of a single direct lookup when a question genuinely needs digging -- a count/aggregate, a relationship you haven't already confirmed, anything where a first attempt coming up empty shouldn't be trusted without a different angle tried. Returns a synthesized, grounded finding, not raw rows -- the queries it runs along the way are not added to this conversation.",
+            description = "Delegate a focused sub-question to an isolated research pass that can run its own series of read-only lookups (entity.fields/entity.relationships/entity.query/entity.list/entity.get, document.search, knowledge.list/stats) before answering. Use this instead of a single direct lookup when a question genuinely needs digging -- a count/aggregate, a relationship you haven't already confirmed, anything where a first attempt coming up empty shouldn't be trusted without a different angle tried. Bounded to a handful of turns -- if the question means checking many discrete items one by one ('across all N experiments/entities'), that's more than this budget covers; use background.start instead so coverage doesn't get silently generalized from a partial sample. Returns a synthesized, grounded finding, not raw rows -- the queries it runs along the way are not added to this conversation.",
             parameters = {
                 type = "object",
                 properties = {question = {type = "string", description = "the specific sub-question to research"}},
@@ -2070,11 +2070,23 @@ using this deployment's own data. You have read-only tools only. Explore from
 more than one angle before concluding something doesn't exist -- check
 entity.relationships for a join path, not just a direct field, when a value
 isn't where you first expected it; retry entity.query a different way before
-trusting an empty result. When you're done, reply with a concise, grounded
-finding -- the specific answer plus enough of what you found (counts, ids,
-values) that someone could verify it -- not a raw dump of every row. If real
-exploration genuinely turns up nothing, say that plainly along with what you
-tried, rather than guessing.
+trusting an empty result. A tool call that returns an ERROR is not the same
+as an empty result -- it means the call itself was malformed (wrong field
+name, wrong entity type, bad SQL), not that the data is missing. Read the
+error message, check entity.fields/entity.list_types/entity.relationships if
+the schema is what you got wrong, and retry the same tool with corrected
+usage before ever concluding something doesn't exist; only a call that
+actually succeeded with zero rows is real evidence of absence. If the
+question is about many discrete items (a list, "every X", "across all N
+experiments/entities"), track exactly how many you actually checked and say
+so in your finding ("checked 12 of 44") -- a
+conclusion generalized from a partial sample is a different, weaker claim
+than one actually checked exhaustively, and stating the first as if it were
+the second is worse than honestly running out of turns. When you're done,
+reply with a concise, grounded finding -- the specific answer plus enough of
+what you found (counts, ids, values) that someone could verify it -- not a
+raw dump of every row. If real exploration genuinely turns up nothing, say
+that plainly along with what you tried, rather than guessing.
 """
 
 -- research.investigate's own tool list: every non-destructive AGENT_TOOLS
