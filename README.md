@@ -252,3 +252,6 @@ tier breakdown, and recent retrievals. See `doc/architecture.md`'s own
 - `doc/glossary.md` -- terms this codebase should use consistently
   (Document vs page/Notebook, Entity vs record, Knowledge Pool tiers,
   capability names).
+- `doc/link-adjudication-alternatives.md` -- a design perspective from
+  comparing notes with the open-ontologies project: an auditable,
+  rule-based alternative to today's LLM-judged co-retrieval linking.
