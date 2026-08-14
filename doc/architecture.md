@@ -705,12 +705,9 @@ document. The pure tier/heat/dedup heuristics
   gets rechecked, not that its tier rises: a spread neighbor still only
   actually promotes if it's genuinely been revised with the right
   content shape, same as any other document.
-- **Deferred, not built**: a `knowledge-browser` filter page, an
-  `ai_note_link`-style co-retrieval graph between documents, and
-  agent-assisted linking -- the agent actively proposing/creating new
-  `document_link` connections between related documents it notices,
-  not just passively scoring the links a user already wrote. That's
-  real new write surface (almost certainly a destructive, approval-
-  gated `AGENT_TOOLS` entry, same bar as `knowledge.distill`/
-  `document.create`), worth scoping properly on its own rather than
-  building ad hoc.
+- **Deferred, not built**: a `knowledge-browser` filter page. (Agent-
+  assisted co-retrieval linking -- once the plan here -- is now real:
+  see "Spreading activation" above and `knowledge.maybe_link_co_retrieved`,
+  a rule-triggered, additive-only side effect of review, the same bar
+  as `knowledge.maybe_distill`, not a destructive approval-gated
+  `AGENT_TOOLS` entry.)

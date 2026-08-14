@@ -16,14 +16,23 @@ This doc is this project's contribution guide.
 self-contained web application written in
 [Luam](https://github.com/BenSiv/luam) and compiled to one static
 binary: its own login/sessions, its own HTML rendering, its own SQL
-storage. Its core idea is that an **entity type is data, not code**:
-you define a new kind of record (a sample, a task, whatever your
-domain needs) as a small declarative Lua file, and the platform
+storage. Its core piece is the **Knowledge Pool**: Documents, chat
+conversations, and the agent's own reasoning all sit in one shared pool
+that tiers, links, and distills itself automatically as it's actually
+retrieved and edited -- no curator, no scheduled job (see
+`architecture.md`'s "Knowledge pool" section, and the glossary's
+Knowledge Pool entry). A built-in, pluggable LLM-backed chat assistant
+(its own small approved tool registry, a human approval gate on
+anything that changes data) is what actually drives real usage of that
+pool.
+
+It also ships an extensible entity-tracking layer: an **entity type is
+data, not code** -- you define a new kind of record (a sample, a task,
+whatever your domain needs) as a small declarative Lua file, and it
 generates storage, validation, a full audit trail, and a queryable
 table for it automatically, with nothing ever hard-deleted -- only
-archived. It also ships a built-in Documents (wiki-style, linked-tree)
-system and a pluggable LLM-backed chat assistant with a small approved
-tool registry.
+archived. This general-purpose data-entry/LIMS-style layer is
+functional but earlier-stage and not the project's current focus.
 
 ## Quick start
 
