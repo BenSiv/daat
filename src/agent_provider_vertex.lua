@@ -171,7 +171,7 @@ end
 
 -- agent.lua's own AGENT_TOOLS (see doc/agent-protocol.md) declares
 -- `parameters` as plain, standard JSON Schema -- lowercase `type`
--- ("object"/"string"/"integer"/etc.) -- platform-wip's own neutral
+-- ("object"/"string"/"integer"/etc.) -- daat's own neutral
 -- contract, not any one vendor's dialect. Vertex/Gemini's real
 -- functionDeclarations Schema requires the uppercase proto enum instead
 -- ("OBJECT"/"STRING"/"INTEGER") -- a real Vertex call rejects lowercase

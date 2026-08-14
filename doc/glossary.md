@@ -73,7 +73,7 @@ each already refers to a different thing, cleanly:
   List/Diagram display-mode toggle, an unrelated feature.
 - **Template vs Example** -- `template.lua` (reusable entry layouts a
   user picks from `/templates`) and `examples.lua` (seed content
-  `platform init --with-examples` writes once, for a fresh deployment to
+  `daat init --with-examples` writes once, for a fresh deployment to
   look at) are genuinely different features that happen to sound
   similar; not the same concept under two names.
 - **Extension vs Hook** -- an "extension" (`extension.lua`) is the

@@ -2946,7 +2946,7 @@ end
 -- feed) yet -- a real starting point, not the end state. `theme` is
 -- config.load_theme(root)'s return value, purely for site_name; no
 -- other Celleste-specific content belongs here (see theme.lua's own
--- split from platform-wip).
+-- split from daat).
 function html.render_home(theme, show_sql, show_admin, has_tasks_view)
     site_name = "Platform"
     has_logo = false

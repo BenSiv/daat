@@ -578,7 +578,7 @@ SELECT * FROM task
     [ "$output" -eq 0 ]
 }
 
-@test "background.start enqueues without blocking the turn; platform agent run-pending-background drains it into the same conversation" {
+@test "background.start enqueues without blocking the turn; daat agent run-pending-background drains it into the same conversation" {
     write_task_schema
     write_task_note_schema
     "$BIN" entity create task title="Ship it" status=open >/dev/null

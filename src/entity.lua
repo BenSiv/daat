@@ -913,14 +913,14 @@ function entity_id_map_prefer_active(rows, key_field)
     return result
 end
 
--- CLI entry point: `platform entity <create|list|show|validate-json|create-json> [args]`
+-- CLI entry point: `daat entity <create|list|show|validate-json|create-json> [args]`
 function entity.do_entity(cmd_args, db_path)
     action = cmd_args[1]
 
     if action == "create" then
         entity_type = cmd_args[2]
         if entity_type == nil then
-            print("Usage: platform entity create <type> field=value [field=value ...]")
+            print("Usage: daat entity create <type> field=value [field=value ...]")
             return
         end
         values = parse_kv_args(cmd_args, 3)
@@ -941,7 +941,7 @@ function entity.do_entity(cmd_args, db_path)
         entity_type = cmd_args[2]
         id = tonumber(cmd_args[3])
         if entity_type == nil or id == nil then
-            print("Usage: platform entity update <type> <id> field=value [field=value ...]")
+            print("Usage: daat entity update <type> <id> field=value [field=value ...]")
             return
         end
         values = parse_kv_args(cmd_args, 4)
@@ -962,7 +962,7 @@ function entity.do_entity(cmd_args, db_path)
         entity_type = cmd_args[2]
         id = tonumber(cmd_args[3])
         if entity_type == nil or id == nil then
-            print("Usage: platform entity archive <type> <id>")
+            print("Usage: daat entity archive <type> <id>")
             return
         end
         archived_id, issues = entity.archive(db_path, entity_type, id, os.getenv("USER"))
@@ -986,7 +986,7 @@ function entity.do_entity(cmd_args, db_path)
         entity_type = cmd_args[2]
         id = tonumber(cmd_args[3])
         if entity_type == nil or id == nil then
-            print("Usage: platform entity unarchive <type> <id>")
+            print("Usage: daat entity unarchive <type> <id>")
             return
         end
         unarchived_id, issues = entity.unarchive(db_path, entity_type, id, os.getenv("USER"))
@@ -1010,7 +1010,7 @@ function entity.do_entity(cmd_args, db_path)
             end
         end
         if entity_type == nil then
-            print("Usage: platform entity list <type> [--include-archived]")
+            print("Usage: daat entity list <type> [--include-archived]")
             return
         end
         for _, row in ipairs(entity.list(db_path, entity_type, nil, nil, include_archived)) do
@@ -1023,7 +1023,7 @@ function entity.do_entity(cmd_args, db_path)
         entity_type = cmd_args[2]
         id = tonumber(cmd_args[3])
         if entity_type == nil or id == nil then
-            print("Usage: platform entity show <type> <id>")
+            print("Usage: daat entity show <type> <id>")
             return
         end
         row = entity.get(db_path, entity_type, id)
@@ -1040,7 +1040,7 @@ function entity.do_entity(cmd_args, db_path)
     if action == "validate-json" then
         entity_type = cmd_args[2]
         if entity_type == nil then
-            print("Usage: platform entity validate-json <type>")
+            print("Usage: daat entity validate-json <type>")
             return
         end
         input = io.read("*all")
@@ -1071,7 +1071,7 @@ function entity.do_entity(cmd_args, db_path)
     if action == "external-ids" then
         entity_type = cmd_args[2]
         if entity_type == nil then
-            print("Usage: platform entity external-ids <type>")
+            print("Usage: daat entity external-ids <type>")
             return
         end
         result = {}
@@ -1096,7 +1096,7 @@ function entity.do_entity(cmd_args, db_path)
         entity_type = cmd_args[2]
         field_name = cmd_args[3]
         if entity_type == nil or field_name == nil then
-            print("Usage: platform entity field-map <type> <field>")
+            print("Usage: daat entity field-map <type> <field>")
             return
         end
         result = {}
@@ -1126,7 +1126,7 @@ function entity.do_entity(cmd_args, db_path)
         field_name = cmd_args[3]
         value = cmd_args[4]
         if entity_type == nil or field_name == nil or value == nil then
-            print("Usage: platform entity list-by-field <type> <field> <value>")
+            print("Usage: daat entity list-by-field <type> <field> <value>")
             return
         end
         rows = entity.list_by_field(db_path, entity_type, field_name, value)
@@ -1141,7 +1141,7 @@ function entity.do_entity(cmd_args, db_path)
     if action == "create-json" then
         entity_type = cmd_args[2]
         if entity_type == nil then
-            print("Usage: platform entity create-json <type>")
+            print("Usage: daat entity create-json <type>")
             return
         end
         input = io.read("*all")
@@ -1169,7 +1169,7 @@ function entity.do_entity(cmd_args, db_path)
         entity_type = cmd_args[2]
         id = tonumber(cmd_args[3])
         if entity_type == nil or id == nil then
-            print("Usage: platform entity update-json <type> <id>")
+            print("Usage: daat entity update-json <type> <id>")
             return
         end
         input = io.read("*all")
@@ -1193,10 +1193,10 @@ function entity.do_entity(cmd_args, db_path)
         return
     end
 
-    print("Usage: platform entity <create|list|show|update|validate-json|create-json|update-json|external-ids|field-map|list-by-field> [args]")
+    print("Usage: daat entity <create|list|show|update|validate-json|create-json|update-json|external-ids|field-map|list-by-field> [args]")
 end
 
--- CLI entry point: `platform extension <list|show|approve|revoke|run-pending> [args]`
+-- CLI entry point: `daat extension <list|show|approve|revoke|run-pending> [args]`
 -- Lives here rather than in extension.lua for the same reason build_ctx
 -- does: run-pending needs entity.create/entity.update, and extension.lua
 -- can't require this module back without a require cycle.
@@ -1225,7 +1225,7 @@ function entity.do_extension(cmd_args, db_path)
     if action == "show" then
         name = cmd_args[2]
         if name == nil then
-            print("Usage: platform extension show <name>")
+            print("Usage: daat extension show <name>")
             return
         end
         manifest, err = extension.load_manifest(ext_dir, name)
@@ -1260,7 +1260,7 @@ function entity.do_extension(cmd_args, db_path)
     if action == "approve" then
         name = cmd_args[2]
         if name == nil then
-            print("Usage: platform extension approve <name>")
+            print("Usage: daat extension approve <name>")
             return
         end
         manifest, err = extension.load_manifest(ext_dir, name)
@@ -1278,7 +1278,7 @@ function entity.do_extension(cmd_args, db_path)
     if action == "revoke" then
         name = cmd_args[2]
         if name == nil then
-            print("Usage: platform extension revoke <name>")
+            print("Usage: daat extension revoke <name>")
             return
         end
         extension.revoke(db_path, name)
@@ -1292,7 +1292,7 @@ function entity.do_extension(cmd_args, db_path)
         return
     end
 
-    print("Usage: platform extension <list|show|approve|revoke|run-pending> [args]")
+    print("Usage: daat extension <list|show|approve|revoke|run-pending> [args]")
 end
 
 return entity

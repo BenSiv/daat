@@ -1,4 +1,4 @@
--- Example config-as-code content for `platform init --with-examples` --
+-- Example config-as-code content for `daat init --with-examples` --
 -- a fresh, truly empty install gives a new user zero indication of what
 -- a schema/view/extension/template file actually looks like or how to
 -- write one. This module is the opt-in alternative: one small,
@@ -57,7 +57,7 @@ EXAMPLE_VIEW = """-- Example saved view: a named, read-only SELECT query rendere
 -- (created_at, archived_at, ...) -- this one reads the "widget"
 -- example schema's own columns. Views need an explicit admin approval
 -- before they can run (System -> a real security control, not
--- skippable even for this example) -- `platform view approve
+-- skippable even for this example) -- `daat view approve
 -- widgets-in-stock` once initialized, or approve it from the /system
 -- page.
 return {

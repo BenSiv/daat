@@ -99,7 +99,7 @@ end
 
 -- Backtick-quotes a raw SQL identifier (column/index name), not a value --
 -- db.quote/db.literal already cover values. Needed anywhere a
--- schema-defined field name (arbitrary, not controlled by platform-wip's
+-- schema-defined field name (arbitrary, not controlled by daat's
 -- own code) gets interpolated as a column identifier: MySQL's reserved-
 -- word list is much larger than SQLite's or MariaDB's own extensions
 -- allow around, so a field genuinely named e.g. "usage" (a real

@@ -91,7 +91,7 @@ function auth.session_secret(root)
     path = config.session_secret_path(root)
     file = io.open(path, "r")
     if file == nil then
-        return nil, "no session secret at " .. path .. " -- run 'platform init' first"
+        return nil, "no session secret at " .. path .. " -- run 'daat init' first"
     end
     secret = io.read(file, "*all")
     io.close(file)
@@ -449,7 +449,7 @@ function auth.verify_csrf(cookie_token, submitted_token)
 end
 
 --------------------------------------------------------------------------
--- CLI: `platform user <add|passwd|capabilities|list|archive|unarchive> ...`
+-- CLI: `daat user <add|passwd|capabilities|list|archive|unarchive> ...`
 --------------------------------------------------------------------------
 
 function auth.do_user(cmd_args, db_path)
@@ -460,7 +460,7 @@ function auth.do_user(cmd_args, db_path)
         password = cmd_args[3]
         cap = cmd_args[4]
         if login == nil or password == nil then
-            print("Usage: platform user add <login> <password> [cap]")
+            print("Usage: daat user add <login> <password> [cap]")
             return
         end
         ok, err = auth.create_user(db_path, login, password, cap)
@@ -476,7 +476,7 @@ function auth.do_user(cmd_args, db_path)
         login = cmd_args[2]
         password = cmd_args[3]
         if login == nil or password == nil then
-            print("Usage: platform user passwd <login> <new_password>")
+            print("Usage: daat user passwd <login> <new_password>")
             return
         end
         ok, err = auth.set_password(db_path, login, password)
@@ -492,7 +492,7 @@ function auth.do_user(cmd_args, db_path)
         login = cmd_args[2]
         cap = cmd_args[3]
         if login == nil or cap == nil then
-            print("Usage: platform user capabilities <login> <cap_string>")
+            print("Usage: daat user capabilities <login> <cap_string>")
             return
         end
         ok, err = auth.set_capabilities(db_path, login, cap)
@@ -525,7 +525,7 @@ function auth.do_user(cmd_args, db_path)
     if action == "archive" then
         login = cmd_args[2]
         if login == nil then
-            print("Usage: platform user archive <login>")
+            print("Usage: daat user archive <login>")
             return
         end
         ok, err = auth.archive_user(db_path, login)
@@ -540,7 +540,7 @@ function auth.do_user(cmd_args, db_path)
     if action == "unarchive" then
         login = cmd_args[2]
         if login == nil then
-            print("Usage: platform user unarchive <login>")
+            print("Usage: daat user unarchive <login>")
             return
         end
         ok, err = auth.unarchive_user(db_path, login)
@@ -552,11 +552,11 @@ function auth.do_user(cmd_args, db_path)
         return
     end
 
-    print("Usage: platform user <add|passwd|capabilities|list|archive|unarchive> ...")
+    print("Usage: daat user <add|passwd|capabilities|list|archive|unarchive> ...")
 end
 
 --------------------------------------------------------------------------
--- CLI: `platform api-key <create|list|capabilities|archive|unarchive> ...`
+-- CLI: `daat api-key <create|list|capabilities|archive|unarchive> ...`
 --------------------------------------------------------------------------
 
 function auth.do_api_key(cmd_args, db_path)
@@ -566,7 +566,7 @@ function auth.do_api_key(cmd_args, db_path)
         label = cmd_args[2]
         cap = cmd_args[3]
         if label == nil then
-            print("Usage: platform api-key create <label> [cap]")
+            print("Usage: daat api-key create <label> [cap]")
             return
         end
         raw_key, err = auth.create_api_key(db_path, label, cap)
@@ -583,7 +583,7 @@ function auth.do_api_key(cmd_args, db_path)
         label = cmd_args[2]
         cap = cmd_args[3]
         if label == nil or cap == nil then
-            print("Usage: platform api-key capabilities <label> <cap_string>")
+            print("Usage: daat api-key capabilities <label> <cap_string>")
             return
         end
         ok, err = auth.set_api_key_capabilities(db_path, label, cap)
@@ -616,7 +616,7 @@ function auth.do_api_key(cmd_args, db_path)
     if action == "archive" then
         label = cmd_args[2]
         if label == nil then
-            print("Usage: platform api-key archive <label>")
+            print("Usage: daat api-key archive <label>")
             return
         end
         ok, err = auth.archive_api_key(db_path, label)
@@ -631,7 +631,7 @@ function auth.do_api_key(cmd_args, db_path)
     if action == "unarchive" then
         label = cmd_args[2]
         if label == nil then
-            print("Usage: platform api-key unarchive <label>")
+            print("Usage: daat api-key unarchive <label>")
             return
         end
         ok, err = auth.unarchive_api_key(db_path, label)
@@ -643,7 +643,7 @@ function auth.do_api_key(cmd_args, db_path)
         return
     end
 
-    print("Usage: platform api-key <create|list|capabilities|archive|unarchive> ...")
+    print("Usage: daat api-key <create|list|capabilities|archive|unarchive> ...")
 end
 
 return auth

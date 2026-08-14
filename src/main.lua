@@ -34,7 +34,7 @@ do_knowledge = knowledge.do_knowledge
 -- own require) since knowledge.lua can't require agent.lua back itself
 -- (agent.lua already requires knowledge.lua; a real circular require,
 -- not just an ordering nuisance) -- the one thing that needs both,
--- `platform knowledge distill`, is dispatched from here instead of
+-- `daat knowledge distill`, is dispatched from here instead of
 -- inside knowledge.do_knowledge.
 agent = require("agent")
 
@@ -73,13 +73,13 @@ function main()
     command = arg[1]
 
     if command != nil then
-        arg[0] = "platform " .. command
+        arg[0] = "daat " .. command
     else
-        arg[0] = "platform"
+        arg[0] = "daat"
     end
 
     if command == nil or command == "-h" or command == "--help" then
-        print("Usage: platform <init|schema|entity|ledger|extension|view|user|api-key|document|knowledge|agent> ...")
+        print("Usage: daat <init|schema|entity|ledger|extension|view|user|api-key|document|knowledge|agent> ...")
         return
     end
 
@@ -90,10 +90,10 @@ function main()
     -- knowledge.do_knowledge instead of through it: see the
     -- require("agent") comment above main(). Meant to be invoked
     -- periodically (cron/systemd timer), the same way extension_job's
-    -- own "platform extension run-pending" already is.
+    -- own "daat extension run-pending" already is.
     if command == "agent" and arg[2] == "run-pending-background" then
         if config.is_initialized(".") == false then
-            print("Not initialized. Run 'platform init' first.")
+            print("Not initialized. Run 'daat init' first.")
             return
         end
         db_path = config.db_path(".")
@@ -120,7 +120,7 @@ function main()
     end
 
     if config.is_initialized(".") == false then
-        print("Not initialized. Run 'platform init' first.")
+        print("Not initialized. Run 'daat init' first.")
         return
     end
 

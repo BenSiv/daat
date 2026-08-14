@@ -515,28 +515,28 @@ move exists yet. This section is the plan; implementation is a
 follow-up phase once the open questions above are resolved.
 
 ## Critical files
-- `/root/projects/platform-wip/src/document.lua` -- `heat`/`retrieval_
+- `/root/projects/daat/src/document.lua` -- `heat`/`retrieval_
   count`/`last_retrieved_at` columns (heat to become `raw_heat`/
   `scale_at_write`), `reinforcement_delta`, `effective_heat`,
   `search_score`, and the Phase 2 pool primitives (`ensure_pool_state`,
   `register_pool_document`, `reinforce_pool_heat`, `return_pool_heat`,
   `on_entity_archived`/`on_entity_unarchived`)
-- `/root/projects/platform-wip/src/knowledge.lua` --
+- `/root/projects/daat/src/knowledge.lua` --
   `record_retrieval_hit` (`301-316`), `spread_activation` (`855-879`),
   `due_for_review` (`756-761`), `review_retrieval`, `duplication_status`
   (merge departure), `KNOWLEDGE_SCHEMA` (new `knowledge_pool_state`
   table)
-- `/root/projects/platform-wip/src/entity.lua`,
-  `/root/projects/platform-wip/src/cgi.lua`,
-  `/root/projects/platform-wip/src/agent.lua` -- every `entity.archive`/
+- `/root/projects/daat/src/entity.lua`,
+  `/root/projects/daat/src/cgi.lua`,
+  `/root/projects/daat/src/agent.lua` -- every `entity.archive`/
   `entity.unarchive` call site, each now calling
   `document.on_entity_archived`/`on_entity_unarchived` on success.
   `entity.lua`'s own CLI dispatcher uses a lazy, function-scoped
   `require("document")` rather than a module-top-level one, since
   `entity.lua` must never require `document.lua` (the reverse already
   holds)
-- `/root/projects/platform-wip/tst/unit/document_pool.lua` -- the
+- `/root/projects/daat/tst/unit/document_pool.lua` -- the
   conservation-invariant tests
-- `/root/projects/platform-wip/doc/architecture.md` --
+- `/root/projects/daat/doc/architecture.md` --
   `platform_heat_decay_half_life_days` config entry, to be removed in
   Phase 3

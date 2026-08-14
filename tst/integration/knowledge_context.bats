@@ -165,7 +165,7 @@ EOF
     [[ "$output" =~ "Core idea" ]]
 }
 
-@test "platform knowledge distill runs an agent turn that proposes distill, gated behind approval" {
+@test "daat knowledge distill runs an agent turn that proposes distill, gated behind approval" {
     # Created via the real entity path (not a raw SQL insert) -- document
     # rows get their id from ledger.append_create's own auto-increment
     # sequence, so a hand-inserted row with an explicit id would collide

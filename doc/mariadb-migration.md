@@ -56,7 +56,7 @@ needed anywhere.
 ### `lib/database.lua`'s calling convention -- the thing that actually constrains scope
 
 - `local_query`/`local_update` (called by `src/db.lua`'s `db.query`/
-  `db.exec`, i.e. everywhere in platform-wip) open a **fresh connection
+  `db.exec`, i.e. everywhere in daat) open a **fresh connection
   per call** -- not per request, per *query* -- set a couple of
   redundant-but-harmless PRAGMAs, run it, then unconditionally close.
   For SQLite (no handshake, just an `open()` syscall) this is free.
@@ -209,7 +209,7 @@ exist for the MariaDB work (task #57 territory again).
   hasn't landed yet, this phase should include at least a
   request-scoped (not query-scoped) connection as a minimum bar.
 
-### Phase 2 -- platform-wip: `src/db.lua` adapter swap (DONE)
+### Phase 2 -- daat: `src/db.lua` adapter swap (DONE)
 
 - `src/db.lua` dispatches `db.query`/`db.exec`/`db.get_tables`/
   `db.get_columns`/`db.table_exists` by `db_path`'s own shape
@@ -270,7 +270,7 @@ full-CLI test) to succeed against MariaDB at all. Full automated
 integration coverage is deferred to Phase 3 landing for that reason,
 not skipped as an oversight.
 
-### Phase 3 -- platform-wip: dialect migration (DONE)
+### Phase 3 -- daat: dialect migration (DONE)
 
 - Every DDL/DML token from the table above now routes through new
   `db.lua` helpers (`now_expr`, `autoincrement_keyword`, `replace_into`,
@@ -308,7 +308,7 @@ not skipped as an oversight.
     a matching `mysql_next_result()` drain loop in `query()`/`exec()`
     (required once multi-statement is enabled, or the next call on the
     same connection fails with "Commands out of sync").
-- `bld/build.sh` (platform-wip's own build, not just luam's) needed a
+- `bld/build.sh` (daat's own build, not just luam's) needed a
   new piece: MariaDB support must be compiled into the `platform`
   binary itself and preload-registered exactly like `sqlite3`/`bcrypt`/
   `hmac` already are -- a plain `require("mariadb")` that works when
@@ -487,8 +487,8 @@ actual usage, not just in the abstract.
 - `/root/projects/luam/lib/bcrypt/bcrypt.c`, `/root/projects/luam/lib/hmac/hmac.c` -- actual size/shape template for the new binding
 - `/root/projects/luam/lib/database.lua` -- wrapper to extend/mirror
 - `/root/projects/luam/bld/build_libs.sh` -- where the new binding's build step goes
-- `/root/projects/platform-wip/src/db.lua` -- the one platform-wip file meant to absorb this change
-- `/root/projects/platform-wip/src/config.lua` -- connection-config resolution
-- `/root/projects/platform-wip/src/ledger.lua:61-80` -- the live race condition to fix
-- `/root/projects/platform-wip/src/schema.lua:15-21,198-230` -- DDL generation/type mapping
+- `/root/projects/daat/src/db.lua` -- the one daat file meant to absorb this change
+- `/root/projects/daat/src/config.lua` -- connection-config resolution
+- `/root/projects/daat/src/ledger.lua:61-80` -- the live race condition to fix
+- `/root/projects/daat/src/schema.lua:15-21,198-230` -- DDL generation/type mapping
 - Every `src/*.lua` file listed in the dialect table above

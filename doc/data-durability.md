@@ -71,7 +71,7 @@ restored instance's connection name, and confirm:
 
 1. The app starts and login works.
 2. A spot-check of known records/ledger entries survived intact.
-3. `platform ledger verify`-style integrity check (if one doesn't exist
+3. `daat ledger verify`-style integrity check (if one doesn't exist
    yet, a small CLI addition) walks the ledger and confirms every
    projected table still matches its log -- so a restored backup's
    integrity is machine-checked, not just "app started successfully."
@@ -91,6 +91,6 @@ Write the actual steps taken down in this section once run for real.
 ## Critical files
 - `/root/software/infra/gcp/lims/main.tf` -- `google_sql_database_instance.platform`, its `backup_configuration` block, instance tier/zone
 - `/root/software/infra/gcp/lims/module/platform_compute/templates/startup-platform.sh.tpl` -- where the app's DB connection is configured (seeds `platform.lua`'s `db_backend`, Cloud SQL Auth Proxy sidecar)
-- `/root/projects/platform-wip/src/db.lua` -- backend dispatch (`is_mariadb()`); where a `PRAGMA journal_mode=WAL` call would be added for the SQLite dev path
-- `/root/projects/platform-wip/doc/mariadb-migration.md` -- the full cutover history/rationale
-- `/root/projects/platform-wip/doc/architecture.md` -- "Storage" section, current dual-backend picture
+- `/root/projects/daat/src/db.lua` -- backend dispatch (`is_mariadb()`); where a `PRAGMA journal_mode=WAL` call would be added for the SQLite dev path
+- `/root/projects/daat/doc/mariadb-migration.md` -- the full cutover history/rationale
+- `/root/projects/daat/doc/architecture.md` -- "Storage" section, current dual-backend picture

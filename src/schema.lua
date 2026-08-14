@@ -1248,14 +1248,14 @@ function schema.list(db_path)
     return rows
 end
 
--- CLI entry point: `platform schema <add|list|show|show-json|sync> [args]`
+-- CLI entry point: `daat schema <add|list|show|show-json|sync> [args]`
 function schema.do_schema(cmd_args, db_path)
     action = cmd_args[1]
 
     if action == "add" then
         path = cmd_args[2]
         if path == nil then
-            print("Usage: platform schema add <file>")
+            print("Usage: daat schema add <file>")
             return
         end
         def, err = schema.load_file(path)
@@ -1279,7 +1279,7 @@ function schema.do_schema(cmd_args, db_path)
     if action == "show-json" or (action == "show" and cmd_args[3] == "--json") then
         name = cmd_args[2]
         if name == nil then
-            print("Usage: platform schema show-json <name>")
+            print("Usage: daat schema show-json <name>")
             return
         end
         schema.sync_all(db_path)
@@ -1295,7 +1295,7 @@ function schema.do_schema(cmd_args, db_path)
     if action == "show" then
         name = cmd_args[2]
         if name == nil then
-            print("Usage: platform schema show <name>")
+            print("Usage: daat schema show <name>")
             return
         end
         schema.sync_all(db_path)
@@ -1319,7 +1319,7 @@ function schema.do_schema(cmd_args, db_path)
         return
     end
 
-    print("Usage: platform schema <add|list|show|show-json|sync> [args]")
+    print("Usage: daat schema <add|list|show|show-json|sync> [args]")
 end
 
 return schema

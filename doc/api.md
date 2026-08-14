@@ -41,11 +41,11 @@ Keys are managed by an account with the `a` (admin) capability, either
 in the web UI (`/admin-api-keys`) or via the CLI:
 
 ```
-platform api-key create <label> [cap]
-platform api-key list [--include-archived]
-platform api-key capabilities <label> <cap_string>
-platform api-key archive <label>
-platform api-key unarchive <label>
+daat api-key create <label> [cap]
+daat api-key list [--include-archived]
+daat api-key capabilities <label> <cap_string>
+daat api-key archive <label>
+daat api-key unarchive <label>
 ```
 
 `create` prints the raw key exactly once. It is stored only as a

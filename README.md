@@ -1,4 +1,4 @@
-# platform-wip
+# daat
 
 A traceable, extensible data-entry and entity-keeping platform:
 define your own entity types, get full audit history and validated
@@ -6,9 +6,6 @@ data entry for free, and extend behavior for your own domain without
 touching the core. It's a single, self-contained web application --
 its own login/sessions and its own rendering, no external identity
 system or separate version-control layer to run alongside it.
-
-**Working name only.** `platform` (the binary name) and this
-directory's name are both placeholders pending a real project name.
 
 ## Status
 
@@ -48,7 +45,7 @@ there's no default, since that's always a real, potentially billed
 deployment choice, never something to hardcode. See "Chat" below.
 
 ```sh
-./bld/build.sh          # -> bin/platform
+./bld/build.sh          # -> bin/daat
 ./bld/build.sh -v       # same, with full compiler output (default logs to a temp file)
 ```
 
@@ -69,24 +66,24 @@ web-request-shaped input -- see `tst/integration/test_helper.bash`).
 ## CLI
 
 ```
-platform init                                   # create .store/ (the database) here
-platform schema add <file.lua>                   # register/update an entity type
-platform schema list
-platform entity create <type> field=value ...
-platform entity list <type> [--include-archived]
-platform entity show <type> <id>
-platform entity update <type> <id> field=value ...
-platform entity archive <type> <id>              # never a delete -- see below
-platform entity unarchive <type> <id>
-platform ledger show|history <entity_id>
-platform extension list|show|approve|revoke|run-pending <name>
-platform view list|show|approve|revoke <name>
-platform user add <login> <password> [cap]
-platform user passwd <login> <new_password>
-platform user capabilities <login> <cap_string>
-platform user list [--include-archived]
-platform user archive|unarchive <login>
-platform document reindex-embeddings [entity_id]
+daat init                                   # create .store/ (the database) here
+daat schema add <file.lua>                   # register/update an entity type
+daat schema list
+daat entity create <type> field=value ...
+daat entity list <type> [--include-archived]
+daat entity show <type> <id>
+daat entity update <type> <id> field=value ...
+daat entity archive <type> <id>              # never a delete -- see below
+daat entity unarchive <type> <id>
+daat ledger show|history <entity_id>
+daat extension list|show|approve|revoke|run-pending <name>
+daat view list|show|approve|revoke <name>
+daat user add <login> <password> [cap]
+daat user passwd <login> <new_password>
+daat user capabilities <login> <cap_string>
+daat user list [--include-archived]
+daat user archive|unarchive <login>
+daat document reindex-embeddings [entity_id]
 ```
 
 Running with no arguments uses this CLI dispatch; running under a real
@@ -101,7 +98,7 @@ extensions are just files dropped into `views/<name>.lua` /
 
 ## Auth
 
-`platform user add <login> <password> [cap]` creates a login. `/login`
+`daat user add <login> <password> [cap]` creates a login. `/login`
 and `/logout` are the only routes reachable without an active session;
 every other route requires one. Permissions are re-checked from the
 account's current record on every request rather than trusted from
@@ -154,7 +151,7 @@ to change data without a human confirming it first.
 
 Document search blends keyword matching with semantic similarity (an
 embedding comparison) when a document has been explicitly indexed via
-`platform document reindex-embeddings` -- indexing is never an
+`daat document reindex-embeddings` -- indexing is never an
 automatic side effect of saving a document, since it costs a real API
 call per document.
 

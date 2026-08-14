@@ -147,7 +147,7 @@ function config.session_secret_path(root)
     return paths.joinpath(config.store_dir(root), SESSION_SECRET_FILE)
 end
 
--- "Initialized" means `platform init` has already created the schema --
+-- "Initialized" means `daat init` has already created the schema --
 -- for sqlite that's a file-exists check; for mariadb there's no file to
 -- check, so this looks for entity_event (ledger.lua's own core table,
 -- always created first during init) existing in the target database
@@ -187,7 +187,7 @@ end
 
 -- Vendored third-party assets platform itself ships (e.g. the Toast UI
 -- Editor bundle) -- unlike theme_assets_dir, this is NOT
--- DOCUMENT_ROOT-relative: these files belong to the platform-wip
+-- DOCUMENT_ROOT-relative: these files belong to the daat
 -- checkout/build, not a deployment's own data. PLATFORM_VENDOR_DIR
 -- lets a real deployment point at wherever it actually copied
 -- vnd/ to (e.g. /app/vnd in the Celleste Docker image); unset
@@ -368,7 +368,7 @@ function config.load_theme(root)
     -- Deployment-specific instructions appended to the chat agent's own
     -- system prompt -- e.g. domain vocabulary, house style, or
     -- reminders specific to this deployment's use case, without editing
-    -- platform-wip's own source. A generic hook (any deployment can set
+    -- daat's own source. A generic hook (any deployment can set
     -- it), same split as every other theme.lua field here.
     if type(parsed.system_prompt_extra) == "string" and parsed.system_prompt_extra != "" then
         theme.system_prompt_extra = parsed.system_prompt_extra

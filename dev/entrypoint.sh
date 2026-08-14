@@ -2,11 +2,11 @@
 set -e
 
 cat <<'EOF'
-platform-wip dev environment
+daat dev environment
 
-  ./bld/build.sh      -> bin/platform
+  ./bld/build.sh      -> bin/daat
   ./bld/test.sh       -> unit + integration tests
-  bin/platform init   -> create .store/ here to try the CLI
+  bin/daat init       -> create .store/ here to try the CLI
 
 EOF
 

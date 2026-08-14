@@ -37,7 +37,7 @@ agent = {}
 -- Same default cgi.lua's own chat routes already use (a real model
 -- name is a deployment choice, never hardcoded, read fresh from
 -- config.platform_config()) -- exposed here too so main.lua's CLI
--- dispatch (`platform knowledge distill`, `platform agent
+-- dispatch (`daat knowledge distill`, `daat agent
 -- run-pending-background`) doesn't need its own copy of the fallback.
 function agent.default_model()
     return config.platform_config().agent_model
@@ -86,8 +86,8 @@ CREATE TABLE IF NOT EXISTS agent_pending_action (
 -- not agent_pending_action's: there's nothing here for a human to
 -- approve/deny, just a question that needs more turns than one HTTP
 -- request affords. Drained by a real, separate process (the CLI's
--- "platform agent run-pending-background", meant to be invoked
--- periodically the same way extension_job's own "platform extension
+-- "daat agent run-pending-background", meant to be invoked
+-- periodically the same way extension_job's own "daat extension
 -- run-pending" already is), never inline in a chat turn.
 CREATE TABLE IF NOT EXISTS agent_background_task (
     id INTEGER PRIMARY KEY %s,
@@ -688,7 +688,7 @@ end
 -- (agent.approve_pending/deny_pending) executes it (or records the
 -- denial) and resumes the loop from there.
 
--- `parameters` is platform-wip's own neutral tool-calling protocol
+-- `parameters` is daat's own neutral tool-calling protocol
 -- (see doc/agent-protocol.md) -- plain, standard JSON Schema, not any
 -- one vendor's dialect. Each agent_provider_<name>.lua translates this
 -- into whatever its own vendor actually requires on the wire (e.g.
@@ -1027,7 +1027,7 @@ AGENT_TOOLS = {
         },
     },
     -- Hands a question off to a separate, later process (the CLI's
-    -- "platform agent run-pending-background", meant to run on a timer --
+    -- "daat agent run-pending-background", meant to run on a timer --
     -- see agent_background_task above) instead of digging in inline, for
     -- something that would need more turns than research.investigate's
     -- own bounded budget affords within one HTTP request. Not a
@@ -1868,7 +1868,7 @@ end
 --
 -- Appends theme.lua's own system_prompt_extra, if a deployment set
 -- one -- deployment-specific instructions (domain vocabulary, house
--- style, use-case reminders) without editing platform-wip's own
+-- style, use-case reminders) without editing daat's own
 -- source. Every real call site (run_turn's own
 -- fallback, approve_pending, deny_pending) already reaches this
 -- function exactly when no caller-supplied system_prompt was given,
@@ -2294,7 +2294,7 @@ end
 -- invoked periodically by whatever the deployer already uses for
 -- scheduled tasks (cron/systemd timer) -- platform is a one-shot CGI/CLI
 -- process, so there's no long-lived place inside it to run this on a
--- timer itself; see "platform agent run-pending-background" in main.lua.
+-- timer itself; see "daat agent run-pending-background" in main.lua.
 -- A finished task's finding is appended to its own session as a new
 -- assistant message -- not routed back through agent.run_turn, since
 -- the outer turn that started it already returned its own answer to the
@@ -2546,7 +2546,7 @@ end
 -- from it (see doc/architecture.md's "Knowledge pool" section for the
 -- older materialize/review pass this replaced). Not automatic on every
 -- search -- a real, ongoing LLM cost for something that isn't
--- time-critical -- triggered explicitly via the CLI (`platform
+-- time-critical -- triggered explicitly via the CLI (`daat
 -- knowledge distill`); knowledge.maybe_distill (see architecture.md's
 -- "Reactive distillation" bullet) is the separate, automatic trigger
 -- tied to real retrieval.

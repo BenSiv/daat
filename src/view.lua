@@ -649,7 +649,7 @@ function view.run_agent_query(db_path, sql_text)
     return column_names, rows, nil, truncated
 end
 
--- CLI entry point: `platform view <list|show|approve|revoke> [args]`
+-- CLI entry point: `daat view <list|show|approve|revoke> [args]`
 function view.do_view(cmd_args, db_path)
     config = require("config")
     views_dir = config.views_dir()
@@ -677,7 +677,7 @@ function view.do_view(cmd_args, db_path)
     if action == "show" then
         name = cmd_args[2]
         if name == nil then
-            print("Usage: platform view show <name>")
+            print("Usage: daat view show <name>")
             return
         end
         def, err = view.load(views_dir, name)
@@ -703,7 +703,7 @@ function view.do_view(cmd_args, db_path)
     if action == "approve" then
         name = cmd_args[2]
         if name == nil then
-            print("Usage: platform view approve <name>")
+            print("Usage: daat view approve <name>")
             return
         end
         def, err = view.load(views_dir, name)
@@ -719,7 +719,7 @@ function view.do_view(cmd_args, db_path)
     if action == "revoke" then
         name = cmd_args[2]
         if name == nil then
-            print("Usage: platform view revoke <name>")
+            print("Usage: daat view revoke <name>")
             return
         end
         view.revoke(db_path, name)
@@ -727,7 +727,7 @@ function view.do_view(cmd_args, db_path)
         return
     end
 
-    print("Usage: platform view <list|show|approve|revoke> [args]")
+    print("Usage: daat view <list|show|approve|revoke> [args]")
 end
 
 return view

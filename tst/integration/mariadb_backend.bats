@@ -60,7 +60,7 @@ teardown() {
     rm -rf "$TEST_DIR"
 }
 
-@test "platform init succeeds against MariaDB and is idempotent" {
+@test "daat init succeeds against MariaDB and is idempotent" {
     run "$BIN" init
     [ "$status" -eq 0 ]
     [[ "$output" =~ "Initialized store" ]]

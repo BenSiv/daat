@@ -68,7 +68,7 @@ fi
 # the project's own name (BIN_NAME below); no reason to couple the two.
 ENTRY="main.lua"
 ENTRY_STEM="${ENTRY%.lua}"
-BIN_NAME="platform"
+BIN_NAME="daat"
 
 echo "Preparing build"
 # Copy this project's sources

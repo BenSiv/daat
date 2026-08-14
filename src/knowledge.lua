@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS knowledge_review (
 -- The actual prompt/reasoning/token record per chat turn (see
 -- doc/architecture.md's "Knowledge pool" section, "Full prompt/
 -- reasoning/token persistence"). Linked to `agent_message` (the
--- assistant response this context produced) -- platform-wip's own
+-- assistant response this context produced) -- daat's own
 -- immutable, append-only chat log is the natural anchor here.
 -- `reasoning_document_id` points at a document (source_type='reasoning')
 -- rather than storing reasoning text inline -- reasoning goes through
@@ -1056,7 +1056,7 @@ function knowledge.set_tier(db_path, document_id, tier)
 end
 
 --------------------------------------------------------------------------
--- CLI: `platform knowledge <stats|list|show|promote>`
+-- CLI: `daat knowledge <stats|list|show|promote>`
 --------------------------------------------------------------------------
 
 function knowledge.do_knowledge(cmd_args, db_path)
@@ -1085,7 +1085,7 @@ function knowledge.do_knowledge(cmd_args, db_path)
     if action == "show" then
         document_id = tonumber(cmd_args[2])
         if document_id == nil then
-            print("Usage: platform knowledge show <document_id>")
+            print("Usage: daat knowledge show <document_id>")
             return
         end
         doc = knowledge.get_document(db_path, document_id)
@@ -1111,7 +1111,7 @@ function knowledge.do_knowledge(cmd_args, db_path)
         document_id = tonumber(cmd_args[2])
         tier = tonumber(cmd_args[3])
         if document_id == nil or tier == nil then
-            print("Usage: platform knowledge promote <document_id> <tier>")
+            print("Usage: daat knowledge promote <document_id> <tier>")
             return
         end
         knowledge.set_tier(db_path, document_id, tier)
@@ -1119,7 +1119,7 @@ function knowledge.do_knowledge(cmd_args, db_path)
         return
     end
 
-    print("Usage: platform knowledge <stats|list [tier]|show <document_id>|promote <document_id> <tier>|distill>")
+    print("Usage: daat knowledge <stats|list [tier]|show <document_id>|promote <document_id> <tier>|distill>")
 end
 
 return knowledge

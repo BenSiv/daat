@@ -4,10 +4,10 @@
 # a developer's own .store/ store) and the real, built binary.
 
 resolve_bin() {
-    if [ -x "$PROJECT_ROOT/bin/platform" ]; then
-        BIN="$PROJECT_ROOT/bin/platform"
+    if [ -x "$PROJECT_ROOT/bin/daat" ]; then
+        BIN="$PROJECT_ROOT/bin/daat"
     else
-        BIN="platform"
+        BIN="daat"
     fi
 }
 

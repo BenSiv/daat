@@ -1235,7 +1235,7 @@ function document.search(db_path, query_text, limit, use_semantic)
     return results
 end
 
--- CLI entry point: `platform document <create-json|reindex-embeddings
+-- CLI entry point: `daat document <create-json|reindex-embeddings
 -- [entity_id]|resync-links [entity_id]>` -- `reindex-embeddings` and
 -- `resync-links` are for bulk backfill (documents saved before these
 -- caches existed, after a provider outage silently dropped some
@@ -1324,7 +1324,7 @@ function document.do_document(cmd_args, db_path)
         return
     end
 
-    print("Usage: platform document <create-json|reindex-embeddings [entity_id]|resync-links [entity_id]>")
+    print("Usage: daat document <create-json|reindex-embeddings [entity_id]|resync-links [entity_id]>")
 end
 
 return document

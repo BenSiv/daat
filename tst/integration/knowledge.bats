@@ -54,7 +54,7 @@ search_for_bioreactor_extra() {
     raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"find bioreactor pages\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 }
 
-@test "platform knowledge stats shows all zeros on a fresh store" {
+@test "daat knowledge stats shows all zeros on a fresh store" {
     run "$BIN" knowledge stats
     [[ "$output" =~ "tier0=0 tier1=0 tier2=0 tier3=0" ]]
     [[ "$output" =~ "notes=0 retrievals=0 reviewed=0 sessions=0" ]]
@@ -176,7 +176,7 @@ search_for_bioreactor_extra() {
     [[ ! "$output" =~ "Bioreactor Notes" ]]
 }
 
-@test "platform knowledge show prints a document's full pool detail" {
+@test "daat knowledge show prints a document's full pool detail" {
     "$BIN" entity create document title="Bioreactor Notes" content="cleaning steps for the bioreactor procedure"
     search_for_bioreactor
 
@@ -191,7 +191,7 @@ search_for_bioreactor_extra() {
     [[ "$output" =~ "cleaning steps for the bioreactor procedure" ]]
 }
 
-@test "platform knowledge promote manually overrides a document's tier" {
+@test "daat knowledge promote manually overrides a document's tier" {
     "$BIN" entity create document title="Bioreactor Notes" content="cleaning steps for the bioreactor procedure"
     search_for_bioreactor
 

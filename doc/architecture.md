@@ -21,7 +21,7 @@ the platform's own source.
                      +--------+---------+   (src/cgi.lua is the single CGI entry point)
                               |
                      +--------v---------+
-                     |     platform     |
+                     |       daat       |
                      | entity history,  |
                      | registration     |
                      | semantics,       |
@@ -355,7 +355,7 @@ and a small, explicit tool registry the model can act through.
   explicitly approved its exact SQL text, not whatever the model
   constructs on the fly; `view.run` refuses an unapproved view outright).
 - **A deployment can append its own instructions to the system
-  prompt** without editing platform-wip's own source --
+  prompt** without editing daat's own source --
   `theme.lua`'s `system_prompt_extra` field (`agent.default_system_
   prompt`) is appended verbatim, empty by default. For domain
   vocabulary, house style, or use-case-specific reminders (e.g. "this
@@ -597,7 +597,7 @@ document. The pure tier/heat/dedup heuristics
   under task #106: every pool document already is a real document from
   the moment it exists, so there's no separate "promote a hidden tracking
   record into a real document" step left to gate. The old agent-driven
-  review pass (`agent.run_knowledge_review`, `platform knowledge
+  review pass (`agent.run_knowledge_review`, `daat knowledge
   review`) was removed for the same reason -- its one job was deciding
   what to materialize.
 - **Real agent-driven distillation, on demand** (task #107,
@@ -611,7 +611,7 @@ document. The pure tier/heat/dedup heuristics
   pointing back at its source. `knowledge.list`'s tool output includes
   each document's `content_shape` (`developed`/`atomic`/`thin`/`simple`)
   so the model can tell what's actually worth distilling from. Triggered
-  explicitly (`platform knowledge distill`, dispatched from `main.lua`
+  explicitly (`daat knowledge distill`, dispatched from `main.lua`
   directly rather than `knowledge.do_knowledge` itself, for the same
   knowledge/agent circular-require reason `review` used to be) -- a
   genuine write, so it pauses for human approval exactly like
@@ -680,7 +680,7 @@ document. The pure tier/heat/dedup heuristics
   audit needs -- these are about retrieval/review *events*, not pool
   content itself, so they reference `document.id` directly rather than
   living on `document`.
-- **Surfaced two ways**: `platform knowledge <stats|list|show|promote|
+- **Surfaced two ways**: `daat knowledge <stats|list|show|promote|
   distill>` (CLI, mirrors `document.do_document`'s dispatch shape), and
   a `/knowledge` page linked from System (gated identically -- Setup or
   Admin capability) with stat tiles, the tier breakdown, and a

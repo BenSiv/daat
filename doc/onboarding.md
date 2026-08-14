@@ -1,7 +1,7 @@
-# Contributing to platform-wip
+# Contributing to daat
 
 This is the entry point for a new external contributor to the
-open-source `platform-wip` project. It assumes no access to, and no
+open-source `daat` project. It assumes no access to, and no
 need to know about, the maintainer's private infrastructure -- a
 couple of the other files in this directory mention that in passing
 (see "Docs that mix in private deployment details" below), but
@@ -12,7 +12,7 @@ This doc is this project's contribution guide.
 
 ## What this is
 
-`platform-wip` (working name -- see caveat below) is a single,
+`daat` is a single,
 self-contained web application written in
 [Luam](https://github.com/BenSiv/luam) and compiled to one static
 binary: its own login/sessions, its own HTML rendering, its own SQL
@@ -24,11 +24,6 @@ table for it automatically, with nothing ever hard-deleted -- only
 archived. It also ships a built-in Documents (wiki-style, linked-tree)
 system and a pluggable LLM-backed chat assistant with a small approved
 tool registry.
-
-**"Working name only."** Both the binary name (`platform`) and this
-repo's directory name are explicit placeholders (see `../README.md`)
-pending a real project name -- don't over-invest in the current name
-in anything you write.
 
 ## Quick start
 
@@ -45,7 +40,7 @@ cd dev && ./deploy.sh
 `dev/Containerfile` installs the C toolchain, `cmark`, `bats`, and a
 built sibling `luam` checkout (see "Option B: manual" below for what
 each is for); `dev/deploy.sh` builds that image and drops you into a
-shell with the repo root bind-mounted at `/root/platform-wip` --
+shell with the repo root bind-mounted at `/root/daat` --
 edits you make on the host are what actually gets built and tested
 inside the container. The container is removed on exit (`--rm`);
 nothing but the image persists between runs. Re-run `./deploy.sh`
@@ -83,7 +78,7 @@ LLM provider (see "Testing conventions"):
 ### Build & test
 
 ```sh
-./bld/build.sh          # -> bin/platform
+./bld/build.sh          # -> bin/daat
 ./bld/build.sh -v       # same, with full compiler output
 ./bld/test.sh           # builds, then runs tst/unit/*.lua and tst/integration/*.bats
 ```
@@ -92,7 +87,7 @@ LLM provider (see "Testing conventions"):
 
 | Path | Purpose |
 |---|---|
-| `bin/` | Build output (`bin/platform`) -- gitignored, never committed |
+| `bin/` | Build output (`bin/daat`) -- gitignored, never committed |
 | `bld/` | `build.sh` (compiles everything into one binary), `test.sh` |
 | `doc/` | Architecture/design docs -- see "Where to go next" below |
 | `dev/` | Minimal Podman dev environment (see "Quick start" above) |
@@ -114,7 +109,7 @@ full story:
 - `extension.lua` / `view.lua` -- the drop-in extensibility mechanisms (see below)
 - `sandbox.lua` -- the shared capability-scoped execution environment used by schema loading, views, and extensions
 - `html.lua` / `render.lua` / `template.lua` -- rendering
-- `db.lua` / `config.lua` / `init.lua` / `multipart.lua` / `label.lua` -- storage adapter, deployment config, `platform init`, CGI form parsing, ZPL labels
+- `db.lua` / `config.lua` / `init.lua` / `multipart.lua` / `label.lua` -- storage adapter, deployment config, `daat init`, CGI form parsing, ZPL labels
 
 ## Architecture concepts to know before contributing
 
@@ -154,7 +149,7 @@ full story:
 Three drop-in mechanisms, none requiring changes to `src/`:
 
 - **Entity types** -- a declarative file under `schemas/<name>.lua`
-  (name + typed field declarations), registered with `platform schema
+  (name + typed field declarations), registered with `daat schema
   add schemas/<name>.lua`. Full details, including every field type:
   `schema.md`.
 - **Views** -- a named, `SELECT`-only saved query, requiring explicit
@@ -173,7 +168,7 @@ Three drop-in mechanisms, none requiring changes to `src/`:
 - `tst/unit/*.lua` are plain Luam scripts (`require` the module under
   test, a local `check(condition, message)` + failure counter, no DB,
   no CGI) run directly by the interpreter.
-- `tst/integration/*.bats` exercise the real compiled `bin/platform`
+- `tst/integration/*.bats` exercise the real compiled `bin/daat`
   binary with real CGI environment variables end to end.
   `tst/integration/test_helper.bash` provides the shared harness:
   `setup_test_env`/`cleanup_test_env` (a fresh scratch dir per test),

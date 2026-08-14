@@ -1,4 +1,4 @@
-# Minimal Podman development environment for platform-wip.
+# Minimal Podman development environment for daat.
 #
 # Contains only what's needed to build and test this project itself:
 # the sibling luam checkout (built from source) plus the system
@@ -40,10 +40,10 @@ RUN git clone https://github.com/BenSiv/luam.git && \
 COPY entrypoint.sh /root/entrypoint.sh
 RUN chmod +x /root/entrypoint.sh
 
-# platform-wip itself is bind-mounted here by deploy.sh, as a sibling
+# daat itself is bind-mounted here by deploy.sh, as a sibling
 # of /root/luam above -- this image only ever provides the toolchain,
 # never a baked-in copy of the source, so edits made on the host are
 # what actually gets built and tested.
-WORKDIR /root/platform-wip
+WORKDIR /root/daat
 
 ENTRYPOINT ["/root/entrypoint.sh"]

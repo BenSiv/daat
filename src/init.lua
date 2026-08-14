@@ -1,4 +1,4 @@
--- `platform init`: creates the local store (.store/, holding the
+-- `daat init`: creates the local store (.store/, holding the
 -- database) plus the schemas/extensions/views/templates directories in
 -- the current directory.
 
@@ -26,7 +26,7 @@ function describe_db_target(target)
     return target
 end
 
--- --with-examples: a plain `platform init` deliberately stays a truly
+-- --with-examples: a plain `daat init` deliberately stays a truly
 -- empty, generic install -- no seed content forced on every deployment.
 -- This is the opt-in alternative: one small, realistic, working example
 -- of each config-as-code kind (schemas/extensions/views/templates) plus
