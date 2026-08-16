@@ -43,6 +43,61 @@ type, extension, and saved-query definitions are plain files, read and
 sandboxed at request time -- nothing external to run alongside it to
 make any of this work.
 
+## Core vs. deployment content
+
+daat's own source (`src/`) carries no domain-specific logic and has no
+required dependency on anything a deployment defines. Two separate
+guarantees, both easy to erode by accident, so both worth stating as
+hard invariants rather than an impression from reading the code once:
+
+**No domain vocabulary in core.** Every table daat creates on its own
+(`init.do_init` -> each module's own `init_schema`) is infrastructure
+any deployment needs regardless of what it tracks: accounts/sessions
+(`auth.lua`), the entity-type/dropdown/junction-table machinery itself
+(`schema.lua`), audit history (`ledger.lua`), Documents and the
+Knowledge Pool (`document.lua`/`knowledge.lua`), extension/view
+approval (`extension.lua`/`view.lua`), and chat (`agent.lua`). None of
+it branches on a concrete entity type by name. The handful of places a
+word like "sample" or "reagent" shows up in `src/` at all -- `html.lua`
+placeholder text, the `/sql` console's example query in `cgi.lua`, a
+doc comment illustrating a mechanism -- are UI copy or comments, never
+a code path that behaves differently because a row happens to be a
+"sample." `document` is a deliberate, narrow exception: it's a
+built-in type registered directly in code (`document.lua`; see
+doc/schema.md) rather than a `schemas/*.lua` file, because its extra
+behavior (link parsing, backlinks, tiering) is tightly coupled to its
+exact field shape -- but that's a structural type (a folder tree of
+notes), not a domain one. `label_template` looks similar (`label.lua`
+has real, non-generic code built around it) but its actual field
+definition is still an ordinary deployment-authored schema file: the
+*printing mechanism* is core, the *shape of what gets printed* isn't.
+
+**No required user-defined content.** A bare `daat init` (no
+`--with-examples`, empty `schemas/`/`dropdowns/`/`extensions/`/
+`views/`/`templates/` directories) is a fully working deployment on
+its own -- accounts, chat, Documents, and the Knowledge Pool all
+function with zero registered entity types. The Entity Types index has
+an explicit empty state ("No entity types registered yet.", `html.lua`'s
+`#entity_types == 0` branch) rather than assuming at least one exists,
+and the entity-facing agent tools (`entity.list_types`/`fields`/
+`relationships`) exist specifically so the model discovers whatever
+schemas a deployment happens to have registered, rather than the
+system prompt (or any core code) hardcoding an assumption about what
+they are. The general-purpose entity-tracking layer doc/schema.md
+describes is additive, opt-in structure a deployment layers on top --
+never something core initialization, auth, chat, or the knowledge pool
+reach into or depend on already existing.
+
+Together these are what make the split in doc/schema.md a hard
+boundary rather than a convention: whatever a deployment actually
+wants to track (a LIMS's `sample`/`cell_line`/`media_batch`, or
+anything else entirely) lives entirely in its own `schemas/`/
+`dropdowns/*.lua` files, interpreted generically by `schema.lua` --
+daat's own repo never needs to change, or even know, what those
+concrete types are. The intent is a base deployment that's robust and
+minimal on its own, with (almost) all data-shape flexibility pushed
+out to config-as-code the deployment owns.
+
 ## Repository layout
 
 ```
@@ -466,6 +521,88 @@ and a small, explicit tool registry the model can act through.
   | `extension_max_job_attempts` | 5 | Retries before an `extension_job` (after-hook write queue) is marked permanently `failed` |
   | `db_backend` | `"sqlite"` | `"sqlite"` or `"mariadb"` -- see doc/mariadb-migration.md |
   | `mariadb_host`/`mariadb_port`/`mariadb_user`/`mariadb_database` | `"127.0.0.1"`/`3306`/none/none | MariaDB connection descriptor -- the password is the one field here that stays a plain `PLATFORM_MARIADB_PASSWORD` env var, never written to a file this repo tracks |
+
+## Agent control: rule-based by default
+
+Design principle, stated explicitly because it's easy to state loosely
+in review and get backwards: anything safety- or authorization-critical
+about what the chat agent can do is enforced in Lua as an
+unconditional rule the model cannot talk its way around. The model's
+own judgment -- an LLM call, a system-prompt instruction -- is used
+only for what's genuinely a matter of judgment (inference, phrasing,
+disambiguation, self-critique), never for deciding what it's allowed
+to do. Dynamic, model-driven flexibility is deliberately the exception,
+granted only where a fixed rule genuinely can't express the right
+answer -- not the default mode the rest is carved out of.
+
+**Enforced in code, not requested via prompt:**
+- **Closed tool surface.** `AGENT_TOOLS` (`agent.lua`) is a fixed table
+  of every callable tool/method; `agent.is_known_tool` rejects anything
+  else before it runs. The system prompt never has to say "only use
+  these tools" -- there is nothing else for the model to call.
+- **The destructive/non-destructive split is a hardcoded flag per tool
+  method, decided by whoever wrote the tool table, never by the model
+  at call time.** Every `entity.create/update/archive/unarchive`,
+  `document.create/update`, and `knowledge.distill` call is marked
+  `destructive = true` in `AGENT_TOOLS` itself; `agent.run_turn` always
+  routes it through the pending-approval state machine (see "Chat"
+  above) no matter how the request is framed or how confident the
+  model sounds. Read-only tools run immediately; there's no code path
+  for the model to skip approval on a destructive one.
+- **Authorization is re-derived from the real user on every write**,
+  never taken on the model's own say-so about who's asking or what
+  they're allowed to do -- see "Attribution and authorization are both
+  the chatting user's own" above (`agent.check_write_capability`).
+- **Field-level validation is structural**, applied identically
+  whether a write comes from chat, the API, or a form. Required
+  fields, types, valid references, and a schema's own
+  `require_reason_on_update`/`require_reason_on_archive` flags (see
+  doc/schema.md's `admin_write_only` section) are enforced by
+  `entity.validate`/`entity.create`/`entity.update` themselves. The
+  `entity.validate` tool's description asks the model to check before
+  proposing a write, purely so a bad write fails fast instead of
+  wasting an approval round-trip -- but a call that skips straight to
+  `entity.create` is rejected the same way regardless; the model
+  calling `validate` first is a courtesy to itself, not the actual
+  gate.
+- **`entity.query` and `label_template.sql` can only ever be a single
+  plain `SELECT`.** `view.is_select_only` rejects anything else at
+  both save and execution time, plus a configurable row cap
+  (`agent_query_row_cap`) -- a parser that refuses to run anything
+  else, not a prompt instruction to "only read data."
+- **Sub-agents get a narrowed tool list by construction, not a wider
+  one plus instructions to behave.** `research.investigate`'s own
+  isolated loop declares every non-destructive `AGENT_TOOLS` entry
+  except `research`/`clarify`/`background` themselves -- it isn't told
+  "don't call these," it's never told they exist, so a bounded,
+  read-only sub-investigation can't escalate scope or spawn further
+  unbounded work, accidentally or otherwise.
+
+**Left to the model's judgment, deliberately:**
+- Inferring reasonable optional-field values, disambiguating
+  same-titled records by content instead of asking for a raw id,
+  retrying a search a different way, and deciding when something is
+  genuinely ambiguous enough to warrant `clarify.ask` -- all
+  system-prompt guidance (`agent.default_system_prompt`), enforced
+  nowhere in code, because there's no single fixed rule that gets
+  every one of those calls right.
+- `run_self_check`: a second, real model call that critiques the draft
+  answer before it's shown. The only code-level rule is a literal
+  `"confirm"`-prefix check on the verdict; everything about what makes
+  an answer good enough is the model's own judgment, applied twice
+  instead of once.
+- A deployment's own `system_prompt_extra` (`theme.lua`) for domain
+  vocabulary, house style, or use-case reminders -- entirely
+  prompt-level, and (by design, see "Core vs. deployment content"
+  above) the one place a deployment shapes agent behavior without
+  touching daat's own source, the same config-as-code seam
+  schemas/dropdowns use for data shape.
+
+The dividing line isn't "reads vs. writes" or "simple vs. complex" --
+it's whether getting a decision wrong would be a safety/authorization
+failure (rule, enforced structurally, no exceptions) or a quality
+shortfall (prompt-guided, and correctable by the self-check pass or by
+the user just asking again).
 
 ## Knowledge pool
 
