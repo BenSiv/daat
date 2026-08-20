@@ -2,77 +2,26 @@
 
 ## Why (recap)
 
-Raised alongside `doc/data-durability.md`: SQLite is an embedded library,
-not a client/server database -- there is no network protocol to connect
-to it remotely, and the file must never sit on a network filesystem
-(broken POSIX locking risks silent corruption). MariaDB solves that
-directly (real network access, real auth/TLS), gives real row-level
-concurrency instead of SQLite's coarser locking, and -- if run as a
-managed service (Cloud SQL) -- gets automated backups/PITR/failover
-essentially for free, which is a stronger durability story than
-Phases 1-3 of the durability plan.
+Raised alongside `doc/data-durability.md`: SQLite is an embedded library, not a client/server database -- there is no network protocol to connect to it remotely, and the file must never sit on a network filesystem (broken POSIX locking risks silent corruption). MariaDB solves that directly (real network access, real auth/TLS), gives real row-level concurrency instead of SQLite's coarser locking, and -- if run as a managed service (Cloud SQL) -- gets automated backups/PITR/failover essentially for free, which is a stronger durability story than Phases 1-3 of the durability plan.
 
-**This is a bigger undertaking than "swap the driver".** Two repos,
-three real phases, and it surfaces one genuine, already-live bug along
-the way (see "Bug found during this investigation" below).
+**This is a bigger undertaking than "swap the driver".** Two repos, three real phases, and it surfaces one genuine, already-live bug along the way (see "Bug found during this investigation" below).
 
 ## Current state as of the start of this investigation (historical -- see Phase 0-4 below for what changed)
 
-**This section describes the state before any of the phases below
-landed.** As of Phase 4 (DONE), Luam has a real MariaDB binding
-(`lib/mariadb/lmariadb.c`, `lib/mariadb/mariadb.so`) and `lib/database.lua`
-has `mariadb_query`/`mariadb_update`/`get_mariadb_connection` with a
-persistent per-process connection cache -- the gap described just below
-no longer exists. Kept as-written for the historical record of what
-justified building it.
+**This section describes the state before any of the phases below landed.** As of Phase 4 (DONE), Luam has a real MariaDB binding (`lib/mariadb/lmariadb.c`, `lib/mariadb/mariadb.so`) and `lib/database.lua` has `mariadb_query`/`mariadb_update`/`get_mariadb_connection` with a persistent per-process connection cache -- the gap described just below no longer exists. Kept as-written for the historical record of what justified building it.
 
 ### Luam had zero client-server DB bindings at the time this was written
 
-`src/db.lua`'s own header says "v0 runs on SQLite ... doc/architecture.md,
-'SQLite now, **Postgres** later'" -- not MariaDB. Checked
-`/root/projects/luam`: the only database binding that exists is
-`lib/sqlite/lsqlite3.c`, a large vendored SQLite amalgamation compiled
-*statically* into the `platform` binary via `src/Makefile`'s own
-`linux:` target (producing `bin/sqlite3.so`) -- not via the generic
-`bld/build_libs.sh` dynamic-linking path that path even describes as
-"secondary/unused" for sqlite specifically.
+`src/db.lua`'s own header says "v0 runs on SQLite ... doc/architecture.md, 'SQLite now, **Postgres** later'" -- not MariaDB. Checked `/root/projects/luam`: the only database binding that exists is `lib/sqlite/lsqlite3.c`, a large vendored SQLite amalgamation compiled *statically* into the `platform` binary via `src/Makefile`'s own `linux:` target (producing `bin/sqlite3.so`) -- not via the generic `bld/build_libs.sh` dynamic-linking path that path even describes as "secondary/unused" for sqlite specifically.
 
-The *actual* template for a new binding is the small ones:
-`lib/bcrypt/bcrypt.c` (~100 lines, one `luaL_Reg` table, links
-`-lcrypt`) and `lib/hmac/hmac.c` (~68 lines, links `-lcrypto`), both
-built by the generic `build_libs.sh` path as standalone `.so` files. A
-MariaDB binding (`lib/mariadb/lmariadb.c`, linking `-lmariadb` against
-Debian's `libmariadb-dev`) is much closer to these in size than to
-sqlite's -- SQLite is unusually large because it vendors the whole
-amalgamation; a real client library binding is normal C-binding-sized
-work.
+The *actual* template for a new binding is the small ones: `lib/bcrypt/bcrypt.c` (~100 lines, one `luaL_Reg` table, links `-lcrypt`) and `lib/hmac/hmac.c` (~68 lines, links `-lcrypto`), both built by the generic `build_libs.sh` path as standalone `.so` files. A MariaDB binding (`lib/mariadb/lmariadb.c`, linking `-lmariadb` against Debian's `libmariadb-dev`) is much closer to these in size than to sqlite's -- SQLite is unusually large because it vendors the whole amalgamation; a real client library binding is normal C-binding-sized work.
 
-Module resolution is stock Lua 5.1 `require`
-(`loadlib.c`'s `loader_C`/`loader_Croot`, driven by `LUA_CPATH`) -- a
-new `lib/mariadb.so` (or `lib/mariadb/mariadb.so`) with a
-`luaopen_mariadb` entry point just works, no bundler/manifest changes
-needed anywhere.
+Module resolution is stock Lua 5.1 `require` (`loadlib.c`'s `loader_C`/`loader_Croot`, driven by `LUA_CPATH`) -- a new `lib/mariadb.so` (or `lib/mariadb/mariadb.so`) with a `luaopen_mariadb` entry point just works, no bundler/manifest changes needed anywhere.
 
 ### `lib/database.lua`'s calling convention -- the thing that actually constrains scope
 
-- `local_query`/`local_update` (called by `src/db.lua`'s `db.query`/
-  `db.exec`, i.e. everywhere in daat) open a **fresh connection
-  per call** -- not per request, per *query* -- set a couple of
-  redundant-but-harmless PRAGMAs, run it, then unconditionally close.
-  For SQLite (no handshake, just an `open()` syscall) this is free.
-  **For MariaDB, a real TCP+auth handshake on every single query would
-  be a severe, likely disqualifying latency regression** unless paired
-  with connection pooling or a persistent process -- this makes task
-  #57 (investigate persistent-process mode to replace CGI-per-request)
-  a hard prerequisite for a usable MariaDB migration, not a nice-to-have
-  optimization anymore.
-- Queries are built via `string.format` + manual escaping
-  (`database.escape_sqlite`, a naive `'`→`''` gsub; `src/db.lua`'s
-  `db.quote`/`db.literal` wrap it) -- **string interpolation, not bound
-  parameters** -- even though the underlying C binding exposes real
-  `bind`/`bind_values`. A MariaDB binding is a natural place to switch
-  to real prepared-statement parameter binding instead of carrying the
-  same escaping convention forward; see "Design decisions" below.
+- `local_query`/`local_update` (called by `src/db.lua`'s `db.query`/`db.exec`, i.e. everywhere in daat) open a **fresh connection per call** -- not per request, per *query* -- set a couple of redundant-but-harmless PRAGMAs, run it, then unconditionally close. For SQLite (no handshake, just an `open()` syscall) this is free. **For MariaDB, a real TCP+auth handshake on every single query would be a severe, likely disqualifying latency regression** unless paired with connection pooling or a persistent process -- this makes task #57 (investigate persistent-process mode to replace CGI-per-request) a hard prerequisite for a usable MariaDB migration, not a nice-to-have optimization anymore.
+- Queries are built via `string.format` + manual escaping (`database.escape_sqlite`, a naive `'`→`''` gsub; `src/db.lua`'s `db.quote`/`db.literal` wrap it) -- **string interpolation, not bound parameters** -- even though the underlying C binding exposes real `bind`/`bind_values`. A MariaDB binding is a natural place to switch to real prepared-statement parameter binding instead of carrying the same escaping convention forward; see "Design decisions" below.
 
 ### Dialect differences (grep'd across `src/*.lua`, not guessed)
 
@@ -83,46 +32,15 @@ needed anywhere.
 | `INSERT OR REPLACE INTO ...` | 6 (`document.lua` x2, `extension.lua`, `view.lua`, `schema.lua` x2, `knowledge.lua`) | `INSERT ... ON DUPLICATE KEY UPDATE ...` (semantically closer -- `REPLACE INTO` is actually DELETE+INSERT under the hood, which would needlessly burn AUTOINCREMENT ids and could disturb foreign-key cascade behavior these tables don't have yet but might) |
 | `INSERT OR IGNORE INTO ...` | a few, same files | `INSERT IGNORE INTO ...` |
 
-**A named view's own `sql` text is a separate case from the above --
-these are content, not platform code**, so this table's substitutions
-don't apply to whatever SQL a view author writes. Most portability gaps
-there are avoidable in the query text itself (e.g. `strftime`/
-`DATE_FORMAT`, `INSERT OR REPLACE`-style constructs a view shouldn't be
-using anyway since `view.is_select_only` forbids DML). Task #116 found
-a genuine exception: SQLite's `julianday()` and MariaDB's `DATEDIFF()`/
-`GREATEST()` (real date-difference arithmetic) share no common function
-name at all, so no single portable expression exists. `view.lua` now
-supports an optional `sql_mariadb` field on a view definition -- the
-MariaDB-native rewrite, used instead of `sql` whenever
-`db.is_mariadb(db_path)` is true (`view.effective_sql`). Approval is
-keyed off both variants combined (`view.approval_identity`), so editing
-either one requires re-approval, not just whichever a given deployment
-happens to run. Meant as a narrow escape hatch for cases like this one,
-not a general per-view dual-maintenance pattern -- most views should
-still just be one portable query.
+**A named view's own `sql` text is a separate case from the above -- these are content, not platform code**, so this table's substitutions don't apply to whatever SQL a view author writes. Most portability gaps there are avoidable in the query text itself (e.g. `strftime`/`DATE_FORMAT`, `INSERT OR REPLACE`-style constructs a view shouldn't be using anyway since `view.is_select_only` forbids DML). Task #116 found a genuine exception: SQLite's `julianday()` and MariaDB's `DATEDIFF()`/`GREATEST()` (real date-difference arithmetic) share no common function name at all, so no single portable expression exists. `view.lua` now supports an optional `sql_mariadb` field on a view definition -- the MariaDB-native rewrite, used instead of `sql` whenever `db.is_mariadb(db_path)` is true (`view.effective_sql`). Approval is keyed off both variants combined (`view.approval_identity`), so editing either one requires re-approval, not just whichever a given deployment happens to run. Meant as a narrow escape hatch for cases like this one, not a general per-view dual-maintenance pattern -- most views should still just be one portable query.
 
-`SQL_TYPE` (`schema.lua:15`) is a simple 5-entry map (`text→TEXT,
-number→REAL, date→TEXT, select→TEXT, reference→INTEGER`) -- clean,
-disciplined usage, maps to MariaDB's `TEXT/DOUBLE/TEXT/TEXT/INT`
-without any surprises. `schema.sync_table`'s "detect via
-`db.table_exists`/`db.get_columns`, `ALTER TABLE ADD COLUMN` if
-missing, never drop/rename" migration model is already
-engine-abstracted through `db.lua` -- should port with no logic
-changes, just the DDL string generation.
+`SQL_TYPE` (`schema.lua:15`) is a simple 5-entry map (`text→TEXT, number→REAL, date→TEXT, select→TEXT, reference→INTEGER`) -- clean, disciplined usage, maps to MariaDB's `TEXT/DOUBLE/TEXT/TEXT/INT` without any surprises. `schema.sync_table`'s "detect via `db.table_exists`/`db.get_columns`, `ALTER TABLE ADD COLUMN` if missing, never drop/rename" migration model is already engine-abstracted through `db.lua` -- should port with no logic changes, just the DDL string generation.
 
-**FTS5 is a non-issue, corrected from an earlier assumption:** searched
-for it -- `document.lua:702-704`'s own comment says FTS5 *was*
-evaluated but this luam sqlite build doesn't have it compiled in, so
-`document.search` already does its lexical+embedding scoring in plain
-Lua over rows (`cosine_similarity`, document.lua:782, called at line
-843), not via a SQLite virtual table. Nothing to replace here.
+**FTS5 is a non-issue, corrected from an earlier assumption:** searched for it -- `document.lua:702-704`'s own comment says FTS5 *was* evaluated but this luam sqlite build doesn't have it compiled in, so `document.search` already does its lexical+embedding scoring in plain Lua over rows (`cosine_similarity`, document.lua:782, called at line 843), not via a SQLite virtual table. Nothing to replace here.
 
 ### Bug found during this investigation (FIXED 2026-07-20, task #77 -- kept here as the original write-up)
 
-`ledger.lua:71-79`, the entity-creation path (this was the state at the
-time this bug was found; `src/ledger.lua:90-113` now reads the
-connection-scoped insert id directly instead, per the fix described
-below):
+`ledger.lua:71-79`, the entity-creation path (this was the state at the time this bug was found; `src/ledger.lua:90-113` now reads the connection-scoped insert id directly instead, per the fix described below):
 
 ```lua
 -- database.lua opens a fresh connection per call (see db.lua), so
@@ -136,351 +54,69 @@ db.exec(db_path, string.format(
 ))
 ```
 
-The comment's own stated assumption -- "single-process CLI, no
-concurrent writers" -- **is false for the actual deployed system**: this
-runs today under Apache mod_cgid, a genuinely concurrent, multi-process
-web server (confirmed by this session's own earlier work on concurrent
-chat sessions/CSRF/capability checks). Two simultaneous entity-creation
-requests can both read the same `MAX(event_id)`, then both assign the
-same `entity_id` to two different rows -- silent data corruption, not a
-crash, so it may not have been noticed yet. **This should be fixed
-independent of any MariaDB work** (raised as its own task, #77), most
-simply by wrapping the insert+update in a
-transaction with `BEGIN IMMEDIATE` (SQLite) to serialize writers, or by
-switching to a real per-request persistent connection and
-`last_insert_rowid()` (SQLite) / `LAST_INSERT_ID()` (MariaDB), which
-are both connection-scoped and safe under concurrency. This is also
-exactly the fix that falls out for free once persistent connections
-exist for the MariaDB work (task #57 territory again).
+The comment's own stated assumption -- "single-process CLI, no concurrent writers" -- **is false for the actual deployed system**: this runs today under Apache mod_cgid, a genuinely concurrent, multi-process web server (confirmed by this session's own earlier work on concurrent chat sessions/CSRF/capability checks). Two simultaneous entity-creation requests can both read the same `MAX(event_id)`, then both assign the same `entity_id` to two different rows -- silent data corruption, not a crash, so it may not have been noticed yet. **This should be fixed independent of any MariaDB work** (raised as its own task, #77), most simply by wrapping the insert+update in a transaction with `BEGIN IMMEDIATE` (SQLite) to serialize writers, or by switching to a real per-request persistent connection and `last_insert_rowid()` (SQLite) / `LAST_INSERT_ID()` (MariaDB), which are both connection-scoped and safe under concurrency. This is also exactly the fix that falls out for free once persistent connections exist for the MariaDB work (task #57 territory again).
 
 ## Design decisions to make before implementing (flagging now, not blocking this doc)
 
-- **Bound parameters vs. string interpolation**: recommend the new
-  MariaDB binding expose real `mysql_stmt_bind_param`-style binding,
-  with `src/db.lua` gaining a parameterized-query path used by new/
-  touched call sites, rather than replicating `escape_sqlite`'s naive
-  escaping for a second SQL dialect. This can land incrementally --
-  existing `string.format`-built call sites keep working unchanged
-  (still just as safe as they are today) while new code uses real
-  binding; not an all-or-nothing rewrite.
-- **Per-installation model**: "one SQLite file per installation" ->
-  "one MariaDB *database* per installation on a shared server" is the
-  natural equivalent (matches `architecture.md`'s stated isolation
-  intent), rather than one full server/instance per installation.
-- **UTC vs. localtime storage**: current schema stores `datetime('now',
-  'localtime')` everywhere (server-local time, not UTC) -- worth
-  deciding once, up front, whether to keep that convention or switch to
-  UTC storage (`UTC_TIMESTAMP()`) as part of this migration, since
-  every touched DDL/query needs the replacement anyway.
-- **`db_path` becomes a connection descriptor**: every function
-  signature across the codebase takes `db_path` as its first argument
-  (by design, per `db.lua`'s own comment -- "only this file needs to
-  change"). For MariaDB this becomes a connection config (host/port/
-  user/password/database) rather than a filesystem path. `src/db.lua`
-  can keep accepting a single opaque value (e.g. a DSN string or a
-  small config table) so call sites elsewhere don't change at all --
-  confirms the original adapter design is holding up as intended.
+- **Bound parameters vs. string interpolation**: recommend the new MariaDB binding expose real `mysql_stmt_bind_param`-style binding, with `src/db.lua` gaining a parameterized-query path used by new/touched call sites, rather than replicating `escape_sqlite`'s naive escaping for a second SQL dialect. This can land incrementally -- existing `string.format`-built call sites keep working unchanged (still just as safe as they are today) while new code uses real binding; not an all-or-nothing rewrite.
+- **Per-installation model**: "one SQLite file per installation" -> "one MariaDB *database* per installation on a shared server" is the natural equivalent (matches `architecture.md`'s stated isolation intent), rather than one full server/instance per installation.
+- **UTC vs. localtime storage**: current schema stores `datetime('now', 'localtime')` everywhere (server-local time, not UTC) -- worth deciding once, up front, whether to keep that convention or switch to UTC storage (`UTC_TIMESTAMP()`) as part of this migration, since every touched DDL/query needs the replacement anyway.
+- **`db_path` becomes a connection descriptor**: every function signature across the codebase takes `db_path` as its first argument (by design, per `db.lua`'s own comment -- "only this file needs to change"). For MariaDB this becomes a connection config (host/port/user/password/database) rather than a filesystem path. `src/db.lua` can keep accepting a single opaque value (e.g. a DSN string or a small config table) so call sites elsewhere don't change at all -- confirms the original adapter design is holding up as intended.
 
 ## Phased plan
 
 ### Phase 0 -- `luam`: new MariaDB C binding
-- New `lib/mariadb/lmariadb.c`, following `bcrypt.c`/`hmac.c`'s shape
-  (small `luaL_Reg` table, `luaopen_mariadb` entry point), linking
-  Debian's `libmariadb-dev` (`-lmariadb`).
-- Exposes: connect (host/port/user/pass/db) -> connection handle,
-  query (returns rows), exec (returns affected-rows/insert-id), escape,
-  close, error message retrieval. Mirror `lsqlite3.c`'s `nil, err`
-  cross-boundary convention for consistency with the existing sqlite
-  binding's calling style.
-- Build wiring: add to `bld/build_libs.sh`'s generic pattern (not
-  `src/Makefile`'s special-cased sqlite path).
-- Tests: mirror `tst/test_database.lua`'s `pcall(require, "mariadb")`-
-  gated pattern -- module loads even where the C lib isn't present,
-  functional tests skip gracefully rather than failing the whole suite.
+- New `lib/mariadb/lmariadb.c`, following `bcrypt.c`/`hmac.c`'s shape (small `luaL_Reg` table, `luaopen_mariadb` entry point), linking Debian's `libmariadb-dev` (`-lmariadb`).
+- Exposes: connect (host/port/user/pass/db) -> connection handle, query (returns rows), exec (returns affected-rows/insert-id), escape, close, error message retrieval. Mirror `lsqlite3.c`'s `nil, err` cross-boundary convention for consistency with the existing sqlite binding's calling style.
+- Build wiring: add to `bld/build_libs.sh`'s generic pattern (not `src/Makefile`'s special-cased sqlite path).
+- Tests: mirror `tst/test_database.lua`'s `pcall(require, "mariadb")`- gated pattern -- module loads even where the C lib isn't present, functional tests skip gracefully rather than failing the whole suite.
 
 ### Phase 1 -- `luam`: `lib/database.lua`-equivalent wrapper + connection lifecycle
-- New Lua-level wrapper (`lib/mariadb.lua` or extend `database.lua`)
-  exposing the same shape `src/db.lua` already calls
-  (`query`/`exec`/`escape`), but backed by a **persistent connection
-  per process** (opened once, reused across calls) instead of
-  open-per-call -- this is the change that makes the whole migration
-  viable latency-wise, and is the same underlying fix task #57 already
-  wants for CGI-per-request generally. If #57's persistent-process work
-  hasn't landed yet, this phase should include at least a
-  request-scoped (not query-scoped) connection as a minimum bar.
+- New Lua-level wrapper (`lib/mariadb.lua` or extend `database.lua`) exposing the same shape `src/db.lua` already calls (`query`/`exec`/`escape`), but backed by a **persistent connection per process** (opened once, reused across calls) instead of open-per-call -- this is the change that makes the whole migration viable latency-wise, and is the same underlying fix task #57 already wants for CGI-per-request generally. If #57's persistent-process work hasn't landed yet, this phase should include at least a request-scoped (not query-scoped) connection as a minimum bar.
 
 ### Phase 2 -- daat: `src/db.lua` adapter swap (DONE)
 
-- `src/db.lua` dispatches `db.query`/`db.exec`/`db.get_tables`/
-  `db.get_columns`/`db.table_exists` by `db_path`'s own shape
-  (`type(db_path) == "table"` -> MariaDB, a plain string -> SQLite) --
-  not a `config.db_backend()` lookup from inside this file, since
-  `config.lua` needing `db.lua`'s own bootstrap check (`is_initialized`)
-  would make that a circular require. Every caller elsewhere is
-  unaffected: `db_path` was already a fully opaque value threaded
-  through ~150 call sites; it just has two possible shapes now.
-- `db.quote`/`db.literal` stayed a **pure, backend-agnostic** function
-  (plain quote-doubling, no `db_path` parameter) rather than threading
-  `db_path` through their own ~65 call sites across 12 files. This only
-  works because every MariaDB connection now sets `NO_BACKSLASH_ESCAPES`
-  (see luam's `get_mariadb_connection`) -- without it, MariaDB's default
-  backslash-escaping and SQLite's complete lack of it are genuinely
-  different grammars, and quote-doubling alone would be safe from
-  injection but not from silent data corruption (a stored value
-  containing `\n` coming back as an actual newline). Verified directly
-  against a live server that a value containing a literal backslash
-  round-trips correctly with plain doubling once that flag is set.
-- `config.lua` gains `config.db_backend()` (`db_backend` field, default
-  `sqlite`) and `config.mariadb_descriptor()` (host/port/user/database
-  from `platform.lua`, password from the `PLATFORM_MARIADB_PASSWORD`
-  env var -- the one secret in the whole descriptor). Originally these
-  read `PLATFORM_DB_BACKEND`/`PLATFORM_MARIADB_*` env vars directly,
-  matching `PLATFORM_VENDOR_DIR`'s convention at the time; both moved
-  onto `config.platform_config()` (see doc/architecture.md's "Chat"
-  section) once deployment config broadly moved from env vars to a
-  structured file. `config.db_path(root)` returns either shape
-  depending on the active backend. `config.is_initialized` and
-  `init.lua`'s "already initialized" message needed their own
-  shape-awareness too (a file-exists check and a bare `..` string
-  concat both assumed `db_path` was always a string).
-- Hit one real, Luam-specific language quirk while writing this: a
-  variable assigned only inside an `if`/`else` branch and then read
-  after the block closes fails to compile ("variable ... is no longer
-  in scope") -- a real static-scoping check Luam's own compiler does
-  that vanilla Lua doesn't. Fixed by declaring the variable (a `query`
-  string, in this case) with a default value before the branch, only
-  conditionally overwriting it inside.
+- `src/db.lua` dispatches `db.query`/`db.exec`/`db.get_tables`/`db.get_columns`/`db.table_exists` by `db_path`'s own shape (`type(db_path) == "table"` -> MariaDB, a plain string -> SQLite) -- not a `config.db_backend()` lookup from inside this file, since `config.lua` needing `db.lua`'s own bootstrap check (`is_initialized`) would make that a circular require. Every caller elsewhere is unaffected: `db_path` was already a fully opaque value threaded through ~150 call sites; it just has two possible shapes now.
+- `db.quote`/`db.literal` stayed a **pure, backend-agnostic** function (plain quote-doubling, no `db_path` parameter) rather than threading `db_path` through their own ~65 call sites across 12 files. This only works because every MariaDB connection now sets `NO_BACKSLASH_ESCAPES` (see luam's `get_mariadb_connection`) -- without it, MariaDB's default backslash-escaping and SQLite's complete lack of it are genuinely different grammars, and quote-doubling alone would be safe from injection but not from silent data corruption (a stored value containing `\n` coming back as an actual newline). Verified directly against a live server that a value containing a literal backslash round-trips correctly with plain doubling once that flag is set.
+- `config.lua` gains `config.db_backend()` (`db_backend` field, default `sqlite`) and `config.mariadb_descriptor()` (host/port/user/database from `platform.lua`, password from the `PLATFORM_MARIADB_PASSWORD` env var -- the one secret in the whole descriptor). Originally these read `PLATFORM_DB_BACKEND`/`PLATFORM_MARIADB_*` env vars directly, matching `PLATFORM_VENDOR_DIR`'s convention at the time; both moved onto `config.platform_config()` (see doc/architecture.md's "Chat" section) once deployment config broadly moved from env vars to a structured file. `config.db_path(root)` returns either shape depending on the active backend. `config.is_initialized` and `init.lua`'s "already initialized" message needed their own shape-awareness too (a file-exists check and a bare `..` string concat both assumed `db_path` was always a string).
+- Hit one real, Luam-specific language quirk while writing this: a variable assigned only inside an `if`/`else` branch and then read after the block closes fails to compile ("variable ... is no longer in scope") -- a real static-scoping check Luam's own compiler does that vanilla Lua doesn't. Fixed by declaring the variable (a `query` string, in this case) with a default value before the branch, only conditionally overwriting it inside.
 
-**Verified directly** (no automated test added yet -- see below):
-against a real local MariaDB server, with a manually-created,
-already-MariaDB-compatible table (bypassing this codebase's own
-still-SQLite-dialect schema strings, which is exactly Phase 3's job,
-not Phase 2's): `db.exec`/`db.query` round-trip correctly with real
-`insert_id`/`affected` values; `db.quote`'s backslash-containing value
-round-trips exactly; `db.table_exists`/`db.get_tables`/`db.get_columns`
-all report correctly via `information_schema`. Separately confirmed
-that `platform init` against a MariaDB-configured store fails with a
-**real MariaDB syntax error** on the SQLite-dialect `CREATE TABLE`
-DDL (`AUTOINCREMENT`, `datetime('now','localtime')`) -- the expected,
-correct failure mode at this phase boundary, not a Phase 2 regression:
-it proves the connection/routing/error-propagation chain all work
-correctly end-to-end, and that Phase 3's dialect migration is a real
-precondition for `platform init` (and therefore any bats-level,
-full-CLI test) to succeed against MariaDB at all. Full automated
-integration coverage is deferred to Phase 3 landing for that reason,
-not skipped as an oversight.
+**Verified directly** (no automated test added yet -- see below): against a real local MariaDB server, with a manually-created, already-MariaDB-compatible table (bypassing this codebase's own still-SQLite-dialect schema strings, which is exactly Phase 3's job, not Phase 2's): `db.exec`/`db.query` round-trip correctly with real `insert_id`/`affected` values; `db.quote`'s backslash-containing value round-trips exactly; `db.table_exists`/`db.get_tables`/`db.get_columns` all report correctly via `information_schema`. Separately confirmed that `platform init` against a MariaDB-configured store fails with a **real MariaDB syntax error** on the SQLite-dialect `CREATE TABLE` DDL (`AUTOINCREMENT`, `datetime('now','localtime')`) -- the expected, correct failure mode at this phase boundary, not a Phase 2 regression: it proves the connection/routing/error-propagation chain all work correctly end-to-end, and that Phase 3's dialect migration is a real precondition for `platform init` (and therefore any bats-level, full-CLI test) to succeed against MariaDB at all. Full automated integration coverage is deferred to Phase 3 landing for that reason, not skipped as an oversight.
 
 ### Phase 3 -- daat: dialect migration (DONE)
 
-- Every DDL/DML token from the table above now routes through new
-  `db.lua` helpers (`now_expr`, `autoincrement_keyword`, `replace_into`,
-  `insert_ignore`, `text_index_column`) rather than being hardcoded per
-  file. `schema.lua`'s `BUILTIN_COLUMNS` became a function of `db_path`
-  (its `created_at`/`updated_at` default expression is backend-specific,
-  and `db_path` isn't known at module-load time when it was a static
-  table).
-- Task #77's race fix (see that task's own entry) already covered the
-  `LAST_INSERT_ID()`-equivalent piece before this phase started, so
-  nothing further was needed here for it.
-- **Two real dialect gaps only a live server surfaced, not anticipated
-  when this doc was first written:**
-  - Every `TEXT` column used as a primary or composite key
-    (`entity_type.name`, `entity_field`'s composite key, `agent_session.
-    id`, `user.login`, `extension_approval.name`, `view_approval.name`,
-    `document_link`'s composite key) needed to become `VARCHAR(255)` --
-    MariaDB/InnoDB refuses a bare `TEXT`/`BLOB` column in a key without
-    an explicit length ("BLOB/TEXT column ... used in key specification
-    without a key length"). `VARCHAR(n)` is identical to `TEXT` in
-    SQLite (same type affinity, the length is purely decorative there),
-    so this needed no backend branch at all -- one uniform fix.
-  - The same restriction applies to plain secondary indexes too, not
-    just keys (`knowledge_note`'s `content_hash` index, and every
-    registered entity type's own `external_id` index generated by
-    `schema.sync_table`) -- these genuinely needed a branch
-    (`db.text_index_column`), since SQLite has no equivalent
-    prefix-length index syntax at all.
-  - A connection opened without `CLIENT_MULTI_STATEMENTS` (luam's
-    `mariadb.connect`) parses only a single statement per query --
-    this codebase's own `SCHEMA` constants are semicolon-separated
-    batches (several `CREATE TABLE`s in one string, matching
-    `sqlite.exec`'s own established convention), so every `init_schema`
-    call failed past its first statement until this was added, with
-    a matching `mysql_next_result()` drain loop in `query()`/`exec()`
-    (required once multi-statement is enabled, or the next call on the
-    same connection fails with "Commands out of sync").
-- `bld/build.sh` (daat's own build, not just luam's) needed a
-  new piece: MariaDB support must be compiled into the `platform`
-  binary itself and preload-registered exactly like `sqlite3`/`bcrypt`/
-  `hmac` already are -- a plain `require("mariadb")` that works when
-  running via `bin/luam` directly does NOT work in the compiled binary,
-  which uses static linking + `package.preload` injection instead of
-  runtime `.so` loading. Done conditionally (only if `libmariadb-dev`'s
-  header is present at build time) so a build without it still
-  succeeds SQLite-only rather than hard-failing -- at the time this was
-  written, `libmariadb-dev` wasn't yet installed in the production
-  Docker builder image (then `elab/schema/platform/Dockerfile`, now
-  `/root/lims/Dockerfile` after the elab/ repo split -- it has
-  `libmariadb-dev`/`libmariadb3` installed today), so production's
-  binary was SQLite-only at that point, unaffected by any of this until
-  Phase 4 added MariaDB support there deliberately.
-- **Verified end-to-end against a real live MariaDB server**: `platform
-  init` (fresh and idempotent), `schema add`, `entity create/list/
-  update/archive/unarchive`, `ledger history`, and the concurrent-create
-  race check (task #77, 15 parallel processes, 0 collisions/nulls) all
-  work correctly. Automated coverage added:
-  `tst/integration/mariadb_backend.bats`, skip-gated (not fail) when no
-  test server is configured, matching luam's own convention. Full
-  `./bld/test.sh` (90/90, up from 87) stays green on the default SQLite
-  path throughout every step of this phase.
+- Every DDL/DML token from the table above now routes through new `db.lua` helpers (`now_expr`, `autoincrement_keyword`, `replace_into`, `insert_ignore`, `text_index_column`) rather than being hardcoded per file. `schema.lua`'s `BUILTIN_COLUMNS` became a function of `db_path` (its `created_at`/`updated_at` default expression is backend-specific, and `db_path` isn't known at module-load time when it was a static table).
+- Task #77's race fix (see that task's own entry) already covered the `LAST_INSERT_ID()`-equivalent piece before this phase started, so nothing further was needed here for it.
+- **Two real dialect gaps only a live server surfaced, not anticipated when this doc was first written:**
+  - Every `TEXT` column used as a primary or composite key (`entity_type.name`, `entity_field`'s composite key, `agent_session.id`, `user.login`, `extension_approval.name`, `view_approval.name`, `document_link`'s composite key) needed to become `VARCHAR(255)` -- MariaDB/InnoDB refuses a bare `TEXT`/`BLOB` column in a key without an explicit length ("BLOB/TEXT column ... used in key specification without a key length"). `VARCHAR(n)` is identical to `TEXT` in SQLite (same type affinity, the length is purely decorative there), so this needed no backend branch at all -- one uniform fix.
+  - The same restriction applies to plain secondary indexes too, not just keys (`knowledge_note`'s `content_hash` index, and every registered entity type's own `external_id` index generated by `schema.sync_table`) -- these genuinely needed a branch (`db.text_index_column`), since SQLite has no equivalent prefix-length index syntax at all.
+  - A connection opened without `CLIENT_MULTI_STATEMENTS` (luam's `mariadb.connect`) parses only a single statement per query -- this codebase's own `SCHEMA` constants are semicolon-separated batches (several `CREATE TABLE`s in one string, matching `sqlite.exec`'s own established convention), so every `init_schema` call failed past its first statement until this was added, with a matching `mysql_next_result()` drain loop in `query()`/`exec()` (required once multi-statement is enabled, or the next call on the same connection fails with "Commands out of sync").
+- `bld/build.sh` (daat's own build, not just luam's) needed a new piece: MariaDB support must be compiled into the `platform` binary itself and preload-registered exactly like `sqlite3`/`bcrypt`/`hmac` already are -- a plain `require("mariadb")` that works when running via `bin/luam` directly does NOT work in the compiled binary, which uses static linking + `package.preload` injection instead of runtime `.so` loading. Done conditionally (only if `libmariadb-dev`'s header is present at build time) so a build without it still succeeds SQLite-only rather than hard-failing -- at the time this was written, `libmariadb-dev` wasn't yet installed in the production Docker builder image (then `elab/schema/platform/Dockerfile`, now `/root/lims/Dockerfile` after the elab/ repo split -- it has `libmariadb-dev`/`libmariadb3` installed today), so production's binary was SQLite-only at that point, unaffected by any of this until Phase 4 added MariaDB support there deliberately.
+- **Verified end-to-end against a real live MariaDB server**: `platform init` (fresh and idempotent), `schema add`, `entity create/list/update/archive/unarchive`, `ledger history`, and the concurrent-create race check (task #77, 15 parallel processes, 0 collisions/nulls) all work correctly. Automated coverage added: `tst/integration/mariadb_backend.bats`, skip-gated (not fail) when no test server is configured, matching luam's own convention. Full `./bld/test.sh` (90/90, up from 87) stays green on the default SQLite path throughout every step of this phase.
 
 ### Phase 4 -- cutover (DONE, 2026-07-21)
-- Stood up Cloud SQL for MySQL (`platform-db-prod`, 1 vCPU/3.75GB,
-  `europe-west1`, single zone) -- Cloud SQL has no literal "MariaDB"
-  flavor, only MySQL 8.0; this surfaced real, previously-latent dialect
-  gaps that only a genuine MySQL server enforces (MariaDB silently
-  tolerates all of them): a literal `DEFAULT` value on a `TEXT`/`BLOB`
-  column is rejected outright (`extension_job.status`,
-  `agent_pending_action.status`, `user.cap` all became `VARCHAR(32)`);
-  `CREATE INDEX IF NOT EXISTS` doesn't exist at all (`db.index_exists`
-  added, every `CREATE INDEX` call site switched to check-then-create);
-  `rank` is a MySQL 8.0 reserved word (backtick-quoted in
-  `knowledge_retrieval_note`); and any schema-defined field name that
-  happens to be a reserved word (found via a real production field,
-  culture_medium's own `usage`) needed every DDL/DML column reference
-  backtick-quoted (`db.quote_ident`, applied in `schema.lua`/`entity.lua`).
-  Connectivity is a Cloud SQL Auth Proxy sidecar container (not private-
-  IP VPC peering -- `celleste-elab`'s only network is the default auto-
-  mode VPC, shared with other resources; the Auth Proxy needs no peering
-  and doesn't require the instance's public IP to accept any inbound
-  range), reachable from the `platform` container by its compose service
-  name.
-- One-time data migration: dumped a live, online `sqlite3 .backup` of
-  production's real `.store/store.db` (39 tables, ~307k rows -- 152,682
-  ledger events, 77,230 samples, 60,271 sample states among them) and
-  loaded it into Cloud SQL via `LOAD DATA LOCAL INFILE`, not per-row
-  `INSERT` (one `INSERT` per row was still running after 40+ minutes on
-  `entity_event` alone, network-round-trip-bound over the Auth Proxy
-  tunnel, not compute-bound). Getting this genuinely correct -- not just
-  "row counts matched" -- took five more real, confirmed-live bugs, none
-  of which row-count checks alone would have caught (a byte-exact
-  `HEX()`/numeric-epsilon comparison between source and destination,
-  built specifically because of these, did): (1) MySQL's `LOAD DATA`
-  defaults to `ESCAPED BY '\\'`, silently reinterpreting a JSON value's
-  own literal `\n`/`\"` text as real control characters -- fixed with
-  `ESCAPED BY ''`; (2) that fix breaks MySQL's bare `\N`-means-NULL
-  convention (only recognized when escaping is active) -- fixed with a
-  0x01 sentinel byte + `SET col = IF(...)` instead of relying on `\N`;
-  (3) the mariadb CLI's default connection charset is `latin1` even
-  though every table is `utf8mb4`, silently mangling any real multi-byte
-  UTF-8 character (found via a single EN DASH in experiment notes
-  becoming a single CP1252-ish byte) -- fixed with
-  `--default-character-set=utf8mb4` and an explicit `CHARACTER SET
-  utf8mb4` on `LOAD DATA`; (4) MySQL's `LOAD DATA "(@var)"` capture
-  collapses ANY empty field -- quoted `""` or not -- to empty-string-
-  read-as-NULL, indistinguishable from a truly-NULL field once
-  captured -- fixed with a second sentinel (0x02, "this was a real empty
-  string"); (5) the sentinel comparisons themselves (`@v = 0x01`) hit a
-  third bug: this connection's default collation
-  (`utf8mb4_0900_ai_ci`) treats control characters as
-  collation-ignorable, so *every* single-control-byte string compared
-  equal to *every other* -- fixed by forcing `BINARY` on both sides of
-  every sentinel check. Verified byte-exact (numeric epsilon for `REAL`
-  columns specifically, since two engines' float-to-decimal-string
-  conversion can legitimately round the same bit-identical double
-  differently at the ~15th significant digit -- confirmed directly, not
-  a real discrepancy) across all 39 tables before cutover.
-- Cut `fossci-app-prod`'s (since renamed to `platform-app-prod`; no
-  instance by the old name exists anymore) startup script over to the
-  new connection config via the existing `deploy.sh --redeploy` path; kept the SQLite
-  file + its existing snapshot policy around, untouched, as a rollback
-  path. Verified live post-cutover: both containers (`platform`,
-  `cloudsql-proxy`) up, `platform.env` shows `PLATFORM_DB_BACKEND=mariadb`,
-  and `platform entity list sample` inside the running container returns
-  exactly 77,230 rows -- the real migrated count, confirming the live
-  app is actually serving from Cloud SQL, not silently still on SQLite.
-- Found post-cutover (2026-07-24), the same reserved-word class as
-  `rank`/`usage` above but missed at the time since it's not a schema
-  field, a fixed system column: `label_template`'s own `sql` column
-  (`src/label.lua`'s `find_template`) is a bare, unquoted `SELECT sql,
-  zpl FROM label_template ...`. `sql` is a MariaDB reserved word too --
-  and since `label.has_template` runs this same query on every
-  `/detail` page for every entity type (to decide whether to show the
-  Print Label button), this 500'd site-wide, not just on label
-  printing. Fixed with `db.quote_ident`, same as the other two.
-  Worth a proactive audit of every other hardcoded column name in the
-  codebase against MariaDB's reserved-word list rather than continuing
-  to find these one at a time in production.
+- Stood up Cloud SQL for MySQL (`platform-db-prod`, 1 vCPU/3.75GB, `europe-west1`, single zone) -- Cloud SQL has no literal "MariaDB" flavor, only MySQL 8.0; this surfaced real, previously-latent dialect gaps that only a genuine MySQL server enforces (MariaDB silently tolerates all of them): a literal `DEFAULT` value on a `TEXT`/`BLOB` column is rejected outright (`extension_job.status`, `agent_pending_action.status`, `user.cap` all became `VARCHAR(32)`); `CREATE INDEX IF NOT EXISTS` doesn't exist at all (`db.index_exists` added, every `CREATE INDEX` call site switched to check-then-create); `rank` is a MySQL 8.0 reserved word (backtick-quoted in `knowledge_retrieval_note`); and any schema-defined field name that happens to be a reserved word (found via a real production field, culture_medium's own `usage`) needed every DDL/DML column reference backtick-quoted (`db.quote_ident`, applied in `schema.lua`/`entity.lua`). Connectivity is a Cloud SQL Auth Proxy sidecar container (not private-IP VPC peering -- `celleste-elab`'s only network is the default auto-mode VPC, shared with other resources; the Auth Proxy needs no peering and doesn't require the instance's public IP to accept any inbound range), reachable from the `platform` container by its compose service name.
+- One-time data migration: dumped a live, online `sqlite3 .backup` of production's real `.store/store.db` (39 tables, ~307k rows -- 152,682 ledger events, 77,230 samples, 60,271 sample states among them) and loaded it into Cloud SQL via `LOAD DATA LOCAL INFILE`, not per-row `INSERT` (one `INSERT` per row was still running after 40+ minutes on `entity_event` alone, network-round-trip-bound over the Auth Proxy tunnel, not compute-bound). Getting this genuinely correct -- not just "row counts matched" -- took five more real, confirmed-live bugs, none of which row-count checks alone would have caught (a byte-exact `HEX()`/numeric-epsilon comparison between source and destination, built specifically because of these, did): (1) MySQL's `LOAD DATA` defaults to `ESCAPED BY '\\'`, silently reinterpreting a JSON value's own literal `\n`/`\"` text as real control characters -- fixed with `ESCAPED BY ''`; (2) that fix breaks MySQL's bare `\N`-means-NULL convention (only recognized when escaping is active) -- fixed with a 0x01 sentinel byte + `SET col = IF(...)` instead of relying on `\N`; (3) the mariadb CLI's default connection charset is `latin1` even though every table is `utf8mb4`, silently mangling any real multi-byte UTF-8 character (found via a single EN DASH in experiment notes becoming a single CP1252-ish byte) -- fixed with `--default-character-set=utf8mb4` and an explicit `CHARACTER SET utf8mb4` on `LOAD DATA`; (4) MySQL's `LOAD DATA "(@var)"` capture collapses ANY empty field -- quoted `""` or not -- to empty-string-read-as-NULL, indistinguishable from a truly-NULL field once captured -- fixed with a second sentinel (0x02, "this was a real empty string"); (5) the sentinel comparisons themselves (`@v = 0x01`) hit a third bug: this connection's default collation (`utf8mb4_0900_ai_ci`) treats control characters as collation-ignorable, so *every* single-control-byte string compared equal to *every other* -- fixed by forcing `BINARY` on both sides of every sentinel check. Verified byte-exact (numeric epsilon for `REAL` columns specifically, since two engines' float-to-decimal-string conversion can legitimately round the same bit-identical double differently at the ~15th significant digit -- confirmed directly, not a real discrepancy) across all 39 tables before cutover.
+- Cut `fossci-app-prod`'s (since renamed to `platform-app-prod`; no instance by the old name exists anymore) startup script over to the new connection config via the existing `deploy.sh --redeploy` path; kept the SQLite file + its existing snapshot policy around, untouched, as a rollback path. Verified live post-cutover: both containers (`platform`, `cloudsql-proxy`) up, `platform.env` shows `PLATFORM_DB_BACKEND=mariadb`, and `platform entity list sample` inside the running container returns exactly 77,230 rows -- the real migrated count, confirming the live app is actually serving from Cloud SQL, not silently still on SQLite.
+- Found post-cutover (2026-07-24), the same reserved-word class as `rank`/`usage` above but missed at the time since it's not a schema field, a fixed system column: `label_template`'s own `sql` column (`src/label.lua`'s `find_template`) is a bare, unquoted `SELECT sql, zpl FROM label_template ...`. `sql` is a MariaDB reserved word too -- and since `label.has_template` runs this same query on every `/detail` page for every entity type (to decide whether to show the Print Label button), this 500'd site-wide, not just on label printing. Fixed with `db.quote_ident`, same as the other two. Worth a proactive audit of every other hardcoded column name in the codebase against MariaDB's reserved-word list rather than continuing to find these one at a time in production.
 
 ## Feature-parity check: does anything here actually need Postgres?
 
-Went through the codebase's real usage, not a generic feature matrix,
-since that's the only comparison that matters for this migration:
+Went through the codebase's real usage, not a generic feature matrix, since that's the only comparison that matters for this migration:
 
-- **Embeddings/vector retrieval** -- `document.lua`'s `document_embedding`
-  table stores `vector_json` as a plain `TEXT` column; `document.search`
-  decodes it with `json.decode` and computes `cosine_similarity` in
-  **pure Lua**, row by row (`document.lua:411,471`). No SQLite-specific
-  vector extension (no `sqlite-vss`, no virtual table) is in use today --
-  this was evaluated for FTS5 and dropped, and the same "just use plain
-  columns + application code" choice was made for vectors too. Nothing
-  here relies on a feature MariaDB lacks.
-  - Bonus, worth knowing either way: **MariaDB gained a native `VECTOR(N)`
-    type + `VECTOR INDEX`** (modified HNSW, cosine/euclidean distance,
-    up to 16,383 dimensions), GA in the 11.7/11.8 LTS line (2025) --
-    already stable well before now. If the Lua-side `cosine_similarity`
-    scan ever becomes a real bottleneck (large document/knowledge-pool
-    counts), there's a legitimate first-party path to move that
-    similarity search into the database itself, comparable to Postgres's
-    `pgvector` -- not something to build now, just good to know it's not
-    a dead end.
-- **Document tree hierarchy** (`html.lua`'s `build_document_tree_index`)
-  -- built with one flat query + a Lua-side parent-child index, not a
-  recursive CTE. Both engines support recursive CTEs anyway (MariaDB
-  since 10.2, 2016), so this wouldn't have been a blocker either way.
-- **JSON fields** (`ledger.lua`'s `field_changes`, `agent.lua`'s tool-call
-  payloads, `knowledge.lua`, etc.) -- always stored as an opaque `TEXT`
-  blob, `json.encode`/`json.decode`d in Lua, **never queried inside the
-  JSON at the SQL level** anywhere in this codebase. Postgres's JSONB
-  (richer indexing, path queries) genuinely outclasses MariaDB's JSON
-  support here -- but since nothing here uses SQL-level JSON querying
-  either way, that gap doesn't touch this project.
-- **The one real, if speculative, gap**: Postgres's `LISTEN`/`NOTIFY`
-  (async cross-connection pub/sub) has no MariaDB equivalent. Not used
-  today (no persistent process yet), but if task #57's persistent-process
-  work ever wants "notify other workers a schema/theme changed" without
-  polling, Postgres would give that for free and MariaDB would need
-  polling or an external broker (Redis, etc.) instead. Worth remembering
-  if #57 gets designed, not a reason to reconsider now.
-- **Row-level security** is Postgres-only (not in MariaDB) but irrelevant
-  here -- every access check in this codebase is application-level
-  (`auth.lua` capabilities), never a database-enforced policy.
+- **Embeddings/vector retrieval** -- `document.lua`'s `document_embedding` table stores `vector_json` as a plain `TEXT` column; `document.search` decodes it with `json.decode` and computes `cosine_similarity` in **pure Lua**, row by row (`document.lua:411,471`). No SQLite-specific vector extension (no `sqlite-vss`, no virtual table) is in use today -- this was evaluated for FTS5 and dropped, and the same "just use plain columns + application code" choice was made for vectors too. Nothing here relies on a feature MariaDB lacks.
+  - Bonus, worth knowing either way: **MariaDB gained a native `VECTOR(N)` type + `VECTOR INDEX`** (modified HNSW, cosine/euclidean distance, up to 16,383 dimensions), GA in the 11.7/11.8 LTS line (2025) -- already stable well before now. If the Lua-side `cosine_similarity` scan ever becomes a real bottleneck (large document/knowledge-pool counts), there's a legitimate first-party path to move that similarity search into the database itself, comparable to Postgres's `pgvector` -- not something to build now, just good to know it's not a dead end.
+- **Document tree hierarchy** (`html.lua`'s `build_document_tree_index`) -- built with one flat query + a Lua-side parent-child index, not a recursive CTE. Both engines support recursive CTEs anyway (MariaDB since 10.2, 2016), so this wouldn't have been a blocker either way.
+- **JSON fields** (`ledger.lua`'s `field_changes`, `agent.lua`'s tool-call payloads, `knowledge.lua`, etc.) -- always stored as an opaque `TEXT` blob, `json.encode`/`json.decode`d in Lua, **never queried inside the JSON at the SQL level** anywhere in this codebase. Postgres's JSONB (richer indexing, path queries) genuinely outclasses MariaDB's JSON support here -- but since nothing here uses SQL-level JSON querying either way, that gap doesn't touch this project.
+- **The one real, if speculative, gap**: Postgres's `LISTEN`/`NOTIFY` (async cross-connection pub/sub) has no MariaDB equivalent. Not used today (no persistent process yet), but if task #57's persistent-process work ever wants "notify other workers a schema/theme changed" without polling, Postgres would give that for free and MariaDB would need polling or an external broker (Redis, etc.) instead. Worth remembering if #57 gets designed, not a reason to reconsider now.
+- **Row-level security** is Postgres-only (not in MariaDB) but irrelevant here -- every access check in this codebase is application-level (`auth.lua` capabilities), never a database-enforced policy.
 
-**Bottom line**: nothing currently built or concretely planned needs a
-Postgres-only capability. The MariaDB choice holds up under scrutiny of
-actual usage, not just in the abstract.
+**Bottom line**: nothing currently built or concretely planned needs a Postgres-only capability. The MariaDB choice holds up under scrutiny of actual usage, not just in the abstract.
 
 ## Not recommended as part of this
 
-- **Postgres instead of MariaDB**: same cross-repo binding-writing cost
-  either way (Postgres has no existing luam binding either). Your stated
-  reasoning -- wanting a purely relational engine specifically to avoid
-  the feature-creep/data-mess risk Postgres's flexibility (JSONB,
-  extensions, procedural languages, etc.) invites -- holds up: everything
-  audited above is deliberately plain relational + application code
-  already, so MariaDB's narrower feature set isn't a constraint you'd be
-  fighting, it's already the shape this codebase is written in. Postgres
-  usage *could* be limited to an equivalent relational-only subset by
-  convention (no JSONB columns, no extensions, no stored
-  procedures/triggers, no `LISTEN`/`NOTIFY`) -- but that's a policy the
-  team has to keep enforcing by discipline/code review; MariaDB removes
-  the temptation structurally by not offering those features at all,
-  which is the actual guarantee you're after, not just a preference.
-- **Skipping Phase 1's persistent-connection work**: technically
-  possible to ship Phase 0+2+3 with open-per-query connections, but per
-  "current state" above, this would likely make every page load
-  noticeably slower than it is today -- not a real option for a
-  production system, just noted so it's not silently skipped under
-  time pressure.
+- **Postgres instead of MariaDB**: same cross-repo binding-writing cost either way (Postgres has no existing luam binding either). Your stated reasoning -- wanting a purely relational engine specifically to avoid the feature-creep/data-mess risk Postgres's flexibility (JSONB, extensions, procedural languages, etc.) invites -- holds up: everything audited above is deliberately plain relational + application code already, so MariaDB's narrower feature set isn't a constraint you'd be fighting, it's already the shape this codebase is written in. Postgres usage *could* be limited to an equivalent relational-only subset by convention (no JSONB columns, no extensions, no stored procedures/triggers, no `LISTEN`/`NOTIFY`) -- but that's a policy the team has to keep enforcing by discipline/code review; MariaDB removes the temptation structurally by not offering those features at all, which is the actual guarantee you're after, not just a preference.
+- **Skipping Phase 1's persistent-connection work**: technically possible to ship Phase 0+2+3 with open-per-query connections, but per "current state" above, this would likely make every page load noticeably slower than it is today -- not a real option for a production system, just noted so it's not silently skipped under time pressure.
 
 ## Critical files
 - `/root/projects/luam/lib/sqlite/lsqlite3.c` -- registration pattern to mirror
