@@ -313,11 +313,10 @@ end
 -- provider without one is already handled.
 
 -- Exposed on the module table purely so tst/unit/agent_provider_claude.lua
--- can reach them across the require() boundary -- require() gives each
--- module its own private scope (see ../../luam/doc/changelog.md), so a
--- bare name here is otherwise invisible outside this file, same as
--- everything else in agent_provider_claude.converse/.generate already
--- only calls them by their plain bare name internally.
+-- can reach them -- a bare name here is a genuine local to this file
+-- (see ../../luam/README.md), invisible to a separate test file, same
+-- as everything else in this module that already only calls these by
+-- their plain bare name internally.
 agent_provider_claude.claude_tools_from_canonical = claude_tools_from_canonical
 agent_provider_claude.claude_messages_from_canonical = claude_messages_from_canonical
 agent_provider_claude.claude_blocks_from_content = claude_blocks_from_content

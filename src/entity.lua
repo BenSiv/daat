@@ -16,6 +16,10 @@ view = require("view")
 
 entity = {}
 
+-- has_error used before its own definition below -- pre-declared,
+-- see ../../luam/doc/forward_references.md
+has_error = nil
+
 function is_number(v)
     return tonumber(v) != nil
 end

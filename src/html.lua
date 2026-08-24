@@ -6,6 +6,11 @@ document = require("document")
 
 html = {}
 
+-- label_print_button_html/label_print_js/related_records_html/
+-- platform_chat_widget_css used before their own definitions below --
+-- pre-declared, see ../../luam/doc/forward_references.md
+label_print_button_html, label_print_js, related_records_html, platform_chat_widget_css = nil, nil, nil, nil
+
 -- Entity field values and (in principle) entity_type ultimately come
 -- from user-submitted data -- escape before ever interpolating into
 -- HTML text/attributes.

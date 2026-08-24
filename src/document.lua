@@ -41,6 +41,10 @@ json = require("dkjson")
 
 document = {}
 
+-- shell_quote/strip_spaces used before their own definitions below --
+-- pre-declared, see ../../luam/doc/forward_references.md
+shell_quote, strip_spaces = nil, nil
+
 DOCUMENT_SCHEMA = {
     name = "document",
     fields = {

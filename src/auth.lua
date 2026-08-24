@@ -21,6 +21,10 @@ hmac = require("hmac")
 
 auth = {}
 
+-- hex_encode used before its own definition below -- pre-declared,
+-- see ../../luam/doc/forward_references.md
+hex_encode = nil
+
 SESSION_TTL_SECONDS = 60 * 60 * 24 * 7 -- 7 days
 
 auth.SCHEMA = """

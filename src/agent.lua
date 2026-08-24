@@ -24,6 +24,10 @@ view = require("view")
 
 agent = {}
 
+-- run_research_loop used before its own definition below --
+-- pre-declared, see ../../luam/doc/forward_references.md
+run_research_loop = nil
+
 -- Turn-budget/size constants in this file are read fresh from
 -- config.platform_config() every time rather than hardcoded (see
 -- doc/architecture.md's "Chat" config table for the full list and
