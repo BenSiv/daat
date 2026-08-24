@@ -24,7 +24,7 @@ function test_tools_from_canonical_passes_lowercase_schema_through()
         {name = "document.search", description = "Search pages.",
          parameters = {type = "object", properties = {query = {type = "string"}}, required = {"query"}}},
     }
-    out = claude_tools_from_canonical(tools)
+    out = agent_provider_claude.claude_tools_from_canonical(tools)
     check(#out == 1, "expected one translated tool")
     check(out[1].name == "document.search", "name should pass through unchanged")
     check(out[1].input_schema.type == "object", "expected lowercase 'object', got: " .. tostring(out[1].input_schema.type))
@@ -37,7 +37,7 @@ function test_messages_from_canonical_user_and_assistant()
         {role = "user", content = "hello"},
         {role = "assistant", content = {{type = "text", text = "hi there"}}},
     }
-    out = claude_messages_from_canonical(messages)
+    out = agent_provider_claude.claude_messages_from_canonical(messages)
     check(#out == 2, "expected two messages")
     check(out[1].role == "user" and out[1].content == "hello", "expected plain user string content")
     check(out[2].role == "assistant", "expected assistant role")
@@ -51,7 +51,7 @@ function test_messages_from_canonical_tool_call_and_result()
         {role = "toolResult", toolCallId = "toolu_abc123", toolName = "document.search", isError = false,
          content = {{text = "found it"}}},
     }
-    out = claude_messages_from_canonical(messages)
+    out = agent_provider_claude.claude_messages_from_canonical(messages)
     check(out[1].content[1].type == "tool_use", "expected tool_use block")
     check(out[1].content[1].id == "toolu_abc123", "expected Claude's own real id preserved, not a synthesized one")
     check(out[1].content[1].input.query == "x", "expected arguments passed as input")
@@ -69,7 +69,7 @@ function test_blocks_from_content_all_three_types()
         {type = "tool_use", id = "toolu_xyz", name = "entity.list", input = {entity_type = "sample"}},
         {type = "thinking", thinking = "let me consider...", signature = "sig123"},
     }
-    blocks = claude_blocks_from_content(content)
+    blocks = agent_provider_claude.claude_blocks_from_content(content)
     check(#blocks == 3, "expected 3 translated blocks, got " .. tostring(#blocks))
     check(blocks[1].type == "text" and blocks[1].text == "here's my answer", "expected text block")
     check(blocks[2].type == "toolCall" and blocks[2].id == "toolu_xyz", "expected toolCall block with real id preserved")
@@ -80,17 +80,17 @@ end
 
 function test_stop_reason_mapping()
     print("Testing claude_stop_reason_to_canonical maps every real stop_reason value")
-    check(claude_stop_reason_to_canonical("end_turn") == "stop", "expected 'end_turn' -> 'stop'")
-    check(claude_stop_reason_to_canonical("tool_use") == "toolUse", "expected 'tool_use' -> 'toolUse'")
-    check(claude_stop_reason_to_canonical("max_tokens") == "length", "expected 'max_tokens' -> 'length'")
+    check(agent_provider_claude.claude_stop_reason_to_canonical("end_turn") == "stop", "expected 'end_turn' -> 'stop'")
+    check(agent_provider_claude.claude_stop_reason_to_canonical("tool_use") == "toolUse", "expected 'tool_use' -> 'toolUse'")
+    check(agent_provider_claude.claude_stop_reason_to_canonical("max_tokens") == "length", "expected 'max_tokens' -> 'length'")
     -- pause_turn is only reachable if a server tool were ever declared
     -- (this file never declares one -- see its own header), and
     -- stop_sequence/refusal/anything else Anthropic adds later are all
     -- real responses that aren't a genuine completed answer this file
     -- knows how to continue -- all fall through to "error".
-    check(claude_stop_reason_to_canonical("pause_turn") == "error", "expected unreachable-in-practice 'pause_turn' -> 'error'")
-    check(claude_stop_reason_to_canonical("stop_sequence") == "error", "expected 'stop_sequence' -> 'error'")
-    check(claude_stop_reason_to_canonical(nil) == "error", "expected nil -> 'error'")
+    check(agent_provider_claude.claude_stop_reason_to_canonical("pause_turn") == "error", "expected unreachable-in-practice 'pause_turn' -> 'error'")
+    check(agent_provider_claude.claude_stop_reason_to_canonical("stop_sequence") == "error", "expected 'stop_sequence' -> 'error'")
+    check(agent_provider_claude.claude_stop_reason_to_canonical(nil) == "error", "expected nil -> 'error'")
 end
 
 -- Run them

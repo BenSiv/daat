@@ -28,19 +28,27 @@ return {
 
 ```lua
 -- extensions/unique-lot-number/main.lua
--- Bare assignment scopes to its enclosing block (not the whole chunk,
--- as stock Lua's globals would be) -- there is no `local` keyword.
-function on_before(new, old, ctx)
-  issues = {}
-  if old == nil or new.lot_number != old.lot_number then
-    dup = ctx.query("reagent", {lot_number = new.lot_number})
-    if #dup > 0 then
-      table.insert(issues, {field = "lot_number", severity = "error",
-        message = "Lot number already registered"})
+-- Hooks are returned as a table, the same convention manifest.lua
+-- already uses -- never a bare top-level `function on_before() end`.
+-- A bare function statement is implicit-local in Luam (see
+-- ../../luam/doc/manifesto.md and doc/why-luam.md), exactly like bare
+-- assignment already is -- it compiles to a variable private to this
+-- file, invisible to the host regardless of what capability-scoped
+-- environment this script runs under. Returning the hooks explicitly
+-- is how they actually reach daat.
+return {
+  on_before = function(new, old, ctx)
+    issues = {}
+    if old == nil or new.lot_number != old.lot_number then
+      dup = ctx.query("reagent", {lot_number = new.lot_number})
+      if #dup > 0 then
+        table.insert(issues, {field = "lot_number", severity = "error",
+          message = "Lot number already registered"})
+      end
     end
-  end
-  return issues
-end
+    return issues
+  end,
+}
 ```
 
 ## Event model

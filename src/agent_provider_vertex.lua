@@ -433,4 +433,9 @@ function agent_provider_vertex.embeddings(model, text)
     return embedding.values
 end
 
+-- Exposed purely so tst/unit/agent_provider_vertex.lua can reach it
+-- across the require() boundary -- see the matching comment in
+-- agent_provider_claude.lua.
+agent_provider_vertex.vertex_url = vertex_url
+
 return agent_provider_vertex

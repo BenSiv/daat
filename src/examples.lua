@@ -104,18 +104,25 @@ EXAMPLE_EXTENSION_MAIN = """-- Example before-hook: rejects a negative "quantity
 -- string, e.g. from a web form) -- tonumber() it before comparing, the
 -- same real gotcha this pattern hit in production once already (see
 -- the task-priority-range extension this one is modeled on).
-function on_before(new, old, ctx)
-    issues = {}
-    raw = new["quantity"]
-    if raw != nil then
-        value = tonumber(raw)
-        if value != nil and value < 0 then
-            table.insert(issues, {field = "quantity", severity = "error",
-                message = "quantity cannot be negative"})
+--
+-- Hooks are returned as a table, the same convention manifest.lua
+-- already uses -- never a bare top-level `function on_before() end`.
+-- A bare function statement is implicit-local (see doc/why-luam.md);
+-- returning it explicitly is how it actually reaches the host.
+return {
+    on_before = function(new, old, ctx)
+        issues = {}
+        raw = new["quantity"]
+        if raw != nil then
+            value = tonumber(raw)
+            if value != nil and value < 0 then
+                table.insert(issues, {field = "quantity", severity = "error",
+                    message = "quantity cannot be negative"})
+            end
         end
-    end
-    return issues
-end
+        return issues
+    end,
+}
 """
 
 EXAMPLE_TEMPLATE = """-- Example entry template (see src/template.lua's own header comment

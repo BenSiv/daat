@@ -294,13 +294,23 @@ function extension.invoke(ext_dir, name, manifest, hook_name, new_values, old_va
         return false, err
     end
     env = sandbox.extension_env(manifest.capabilities)
-    env[hook_name] = nil
     main_path = paths.joinpath(ext_dir, name, "main.lua")
-    load_ok, load_err = sandbox.run(main_src, main_path, env)
+    -- main.lua returns its hooks as a table (return {on_before = ...,
+    -- on_after = ...}), the same convention manifest.lua already uses
+    -- -- never a bare top-level `function on_before() end` read back
+    -- out of env afterward. A bare function statement is implicit-
+    -- local (see doc/why-luam.md), so it would compile to a real local
+    -- invisible to this file no matter what env the chunk ran under;
+    -- setfenv only ever redirects a *global* read/write, and a local
+    -- was never one.
+    load_ok, hooks = sandbox.run(main_src, main_path, env)
     if load_ok == false then
-        return false, "error running extension main.lua: " .. tostring(load_err)
+        return false, "error running extension main.lua: " .. tostring(hooks)
     end
-    hook_fn = env[hook_name]
+    if type(hooks) != "table" then
+        return true, nil
+    end
+    hook_fn = hooks[hook_name]
     if type(hook_fn) != "function" then
         return true, nil
     end

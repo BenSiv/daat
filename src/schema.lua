@@ -1322,4 +1322,9 @@ function schema.do_schema(cmd_args, db_path)
     print("Usage: daat schema <add|list|show|show-json|sync> [args]")
 end
 
+-- Exposed purely so tst/unit/schema.lua can reach it across the
+-- require() boundary -- see the matching comment in
+-- agent_provider_claude.lua.
+schema.is_multi_field_type = is_multi_field_type
+
 return schema

@@ -17,7 +17,7 @@ end
 
 function test_vertex_url_regional_uses_region_subdomain()
     print("Testing vertex_url prefixes the host with region for a regional location")
-    url = vertex_url("celleste-elab", "europe-west1", "gemini-2.5-flash:generateContent")
+    url = agent_provider_vertex.vertex_url("celleste-elab", "europe-west1", "gemini-2.5-flash:generateContent")
     expected = "https://europe-west1-aiplatform.googleapis.com/v1/projects/celleste-elab" ..
         "/locations/europe-west1/publishers/google/models/gemini-2.5-flash:generateContent"
     check(url == expected, "expected " .. expected .. ", got " .. tostring(url))
@@ -25,7 +25,7 @@ end
 
 function test_vertex_url_global_has_no_subdomain_prefix()
     print("Testing vertex_url uses the bare host for the global location")
-    url = vertex_url("celleste-elab", "global", "gemini-3.5-flash-lite:generateContent")
+    url = agent_provider_vertex.vertex_url("celleste-elab", "global", "gemini-3.5-flash-lite:generateContent")
     expected = "https://aiplatform.googleapis.com/v1/projects/celleste-elab" ..
         "/locations/global/publishers/google/models/gemini-3.5-flash-lite:generateContent"
     check(url == expected, "expected " .. expected .. ", got " .. tostring(url))

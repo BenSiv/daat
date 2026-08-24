@@ -137,11 +137,11 @@ end
 
 function test_is_multi_field_type()
     print("Testing is_multi_field_type recognizes only the two multivalue types")
-    check(is_multi_field_type("multi_select") == true, "multi_select should be a multi field type")
-    check(is_multi_field_type("multi_reference") == true, "multi_reference should be a multi field type")
-    check(is_multi_field_type("select") == false, "select should not be a multi field type")
-    check(is_multi_field_type("reference") == false, "reference should not be a multi field type")
-    check(is_multi_field_type("text") == false, "text should not be a multi field type")
+    check(schema.is_multi_field_type("multi_select") == true, "multi_select should be a multi field type")
+    check(schema.is_multi_field_type("multi_reference") == true, "multi_reference should be a multi field type")
+    check(schema.is_multi_field_type("select") == false, "select should not be a multi field type")
+    check(schema.is_multi_field_type("reference") == false, "reference should not be a multi field type")
+    check(schema.is_multi_field_type("text") == false, "text should not be a multi field type")
 end
 
 function test_multi_field_table_name()
