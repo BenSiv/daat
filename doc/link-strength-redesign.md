@@ -45,6 +45,24 @@ neighbor_delta = (base_delta * SPREADING_ACTIVATION_FACTOR) / fan_count
 
 **Backward-compatible degenerate case:** with every edge still at `BASE_LINK_STRENGTH = 1.0` (a document whose links have never been reinforced -- true for the whole graph at migration time), `total_strength = fan_count * 1.0`, so `edge.raw_strength / total_strength = 1 / fan_count` -- identical to today's formula. The new behavior only diverges from today's once real, repeated co-retrieval actually differentiates one edge from its siblings.
 
+### Worked example
+
+"Bioreactor SOP" is retrieved (`base_delta = 0.5`) and has three linked neighbors, whose edges have accumulated different `raw_strength` from real co-retrieval history. `total_strength = 2.0 + 1.0 + 0.6 = 3.6`; each neighbor's delta is `0.5 * 0.35 * (its own raw_strength / 3.6)`:
+
+```mermaid
+flowchart LR
+    A["Bioreactor SOP<br/>(direct hit)"]
+    B["Cleaning Checklist<br/>raw_strength 2.0"]
+    C["Calibration Log<br/>raw_strength 1.0"]
+    D["Old Draft Notes<br/>raw_strength 0.6"]
+
+    A ==>|"share 0.56<br/>+0.097 heat"| B
+    A -->|"share 0.28<br/>+0.049 heat"| C
+    A -.->|"share 0.17<br/>+0.029 heat"| D
+```
+
+Line weight in the diagram mirrors edge strength on purpose -- it's the same visual grammar the knowledge-graph explorer (see below, and the platform-ui backlog item) is meant to render for real, with actual node/edge data instead of this hand-picked example. "Old Draft Notes" isn't struggling because anything was deleted or explicitly decayed -- it never earned a second reinforcement, so it simply holds a shrinking *share* as its siblings keep being borne out by real usage. If "Old Draft Notes" starts getting genuinely co-retrieved with "Bioreactor SOP" again, its `raw_strength` -- and with it, its share of every future spread from this document -- grows again, with nothing to undo first.
+
 ### Decay is relative, never subtractive -- no wall clock anywhere
 
 Nothing ever decrements `raw_strength`, and nothing reads a timestamp. An edge that stops being co-retrieved keeps its `raw_strength` exactly where it last was -- what changes is its *share* of `total_strength` at the next spread event, once a sibling edge has been reinforced and the denominator has grown. A month of silence changes no edge's share at all, because a month of silence produces no reinforcement events for anything to be relative to; a month where every *other* edge from that document gets reinforced shrinks the quiet one's share automatically, with no separate decay step to write. This is the exact "usage, not time" property heat's own redesign established, arrived at here without needing heat's conserved-budget invariant to get it -- relative normalization over a small live set gives the same property directly.
