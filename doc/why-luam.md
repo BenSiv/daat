@@ -31,7 +31,7 @@ The same instinct extends to what ships with the language. Luam's `lib/` is wher
 
 ## A single small binary matches a single self-contained application (tenet 1)
 
-daat builds to one binary that dispatches, per invocation, into CLI commands or CGI-style web-request handling. Luam's changelog reports source size within 0.3% of upstream Lua 5.1 and a stripped interpreter around 215KB. That's what lets daat actually be the single, self-contained thing its README claims -- no external identity system, no separate version-control layer, nothing beyond a couple of documented runtime tools (`cmark`; `curl`/`gcloud` if chat is enabled) -- rather than a thin wrapper shipping a general-purpose language runtime, and its packaging ecosystem, as a hidden second dependency.
+daat builds to one binary that dispatches, per invocation, into CLI commands or CGI-style web-request handling. Luam's changelog reports source size within 0.3% of upstream Lua 5.1 and a stripped interpreter around 215KB. That's what lets daat actually be the single, self-contained thing its README claims -- no external identity system, no separate version-control layer, nothing beyond a couple of documented runtime tools (`cmark-gfm`; `curl`/`gcloud` if chat is enabled) -- rather than a thin wrapper shipping a general-purpose language runtime, and its packaging ecosystem, as a hidden second dependency.
 
 ## Why not Python or JavaScript
 

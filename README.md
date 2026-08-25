@@ -18,7 +18,7 @@ A self-maintaining knowledge base with a built-in AI agent: Documents, chat conv
 
 Written in [Luam](https://github.com/BenSiv/luam); requires a sibling `luam` checkout, already built (`obj/liblua.a` present). By default `bld/build.sh` looks for it at `../luam`; override with the `LUAM_DIR` env var if yours lives elsewhere.
 
-Also requires `cmark` on `PATH` **at runtime** (`apt install cmark` / `brew install cmark`) -- unlike everything else here, it isn't compiled into the binary; Document rendering shells out to it.
+Also requires `cmark-gfm` on `PATH` **at runtime** (`apt install cmark-gfm` / `brew install cmark-gfm`, not plain `cmark` -- a separate package/binary) -- unlike everything else here, it isn't compiled into the binary; Document rendering shells out to it.
 
 Chat/assistant features additionally need `curl` and `gcloud` on `PATH` at runtime (the built-in provider calls Google Vertex AI's REST API, authenticated via `gcloud auth application-default login`), plus a `vertex_project` field in `platform.lua` naming a real GCP project -- there's no default, since that's always a real, potentially billed deployment choice, never something to hardcode. See "Chat" below.
 
@@ -74,7 +74,7 @@ Nothing is ever deleted. Every entity carries a nullable "archived" timestamp; a
 
 ## Documents
 
-A built-in entity type (`src/document.lua`) -- a real parent-child tree (a document's identity is its id, not its title, so renaming or moving a document is a plain field edit, never a collision risk), Markdown content rendered via `cmark`, and `[[title]]` / `[[folder/title]]` inline links between documents that show up as backlinks on the document they point to. `/documents` lists the tree, `/document?entity_id=<id>` views one document, `/document-edit` creates or edits one (a plain textarea with a live preview). A link to a document that doesn't exist yet renders as a plain, clearly-marked placeholder rather than a broken link.
+A built-in entity type (`src/document.lua`) -- a real parent-child tree (a document's identity is its id, not its title, so renaming or moving a document is a plain field edit, never a collision risk), Markdown content rendered via `cmark-gfm`, and `[[title]]` / `[[folder/title]]` inline links between documents that show up as backlinks on the document they point to. `/documents` lists the tree, `/document?entity_id=<id>` views one document, `/document-edit` creates or edits one (a plain textarea with a live preview). A link to a document that doesn't exist yet renders as a plain, clearly-marked placeholder rather than a broken link.
 
 ## Chat
 

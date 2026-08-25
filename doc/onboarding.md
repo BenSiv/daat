@@ -20,7 +20,7 @@ It also ships an extensible entity-tracking layer: an **entity type is data, not
 cd dev && ./deploy.sh
 ```
 
-`dev/Containerfile` installs the C toolchain, `cmark`, `bats`, and a built sibling `luam` checkout (see "Option B: manual" below for what each is for); `dev/deploy.sh` builds that image and drops you into a shell with the repo root bind-mounted at `/root/daat` -- edits you make on the host are what actually gets built and tested inside the container. The container is removed on exit (`--rm`); nothing but the image persists between runs. Re-run `./deploy.sh` after changing `Containerfile` to rebuild it.
+`dev/Containerfile` installs the C toolchain, `cmark-gfm`, `bats`, and a built sibling `luam` checkout (see "Option B: manual" below for what each is for); `dev/deploy.sh` builds that image and drops you into a shell with the repo root bind-mounted at `/root/daat` -- edits you make on the host are what actually gets built and tested inside the container. The container is removed on exit (`--rm`); nothing but the image persists between runs. Re-run `./deploy.sh` after changing `Containerfile` to rebuild it.
 
 ### Option B: manual
 
@@ -28,7 +28,7 @@ cd dev && ./deploy.sh
 
 - A sibling `luam` checkout, built (`../luam` with `obj/liblua.a` present) -- `bld/build.sh` looks there by default; override with the `LUAM_DIR` env var.
 - A C toolchain (`cc`/`make`) and the dev headers `bld/build.sh` compiles against: `libsqlite3-dev`, `libreadline-dev`, `libssl-dev`, `libcrypt-dev`.
-- `cmark` on `PATH` **at runtime** (`apt install cmark` / `brew install cmark`) -- Document rendering shells out to it; it is not compiled in.
+- `cmark-gfm` on `PATH` **at runtime** (`apt install cmark-gfm` / `brew install cmark-gfm`) -- Document rendering shells out to it; it is not compiled in. Not plain `cmark` -- a separate package/binary (GitHub's own fork, needed for the table/strikethrough/autolink extensions `document.lua` renders with); installing the wrong one is a real, previously-hit failure mode (missing `cmark-gfm` produces empty rendered content, not an error at install time).
 - `bats` on `PATH` (`apt install bats` / `brew install bats-core`) -- required to run `tst/integration/*.bats`.
 - SQLite itself needs no setup; it's the default storage backend.
 

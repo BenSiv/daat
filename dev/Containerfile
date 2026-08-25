@@ -3,8 +3,8 @@
 # Contains only what's needed to build and test this project itself:
 # the sibling luam checkout (built from source) plus the system
 # packages bld/build.sh and bld/test.sh require. No unrelated tooling,
-# credentials, or private repos -- see ../ONBOARDING.md for what each
-# dependency is for.
+# credentials, or private repos -- see ../doc/onboarding.md for what
+# each dependency is for.
 
 FROM ubuntu:24.04
 
@@ -19,7 +19,7 @@ RUN apt-get update -y && apt-get install -y \
         libreadline-dev \
         libssl-dev \
         libcrypt-dev \
-        cmark \
+        cmark-gfm \
         bats \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
