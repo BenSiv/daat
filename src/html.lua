@@ -3089,6 +3089,24 @@ KNOWLEDGE_TIER_CAPTIONS = {
     [3] = "Short, single-subject, distilled to one idea.",
 }
 
+-- One hue, monotone lightness, light->dark as maturity rises (an
+-- ordinal ramp, not a categorical one -- tier order is meaningful, so
+-- color should read as a sequence, not four arbitrary identities).
+-- Validated against dataviz's ordinal-ramp checks (monotone L, adjacent
+-- delta-L >= 0.06, light-end contrast >= 2:1 against the default
+-- #fcfcfb-ish surface, single hue) -- these are the *fallback* values a
+-- deployment's theme.lua can override per-key (config.THEME_COLOR_KEYS'
+-- tier_0..tier_3), the same override convention every other themed
+-- color here already follows. Reused as-is for node color in the
+-- knowledge-graph explorer (doc/knowledge-graph-explorer.md) once that
+-- ships, so a document's tier reads the same way on both pages.
+KNOWLEDGE_TIER_COLORS = {
+    [0] = "#b0abf0",
+    [1] = "#8880ec",
+    [2] = "#5c52e0",
+    [3] = "#332ba8",
+}
+
 -- Landing page for src/knowledge.lua's tiering/retrieval-logging
 -- system (see that module's own header) -- linked from System, not
 -- given its own sidebar icon. Every stat/tier tile is a link to its
@@ -3100,9 +3118,9 @@ function html.render_knowledge_pool(stats)
     tier_tiles = ""
     for tier = 0, 3 do
         tier_tiles = tier_tiles .. string.format(
-            '<a class="platform-knowledge-tier" href="knowledge-documents?tier=%d"><strong>%s</strong><span class="dimmed">%d note(s)</span>' ..
+            '<a class="platform-knowledge-tier" href="knowledge-documents?tier=%d" style="border-left: 4px solid var(--platform-tier-%d, %s);"><strong>%s</strong><span class="dimmed">%d note(s)</span>' ..
             '<p class="platform-knowledge-tier-caption">%s</p></a>',
-            tier, html.html_escape(KNOWLEDGE_TIER_LABELS[tier]), stats.tier_counts[tier],
+            tier, tier, KNOWLEDGE_TIER_COLORS[tier], html.html_escape(KNOWLEDGE_TIER_LABELS[tier]), stats.tier_counts[tier],
             html.html_escape(KNOWLEDGE_TIER_CAPTIONS[tier])
         )
     end

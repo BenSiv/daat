@@ -30,9 +30,17 @@ PLATFORM_CONFIG_CACHE = nil
 -- html.lua's own var(--platform-*, <fallback>) usage sites exactly, so a
 -- deployment can only override colors/tokens the app already exposes
 -- as a hook, never introduce a new one by typo.
+-- tier_0..tier_3: the Knowledge Pool's ordinal tier ramp (Raw Intake ->
+-- Atomic Record) -- one hue, monotone lightness, light->dark as
+-- maturity rises. Validated against dataviz's ordinal-ramp checks
+-- (monotone L, adjacent ΔL >= 0.06, light-end contrast >= 2:1 on the
+-- default surface, single hue) -- see html.theme_root_css's own
+-- fallback defaults for the values, and doc/knowledge-graph-explorer.md
+-- for the second place this ramp is meant to be reused (node color).
 THEME_COLOR_KEYS = {
     "accent", "accent_2", "bg", "bg_2", "border", "border_2",
     "heading", "input_text", "muted", "muted_2", "text", "th_text",
+    "tier_0", "tier_1", "tier_2", "tier_3",
 }
 
 function config.find_root()
