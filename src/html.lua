@@ -200,6 +200,7 @@ function platform_page_header_css()
         .platform-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px; margin-bottom: 20px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; }
         .platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
         .platform-header p { color: var(--platform-muted, #64748b); margin: 0; font-size: 0.95rem; }
+        .platform-header p a { color: var(--platform-accent, #4f46e5); }
         .platform-header > div:first-child { min-width: 0; }
 """
 end
@@ -685,6 +686,7 @@ end
 THEME_COLOR_KEYS = {
     "accent", "accent_2", "bg", "bg_2", "border", "border_2",
     "heading", "input_text", "muted", "muted_2", "text", "th_text",
+    "tier_0", "tier_1", "tier_2", "tier_3",
 }
 
 -- Wraps a rendered page body in the outer HTML document (<!doctype>,
@@ -3233,6 +3235,12 @@ function html.render_knowledge_graph(nonce)
             return v ? v.trim() : '#8880ec';
         }
 
+        function accentColor() {
+            var style = getComputedStyle(document.documentElement);
+            var v = style.getPropertyValue('--platform-accent');
+            return v ? v.trim() : '#5c52e0';
+        }
+
         function nodeRadius(heat) {
             var h = (typeof heat === 'number') ? heat : 1.0;
             return Math.max(4, Math.min(22, 4 + h * 6));
@@ -3248,8 +3256,10 @@ function html.render_knowledge_graph(nonce)
                 ctx.moveTo(a.x, a.y);
                 ctx.lineTo(b.x, b.y);
                 ctx.lineWidth = Math.max(0.5, Math.min(6, strength));
-                ctx.strokeStyle = 'rgba(92, 82, 224, ' + Math.max(0.15, Math.min(0.85, strength / 3)) + ')';
+                ctx.strokeStyle = accentColor();
+                ctx.globalAlpha = Math.max(0.15, Math.min(0.85, strength / 3));
                 ctx.stroke();
+                ctx.globalAlpha = 1;
             });
             nodes.forEach(function(n) {
                 ctx.beginPath();

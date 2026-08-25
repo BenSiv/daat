@@ -24,6 +24,7 @@ cgi = {}
 THEME_COLOR_KEYS = {
     "accent", "accent_2", "bg", "bg_2", "border", "border_2",
     "heading", "input_text", "muted", "muted_2", "text", "th_text",
+    "tier_0", "tier_1", "tier_2", "tier_3",
 }
 
 -- The baseline capability every gated route (other than /login,
