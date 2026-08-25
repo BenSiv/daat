@@ -1,5 +1,7 @@
 # The Agent Provider Protocol
 
+See `doc/agent-harness-rationale.md` for why this protocol exists at all rather than adopting a provider's own managed agent SDK -- vendor neutrality, expanded on below, is one of several reasons that document covers.
+
 The chat agent's tool-calling logic (`agent.lua`'s `run_turn`, destructive-action pause/resume, history building, tool dispatch) is written against one neutral, internal protocol -- not any one model vendor's wire format. `agent_provider_<name>.lua` implementations (`vertex`, `claude`, `test`, and any added later) are equal, symmetric translators between this protocol and their own vendor's real API. None of them defines the protocol; `agent.lua` does, and no provider adapter gets to be "home" while others are guests translating into its shape.
 
 This wasn't always true. `AGENT_TOOLS`' tool-parameter schemas used to be authored directly in Vertex/Gemini's own uppercase proto-enum convention (`"OBJECT"`/`"STRING"`/`"INTEGER"`), with zero translation layer in `agent_provider_vertex.lua` -- Vertex was silently privileged, and adding a second provider meant either duplicating that dialect or reverse-engineering which parts of the "shared" shape were actually vendor-specific. Fixed by making the schema convention genuinely neutral (see below) and giving Vertex its own explicit translation step, the same as every other provider.
