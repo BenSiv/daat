@@ -231,6 +231,41 @@ search_for_bioreactor_extra() {
     [ "$output" -eq 1 ]
 }
 
+@test "spreading activation weights a reinforced link's neighbor more than an unreinforced sibling (doc/link-strength-redesign.md Phase 3)" {
+    # Two neighbors of the same retrieved document, both real [[title]]
+    # links -- "Cleaning Checklist"'s edge is reinforced (simulating
+    # repeated real co-retrieval, the trigger knowledge.maybe_link_
+    # co_retrieved's own reinforce branch uses) before the retrieval
+    # this test actually triggers; "Calibration Log"'s stays at
+    # BASE_LINK_STRENGTH. If spread_activation's weighting is working,
+    # the reinforced neighbor gets a strictly bigger share of the same
+    # base_delta than its unreinforced sibling.
+    raw_post "/document-save" "csrf_token=${CSRF}&title=Cleaning+Checklist&parent_id=&content=Checklist+content+here." "$COOKIE" "" >/dev/null
+    raw_post "/document-save" "csrf_token=${CSRF}&title=Calibration+Log&parent_id=&content=Calibration+log+content+here." "$COOKIE" "" >/dev/null
+    raw_post "/document-save" "csrf_token=${CSRF}&title=Bioreactor+SOP&parent_id=&content=Steps+for+the+bioreactor.+See+%5B%5BCleaning+Checklist%5D%5D+and+%5B%5BCalibration+Log%5D%5D+for+details." "$COOKIE" "" >/dev/null
+
+    sqlite3 .store/store.db "UPDATE document_link SET raw_strength = raw_strength + 0.6 WHERE link_text = 'Cleaning Checklist';"
+
+    resp=$(start_chat)
+    session_id=$(extract_query_param "$resp" "session_id")
+    scripted="$(tool_call_response "document.search" '{"query":"bioreactor"}')"$'\1'"$(done_response "Found it.")"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"find bioreactor pages\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+
+    reinforced_delta=$(sqlite3 .store/store.db "
+        SELECT krd.reinforcement_delta FROM knowledge_retrieval_document krd
+        JOIN document d ON d.id = krd.document_id
+        WHERE d.title = 'Cleaning Checklist' ORDER BY krd.retrieval_id DESC LIMIT 1;
+    ")
+    unreinforced_delta=$(sqlite3 .store/store.db "
+        SELECT krd.reinforcement_delta FROM knowledge_retrieval_document krd
+        JOIN document d ON d.id = krd.document_id
+        WHERE d.title = 'Calibration Log' ORDER BY krd.retrieval_id DESC LIMIT 1;
+    ")
+
+    run awk -v a="$reinforced_delta" -v b="$unreinforced_delta" 'BEGIN { print (a > b) ? 1 : 0 }'
+    [ "$output" -eq 1 ]
+}
+
 @test "the agent's knowledge.stats tool reports the same numbers as the CLI" {
     "$BIN" entity create document title="Bioreactor Notes" content="cleaning steps for the bioreactor procedure"
     search_for_bioreactor

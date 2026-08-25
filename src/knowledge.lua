@@ -905,12 +905,16 @@ function knowledge.spread_activation(db_path, retrieval_id, document_id, base_de
     if #neighbors == 0 then
         return
     end
-    delta = document.spreading_delta(base_delta, #neighbors)
+    total_strength = 0
+    for _, neighbor in ipairs(neighbors) do
+        total_strength = total_strength + tonumber(neighbor.raw_strength)
+    end
     for _, neighbor in ipairs(neighbors) do
         neighbor_id = tonumber(neighbor.id)
         if neighbor_id != nil and hit_ids[neighbor_id] == nil then
             neighbor_doc = knowledge.get_document(db_path, neighbor_id)
             if neighbor_doc != nil then
+                delta = document.weighted_spreading_delta(base_delta, neighbor.raw_strength, total_strength)
                 tier_weight = document.tier_weight(neighbor_doc.tier)
                 db.exec(db_path, string.format(
                     "UPDATE document SET updated_at = %s WHERE id = %d;",

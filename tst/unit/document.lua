@@ -169,6 +169,44 @@ function test_tier_weight_known_and_unknown_tiers()
     check(document.tier_weight(99) == 0.0, "unknown tier should default to 0.0")
 end
 
+function test_weighted_spreading_delta_degenerate_case_matches_old_flat_split()
+    print("Testing weighted_spreading_delta reduces to the old flat 1/fan_count split when every edge is unreinforced")
+    -- 4 neighbors, every edge still at BASE_LINK_STRENGTH (1.0) --
+    -- total_strength = 4.0, each neighbor's share = 1/4, matching the
+    -- old document.spreading_delta(base_delta, 4) this replaces.
+    base_delta = 0.5
+    total_strength = 4.0
+    delta = document.weighted_spreading_delta(base_delta, 1.0, total_strength)
+    expected = (base_delta * 0.35) / 4
+    check(math.abs(delta - expected) < 0.0000001, "expected " .. tostring(expected) .. ", got " .. tostring(delta))
+end
+
+function test_weighted_spreading_delta_gives_a_reinforced_edge_a_bigger_share()
+    print("Testing a reinforced edge captures a bigger share of the spread than an unreinforced sibling")
+    base_delta = 0.5
+    -- Same document, two neighbors: one still at BASE_LINK_STRENGTH,
+    -- one reinforced twice (1.0 + 2*0.15 = 1.3). total_strength sums both.
+    total_strength = 1.0 + 1.3
+    delta_unreinforced = document.weighted_spreading_delta(base_delta, 1.0, total_strength)
+    delta_reinforced = document.weighted_spreading_delta(base_delta, 1.3, total_strength)
+    check(delta_reinforced > delta_unreinforced,
+        "reinforced neighbor's share (" .. tostring(delta_reinforced) .. ") should exceed the unreinforced sibling's (" .. tostring(delta_unreinforced) .. ")")
+end
+
+function test_weighted_spreading_delta_never_exceeds_the_direct_hit_factor()
+    print("Testing a single neighbor holding the entire total still can't exceed SPREADING_ACTIVATION_FACTOR's own share")
+    base_delta = 0.5
+    delta = document.weighted_spreading_delta(base_delta, 2.0, 2.0) -- sole neighbor, share = 1.0
+    expected = base_delta * 0.35
+    check(math.abs(delta - expected) < 0.0000001, "a single neighbor's share should cap at base_delta * SPREADING_ACTIVATION_FACTOR, got " .. tostring(delta))
+end
+
+function test_weighted_spreading_delta_zero_total_strength_is_a_safe_no_op()
+    print("Testing weighted_spreading_delta doesn't error on a zero/nil total_strength")
+    check(document.weighted_spreading_delta(0.5, 1.0, 0) == 0, "zero total_strength should return 0, not error")
+    check(document.weighted_spreading_delta(0.5, 1.0, nil) == 0, "nil total_strength should return 0, not error")
+end
+
 -- Run them
 test_reinforcement_delta_matches_tier_weights()
 test_promotion_requires_revised_regardless_of_content_shape()
@@ -193,6 +231,10 @@ test_pool_effective_heat_reads_raw_heat_unchanged_when_pool_scale_matches()
 test_pool_effective_heat_applies_accumulated_shrink()
 test_pool_effective_heat_falls_back_to_base_heat_on_missing_data()
 test_tier_weight_known_and_unknown_tiers()
+test_weighted_spreading_delta_degenerate_case_matches_old_flat_split()
+test_weighted_spreading_delta_gives_a_reinforced_edge_a_bigger_share()
+test_weighted_spreading_delta_never_exceeds_the_direct_hit_factor()
+test_weighted_spreading_delta_zero_total_strength_is_a_safe_no_op()
 
 if FAILURES > 0 then
     print(FAILURES .. " test(s) failed")

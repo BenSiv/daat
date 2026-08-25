@@ -444,17 +444,31 @@ function document.sync_links(db_path, document_id, content)
     end
 end
 
--- Documents linked to/from `document_id` (both directions, deduped via
--- UNION, self never included since document_link never stores a
--- self-loop) -- the graph knowledge.lua's spreading-activation pass
--- reinforces when a document is actually retrieved, on top of the
--- retrieved document's own heat bump (see doc/architecture.md's
--- "Knowledge pool" section, "Spreading activation").
+-- Documents linked to/from `document_id` (both directions, self never
+-- included since document_link never stores a self-loop) -- the graph
+-- knowledge.lua's spreading-activation pass reinforces when a document
+-- is actually retrieved, on top of the retrieved document's own heat
+-- bump (see doc/architecture.md's "Knowledge pool" section, "Spreading
+-- activation", and doc/link-strength-redesign.md for raw_strength).
+--
+-- GROUP BY id, SUM(raw_strength) rather than a bare UNION (dedup on
+-- the whole row) -- with only an id column, UNION's row-level dedup
+-- already collapsed a neighbor connected by two distinct document_link
+-- rows (e.g. one authored, one co-retrieval) down to one; adding
+-- raw_strength as a second column would silently break that once two
+-- such rows carry different strengths, since UNION would then see them
+-- as two different rows instead of duplicates. Aggregating explicitly
+-- keeps one row per neighbor id either way, with the rare double-link
+-- case's strengths summed into one total instead of ambiguously
+-- picking one.
 function document.linked_neighbors(db_path, document_id)
     rows = db.query(db_path, string.format("""
-        SELECT to_document_id AS id FROM document_link WHERE from_document_id = %d AND to_document_id IS NOT NULL
-        UNION
-        SELECT from_document_id AS id FROM document_link WHERE to_document_id = %d;
+        SELECT id, SUM(raw_strength) AS raw_strength FROM (
+            SELECT to_document_id AS id, raw_strength FROM document_link WHERE from_document_id = %d AND to_document_id IS NOT NULL
+            UNION ALL
+            SELECT from_document_id AS id, raw_strength FROM document_link WHERE to_document_id = %d
+        ) AS neighbor_links
+        GROUP BY id;
     """, tonumber(document_id), tonumber(document_id)))
     if rows == nil then
         return {}
@@ -466,21 +480,31 @@ end
 -- own heat directly (document.reinforcement_delta), but relevance
 -- doesn't stop at the exact document that matched a query -- its
 -- linked neighbors (document.linked_neighbors) get a smaller
--- reinforcement too. Diluted by fan_count (the "fan effect" -- a
--- concept spreads its activation across every connection it has, so a
--- heavily-linked hub document gives each neighbor a proportionally
--- smaller nudge, never the full amount every time). Never exceeds the
--- direct hit's own delta even for a single neighbor (fan_count floors
--- at 1, and SPREADING_ACTIVATION_FACTOR is itself < 1) -- a linked
--- neighbor's relevance is always a weaker signal than actually being
--- retrieved.
+-- reinforcement too. Diluted by each neighbor's own share of this
+-- document's total outgoing link strength (see doc/link-strength-
+-- redesign.md) -- the "fan effect": a heavily-linked hub document
+-- spreads its activation across every connection it has, so a neighbor
+-- reached through a strong, frequently-co-retrieved edge gets a bigger
+-- share than one reached through a rarely-reinforced edge, rather than
+-- every neighbor getting an identical flat cut. Never exceeds the
+-- direct hit's own delta even for a single neighbor (a single edge's
+-- share of the total is at most 1, and SPREADING_ACTIVATION_FACTOR is
+-- itself < 1) -- a linked neighbor's relevance is always a weaker
+-- signal than actually being retrieved.
+--
+-- Backward-compatible degenerate case: with every edge still at
+-- BASE_LINK_STRENGTH (1.0, unreinforced), total_strength = fan_count *
+-- 1.0, so edge_strength / total_strength = 1 / fan_count -- identical
+-- to the flat per-neighbor split this replaces. Behavior only diverges
+-- once real, repeated co-retrieval differentiates one edge's strength
+-- from its siblings'.
 SPREADING_ACTIVATION_FACTOR = 0.35
 
-function document.spreading_delta(base_delta, fan_count)
-    if fan_count == nil or fan_count < 1 then
-        fan_count = 1
+function document.weighted_spreading_delta(base_delta, edge_strength, total_strength)
+    if total_strength == nil or total_strength <= 0 then
+        return 0
     end
-    return (base_delta * SPREADING_ACTIVATION_FACTOR) / fan_count
+    return (base_delta * SPREADING_ACTIVATION_FACTOR) * (tonumber(edge_strength) / total_strength)
 end
 
 -- entity.create/update + document.sync_links together -- the full
