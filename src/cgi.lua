@@ -852,6 +852,31 @@ function cgi.handle_request()
             html.page_shell("Knowledge Pool", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
     end
 
+    -- Obsidian-style graph view of the document_link graph (doc/
+    -- knowledge-graph-explorer.md, Phase 2) -- same gate as every other
+    -- /knowledge* route; the page shell here just carries the canvas +
+    -- rendering script, real data comes from /knowledge-graph-data.
+    if path_info == "/knowledge-graph" then
+        if show_sql_nav == false and show_admin_nav == false then
+            return print_response("403 Forbidden", "text/html", "<h3>Forbidden: requires Setup or Admin capability</h3>")
+        end
+        body = html.render_knowledge_graph(nonce)
+        return print_response("200 OK", "text/html",
+            html.page_shell("Knowledge Pool", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
+    end
+
+    -- JSON data for /knowledge-graph's own client-side render -- nodes
+    -- (id/title/tier/heat) and edges (from/to/strength), the exact
+    -- shape doc/knowledge-graph-explorer.md specs.
+    if path_info == "/knowledge-graph-data" then
+        if show_sql_nav == false and show_admin_nav == false then
+            return print_response("403 Forbidden", "application/json", json.encode({error = "Forbidden: requires Setup or Admin capability"}))
+        end
+        nodes = knowledge.graph_nodes(db_path)
+        edges = document.graph_edges(db_path)
+        return print_response("200 OK", "application/json", json.encode({nodes = nodes, edges = edges}))
+    end
+
     -- Backing view for /knowledge's "N retrieval runs" stat -- replaces
     -- the old inline "Recent Retrievals" preview panel (capped at 10)
     -- with a real full listing, same reasoning as /knowledge-documents:

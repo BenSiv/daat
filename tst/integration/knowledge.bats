@@ -311,6 +311,52 @@ search_for_bioreactor_extra() {
     [[ "$output" =~ "403 Forbidden" ]]
 }
 
+@test "/knowledge-graph renders for a Setup/Admin user (doc/knowledge-graph-explorer.md, Phase 2)" {
+    "$BIN" user add dave davepass123 isa
+    raw_dave=$(printf 'login=dave&password=davepass123' | \
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/login" QUERY_STRING="" "$BIN")
+    dave_session=$(printf '%s' "$raw_dave" | grep -o 'Set-Cookie: session=[^;]*' | sed 's/Set-Cookie: session=//')
+
+    run bash -c "GATEWAY_INTERFACE=CGI/1.1 REQUEST_METHOD=GET PATH_INFO=/knowledge-graph QUERY_STRING= HTTP_COOKIE='session=${dave_session}' '$BIN'"
+    [[ "$output" =~ "200 OK" ]]
+    [[ "$output" =~ "Knowledge Graph" ]]
+    [[ "$output" =~ "knowledge-graph-data" ]]
+}
+
+@test "/knowledge-graph is forbidden for a plain (non Setup/Admin) user" {
+    run raw_get "/knowledge-graph" "" "$COOKIE"
+    [[ "$output" =~ "403 Forbidden" ]]
+}
+
+@test "/knowledge-graph-data returns real nodes and edges as JSON" {
+    "$BIN" user add erin erinpass123 isa
+    raw_erin=$(printf 'login=erin&password=erinpass123' | \
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/login" QUERY_STRING="" "$BIN")
+    erin_session=$(printf '%s' "$raw_erin" | grep -o 'Set-Cookie: session=[^;]*' | sed 's/Set-Cookie: session=//')
+    erin_csrf=$(printf '%s' "$raw_erin" | grep -o 'Set-Cookie: csrf=[^;]*' | sed 's/Set-Cookie: csrf=//')
+
+    raw_post "/document-save" "csrf_token=${erin_csrf}&title=Graph+Node+A&parent_id=&content=First+node." "session=${erin_session}; csrf=${erin_csrf}" "" >/dev/null
+    raw_post "/document-save" "csrf_token=${erin_csrf}&title=Graph+Node+B&parent_id=&content=Links+to+%5B%5BGraph+Node+A%5D%5D." "session=${erin_session}; csrf=${erin_csrf}" "" >/dev/null
+
+    resp=$(GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/knowledge-graph-data" QUERY_STRING="" HTTP_COOKIE="session=${erin_session}" "$BIN")
+    body=$(json_body "$resp")
+
+    node_titles=$(echo "$body" | jq -r '.nodes[].title')
+    [[ "$node_titles" =~ "Graph Node A" ]]
+    [[ "$node_titles" =~ "Graph Node B" ]]
+
+    edge_count=$(echo "$body" | jq '.edges | length')
+    [ "$edge_count" -ge 1 ]
+
+    strength=$(echo "$body" | jq '.edges[0].strength')
+    [[ "$strength" != "null" ]]
+}
+
+@test "/knowledge-graph-data is forbidden for a plain (non Setup/Admin) user" {
+    run raw_get "/knowledge-graph-data" "" "$COOKIE"
+    [[ "$output" =~ "403 Forbidden" ]]
+}
+
 @test "the icon rail no longer has a dedicated Chats entry; System links to Knowledge Pool instead" {
     "$BIN" user add carol carolpass123 isa
     raw_carol=$(printf 'login=carol&password=carolpass123' | \

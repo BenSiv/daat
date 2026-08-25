@@ -1082,6 +1082,30 @@ function knowledge.reviewed_documents(db_path)
     return rows
 end
 
+-- Backs /knowledge-graph-data (doc/knowledge-graph-explorer.md, Phase
+-- 2): every active document, not just knowledge.list_documents' own
+-- narrower "pool member" set (KNOWLEDGE_MEMBER_WHERE -- retrieved at
+-- least once, or system/agent-derived). A document can carry real
+-- document_link edges (an authored [[title]] reference) without ever
+-- having been searched -- the graph explorer's job is to show link
+-- structure, the same way Obsidian's own graph view includes every
+-- note, not just ones some usage threshold happens to select.
+function knowledge.graph_nodes(db_path)
+    rows = db.query(db_path, """
+        SELECT id, title, tier, raw_heat, scale_at_write FROM document
+        WHERE (archived_at IS NULL OR archived_at = '') AND merged_into IS NULL;
+    """)
+    if rows == nil then
+        return {}
+    end
+    rows = attach_and_sort_by_pool_heat(db_path, rows)
+    nodes = {}
+    for _, row in ipairs(rows) do
+        table.insert(nodes, {id = tonumber(row.id), title = row.title, tier = tonumber(row.tier), heat = row.effective_heat})
+    end
+    return nodes
+end
+
 function knowledge.set_tier(db_path, document_id, tier)
     db.exec(db_path, string.format(
         "UPDATE document SET tier = %d, updated_at = %s WHERE id = %d;",

@@ -40,8 +40,10 @@ Consistent with `doc/why-luam.md`'s "Minimal dependencies" section (`lib/`, vend
 ### Phase 1 -- design (this document)
 Resolved: route/gating follows `/knowledge`'s own precedent, data via a new JSON endpoint (not server-rendered), vanilla-JS force layout on canvas (no new dependency), node size = heat / edge weight = strength / node color = tier. Open: whether the Setup/Admin gate is actually right for an explorer rather than an analytics page (see above). Pending review before Phase 2 starts.
 
-### Phase 2 -- data endpoint + static (non-interactive) render
-`GET /knowledge-graph-data`, and a first render that lays out and draws the graph but doesn't yet support drag/pan/zoom -- gets the data plumbing and the visual mapping (size/width/opacity/color) right and checkable against real data before adding interaction on top.
+### Phase 2 -- data endpoint + static (non-interactive) render (DONE)
+`GET /knowledge-graph-data` (`knowledge.graph_nodes`/`document.graph_edges`) returns every active document (not `list_documents`' narrower "pool member" set -- a document can carry a real `[[title]]` edge without ever having been searched) and every `document_link` edge whose two endpoints are both active, as flat JSON. `/knowledge-graph` renders a canvas page that fetches this client-side, lays it out with a small hand-rolled force simulation (repulsion + spring attraction + center pull, ~250 iterations, settles once on load), and draws it -- no drag/pan/zoom/click-to-navigate yet, exactly this phase's scope. Node radius scales with heat, edge width/opacity with strength, node color reuses `KNOWLEDGE_TIER_COLORS` (the same ramp `/knowledge`'s own tier tiles use) via the shared `--platform-tier-N` custom properties -- no second palette. Linked from `/knowledge`'s own landing page, gated identically to every other `/knowledge*` route.
+
+**Verified:** 4 new integration tests (`tst/integration/knowledge.bats`) -- the page renders for a Setup/Admin user and is forbidden for a plain one (mirrors `/knowledge`'s own two tests exactly), and the data endpoint returns real node titles and a real edge with a numeric `strength` for two documents connected by an actual `[[title]]` link, not just a shape check against empty data. All 11 unit test files and 21/22 integration tests pass (1 pre-existing, unrelated failure, unchanged).
 
 ### Phase 3 -- interaction
 Pan, zoom, drag-to-reposition, click-to-navigate. Click behavior is simple (a real link, no JS routing framework); pan/zoom is the part actually worth prototyping against a real, sizable document pool before considering it done, since layout quality at real scale is the part a hand-rolled force simulation is most likely to need tuning on.
@@ -51,10 +53,16 @@ Pan, zoom, drag-to-reposition, click-to-navigate. Click behavior is simple (a re
 - Whether/how to represent `source` (`authored` vs `co-retrieval`) visually -- distinct from strength, but potentially useful context (e.g. dashed vs solid).
 - Performance ceiling: at what node/edge count does a hand-rolled canvas force simulation stop being smooth, and is that ceiling ever actually reached by a real deployment's pool size.
 
-## Critical files (once implementation starts)
-- `src/cgi.lua` -- new `/knowledge-graph` and `/knowledge-graph-data` routes, mirroring `/knowledge`/`/knowledge-documents`'s existing gating (`816-853`)
-- `src/document.lua` -- `pool_effective_heat` (node heat), `document_link`/`raw_strength` (edges, no new query logic beyond a plain `SELECT`)
-- `src/html.lua` -- a new `render_knowledge_graph` page shell (the canvas + script tag), following `render_knowledge_pool`'s own pattern
-- `vnd/` -- if the force-simulation JS grows large enough to want its own file rather than living inline, follows the existing vendored-asset convention (though this would be first-party JS, not a third-party bundle, so may not belong there specifically -- worth deciding at implementation time, not guessed here)
+## Critical files
+- `src/cgi.lua` -- `/knowledge-graph` and `/knowledge-graph-data` routes, mirroring `/knowledge`/`/knowledge-documents`'s existing gating
+- `src/knowledge.lua` -- `graph_nodes` (every active document + effective heat, not the narrower `list_documents`/`KNOWLEDGE_MEMBER_WHERE` set)
+- `src/document.lua` -- `graph_edges` (every `document_link` row between two active documents, flat, no per-neighbor aggregation the way `linked_neighbors` needs)
+- `src/html.lua` -- `render_knowledge_graph` (canvas + inline force-layout script), `KNOWLEDGE_TIER_COLORS` (reused for node color)
+- `tst/integration/knowledge.bats` -- the 4 Phase 2 tests (render/gate for `/knowledge-graph`, render/gate for `/knowledge-graph-data`)
 - `doc/link-strength-redesign.md` -- the mechanism this visualizes; its own "Worked example" section's diagram uses the identical visual grammar (line weight = strength) this explorer renders for real
 - `doc/architecture.md` -- `/knowledge`'s existing routes and gating, the pattern this follows
+
+## Still open (Phase 3+)
+- Pan, zoom, drag-to-reposition, click-to-navigate -- none implemented yet.
+- Filtering, `source` (`authored` vs `co-retrieval`) visual distinction, performance at real scale -- Phase 4, unscoped.
+- Whether the Setup/Admin gate is actually right for an explorer vs. an analytics page -- still an open product decision, not resolved by shipping Phase 2 with the conservative default.

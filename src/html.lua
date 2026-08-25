@@ -3159,12 +3159,179 @@ function html.render_knowledge_pool(stats)
 %s
             </div>
         </div>
+        <p style="margin-top: 14px;"><a class="btn btn-secondary" href="knowledge-graph">Explore the knowledge graph &rarr;</a></p>
     </div>
 </div>
 """, platform_container_css(1200), platform_button_css(), platform_page_header_css(),
      render_page_header("Knowledge Pool", "<p>Notes promote through processing tiers as they're retrieved and reinforced; every retrieval is logged.</p>", nil),
      stats.note_count, stats.retrieval_count, stats.reviewed_note_count,
      stats.session_count, tier_tiles)
+end
+
+-- Obsidian-style graph view of the document_link graph (doc/knowledge-
+-- graph-explorer.md, Phase 2): fetches /knowledge-graph-data client-
+-- side and lays it out with a small, hand-rolled force simulation --
+-- no charting/graph-layout dependency, consistent with why-luam.md's
+-- "Minimal dependencies" stance and this problem's actual scale (a
+-- single deployment's own document pool, not a general-purpose graph
+-- product). Static for now: the simulation runs once on load and
+-- settles, no drag/pan/zoom/click-to-navigate yet (Phase 3). Node
+-- radius = heat, edge width/opacity = strength, node color = tier via
+-- the same --platform-tier-N custom properties /knowledge's own tier
+-- tiles use (KNOWLEDGE_TIER_COLORS) -- a document's tier reads the
+-- same way on both pages.
+function html.render_knowledge_graph(nonce)
+    legend_items = ""
+    for tier = 0, 3 do
+        legend_items = legend_items .. string.format(
+            '<span class="platform-kg-legend-item"><span class="platform-kg-legend-dot" style="background: var(--platform-tier-%d, %s);"></span>%s</span>',
+            tier, KNOWLEDGE_TIER_COLORS[tier], html.html_escape(KNOWLEDGE_TIER_LABELS[tier])
+        )
+    end
+
+    kg_header = render_page_header("Knowledge Graph",
+        "<p>Documents sized by heat, connections weighted by link strength -- see <a href=\"knowledge\">Knowledge Pool</a> for the tier/heat breakdown this visualizes.</p>",
+        "<a class=\"btn btn-secondary\" href=\"knowledge\">&larr; Back to Knowledge Pool</a>")
+
+    return string.format("""
+<div class="fossil-doc" data-title="Knowledge Graph">
+    <style>
+%s
+%s
+%s
+        .platform-kg-canvas-wrap { border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); background: var(--platform-bg, #f8fafc); padding: 8px; }
+        #platform-kg-canvas { width: 100%%; display: block; border-radius: var(--platform-radius-item, 10px); background: #ffffff; }
+        .platform-kg-legend { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 12px; font-size: 0.85rem; color: var(--platform-muted, #64748b); }
+        .platform-kg-legend-item { display: inline-flex; align-items: center; gap: 6px; }
+        .platform-kg-legend-dot { width: 10px; height: 10px; border-radius: 50%%; display: inline-block; }
+        .platform-kg-status { padding: 32px; text-align: center; color: var(--platform-muted, #64748b); }
+    </style>
+    <div class="platform-container">
+        %s
+        <div class="platform-kg-canvas-wrap">
+            <canvas id="platform-kg-canvas" height="600"></canvas>
+            <p id="platform-kg-status" class="platform-kg-status">Loading graph...</p>
+        </div>
+        <div class="platform-kg-legend">%s</div>
+    </div>
+    <script nonce="%s">
+    (function() {
+        var canvas = document.getElementById('platform-kg-canvas');
+        var ctx = canvas.getContext('2d');
+        var status = document.getElementById('platform-kg-status');
+        var nodes = [], links = [], byId = {};
+
+        function resize() {
+            canvas.width = canvas.parentElement.clientWidth - 16;
+        }
+        resize();
+        window.addEventListener('resize', function() { resize(); draw(); });
+
+        function tierColor(tier) {
+            var style = getComputedStyle(document.documentElement);
+            var v = style.getPropertyValue('--platform-tier-' + tier);
+            return v ? v.trim() : '#8880ec';
+        }
+
+        function nodeRadius(heat) {
+            var h = (typeof heat === 'number') ? heat : 1.0;
+            return Math.max(4, Math.min(22, 4 + h * 6));
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            links.forEach(function(e) {
+                var a = byId[e.from], b = byId[e.to];
+                if (!a || !b) { return; }
+                var strength = (typeof e.strength === 'number') ? e.strength : 1.0;
+                ctx.beginPath();
+                ctx.moveTo(a.x, a.y);
+                ctx.lineTo(b.x, b.y);
+                ctx.lineWidth = Math.max(0.5, Math.min(6, strength));
+                ctx.strokeStyle = 'rgba(92, 82, 224, ' + Math.max(0.15, Math.min(0.85, strength / 3)) + ')';
+                ctx.stroke();
+            });
+            nodes.forEach(function(n) {
+                ctx.beginPath();
+                ctx.arc(n.x, n.y, nodeRadius(n.heat), 0, Math.PI * 2);
+                ctx.fillStyle = tierColor(n.tier);
+                ctx.fill();
+            });
+        }
+
+        function layout() {
+            var w = canvas.width, h = canvas.height;
+            nodes.forEach(function(n) {
+                n.x = Math.random() * w;
+                n.y = Math.random() * h;
+                n.vx = 0;
+                n.vy = 0;
+            });
+            var REPULSION = 6000;
+            var SPRING = 0.02;
+            var SPRING_LENGTH = 70;
+            var DAMPING = 0.85;
+            var ITERATIONS = 250;
+            for (var iter = 0; iter < ITERATIONS; iter++) {
+                for (var i = 0; i < nodes.length; i++) {
+                    for (var j = i + 1; j < nodes.length; j++) {
+                        var a = nodes[i], b = nodes[j];
+                        var dx = a.x - b.x, dy = a.y - b.y;
+                        var distSq = (dx * dx + dy * dy) || 0.01;
+                        var dist = Math.sqrt(distSq);
+                        var force = REPULSION / distSq;
+                        var fx = (dx / dist) * force, fy = (dy / dist) * force;
+                        a.vx += fx; a.vy += fy;
+                        b.vx -= fx; b.vy -= fy;
+                    }
+                }
+                links.forEach(function(e) {
+                    var a = byId[e.from], b = byId[e.to];
+                    if (!a || !b) { return; }
+                    var dx = b.x - a.x, dy = b.y - a.y;
+                    var dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+                    var force = (dist - SPRING_LENGTH) * SPRING;
+                    var fx = (dx / dist) * force, fy = (dy / dist) * force;
+                    a.vx += fx; a.vy += fy;
+                    b.vx -= fx; b.vy -= fy;
+                });
+                nodes.forEach(function(n) {
+                    n.vx += (w / 2 - n.x) * 0.001;
+                    n.vy += (h / 2 - n.y) * 0.001;
+                    n.vx *= DAMPING;
+                    n.vy *= DAMPING;
+                    n.x += n.vx;
+                    n.y += n.vy;
+                    var r = nodeRadius(n.heat);
+                    n.x = Math.max(r, Math.min(w - r, n.x));
+                    n.y = Math.max(r, Math.min(h - r, n.y));
+                });
+            }
+        }
+
+        fetch('knowledge-graph-data').then(function(r) {
+            if (!r.ok) { throw new Error('status ' + r.status); }
+            return r.json();
+        }).then(function(data) {
+            nodes = data.nodes || [];
+            byId = {};
+            nodes.forEach(function(n) { byId[n.id] = n; });
+            links = (data.edges || []).filter(function(e) { return byId[e.from] && byId[e.to]; });
+            if (nodes.length === 0) {
+                status.textContent = 'No documents in the pool yet.';
+                return;
+            }
+            status.style.display = 'none';
+            layout();
+            draw();
+        }).catch(function(err) {
+            status.textContent = 'Failed to load graph data.';
+        });
+    })();
+    </script>
+</div>
+""", platform_container_css(1200), platform_button_css(), platform_page_header_css(),
+     kg_header, legend_items, nonce)
 end
 
 -- Backing table for /knowledge's "N pool records" stat and each tier

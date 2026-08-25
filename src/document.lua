@@ -476,6 +476,36 @@ function document.linked_neighbors(db_path, document_id)
     return rows
 end
 
+-- Backs /knowledge-graph-data (doc/knowledge-graph-explorer.md, Phase
+-- 2): every document_link edge whose two endpoints are both active
+-- documents, as flat (from, to, strength) rows for the graph explorer
+-- to draw directly -- unlike linked_neighbors, this isn't scoped to
+-- one document's own local neighbor set, so there's no SUM-by-id
+-- aggregation here; a pair connected by two distinct document_link
+-- rows (an authored link plus a separately-created co-retrieval link)
+-- comes back as two edges, drawn as two lines, rather than merged into
+-- one -- a Phase 4 open question (doc/knowledge-graph-explorer.md), not
+-- resolved here.
+function document.graph_edges(db_path)
+    rows = db.query(db_path, """
+        SELECT dl.from_document_id AS from_id, dl.to_document_id AS to_id, dl.raw_strength AS strength
+        FROM document_link dl
+        JOIN document d1 ON d1.id = dl.from_document_id
+        JOIN document d2 ON d2.id = dl.to_document_id
+        WHERE dl.to_document_id IS NOT NULL
+          AND (d1.archived_at IS NULL OR d1.archived_at = '') AND d1.merged_into IS NULL
+          AND (d2.archived_at IS NULL OR d2.archived_at = '') AND d2.merged_into IS NULL;
+    """)
+    if rows == nil then
+        return {}
+    end
+    edges = {}
+    for _, row in ipairs(rows) do
+        table.insert(edges, {from = tonumber(row.from_id), to = tonumber(row.to_id), strength = tonumber(row.strength)})
+    end
+    return edges
+end
+
 -- ACT-R's "spreading activation": a retrieved document reinforces its
 -- own heat directly (document.reinforcement_delta), but relevance
 -- doesn't stop at the exact document that matched a query -- its
