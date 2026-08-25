@@ -82,6 +82,26 @@ function ensure_document_link_source_column(db_path)
     end
 end
 
+-- Usage-driven edge strength (see doc/link-strength-redesign.md) --
+-- reinforced on repeated co-retrieval of an already-linked pair
+-- (knowledge.maybe_link_co_retrieved), read as a share of a retrieved
+-- document's total outgoing strength by spread_activation once Phase 3
+-- of that doc lands. DEFAULT 1.0 (BASE_LINK_STRENGTH) backfills every
+-- existing row to parity, reproducing today's flat per-neighbor split
+-- exactly until real usage differentiates one edge from its siblings.
+BASE_LINK_STRENGTH = 1.0
+
+function ensure_document_link_strength_column(db_path)
+    existing = db.get_columns(db_path, "document_link")
+    have = {}
+    for _, name in ipairs(existing) do
+        have[name] = true
+    end
+    if have["raw_strength"] == nil then
+        db.exec(db_path, "ALTER TABLE document_link ADD COLUMN raw_strength REAL NOT NULL DEFAULT 1.0;")
+    end
+end
+
 -- A document's cached semantic-search embedding. Recomputed on every
 -- create_page/update_page -- one embedding API call per save, not a
 -- corpus reindex. Best-effort: document.reindex_embedding returns
@@ -250,6 +270,7 @@ function document.init_schema(db_path)
     ensure_document_knowledge_columns(db_path)
     ensure_document_knowledge_indexes(db_path)
     ensure_document_link_source_column(db_path)
+    ensure_document_link_strength_column(db_path)
     document.ensure_pool_state(db_path)
 end
 

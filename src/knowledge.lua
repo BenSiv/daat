@@ -678,6 +678,15 @@ CO_RETRIEVAL_HUB_RATIO = 0.25
 -- retrieval forever.
 CO_RETRIEVAL_REEVALUATION_STEP = 3
 
+-- Usage-driven edge strength (doc/link-strength-redesign.md): an
+-- already-linked pair that keeps being co-retrieved has its edge's
+-- raw_strength reinforced by this flat amount, same trigger as link
+-- creation just for the already-linked case. No tier concept for an
+-- edge, so this is a flat constant rather than a reinforcement_delta(tier)
+-- table -- matches document.reinforcement_delta's own tier-0 floor,
+-- which is otherwise unrelated to this value.
+LINK_REINFORCEMENT_DELTA = 0.15
+
 LINK_EVALUATION_MODEL = DISTILL_MODEL
 
 LINK_EVALUATION_SYSTEM_PROMPT = """
@@ -762,6 +771,25 @@ function knowledge.document_link_exists(db_path, document_a_id, document_b_id)
     return rows != nil and rows[1] != nil
 end
 
+-- Reinforces an already-linked pair's edge on repeated co-retrieval
+-- (doc/link-strength-redesign.md). Matches both directions, same as
+-- document_link_exists above -- an authored `[[title]]` link's
+-- from/to reflects who wrote it, not co_retrieval_pairs' doc_a < doc_b
+-- ordering, so only one direction would ever match otherwise and a
+-- real, already-linked pair would silently never get reinforced. A
+-- single atomic in-place UPDATE (raw_strength = raw_strength + ?), the
+-- same shape record_retrieval_hit already uses for heat -- safe under
+-- concurrent reinforcement with no read-modify-write race, since
+-- spread_activation only ever reads raw_strength, never writes it, so
+-- there's no shared multiplicative factor here for two writers to
+-- race over the way heat's pool_scale needed extra care for.
+function knowledge.reinforce_link_strength(db_path, document_a_id, document_b_id)
+    db.exec(db_path, string.format("""
+        UPDATE document_link SET raw_strength = raw_strength + %.17g
+        WHERE (from_document_id = %d AND to_document_id = %d) OR (from_document_id = %d AND to_document_id = %d);
+    """, LINK_REINFORCEMENT_DELTA, tonumber(document_a_id), tonumber(document_b_id), tonumber(document_b_id), tonumber(document_a_id)))
+end
+
 -- Whether a document has been retrieved/reinforced enough to be worth
 -- spending a ledger round-trip (document.was_revised) rechecking its
 -- processing maturity -- retrieval_count/effective_heat no longer
@@ -814,6 +842,8 @@ function knowledge.maybe_link_co_retrieved(db_path, author, document_ids)
                     end
                 end
             end
+        else
+            knowledge.reinforce_link_strength(db_path, doc_a_id, doc_b_id)
         end
     end
 end
