@@ -102,6 +102,23 @@ function ensure_document_link_strength_column(db_path)
     end
 end
 
+-- Archived, not deleted, the same convention `document.archived_at`
+-- already follows (see doc/document-link-flow.md's "Archiving and
+-- reintroduction" section) -- a link that loses its last source tag
+-- (document.upsert_link/sync_links) is archived here rather than
+-- dropped, so its raw_strength survives a later reintroduction instead
+-- of resetting to BASE_LINK_STRENGTH.
+function ensure_document_link_archived_at_column(db_path)
+    existing = db.get_columns(db_path, "document_link")
+    have = {}
+    for _, name in ipairs(existing) do
+        have[name] = true
+    end
+    if have["archived_at"] == nil then
+        db.exec(db_path, "ALTER TABLE document_link ADD COLUMN archived_at TEXT DEFAULT NULL;")
+    end
+end
+
 -- A document's cached semantic-search embedding. Recomputed on every
 -- create_page/update_page -- one embedding API call per save, not a
 -- corpus reindex. Best-effort: document.reindex_embedding returns
@@ -271,6 +288,7 @@ function document.init_schema(db_path)
     ensure_document_knowledge_indexes(db_path)
     ensure_document_link_source_column(db_path)
     ensure_document_link_strength_column(db_path)
+    ensure_document_link_archived_at_column(db_path)
     document.ensure_pool_state(db_path)
 end
 
@@ -415,31 +433,137 @@ function document.resolve_link(db_path, subject, title)
     return nil
 end
 
--- Recomputes every outgoing link for `document_id` from `content`:
--- delete the old set, re-parse, re-resolve, reinsert. Idempotent, safe
--- to call on every save regardless of whether content actually changed.
--- Only wipes/resyncs *authored* links (parsed fresh from this save's
--- own [[...]] markup below) -- an auto-created co-retrieval link
--- (source='co-retrieval') isn't derived from this document's content
--- at all, so it would otherwise get deleted the next time either
--- document's content changes.
-function document.sync_links(db_path, document_id, content)
-    db.exec(db_path, string.format(
-        "DELETE FROM document_link WHERE from_document_id = %d AND source = 'authored';", tonumber(document_id)
+-- `source` on a document_link row is a small sorted, comma-joined set
+-- of every way this link has ever been (re)introduced -- "authored",
+-- "co-retrieval", or both -- not a single mutable enum recording
+-- whichever wrote it last (doc/document-link-flow.md's "Archiving and
+-- reintroduction"). Sorted so the stored string is deterministic.
+-- Adding an already-present tag is a no-op.
+function document.source_set_add(existing, tag)
+    members = {}
+    have = {}
+    if existing != nil and existing != "" then
+        for part in string.gmatch(existing, "[^,]+") do
+            if have[part] == nil then
+                have[part] = true
+                table.insert(members, part)
+            end
+        end
+    end
+    if have[tag] == nil then
+        table.insert(members, tag)
+    end
+    table.sort(members)
+    return table.concat(members, ",")
+end
+
+-- Removes one tag from the set (document.source_set_add); may return
+-- "" if that was the only tag left -- callers treat an empty set as
+-- "no provenance left, archive this row" rather than deleting it.
+function document.source_set_remove(existing, tag)
+    members = {}
+    if existing != nil and existing != "" then
+        for part in string.gmatch(existing, "[^,]+") do
+            if part != tag then
+                table.insert(members, part)
+            end
+        end
+    end
+    table.sort(members)
+    return table.concat(members, ",")
+end
+
+-- The one place a link's introduction -- first or repeat -- gets
+-- written, whether authored (document.sync_links, below) or
+-- behavioral (knowledge.evaluate_co_retrieval_pair). A fresh pair
+-- inserts; an existing pair (active or archived) gets `tag` folded
+-- into its source set, is unarchived, and has its to_document_id
+-- healed if it was previously dangling (NULL) and this call resolved
+-- to a real target. Reintroduction always heals -- it never resets
+-- raw_strength, which is left untouched either way.
+function document.upsert_link(db_path, from_id, to_id, link_text, tag)
+    rows = db.query(db_path, string.format(
+        "SELECT source, to_document_id FROM document_link WHERE from_document_id = %d AND link_text = %s;",
+        tonumber(from_id), db.quote(link_text)
     ))
+    if rows == nil or #rows == 0 then
+        db.exec(db_path, string.format(
+            "INSERT INTO document_link (from_document_id, to_document_id, link_text, source) VALUES (%d, %s, %s, %s);",
+            tonumber(from_id), db.literal(to_id), db.quote(link_text), db.quote(tag)
+        ))
+        return
+    end
+    row = rows[1]
+    -- db.query renders a SQL NULL as "" here, never Lua nil (same
+    -- reason every SQL read of archived_at elsewhere in this file
+    -- checks "IS NULL OR = ''") -- checking only `== nil` would never
+    -- fire, and a dangling row would never heal.
+    healed_to_id = row.to_document_id
+    if healed_to_id == nil or healed_to_id == "" then
+        healed_to_id = to_id
+    end
+    db.exec(db_path, string.format(
+        "UPDATE document_link SET source = %s, archived_at = NULL, to_document_id = %s WHERE from_document_id = %d AND link_text = %s;",
+        db.quote(document.source_set_add(row.source, tag)), db.literal(healed_to_id), tonumber(from_id), db.quote(link_text)
+    ))
+end
+
+-- Recomputes every outgoing authored link for `document_id` from
+-- `content`, re-parsing and re-resolving on every save regardless of
+-- whether content actually changed (idempotent). Archives rather than
+-- deletes: an authored link whose markup disappeared from this save's
+-- content loses its "authored" source tag (document.source_set_remove)
+-- -- if nothing else backs it (no "co-retrieval" tag remaining), the
+-- row is archived (archived_at set), not dropped, so raw_strength
+-- survives a later reintroduction. A "co-retrieval" tag left standing
+-- keeps the row active on its own. Every link still present in content
+-- goes through document.upsert_link, which unarchives and re-tags
+-- "authored" on a row that already existed (including one archived
+-- last save) -- retyping a deleted [[link]] reintroduces it at its old
+-- strength, not a fresh 1.0.
+function document.sync_links(db_path, document_id, content)
+    existing = db.query(db_path, string.format(
+        "SELECT link_text, source FROM document_link WHERE from_document_id = %d AND source LIKE '%%authored%%';",
+        tonumber(document_id)
+    ))
+    if existing == nil then
+        existing = {}
+    end
+
+    seen = {}
+    if content != nil then
+        for raw_link in string.gmatch(content, "%[%[(.-)%]%]") do
+            seen[raw_link] = true
+        end
+    end
+
+    for _, row in ipairs(existing) do
+        if seen[row.link_text] == nil then
+            reduced = document.source_set_remove(row.source, "authored")
+            if reduced == "" then
+                db.exec(db_path, string.format(
+                    "UPDATE document_link SET source = '', archived_at = %s WHERE from_document_id = %d AND link_text = %s;",
+                    db.now_expr(db_path), tonumber(document_id), db.quote(row.link_text)
+                ))
+            else
+                db.exec(db_path, string.format(
+                    "UPDATE document_link SET source = %s WHERE from_document_id = %d AND link_text = %s;",
+                    db.quote(reduced), tonumber(document_id), db.quote(row.link_text)
+                ))
+            end
+        end
+    end
+
     if content == nil then
         return
     end
-    seen = {}
+    done = {}
     for raw_link in string.gmatch(content, "%[%[(.-)%]%]") do
-        if seen[raw_link] == nil then
-            seen[raw_link] = true
+        if done[raw_link] == nil then
+            done[raw_link] = true
             subject, title = document.parse_link_ref(raw_link)
             to_id = document.resolve_link(db_path, subject, title)
-            db.exec(db_path, string.format(
-                "%s document_link (from_document_id, to_document_id, link_text) VALUES (%d, %s, %s);",
-                db.insert_ignore(db_path), tonumber(document_id), db.literal(to_id), db.quote(raw_link)
-            ))
+            document.upsert_link(db_path, document_id, to_id, raw_link, "authored")
         end
     end
 end
@@ -464,9 +588,9 @@ end
 function document.linked_neighbors(db_path, document_id)
     rows = db.query(db_path, string.format("""
         SELECT id, SUM(raw_strength) AS raw_strength FROM (
-            SELECT to_document_id AS id, raw_strength FROM document_link WHERE from_document_id = %d AND to_document_id IS NOT NULL
+            SELECT to_document_id AS id, raw_strength FROM document_link WHERE from_document_id = %d AND to_document_id IS NOT NULL AND (archived_at IS NULL OR archived_at = '')
             UNION ALL
-            SELECT from_document_id AS id, raw_strength FROM document_link WHERE to_document_id = %d
+            SELECT from_document_id AS id, raw_strength FROM document_link WHERE to_document_id = %d AND (archived_at IS NULL OR archived_at = '')
         ) AS neighbor_links
         GROUP BY id;
     """, tonumber(document_id), tonumber(document_id)))
@@ -493,6 +617,7 @@ function document.graph_edges(db_path)
         JOIN document d1 ON d1.id = dl.from_document_id
         JOIN document d2 ON d2.id = dl.to_document_id
         WHERE dl.to_document_id IS NOT NULL
+          AND (dl.archived_at IS NULL OR dl.archived_at = '')
           AND (d1.archived_at IS NULL OR d1.archived_at = '') AND d1.merged_into IS NULL
           AND (d2.archived_at IS NULL OR d2.archived_at = '') AND d2.merged_into IS NULL;
     """)
@@ -570,7 +695,7 @@ function document.backlinks(db_path, document_id)
         SELECT dl.from_document_id AS id, d.title AS title
         FROM document_link dl
         JOIN document d ON d.id = dl.from_document_id
-        WHERE dl.to_document_id = %d AND (d.archived_at IS NULL OR d.archived_at = '');
+        WHERE dl.to_document_id = %d AND (dl.archived_at IS NULL OR dl.archived_at = '') AND (d.archived_at IS NULL OR d.archived_at = '');
     """, tonumber(document_id)))
     if rows == nil then
         return {}

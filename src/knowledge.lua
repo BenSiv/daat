@@ -762,6 +762,11 @@ function knowledge.record_link_review(db_path, document_a_id, document_b_id, co_
     ))
 end
 
+-- Deliberately unfiltered by archived_at -- an archived row still
+-- counts as "exists" here so maybe_link_co_retrieved below takes the
+-- reinforce branch (which unarchives, see reinforce_link_strength) on
+-- a repeat co-retrieval, instead of re-running the LLM judgment on a
+-- pair it already evaluated once.
 function knowledge.document_link_exists(db_path, document_a_id, document_b_id)
     rows = db.query(db_path, string.format("""
         SELECT 1 FROM document_link
@@ -772,22 +777,37 @@ function knowledge.document_link_exists(db_path, document_a_id, document_b_id)
 end
 
 -- Reinforces an already-linked pair's edge on repeated co-retrieval
--- (doc/link-strength-redesign.md). Matches both directions, same as
+-- (doc/link-strength-redesign.md), and treats that reinforcement as a
+-- reintroduction: retrieval re-establishing a connection unarchives it
+-- and folds "co-retrieval" into its source set
+-- (document.source_set_add), same as an authored re-add going through
+-- document.upsert_link (doc/document-link-flow.md's "Archiving and
+-- reintroduction"). Matches both directions, same as
 -- document_link_exists above -- an authored `[[title]]` link's
 -- from/to reflects who wrote it, not co_retrieval_pairs' doc_a < doc_b
 -- ordering, so only one direction would ever match otherwise and a
--- real, already-linked pair would silently never get reinforced. A
--- single atomic in-place UPDATE (raw_strength = raw_strength + ?), the
--- same shape record_retrieval_hit already uses for heat -- safe under
--- concurrent reinforcement with no read-modify-write race, since
--- spread_activation only ever reads raw_strength, never writes it, so
--- there's no shared multiplicative factor here for two writers to
--- race over the way heat's pool_scale needed extra care for.
+-- real, already-linked pair would silently never get reinforced.
+-- Selects the matching row(s) first (there can be more than one -- the
+-- parallel-edges case, doc/document-link-flow.md) rather than a single
+-- blind UPDATE, since folding a tag into `source` needs each row's own
+-- current value; each row is then updated by its own primary key
+-- (from_document_id, link_text), still one atomic UPDATE per row with
+-- no shared read-modify-write across rows to race over.
 function knowledge.reinforce_link_strength(db_path, document_a_id, document_b_id)
-    db.exec(db_path, string.format("""
-        UPDATE document_link SET raw_strength = raw_strength + %.17g
+    rows = db.query(db_path, string.format("""
+        SELECT from_document_id, link_text, source FROM document_link
         WHERE (from_document_id = %d AND to_document_id = %d) OR (from_document_id = %d AND to_document_id = %d);
-    """, LINK_REINFORCEMENT_DELTA, tonumber(document_a_id), tonumber(document_b_id), tonumber(document_b_id), tonumber(document_a_id)))
+    """, tonumber(document_a_id), tonumber(document_b_id), tonumber(document_b_id), tonumber(document_a_id)))
+    if rows == nil then
+        return
+    end
+    for _, row in ipairs(rows) do
+        db.exec(db_path, string.format(
+            "UPDATE document_link SET raw_strength = raw_strength + %.17g, archived_at = NULL, source = %s WHERE from_document_id = %d AND link_text = %s;",
+            LINK_REINFORCEMENT_DELTA, db.quote(document.source_set_add(row.source, "co-retrieval")),
+            tonumber(row.from_document_id), db.quote(row.link_text)
+        ))
+    end
 end
 
 -- Whether a document has been retrieved/reinforced enough to be worth
@@ -869,10 +889,7 @@ function knowledge.evaluate_co_retrieval_pair(db_path, doc_a, doc_b, co_count)
     answer = string.upper(string.gsub(answer, "^%s*(.-)%s*$", "%1"))
 
     if answer == "YES" then
-        db.exec(db_path, string.format(
-            "%s document_link (from_document_id, to_document_id, link_text, source) VALUES (%d, %d, %s, 'co-retrieval');",
-            db.insert_ignore(db_path), doc_a.id, doc_b.id, db.quote(doc_b.title)
-        ))
+        document.upsert_link(db_path, doc_a.id, doc_b.id, doc_b.title, "co-retrieval")
         knowledge.record_link_review(db_path, doc_a.id, doc_b.id, co_count, "linked")
     else
         knowledge.record_link_review(db_path, doc_a.id, doc_b.id, co_count, "declined")
