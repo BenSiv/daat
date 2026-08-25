@@ -3202,11 +3202,13 @@ function html.render_knowledge_graph(nonce)
 %s
 %s
         .platform-kg-canvas-wrap { border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); background: var(--platform-bg, #f8fafc); padding: 8px; }
-        #platform-kg-canvas { width: 100%%; display: block; border-radius: var(--platform-radius-item, 10px); background: #ffffff; }
-        .platform-kg-legend { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 12px; font-size: 0.85rem; color: var(--platform-muted, #64748b); }
+        #platform-kg-canvas { width: 100%%; display: block; border-radius: var(--platform-radius-item, 10px); background: #ffffff; cursor: grab; touch-action: none; }
+        .platform-kg-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin-top: 12px; font-size: 0.85rem; color: var(--platform-muted, #64748b); }
         .platform-kg-legend-item { display: inline-flex; align-items: center; gap: 6px; }
         .platform-kg-legend-dot { width: 10px; height: 10px; border-radius: 50%%; display: inline-block; }
+        .platform-kg-legend-reset { margin-left: auto; background: none; border: none; padding: 0; color: var(--platform-accent, #4f46e5); font-size: 0.85rem; cursor: pointer; text-decoration: underline; }
         .platform-kg-status { padding: 32px; text-align: center; color: var(--platform-muted, #64748b); }
+        .platform-kg-tooltip { position: fixed; display: none; z-index: 1000; pointer-events: none; background: #1f2937; color: #f8fafc; font-size: 0.8rem; line-height: 1.4; padding: 6px 10px; border-radius: 6px; white-space: pre-line; box-shadow: 0 4px 12px rgba(0,0,0,0.25); max-width: 280px; }
     </style>
     <div class="platform-container">
         %s
@@ -3214,14 +3216,23 @@ function html.render_knowledge_graph(nonce)
             <canvas id="platform-kg-canvas" height="600"></canvas>
             <p id="platform-kg-status" class="platform-kg-status">Loading graph...</p>
         </div>
-        <div class="platform-kg-legend">%s</div>
+        <div class="platform-kg-legend">%s<button type="button" class="platform-kg-legend-reset" id="platform-kg-reset">Reset view</button></div>
+        <div class="platform-kg-tooltip" id="platform-kg-tooltip"></div>
     </div>
     <script nonce="%s">
     (function() {
         var canvas = document.getElementById('platform-kg-canvas');
         var ctx = canvas.getContext('2d');
         var status = document.getElementById('platform-kg-status');
+        var tooltip = document.getElementById('platform-kg-tooltip');
+        var resetBtn = document.getElementById('platform-kg-reset');
         var nodes = [], links = [], byId = {};
+
+        // Screen-space pan/zoom over a fixed "world" (the coordinates
+        // layout() computes once at load) -- node positions themselves
+        // never change on pan/zoom, only how they're projected to the
+        // canvas (draw()'s ctx.setTransform below).
+        var camera = { x: 0, y: 0, scale: 1 };
 
         function resize() {
             canvas.width = canvas.parentElement.clientWidth - 16;
@@ -3247,7 +3258,9 @@ function html.render_knowledge_graph(nonce)
         }
 
         function draw() {
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
             ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.setTransform(camera.scale, 0, 0, camera.scale, camera.x, camera.y);
             links.forEach(function(e) {
                 var a = byId[e.from], b = byId[e.to];
                 if (!a || !b) { return; }
@@ -3269,6 +3282,246 @@ function html.render_knowledge_graph(nonce)
             });
         }
 
+        // -- Interaction: pan, zoom, drag-to-reposition, click-to-
+        // navigate, hover tooltips (doc/knowledge-graph-explorer.md
+        // Phase 3). No live physics here -- layout() below still just
+        // settles once on load; dragging a node only ever moves that
+        // one node's own x/y, nothing reacts to it.
+
+        function screenToWorld(sx, sy) {
+            return { x: (sx - camera.x) / camera.scale, y: (sy - camera.y) / camera.scale };
+        }
+
+        function nodeAt(wx, wy) {
+            var best = null, bestDist = Infinity;
+            nodes.forEach(function(n) {
+                var dx = n.x - wx, dy = n.y - wy;
+                var d = Math.sqrt(dx * dx + dy * dy);
+                if (d <= nodeRadius(n.heat) && d < bestDist) { best = n; bestDist = d; }
+            });
+            return best;
+        }
+
+        function pointSegmentDistance(px, py, ax, ay, bx, by) {
+            var dx = bx - ax, dy = by - ay;
+            var lenSq = dx * dx + dy * dy;
+            var t = lenSq > 0 ? ((px - ax) * dx + (py - ay) * dy) / lenSq : 0;
+            t = Math.max(0, Math.min(1, t));
+            var cx = ax + t * dx, cy = ay + t * dy;
+            return Math.sqrt((px - cx) * (px - cx) + (py - cy) * (py - cy));
+        }
+
+        function edgeAt(wx, wy) {
+            var threshold = 6 / camera.scale;
+            var best = null, bestDist = Infinity;
+            links.forEach(function(e) {
+                var a = byId[e.from], b = byId[e.to];
+                if (!a || !b) { return; }
+                var d = pointSegmentDistance(wx, wy, a.x, a.y, b.x, b.y);
+                if (d <= threshold && d < bestDist) { best = e; bestDist = d; }
+            });
+            return best;
+        }
+
+        function showTooltip(clientX, clientY, text) {
+            tooltip.textContent = text;
+            tooltip.style.left = (clientX + 14) + 'px';
+            tooltip.style.top = (clientY + 14) + 'px';
+            tooltip.style.display = 'block';
+        }
+
+        function hideTooltip() {
+            tooltip.style.display = 'none';
+        }
+
+        var dragNode = null, dragMoved = false;
+        var isPanning = false, panStart = { x: 0, y: 0 }, camStart = { x: 0, y: 0 };
+
+        function onDragMove(ev) {
+            var rect = canvas.getBoundingClientRect();
+            var w = screenToWorld(ev.clientX - rect.left, ev.clientY - rect.top);
+            dragNode.x = w.x;
+            dragNode.y = w.y;
+            dragMoved = true;
+            hideTooltip();
+            wakeSimulation();
+            draw();
+        }
+        function onDragEnd(ev) {
+            window.removeEventListener('mousemove', onDragMove);
+            window.removeEventListener('mouseup', onDragEnd);
+            if (dragMoved === false && dragNode != null) {
+                window.location.href = 'document?entity_id=' + dragNode.id;
+                return;
+            }
+            if (dragNode != null) {
+                // Un-pin -- the node rejoins the live simulation instead
+                // of staying frozen wherever it was dropped.
+                dragNode.fixed = false;
+                wakeSimulation();
+            }
+            dragNode = null;
+        }
+
+        function onPanMove(ev) {
+            var rect = canvas.getBoundingClientRect();
+            var mx = ev.clientX - rect.left, my = ev.clientY - rect.top;
+            camera.x = camStart.x + (mx - panStart.x);
+            camera.y = camStart.y + (my - panStart.y);
+            draw();
+        }
+        function onPanEnd() {
+            window.removeEventListener('mousemove', onPanMove);
+            window.removeEventListener('mouseup', onPanEnd);
+            isPanning = false;
+            canvas.style.cursor = 'grab';
+        }
+
+        canvas.addEventListener('mousedown', function(ev) {
+            var rect = canvas.getBoundingClientRect();
+            var mx = ev.clientX - rect.left, my = ev.clientY - rect.top;
+            var w = screenToWorld(mx, my);
+            var n = nodeAt(w.x, w.y);
+            if (n) {
+                dragNode = n;
+                // Pinned while held -- the live simulation skips force
+                // integration for it (simStep below), so the mouse is
+                // the only thing moving it, but its neighbors still
+                // feel it and react in real time.
+                dragNode.fixed = true;
+                dragMoved = false;
+                wakeSimulation();
+                window.addEventListener('mousemove', onDragMove);
+                window.addEventListener('mouseup', onDragEnd);
+                return;
+            }
+            isPanning = true;
+            panStart = { x: mx, y: my };
+            camStart = { x: camera.x, y: camera.y };
+            canvas.style.cursor = 'grabbing';
+            window.addEventListener('mousemove', onPanMove);
+            window.addEventListener('mouseup', onPanEnd);
+        });
+
+        canvas.addEventListener('mousemove', function(ev) {
+            if (dragNode != null || isPanning) { return; }
+            var rect = canvas.getBoundingClientRect();
+            var w = screenToWorld(ev.clientX - rect.left, ev.clientY - rect.top);
+            var n = nodeAt(w.x, w.y);
+            if (n) {
+                canvas.style.cursor = 'pointer';
+                var heat = (typeof n.heat === 'number') ? n.heat : 1.0;
+                showTooltip(ev.clientX, ev.clientY, n.title + '\nheat ' + heat.toFixed(2));
+                return;
+            }
+            var e = edgeAt(w.x, w.y);
+            if (e) {
+                canvas.style.cursor = 'default';
+                var a = byId[e.from], b = byId[e.to];
+                var strength = (typeof e.strength === 'number') ? e.strength : 1.0;
+                showTooltip(ev.clientX, ev.clientY, a.title + ' ↔ ' + b.title + '\nstrength ' + strength.toFixed(2));
+                return;
+            }
+            canvas.style.cursor = 'grab';
+            hideTooltip();
+        });
+
+        canvas.addEventListener('mouseleave', function() {
+            hideTooltip();
+            if (dragNode == null && isPanning === false) { canvas.style.cursor = 'grab'; }
+        });
+
+        canvas.addEventListener('wheel', function(ev) {
+            ev.preventDefault();
+            var rect = canvas.getBoundingClientRect();
+            var mx = ev.clientX - rect.left, my = ev.clientY - rect.top;
+            var before = screenToWorld(mx, my);
+            var zoomFactor = Math.exp(-ev.deltaY * 0.001);
+            camera.scale = Math.max(0.2, Math.min(4, camera.scale * zoomFactor));
+            camera.x = mx - before.x * camera.scale;
+            camera.y = my - before.y * camera.scale;
+            hideTooltip();
+            draw();
+        }, { passive: false });
+
+        resetBtn.addEventListener('click', function() {
+            camera = { x: 0, y: 0, scale: 1 };
+            draw();
+        });
+
+        // Force-directed layout -- repulsion between every node pair,
+        // spring attraction along edges, a mild pull toward center,
+        // velocity damping. Was a one-shot batch (250 iterations, then
+        // frozen) through Phase 2; now runs live via requestAnimationFrame
+        // and only goes idle once total kinetic energy drops below
+        // SLEEP_ENERGY, the same "settle, then sleep until disturbed"
+        // shape d3-force's alpha decay uses -- so dragging a node (see
+        // onDragMove/mousedown above) wakes real physics instead of just
+        // moving one node in isolation. fixed=true (set while a node is
+        // held) skips force integration for that node only -- everyone
+        // else still reacts to it living wherever the mouse puts it.
+        var REPULSION = 6000;
+        var SPRING = 0.02;
+        var SPRING_LENGTH = 70;
+        var DAMPING = 0.85;
+        var CENTER_PULL = 0.001;
+        var SLEEP_ENERGY = 0.02;
+        var simRunning = false;
+
+        function simStep(w, h) {
+            for (var i = 0; i < nodes.length; i++) {
+                for (var j = i + 1; j < nodes.length; j++) {
+                    var a = nodes[i], b = nodes[j];
+                    var dx = a.x - b.x, dy = a.y - b.y;
+                    var distSq = (dx * dx + dy * dy) || 0.01;
+                    var dist = Math.sqrt(distSq);
+                    var force = REPULSION / distSq;
+                    var fx = (dx / dist) * force, fy = (dy / dist) * force;
+                    if (!a.fixed) { a.vx += fx; a.vy += fy; }
+                    if (!b.fixed) { b.vx -= fx; b.vy -= fy; }
+                }
+            }
+            links.forEach(function(e) {
+                var a = byId[e.from], b = byId[e.to];
+                if (!a || !b) { return; }
+                var dx = b.x - a.x, dy = b.y - a.y;
+                var dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+                var force = (dist - SPRING_LENGTH) * SPRING;
+                var fx = (dx / dist) * force, fy = (dy / dist) * force;
+                if (!a.fixed) { a.vx += fx; a.vy += fy; }
+                if (!b.fixed) { b.vx -= fx; b.vy -= fy; }
+            });
+            var energy = 0;
+            nodes.forEach(function(n) {
+                if (n.fixed) { n.vx = 0; n.vy = 0; return; }
+                n.vx += (w / 2 - n.x) * CENTER_PULL;
+                n.vy += (h / 2 - n.y) * CENTER_PULL;
+                n.vx *= DAMPING;
+                n.vy *= DAMPING;
+                n.x += n.vx;
+                n.y += n.vy;
+                energy += n.vx * n.vx + n.vy * n.vy;
+            });
+            return energy;
+        }
+
+        function simLoop() {
+            var energy = simStep(canvas.width, canvas.height);
+            draw();
+            if (energy > SLEEP_ENERGY) {
+                requestAnimationFrame(simLoop);
+            } else {
+                simRunning = false;
+            }
+        }
+
+        function wakeSimulation() {
+            if (!simRunning) {
+                simRunning = true;
+                requestAnimationFrame(simLoop);
+            }
+        }
+
         function layout() {
             var w = canvas.width, h = canvas.height;
             nodes.forEach(function(n) {
@@ -3276,47 +3529,12 @@ function html.render_knowledge_graph(nonce)
                 n.y = Math.random() * h;
                 n.vx = 0;
                 n.vy = 0;
+                n.fixed = false;
             });
-            var REPULSION = 6000;
-            var SPRING = 0.02;
-            var SPRING_LENGTH = 70;
-            var DAMPING = 0.85;
-            var ITERATIONS = 250;
-            for (var iter = 0; iter < ITERATIONS; iter++) {
-                for (var i = 0; i < nodes.length; i++) {
-                    for (var j = i + 1; j < nodes.length; j++) {
-                        var a = nodes[i], b = nodes[j];
-                        var dx = a.x - b.x, dy = a.y - b.y;
-                        var distSq = (dx * dx + dy * dy) || 0.01;
-                        var dist = Math.sqrt(distSq);
-                        var force = REPULSION / distSq;
-                        var fx = (dx / dist) * force, fy = (dy / dist) * force;
-                        a.vx += fx; a.vy += fy;
-                        b.vx -= fx; b.vy -= fy;
-                    }
-                }
-                links.forEach(function(e) {
-                    var a = byId[e.from], b = byId[e.to];
-                    if (!a || !b) { return; }
-                    var dx = b.x - a.x, dy = b.y - a.y;
-                    var dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
-                    var force = (dist - SPRING_LENGTH) * SPRING;
-                    var fx = (dx / dist) * force, fy = (dy / dist) * force;
-                    a.vx += fx; a.vy += fy;
-                    b.vx -= fx; b.vy -= fy;
-                });
-                nodes.forEach(function(n) {
-                    n.vx += (w / 2 - n.x) * 0.001;
-                    n.vy += (h / 2 - n.y) * 0.001;
-                    n.vx *= DAMPING;
-                    n.vy *= DAMPING;
-                    n.x += n.vx;
-                    n.y += n.vy;
-                    var r = nodeRadius(n.heat);
-                    n.x = Math.max(r, Math.min(w - r, n.x));
-                    n.y = Math.max(r, Math.min(h - r, n.y));
-                });
-            }
+            // A quick batch settle first so the initial paint isn't a
+            // chaotic random scatter, then hand off to the live loop.
+            for (var iter = 0; iter < 120; iter++) { simStep(w, h); }
+            wakeSimulation();
         }
 
         fetch('knowledge-graph-data').then(function(r) {
