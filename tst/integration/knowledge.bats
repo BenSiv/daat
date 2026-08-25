@@ -224,10 +224,27 @@ search_for_bioreactor_extra() {
 
     # The linked neighbor ("Cleaning Checklist") never matched the query
     # directly, so its retrieval_count stays 0 -- but it should still
-    # get a heat bump above the 1.0 default via spreading activation.
+    # get a positive reinforcement_delta logged via spreading activation.
     run sqlite3 .store/store.db "SELECT retrieval_count FROM document WHERE title = 'Cleaning Checklist';"
     [ "$output" -eq 0 ]
-    run sqlite3 .store/store.db "SELECT heat > 1.0 FROM document WHERE title = 'Cleaning Checklist';"
+    # Not the plain `heat` column -- doc/heat-decay-redesign.md's Phase 3
+    # deliberately stopped writing it (kept in the schema only for a fast
+    # rollback path) and moved reinforcement to raw_heat/scale_at_write.
+    # Also not an absolute "> 1.0" threshold on effective heat: this is a
+    # *conserved* pool (document.pool_effective_heat), so a neighbor's
+    # effective heat can legitimately sit below BASE_HEAT even after a
+    # real, positive reinforcement, simply because other documents (the
+    # built-in "Knowledge Pool"/"Chat: Chat" pool documents among them)
+    # joined the pool and diluted everyone's share in the meantime.
+    # reinforcement_delta itself -- what spread_activation actually
+    # computed and applied -- is the real signal, same as the sibling
+    # Phase 3 test right below already checks.
+    reinforcement_delta=$(sqlite3 .store/store.db "
+        SELECT krd.reinforcement_delta FROM knowledge_retrieval_document krd
+        JOIN document d ON d.id = krd.document_id
+        WHERE d.title = 'Cleaning Checklist' ORDER BY krd.retrieval_id DESC LIMIT 1;
+    ")
+    run awk -v d="$reinforcement_delta" 'BEGIN { print (d > 0) ? 1 : 0 }'
     [ "$output" -eq 1 ]
 }
 
