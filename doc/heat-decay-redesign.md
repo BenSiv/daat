@@ -92,6 +92,8 @@ document_count = document_count - 1                     -- only now
 
 `knowledge.spread_activation` (`src/knowledge.lua:855-879`) currently does its own unconditional `UPDATE document SET heat = heat + %.17g ...` directly on each linked neighbor (`src/knowledge.lua:868-871`), separate from `record_retrieval_hit`'s own write. Under the conserved model this has to route through the exact same reinforcement primitive above (each neighbor bump is its own `reinforce(neighbor_id, spreading_delta)` event, funded by the pool like any other), not a second, parallel place that manufactures heat.
 
+This section is about how much heat a spread event gives a neighbor *document*; `doc/link-strength-redesign.md` covers a separate, complementary question this design doesn't touch -- how much of that spread a given *edge* should carry relative to a retrieved document's other edges, usage-weighted the same way heat itself is.
+
 ### New table
 
 A single-row global-state table, alongside `knowledge.lua`'s other hand-rolled bookkeeping tables (`knowledge_retrieval`, etc., defined from `src/knowledge.lua:31` on):

@@ -28,3 +28,4 @@ The underlying shape is the same in both systems: generate candidates (co-retrie
 
 - open-ontologies: https://github.com/fabio-rovai/open-ontologies (`src/align_fuzzy.rs`, `src/flora_pipeline.rs`, `docs/alignment.md`)
 - daat's own mechanism: `doc/architecture.md`'s "Knowledge pool" section, "Spreading activation" -- and `src/knowledge.lua`'s `maybe_link_co_retrieved`/`spread_activation`.
+- `doc/link-strength-redesign.md` -- a separate, complementary design: not whether a link should be *created*, but how strong an already-created one should be at spread time, usage-weighted rather than flat.
