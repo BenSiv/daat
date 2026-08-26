@@ -907,6 +907,41 @@ AGENT_TOOLS = {
             },
         },
     },
+    -- Turns entity.query results straight into a ready-to-paste ```plot```
+    -- fence, instead of leaving the model to transcribe a text table into
+    -- x/y arrays by hand -- confirmed live (task: active-samples-over-time
+    -- chart) that this transcription step is where plotting attempts
+    -- actually fail (mismatched array lengths, botched date arithmetic),
+    -- not the SQL or the fence syntax itself. The row-to-array marshaling
+    -- happens here in Lua, not in the model's own reasoning; the model's
+    -- only remaining job is to paste the returned fence text into its
+    -- reply verbatim. Deliberately returns fence TEXT rather than
+    -- rendering an SVG itself -- reuses document.render_plot_fences (the
+    -- same hook a hand-written ```plot``` block already goes through)
+    -- rather than adding a second rendering path, since tool_result
+    -- messages are shown as escaped plain text, not run through
+    -- render_markdown (html.CHAT_MARKDOWN_ROLES), so a tool result can't
+    -- render its own SVG directly anyway.
+    plot = {
+        from_query = {
+            destructive = false,
+            description = "Run a read-only SQL query (same rules as entity.query: single SELECT, registered entity tables only) and turn two of its numeric columns directly into a ready-to-paste ```plot``` fence -- paste the returned text into your reply verbatim, right where the chart should appear. Use this instead of entity.query whenever the goal is a chart: it builds the x/y arrays itself from the real query rows, so there's no risk of miscounting or mistyping values by hand.",
+            parameters = {
+                type = "object",
+                properties = {
+                    sql = {type = "string", description = "a single SELECT statement returning at least the x_column and y_column columns"},
+                    x_column = {type = "string", description = "name of the result column to plot on the x axis -- must be numeric"},
+                    y_column = {type = "string", description = "name of the result column to plot on the y axis -- must be numeric"},
+                    series_name = {type = "string", description = "optional legend label for this series (defaults to y_column)"},
+                    type = {type = "string", description = "optional: \"line\" (default), \"scatter\", or \"bar\""},
+                    title = {type = "string", description = "optional chart title"},
+                    xlabel = {type = "string", description = "optional x-axis label"},
+                    ylabel = {type = "string", description = "optional y-axis label"},
+                },
+                required = {"sql", "x_column", "y_column"},
+            },
+        },
+    },
     -- Reusable Entry templates (src/template.lua) -- a separate,
     -- filesystem-based system from `document`, invisible to every other
     -- tool. Read-only, same no-capability-check precedent as
@@ -1370,6 +1405,79 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
             result = result .. "\n\n(truncated at " .. tostring(#rows) .. " rows -- add your own LIMIT or narrow the query for a complete result)"
         end
         return result
+    end
+
+    if tool_name == "plot" and method_name == "from_query" then
+        if args.sql == nil or args.x_column == nil or args.y_column == nil then
+            return nil, "from_query requires sql, x_column, and y_column"
+        end
+        column_names, rows, err, truncated = view.run_agent_query(db_path, args.sql)
+        if column_names == nil then
+            return nil, tostring(err)
+        end
+        if #rows == 0 then
+            return nil, "query returned no rows -- nothing to plot"
+        end
+
+        has_x, has_y = false, false
+        for _, col in ipairs(column_names) do
+            if col == args.x_column then
+                has_x = true
+            end
+            if col == args.y_column then
+                has_y = true
+            end
+        end
+        if has_x == false or has_y == false then
+            return nil, "query result has no column named \"" .. tostring(args.x_column) .. "\" and/or \"" .. tostring(args.y_column) ..
+                "\" -- actual columns: " .. table.concat(column_names, ", ")
+        end
+
+        x_values, y_values = {}, {}
+        for i, row in ipairs(rows) do
+            x_num = tonumber(row[args.x_column])
+            y_num = tonumber(row[args.y_column])
+            if x_num == nil or y_num == nil then
+                return nil, "row " .. tostring(i) .. "'s \"" .. tostring(args.x_column) .. "\"/\"" .. tostring(args.y_column) ..
+                    "\" value isn't numeric (got " .. tostring(row[args.x_column]) .. "/" .. tostring(row[args.y_column]) ..
+                    ") -- both columns must be numeric to plot"
+            end
+            table.insert(x_values, x_num)
+            table.insert(y_values, y_num)
+        end
+
+        series_name = args.series_name
+        if series_name == nil then
+            series_name = args.y_column
+        end
+        spec = {series = {{name = series_name, x = x_values, y = y_values}}}
+        if args.type != nil then
+            spec.type = args.type
+        end
+        if args.title != nil then
+            spec.title = args.title
+        end
+        if args.xlabel != nil then
+            spec.xlabel = args.xlabel
+        end
+        if args.ylabel != nil then
+            spec.ylabel = args.ylabel
+        end
+
+        -- Same validation the fence renderer itself runs at reply-render
+        -- time (document.render_plot_fences) -- catching a malformed
+        -- spec here gives the model a clear, actionable tool error
+        -- instead of a reply that only shows a broken chart once sent.
+        cfg, cfg_err = document.plot_spec_to_gnuplot_cfg(spec)
+        if cfg == nil then
+            return nil, "built an invalid plot spec: " .. tostring(cfg_err)
+        end
+
+        fence = "```plot\n" .. json.encode(spec) .. "\n```"
+        if truncated == true then
+            fence = fence .. "\n\n(query truncated at " .. tostring(#rows) .. " rows -- add your own LIMIT or narrow the query for a complete chart)"
+        end
+        return fence
     end
 
     if tool_name == "entity" and method_name == "list" then
@@ -1991,6 +2099,17 @@ length holding only numbers -- no strings, no dates, no nulls. "name" on a
 series is optional (used as its legend label); "title"/"xlabel"/"ylabel"
 are optional. Only plot real numeric data you actually have or were given
 -- never fabricate data points to fill out a chart.
+
+When the data to plot comes from a SQL query (entity.query), use
+plot.from_query instead of building the fence by hand: give it the query
+plus which result columns are x and y, and it returns the exact fence text
+above ready to paste into your reply. Do not retype/copy numbers from an
+entity.query text-table result into a plot fence yourself -- transcribing
+many rows by hand is exactly the kind of thing that produces mismatched or
+wrong values; let plot.from_query build the arrays from the real rows
+instead. Reach for a hand-written fence only when you already have a small
+number of values directly (e.g. numbers stated in the conversation, not
+pulled from a query result).
 """ .. extra
 end
 

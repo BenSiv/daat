@@ -450,6 +450,73 @@ SELECT * FROM task
     [[ "$output" =~ "not a registered entity type" ]]
 }
 
+write_reading_schema() {
+    mkdir -p schemas
+    cat > schemas/reading.lua <<'EOF'
+return {
+  name = "reading",
+  fields = {
+    {name = "day", type = "number", required = true},
+    {name = "value", type = "number", required = true},
+  },
+}
+EOF
+    "$BIN" schema add schemas/reading.lua >/dev/null
+}
+
+@test "plot.from_query turns real query rows into a ready-to-paste plot fence, no hand-transcription" {
+    write_reading_schema
+    "$BIN" entity create reading day=0 value=5 >/dev/null
+    "$BIN" entity create reading day=1 value=8 >/dev/null
+    "$BIN" entity create reading day=2 value=3 >/dev/null
+
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    args='{"sql":"SELECT day, value FROM reading ORDER BY day","x_column":"day","y_column":"value","title":"Readings"}'
+    scripted="$(tool_call_response "plot.from_query" "$args")"$'\1'"$(done_response "Here you go.")"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"plot the readings\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ '```plot' ]]
+    [[ "$output" =~ '\"x\":[0,1,2]' ]]
+    [[ "$output" =~ '\"y\":[5,8,3]' ]]
+    [[ "$output" =~ '\"title\":\"Readings\"' ]]
+    [[ "$output" =~ '```' ]]
+}
+
+@test "plot.from_query reports a clear error when x_column/y_column aren't in the query's own result columns" {
+    write_reading_schema
+    "$BIN" entity create reading day=0 value=5 >/dev/null
+
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    args='{"sql":"SELECT day, value FROM reading","x_column":"day","y_column":"nonexistent"}'
+    scripted="$(tool_call_response "plot.from_query" "$args")"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"plot it\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "no column named" ]]
+    [[ "$output" =~ '"is_error":true' ]]
+}
+
+@test "plot.from_query reports a clear error when the chosen column isn't numeric" {
+    write_task_schema
+    "$BIN" entity create task title="Ship it" status=open >/dev/null
+
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    args='{"sql":"SELECT id, title FROM task","x_column":"id","y_column":"title"}'
+    scripted="$(tool_call_response "plot.from_query" "$args")"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"plot it\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "isn't numeric" ]]
+    [[ "$output" =~ '"is_error":true' ]]
+}
+
 @test "entity.query refuses non-SELECT SQL the same way the admin /sql console does" {
     write_task_schema
     "$BIN" entity create task title="Untouchable" status=open >/dev/null
