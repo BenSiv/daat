@@ -205,6 +205,20 @@ function platform_page_header_css()
 """
 end
 
+-- Wraps every document.render_plot output (document content and chat
+-- alike, since both bottom out in document.render_markdown). overflow-x
+-- rather than a fixed max-width -- a plot is a fixed-size SVG (gnuplot's
+-- own width/height), and the narrowest surface this renders into is the
+-- ~280px-wide chat panel, so a plot wider than its container scrolls in
+-- its own box instead of the page/panel scrolling sideways.
+function html.plot_css()
+    return """
+        .platform-plot { overflow-x: auto; margin: 12px 0; }
+        .platform-plot svg { display: block; }
+        .platform-plot-error { color: var(--platform-muted, #64748b); font-size: 0.88rem; font-style: italic; }
+"""
+end
+
 -- One page header: a title, optional extra markup under it (a
 -- subtitle <p>, a back-link, more than one paragraph -- caller's own
 -- raw HTML, or nil/"" for none), and an optional right-aligned action
@@ -4810,6 +4824,7 @@ function html.render_document(doc, rendered_html, breadcrumbs, children, backlin
         .platform-document-content h1, .platform-document-content h2, .platform-document-content h3 { margin-top: 1.2em; }
         .platform-document-content a { color: var(--platform-accent, #4f46e5); text-decoration: none; }
         .platform-document-content a:hover { text-decoration: underline; }
+        %s
         .platform-document-children, .platform-document-backlinks { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--platform-border, #e2e8f0); }
         .platform-document-children h4, .platform-document-backlinks h4 { margin: 0 0 8px 0; font-size: 0.95rem; color: var(--platform-muted, #64748b); }
     </style>
@@ -4824,7 +4839,7 @@ function html.render_document(doc, rendered_html, breadcrumbs, children, backlin
     </div>
 </div>
 """, escaped_doc_title, platform_container_css(900), platform_button_css(),
-     platform_page_header_css(), breadcrumb_html, doc_header, rendered_html, children_block, backlinks_block)
+     platform_page_header_css(), html.plot_css(), breadcrumb_html, doc_header, rendered_html, children_block, backlinks_block)
 end
 
 -- `doc` is nil for "create a new document", or the current row for
@@ -5123,6 +5138,9 @@ function platform_chat_widget_css()
 .platform-chat-feedback button.platform-feedback-pressed { opacity: 1; border-color: var(--platform-border, #e2e8f0); background: var(--platform-bg-2, #f1f5f9); }
 .platform-chat-feedback button:disabled { cursor: default; }
 .platform-chat-feedback-error { color: #991b1b; font-size: 0.85rem; }
+.platform-plot { overflow-x: auto; margin: 12px 0; max-width: 100%; }
+.platform-plot svg { display: block; max-width: 100%; height: auto; }
+.platform-plot-error { color: var(--platform-muted, #64748b); font-size: 0.85rem; font-style: italic; }
 """
 end
 

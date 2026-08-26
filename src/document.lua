@@ -38,6 +38,7 @@ db = require("db")
 schema = require("schema")
 entity = require("entity")
 json = require("dkjson")
+gnuplot = require("gnuplot")
 
 document = {}
 
@@ -768,11 +769,170 @@ function document.render_markdown(content)
     if html == nil then
         html = ""
     end
-    return html
+    return document.render_plot_fences(html)
 end
 
 function shell_quote(s)
     return "'" .. string.gsub(s, "'", "'\\''") .. "'"
+end
+
+--------------------------------------------------------------------------
+-- Plotting: ```plot``` fences -> gnuplot SVG
+--------------------------------------------------------------------------
+--
+-- Deliberately NOT letting the agent/document author write raw gnuplot
+-- script: gnuplot's own language can shell out (`system(...)`, `load`),
+-- so free-form text reaching a real gnuplot process would be a real RCE
+-- surface. Instead a ```plot``` fence holds a small, constrained JSON
+-- data spec; document.plot_spec_to_gnuplot_cfg is the only thing that
+-- turns it into a gnuplot.create(cfg) table, and every string that ends
+-- up embedded in a generated `set title "..."`/`t "..."` command is run
+-- through document.gnuplot_safe_string first, since gnuplot.lua's own
+-- generate_code interpolates title/xlabel/ylabel/series-title strings
+-- into double-quoted gnuplot commands with no escaping of its own --
+-- an unescaped `"` in one of those strings would let a spec break out
+-- of the string literal and inject arbitrary gnuplot commands.
+
+-- Reverses cmark-gfm's HTML entity escaping of fenced code block
+-- content. Order matters: the four specific entities first, `&amp;`
+-- last -- reversing that order would turn a literal "&amp;lt;" (an
+-- escaped ampersand followed by literal text "lt;") into "<" instead
+-- of leaving it as the literal text "&lt;" it actually represents.
+function document.html_unescape(s)
+    if s == nil then
+        return ""
+    end
+    s = string.gsub(s, "&lt;", "<")
+    s = string.gsub(s, "&gt;", ">")
+    s = string.gsub(s, "&quot;", "\"")
+    s = string.gsub(s, "&#39;", "'")
+    s = string.gsub(s, "&amp;", "&")
+    return s
+end
+
+-- Strips the characters that would let a title/label string break out
+-- of gnuplot.lua's own unescaped `"..."` command interpolation (a bare
+-- `"` ends the string literal early; a `\` can start an escape gnuplot
+-- itself interprets). Chart labels have no legitimate need for either.
+function document.gnuplot_safe_string(s)
+    if s == nil then
+        return ""
+    end
+    s = tostring(s)
+    s = string.gsub(s, "[\"\\]", "")
+    s = string.gsub(s, "[\r\n]", " ")
+    return s
+end
+
+PLOT_TYPE_TO_WITH = {line = "linespoints", scatter = "points", bar = "boxes"}
+
+-- Pure translation from the fence's JSON spec into the table shape
+-- gnuplot.create expects -- no file I/O, no shelling out, so it's
+-- unit-testable on its own. Returns (cfg, nil) on success or
+-- (nil, error_message) if the spec is malformed.
+function document.plot_spec_to_gnuplot_cfg(spec)
+    if spec == nil or type(spec) != "table" then
+        return nil, "plot spec must be a JSON object"
+    end
+    if spec.series == nil or type(spec.series) != "table" or #spec.series == 0 then
+        return nil, "plot spec needs a non-empty \"series\" array"
+    end
+
+    default_with = PLOT_TYPE_TO_WITH[spec.type]
+    if default_with == nil then
+        default_with = "linespoints"
+    end
+
+    data = {}
+    for i, series in ipairs(spec.series) do
+        if series.x == nil or type(series.x) != "table" or series.y == nil or type(series.y) != "table" then
+            return nil, "series " .. tostring(i) .. " needs \"x\" and \"y\" arrays"
+        end
+        if #series.x != #series.y then
+            return nil, "series " .. tostring(i) .. "'s \"x\" and \"y\" arrays must be the same length"
+        end
+        for j = 1, #series.x do
+            if type(series.x[j]) != "number" or type(series.y[j]) != "number" then
+                return nil, "series " .. tostring(i) .. "'s \"x\"/\"y\" values must all be numbers"
+            end
+        end
+
+        series_with = default_with
+        if series.with != nil then
+            series_with = document.gnuplot_safe_string(series.with)
+        end
+        series_title = "series " .. tostring(i)
+        if series.name != nil then
+            series_title = document.gnuplot_safe_string(series.name)
+        end
+        table.insert(data, {{series.x, series.y}, with = series_with, title = series_title})
+    end
+
+    cfg = {type = "svg", width = 640, height = 400, grid = true, data = data}
+    if spec.title != nil then
+        cfg.title = document.gnuplot_safe_string(spec.title)
+    end
+    if spec.xlabel != nil then
+        cfg.xlabel = document.gnuplot_safe_string(spec.xlabel)
+    end
+    if spec.ylabel != nil then
+        cfg.ylabel = document.gnuplot_safe_string(spec.ylabel)
+    end
+
+    return cfg, nil
+end
+
+-- Renders one JSON spec (already HTML-unescaped, already JSON-decoded)
+-- into a `<div class="platform-plot">` holding raw SVG markup, or a
+-- visible error message on any failure. Never lets an exception here
+-- crash the surrounding page.
+function document.render_plot(spec_text)
+    spec, _, decode_err = json.decode(spec_text)
+    if spec == nil then
+        return '<div class="platform-plot platform-plot-error">Could not render plot: invalid JSON.</div>'
+    end
+
+    cfg, cfg_err = document.plot_spec_to_gnuplot_cfg(spec)
+    if cfg == nil then
+        return '<div class="platform-plot platform-plot-error">Could not render plot: ' .. tostring(cfg_err) .. '.</div>'
+    end
+
+    plot = gnuplot.create(cfg)
+    out_path = os.tmpname()
+    ok, gnuplot_output, script_path = gnuplot.savefig(plot, out_path)
+    if script_path != nil then
+        os.remove(script_path)
+    end
+    if ok != true then
+        os.remove(out_path)
+        return '<div class="platform-plot platform-plot-error">Could not render plot: gnuplot failed.</div>'
+    end
+
+    file = io.open(out_path, "r")
+    if file == nil then
+        os.remove(out_path)
+        return '<div class="platform-plot platform-plot-error">Could not render plot: no output produced.</div>'
+    end
+    svg = io.read(file, "*all")
+    io.close(file)
+    os.remove(out_path)
+    if svg == nil or string.find(svg, "<svg", 1, true) == nil then
+        return '<div class="platform-plot platform-plot-error">Could not render plot: no output produced.</div>'
+    end
+
+    return '<div class="platform-plot">' .. svg .. '</div>'
+end
+
+-- Post-processes cmark-gfm's rendered HTML, replacing every
+-- `<pre><code class="language-plot">...</code></pre>` block (the exact
+-- shape cmark-gfm emits for a fenced ```plot``` block) with a rendered
+-- plot. Run over cmark's OUTPUT, never over the raw Markdown -- so this
+-- only ever sees content cmark itself already decided was a code fence,
+-- with cmark's own HTML-escaping already applied.
+function document.render_plot_fences(html)
+    return (string.gsub(html, '<pre><code class="language%-plot">(.-)</code></pre>', function(escaped_json)
+        return document.render_plot(document.html_unescape(escaped_json))
+    end))
 end
 
 -- The full pipeline: resolve "[[...]]" refs into plain Markdown links

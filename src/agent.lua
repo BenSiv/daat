@@ -1979,6 +1979,18 @@ tool call gets you the raw material for something like "categorize these"
 or "what's the common theme here", do that analysis yourself in your
 reply -- never tell the user you can't, or hand back the raw data
 unprocessed, just because no tool is literally named for it.
+
+To plot numeric data (a document you write, or a chat reply), use a fenced
+code block whose language is "plot" containing a single JSON object -- do
+not write gnuplot script or any other plotting syntax yourself. Shape:
+{"type": "line", "title": "...", "xlabel": "...", "ylabel": "...",
+"series": [{"name": "...", "x": [1,2,3], "y": [4,5,6]}]}. "type" is "line",
+"scatter", or "bar" (default "line" if omitted); "series" is required and
+needs at least one entry, each with an "x" and "y" array of the same
+length holding only numbers -- no strings, no dates, no nulls. "name" on a
+series is optional (used as its legend label); "title"/"xlabel"/"ylabel"
+are optional. Only plot real numeric data you actually have or were given
+-- never fabricate data points to fill out a chart.
 """ .. extra
 end
 

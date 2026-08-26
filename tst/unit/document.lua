@@ -226,6 +226,104 @@ test_guess_title_skips_heading_uses_first_real_line()
 test_guess_title_strips_bullet_decoration()
 test_guess_title_truncates_long_lines_on_word_boundary()
 test_guess_title_empty_body_returns_untitled()
+function test_html_unescape_reverses_cmark_entities()
+    print("Testing html_unescape reverses cmark-gfm's entity escaping")
+    check(document.html_unescape("&lt;b&gt;") == "<b>", "should unescape &lt;/&gt;")
+    check(document.html_unescape("&quot;hi&quot;") == "\"hi\"", "should unescape &quot;")
+    check(document.html_unescape("it&#39;s") == "it's", "should unescape &#39;")
+    check(document.html_unescape("cats &amp; dogs") == "cats & dogs", "should unescape &amp;")
+end
+
+function test_html_unescape_does_not_double_unescape_amp()
+    print("Testing html_unescape doesn't turn a literal escaped '&lt;' text into '<' via its &amp; pass")
+    check(document.html_unescape("&amp;lt;") == "&lt;",
+        "an escaped literal '&lt;' (i.e. &amp;lt;) should unescape to the literal text '&lt;', not '<'")
+end
+
+function test_html_unescape_nil_returns_empty()
+    print("Testing html_unescape on nil returns empty string")
+    check(document.html_unescape(nil) == "", "nil should unescape to empty string")
+end
+
+function test_gnuplot_safe_string_strips_quotes_and_backslashes()
+    print("Testing gnuplot_safe_string strips characters that could break out of a gnuplot \"...\" literal")
+    check(document.gnuplot_safe_string('foo"; system("rm -rf /"); set title "bar') == "foo; system(rm -rf /); set title bar",
+        "should strip every double-quote and backslash")
+    check(document.gnuplot_safe_string("line one\nline two") == "line one line two",
+        "should collapse newlines to a space")
+end
+
+function test_plot_spec_to_gnuplot_cfg_valid_line_spec()
+    print("Testing plot_spec_to_gnuplot_cfg on a valid line spec")
+    cfg, err = document.plot_spec_to_gnuplot_cfg({
+        type = "line", title = "Growth", xlabel = "Day", ylabel = "Biomass",
+        series = {{name = "Run A", x = {1, 2, 3}, y = {0.5, 1.1, 2.3}}},
+    })
+    check(err == nil, "valid spec should not error, got: " .. tostring(err))
+    check(cfg.type == "svg", "cfg.type should always be svg regardless of spec.type")
+    check(cfg.title == "Growth", "cfg.title should carry through")
+    check(#cfg.data == 1, "should produce one data series")
+    check(cfg.data[1].with == "linespoints", "type=line should map to with=linespoints")
+    check(cfg.data[1].title == "Run A", "series name should carry through as its title")
+end
+
+function test_plot_spec_to_gnuplot_cfg_type_mapping()
+    print("Testing plot_spec_to_gnuplot_cfg maps type to gnuplot's with style")
+    scatter_cfg = document.plot_spec_to_gnuplot_cfg({type = "scatter", series = {{x = {1}, y = {1}}}})
+    check(scatter_cfg.data[1].with == "points", "type=scatter should map to with=points")
+    bar_cfg = document.plot_spec_to_gnuplot_cfg({type = "bar", series = {{x = {1}, y = {1}}}})
+    check(bar_cfg.data[1].with == "boxes", "type=bar should map to with=boxes")
+    default_cfg = document.plot_spec_to_gnuplot_cfg({series = {{x = {1}, y = {1}}}})
+    check(default_cfg.data[1].with == "linespoints", "an omitted type should default to linespoints")
+end
+
+function test_plot_spec_to_gnuplot_cfg_sanitizes_labels()
+    print("Testing plot_spec_to_gnuplot_cfg strips gnuplot-command-breaking characters out of labels")
+    cfg, err = document.plot_spec_to_gnuplot_cfg({title = 'a" set title "b', series = {{x = {1}, y = {1}}}})
+    check(err == nil, "should not error, got: " .. tostring(err))
+    check(string.find(cfg.title, "\"", 1, true) == nil, "sanitized title should contain no double-quote")
+end
+
+function test_plot_spec_to_gnuplot_cfg_rejects_missing_series()
+    print("Testing plot_spec_to_gnuplot_cfg rejects a spec with no series")
+    cfg, err = document.plot_spec_to_gnuplot_cfg({type = "line"})
+    check(cfg == nil, "a spec with no series should be rejected")
+    check(err != nil, "should return an error message")
+end
+
+function test_plot_spec_to_gnuplot_cfg_rejects_mismatched_lengths()
+    print("Testing plot_spec_to_gnuplot_cfg rejects x/y arrays of different lengths")
+    cfg, err = document.plot_spec_to_gnuplot_cfg({series = {{x = {1, 2}, y = {1}}}})
+    check(cfg == nil, "mismatched x/y lengths should be rejected")
+    check(err != nil, "should return an error message")
+end
+
+function test_plot_spec_to_gnuplot_cfg_rejects_non_numeric_values()
+    print("Testing plot_spec_to_gnuplot_cfg rejects non-numeric x/y values")
+    cfg, err = document.plot_spec_to_gnuplot_cfg({series = {{x = {"a"}, y = {1}}}})
+    check(cfg == nil, "non-numeric values should be rejected")
+    check(err != nil, "should return an error message")
+end
+
+function test_plot_spec_to_gnuplot_cfg_rejects_non_table_spec()
+    print("Testing plot_spec_to_gnuplot_cfg rejects a nil or non-table spec")
+    cfg, err = document.plot_spec_to_gnuplot_cfg(nil)
+    check(cfg == nil, "nil spec should be rejected")
+    check(err != nil, "should return an error message")
+end
+
+test_html_unescape_reverses_cmark_entities()
+test_html_unescape_does_not_double_unescape_amp()
+test_html_unescape_nil_returns_empty()
+test_gnuplot_safe_string_strips_quotes_and_backslashes()
+test_plot_spec_to_gnuplot_cfg_valid_line_spec()
+test_plot_spec_to_gnuplot_cfg_type_mapping()
+test_plot_spec_to_gnuplot_cfg_sanitizes_labels()
+test_plot_spec_to_gnuplot_cfg_rejects_missing_series()
+test_plot_spec_to_gnuplot_cfg_rejects_mismatched_lengths()
+test_plot_spec_to_gnuplot_cfg_rejects_non_numeric_values()
+test_plot_spec_to_gnuplot_cfg_rejects_non_table_spec()
+
 test_content_hash_is_deterministic()
 test_pool_effective_heat_reads_raw_heat_unchanged_when_pool_scale_matches()
 test_pool_effective_heat_applies_accumulated_shrink()

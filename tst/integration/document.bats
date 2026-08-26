@@ -283,6 +283,25 @@ EOF
     [[ ! "$output" =~ '|---|---|' ]]
 }
 
+@test "a ```plot``` fence renders as a real gnuplot SVG, not raw JSON text (document.render_plot_fences)" {
+    body='{"content": "```plot\n{\"type\":\"line\",\"title\":\"Growth\",\"series\":[{\"name\":\"Run A\",\"x\":[1,2,3],\"y\":[4,5,6]}]}\n```"}'
+
+    run raw_document_preview "$body" "$CSRF"
+    [[ "$output" =~ "200 OK" ]]
+    [[ "$output" =~ "platform-plot" ]]
+    [[ "$output" =~ "<svg" ]]
+    [[ ! "$output" =~ "language-plot" ]]
+}
+
+@test "a plot fence with a malformed spec renders a visible error instead of crashing the page" {
+    body='{"content": "```plot\n{\"series\":[]}\n```"}'
+
+    run raw_document_preview "$body" "$CSRF"
+    [[ "$output" =~ "200 OK" ]]
+    [[ "$output" =~ "platform-plot-error" ]]
+    [[ ! "$output" =~ "Internal Server Error" ]]
+}
+
 @test "archiving a document (via the generic /api/archive route) removes it from the /documents tree" {
     save_document "csrf_token=${CSRF}&title=Home&parent_id=&content=" >/dev/null
 
