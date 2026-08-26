@@ -30,6 +30,7 @@ cd dev && ./deploy.sh
 - A C toolchain (`cc`/`make`) and the dev headers `bld/build.sh` compiles against: `libsqlite3-dev`, `libreadline-dev`, `libssl-dev`, `libcrypt-dev`.
 - `cmark-gfm` on `PATH` **at runtime** (`apt install cmark-gfm` / `brew install cmark-gfm`) -- Document rendering shells out to it; it is not compiled in. Not plain `cmark` -- a separate package/binary (GitHub's own fork, needed for the table/strikethrough/autolink extensions `document.lua` renders with); installing the wrong one is a real, previously-hit failure mode (missing `cmark-gfm` produces empty rendered content, not an error at install time).
 - `bats` on `PATH` (`apt install bats` / `brew install bats-core`) -- required to run `tst/integration/*.bats`.
+- `jq` on `PATH` (`apt install jq` / `brew install jq`) -- required by `tst/integration/agent.bats`, `knowledge.bats`, and `knowledge_context.bats`, which parse JSON responses through it.
 - SQLite itself needs no setup; it's the default storage backend.
 
 **Optional** -- you do not need any of this to build, test, or run the app or its chat UI, because tests default to a deterministic stub LLM provider (see "Testing conventions"):
