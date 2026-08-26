@@ -2589,27 +2589,37 @@ function html.diagram_js(nonce)
     });
     var cached = loadCachedOffsets();
 
-    // -- Auto-arrange: a force-directed pass to shorten edges and tend
-    // to reduce crossings, on request rather than on every load (would
-    // otherwise blow away a manual drag arrangement every visit). Runs
-    // from the CURRENT positions -- the packed grid on first load, or
-    // wherever boxes already sit -- not a random scatter like /knowledge-
-    // graph, so it's refining an already-reasonable layout rather than
-    // solving from scratch, and settles fast. Boxes vary in size (field
-    // count), so pairwise separation is AABB-overlap-based (push apart
-    // along whichever axis has less overlap) rather than knowledge_
-    // graph's point/circle repulsion, which would either crowd big boxes
-    // or over-space small ones at the same "radius."
-    var AUTO_BOX_MARGIN = 24;
+    // -- Auto-arrange: Fruchterman-Reingold force-directed placement
+    // (Fruchterman & Reingold, "Graph Drawing by Force-directed
+    // Placement", 1991) -- the standard, well-documented algorithm for
+    // this job, not an ad-hoc force mix. Repulsion (k*k/d) acts between
+    // EVERY pair, not just overlapping ones -- an earlier version here
+    // only pushed apart boxes whose margins already overlapped, so any
+    // pair that wasn't already touching felt no separating force at
+    // all, and the constant center-pull (nothing opposed it for most
+    // pairs) dragged the whole layout inward over time. Attraction
+    // (d*d/k) pulls along edges. Displacement per node is capped by a
+    // "temperature" that cools linearly from AUTO_T0 to ~0 over
+    // AUTO_ITERATIONS -- convergence is guaranteed by the schedule
+    // itself, not an energy-below-threshold heuristic that depends on
+    // the forces happening to settle cleanly.
+    //
+    // k (ideal distance) isn't one global constant, since boxes vary a
+    // lot in size (field count) at a fixed width -- idealDistance(a, b)
+    // floors the classic sqrt(area/n) value at the two boxes' own
+    // combined half-diagonals (the largest gap either could need
+    // regardless of relative angle) plus a gap, so equilibrium distance
+    // never asks two boxes to sit closer than their footprints allow.
+    var vb0 = svg.viewBox.baseVal;
+    var AUTO_AREA = vb0.width * vb0.height;
     var AUTO_EDGE_GAP = 40;
-    var AUTO_SEPARATION = 0.4;
-    var AUTO_SPRING = 0.02;
-    var AUTO_DAMPING = 0.72;
-    var AUTO_MAX_SPEED = 18;
-    var AUTO_CENTER_PULL = 0.001;
-    var AUTO_SLEEP_ENERGY = 0.05;
+    var AUTO_BASE_K = Math.sqrt(AUTO_AREA / Math.max(1, types.length));
+    var AUTO_ITERATIONS = 300;
+    var AUTO_T0 = Math.max(vb0.width, vb0.height) / 10;
+    var AUTO_CENTER_PULL = 0.01;
+    var AUTO_CLEANUP_ITERATIONS = 40;
+    var AUTO_BOX_MARGIN = 16;
     var autoRunning = false;
-    var nodeVel = {};
     var types = Object.keys(nodeBase);
 
     function nodeRect(type){
@@ -2620,26 +2630,66 @@ function html.diagram_js(nonce)
         var r = nodeRect(type);
         return {x: r.x + r.w / 2, y: r.y + r.h / 2};
     }
-    // Half-diagonal of each box (the largest gap two boxes could need
-    // regardless of their relative angle) plus a fixed gap, not one
-    // flat distance for every pair -- a flat rest length shorter than
-    // a tall box's own footprint had springs and the AABB separation
-    // force fighting each other every frame (pull together, shove
-    // apart, repeat), which read as boxes "stuck" vibrating against
-    // each other instead of settling.
-    function restLengthFor(a, b){
+    function idealDistance(a, b){
         var ra = nodeBase[a], rb = nodeBase[b];
         var halfA = Math.sqrt(ra.w * ra.w + ra.h * ra.h) / 2;
         var halfB = Math.sqrt(rb.w * rb.w + rb.h * rb.h) / 2;
-        return halfA + halfB + AUTO_EDGE_GAP;
+        return Math.max(AUTO_BASE_K, halfA + halfB + AUTO_EDGE_GAP);
     }
     function applyOffset(type){
         var node = nodeElementByType[type];
         if(node){ node.setAttribute('transform', 'translate(' + nodeOffsets[type].dx + ',' + nodeOffsets[type].dy + ')'); }
         updateEdgesFor(type);
     }
+    function moveBy(type, dx, dy){
+        nodeOffsets[type].dx += dx;
+        nodeOffsets[type].dy += dy;
+        applyOffset(type);
+    }
 
-    function autoStep(centerX, centerY){
+    function frStep(centerX, centerY, temperature){
+        var disp = {};
+        types.forEach(function(type){ disp[type] = {x: 0, y: 0}; });
+        for(var i = 0; i < types.length; i++){
+            for(var j = i + 1; j < types.length; j++){
+                var a = types[i], b = types[j];
+                var ca = nodeCenter(a), cb = nodeCenter(b);
+                var dx = ca.x - cb.x, dy = ca.y - cb.y;
+                var dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+                var k = idealDistance(a, b);
+                var force = (k * k) / dist;
+                disp[a].x += (dx / dist) * force; disp[a].y += (dy / dist) * force;
+                disp[b].x -= (dx / dist) * force; disp[b].y -= (dy / dist) * force;
+            }
+        }
+        edges.forEach(function(edge){
+            var from = edge.getAttribute('data-from'), to = edge.getAttribute('data-to');
+            if(!nodeBase[from] || !nodeBase[to] || from === to){ return; }
+            var pa = nodeCenter(from), pb = nodeCenter(to);
+            var dx = pb.x - pa.x, dy = pb.y - pa.y;
+            var dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+            var k = idealDistance(from, to);
+            var force = (dist * dist) / k;
+            disp[from].x += (dx / dist) * force; disp[from].y += (dy / dist) * force;
+            disp[to].x -= (dx / dist) * force; disp[to].y -= (dy / dist) * force;
+        });
+        types.forEach(function(type){
+            var c = nodeCenter(type);
+            disp[type].x += (centerX - c.x) * AUTO_CENTER_PULL;
+            disp[type].y += (centerY - c.y) * AUTO_CENTER_PULL;
+            var len = Math.sqrt(disp[type].x * disp[type].x + disp[type].y * disp[type].y) || 0.01;
+            var capped = Math.min(len, temperature);
+            moveBy(type, (disp[type].x / len) * capped, (disp[type].y / len) * capped);
+        });
+    }
+
+    // Point-based FR doesn't know a box's actual footprint beyond
+    // idealDistance's floor, which is a worst-case (diagonal) safe
+    // distance -- two boxes settling axis-aligned at exactly that
+    // distance can still clip. A few pure AABB-overlap separation
+    // passes (push apart along whichever axis overlaps less), no
+    // attraction/repulsion involved, cleans up what's left.
+    function cleanupStep(){
         for(var i = 0; i < types.length; i++){
             for(var j = i + 1; j < types.length; j++){
                 var a = types[i], b = types[j];
@@ -2651,47 +2701,24 @@ function html.diagram_js(nonce)
                 var ca = nodeCenter(a), cb = nodeCenter(b);
                 if(overlapX < overlapY){
                     var dirX = (ca.x <= cb.x) ? -1 : 1;
-                    var fx = dirX * overlapX * AUTO_SEPARATION;
-                    nodeVel[a].vx += fx; nodeVel[b].vx -= fx;
+                    moveBy(a, dirX * overlapX * 0.5, 0); moveBy(b, -dirX * overlapX * 0.5, 0);
                 } else {
                     var dirY = (ca.y <= cb.y) ? -1 : 1;
-                    var fy = dirY * overlapY * AUTO_SEPARATION;
-                    nodeVel[a].vy += fy; nodeVel[b].vy -= fy;
+                    moveBy(a, 0, dirY * overlapY * 0.5); moveBy(b, 0, -dirY * overlapY * 0.5);
                 }
             }
         }
-        edges.forEach(function(edge){
-            var from = edge.getAttribute('data-from'), to = edge.getAttribute('data-to');
-            if(!nodeBase[from] || !nodeBase[to] || from === to){ return; }
-            var pa = nodeCenter(from), pb = nodeCenter(to);
-            var dx = pb.x - pa.x, dy = pb.y - pa.y;
-            var dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
-            var force = (dist - restLengthFor(from, to)) * AUTO_SPRING;
-            var fx = (dx / dist) * force, fy = (dy / dist) * force;
-            nodeVel[from].vx += fx; nodeVel[from].vy += fy;
-            nodeVel[to].vx -= fx; nodeVel[to].vy -= fy;
-        });
-        var energy = 0;
-        types.forEach(function(type){
-            var v = nodeVel[type], c = nodeCenter(type);
-            v.vx += (centerX - c.x) * AUTO_CENTER_PULL;
-            v.vy += (centerY - c.y) * AUTO_CENTER_PULL;
-            v.vx *= AUTO_DAMPING; v.vy *= AUTO_DAMPING;
-            v.vx = Math.max(-AUTO_MAX_SPEED, Math.min(AUTO_MAX_SPEED, v.vx));
-            v.vy = Math.max(-AUTO_MAX_SPEED, Math.min(AUTO_MAX_SPEED, v.vy));
-            nodeOffsets[type].dx += v.vx;
-            nodeOffsets[type].dy += v.vy;
-            applyOffset(type);
-            energy += v.vx * v.vx + v.vy * v.vy;
-        });
-        return types.length > 0 ? energy / types.length : 0;
     }
 
-    function autoLoop(){
+    function autoLoop(iteration){
         var vb = svg.viewBox.baseVal;
-        var energy = autoStep(vb.width / 2, vb.height / 2);
-        if(energy > AUTO_SLEEP_ENERGY){
-            requestAnimationFrame(autoLoop);
+        if(iteration < AUTO_ITERATIONS){
+            var temperature = AUTO_T0 * (1 - iteration / AUTO_ITERATIONS);
+            frStep(vb.x + vb.width / 2, vb.y + vb.height / 2, temperature);
+            requestAnimationFrame(function(){ autoLoop(iteration + 1); });
+        } else if(iteration < AUTO_ITERATIONS + AUTO_CLEANUP_ITERATIONS){
+            cleanupStep();
+            requestAnimationFrame(function(){ autoLoop(iteration + 1); });
         } else {
             autoRunning = false;
             saveCachedOffsets();
@@ -2702,9 +2729,8 @@ function html.diagram_js(nonce)
     if(autoBtn){
         autoBtn.addEventListener('click', function(){
             if(autoRunning){ return; }
-            types.forEach(function(type){ nodeVel[type] = {vx: 0, vy: 0}; });
             autoRunning = true;
-            requestAnimationFrame(autoLoop);
+            requestAnimationFrame(function(){ autoLoop(0); });
         });
     }
 
