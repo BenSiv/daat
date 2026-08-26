@@ -2610,6 +2610,7 @@ function html.diagram_js(nonce)
     // combined half-diagonals (the largest gap either could need
     // regardless of relative angle) plus a gap, so equilibrium distance
     // never asks two boxes to sit closer than their footprints allow.
+    var types = Object.keys(nodeBase);
     var vb0 = svg.viewBox.baseVal;
     var AUTO_AREA = vb0.width * vb0.height;
     var AUTO_EDGE_GAP = 40;
@@ -2620,7 +2621,6 @@ function html.diagram_js(nonce)
     var AUTO_CLEANUP_ITERATIONS = 40;
     var AUTO_BOX_MARGIN = 16;
     var autoRunning = false;
-    var types = Object.keys(nodeBase);
 
     function nodeRect(type){
         var base = nodeBase[type], off = nodeOffsets[type];
