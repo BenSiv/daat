@@ -2375,11 +2375,12 @@ function html.render_relation_diagram(db_path, entity_types, edges)
 
     return string.format("""
 <div class="platform-diagram-hint">
-    Hover an entity to see its relations; click its header to browse it; drag a box to rearrange.
+    Hover an entity to see its relations; click its header to browse it; drag a box or the background to rearrange/pan, scroll to zoom.
     <button type="button" class="platform-diagram-auto-arrange" id="platform-diagram-auto-arrange">Auto-arrange</button>
+    <button type="button" class="platform-diagram-auto-arrange" id="platform-diagram-reset-view">Reset view</button>
 </div>
 <div class="platform-diagram-scroll">
-<svg id="platform-diagram-svg" viewBox="0 0 %d %d" width="%d" height="%d">
+<svg id="platform-diagram-svg" viewBox="0 0 %d %d" data-natural-view="0 0 %d %d" preserveAspectRatio="xMidYMid meet">
     %s
     %s
 </svg>
@@ -2391,7 +2392,9 @@ function html.relation_diagram_css()
     return """
         .platform-diagram-hint { display: flex; align-items: center; gap: 14px; color: var(--platform-muted, #64748b); font-size: 0.85rem; margin-bottom: 10px; }
         .platform-diagram-auto-arrange { margin-left: auto; background: none; border: none; padding: 0; color: var(--platform-accent, #4f46e5); font-size: 0.85rem; font-weight: 600; cursor: pointer; text-decoration: underline; flex-shrink: 0; }
-        .platform-diagram-scroll { overflow: auto; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); background: var(--platform-bg, #f8fafc); }
+        .platform-diagram-scroll { overflow: hidden; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); background: var(--platform-bg, #f8fafc); }
+        #platform-diagram-svg { display: block; width: 100%; height: 70vh; cursor: grab; touch-action: none; }
+        #platform-diagram-svg.platform-diagram-panning { cursor: grabbing; }
         .platform-diagram-edge line { stroke: var(--platform-border, #cbd5e1); stroke-width: 1.5; transition: stroke 0.15s ease, opacity 0.15s ease; }
         .platform-diagram-edge.platform-diagram-edge-active line { stroke: var(--platform-accent, #4f46e5); stroke-width: 2.5; }
         .platform-diagram-edge.platform-diagram-edge-dim { opacity: 0.15; }
@@ -2450,6 +2453,56 @@ function html.diagram_js(nonce)
     if(!svg) return;
     var nodes = svg.querySelectorAll('.platform-diagram-node');
     var edges = svg.querySelectorAll('.platform-diagram-edge');
+
+    // -- Pan/zoom: the SVG's own viewBox is the "camera" (no group
+    // transform needed) -- scroll to zoom (cursor-anchored, so the
+    // point under the pointer stays put), drag the background to pan.
+    // Node drag/click (wired further down) already stops its own
+    // mousedown from doing anything else; this only starts a pan when
+    // the press didn't land on a node in the first place.
+    var naturalView = (svg.getAttribute('data-natural-view') || svg.getAttribute('viewBox')).split(' ').map(Number);
+    var MIN_VB_W = naturalView[2] * 0.15, MAX_VB_W = naturalView[2] * 4;
+
+    function currentViewBox(){
+        var v = svg.getAttribute('viewBox').split(' ').map(Number);
+        return {x: v[0], y: v[1], w: v[2], h: v[3]};
+    }
+    document.getElementById('platform-diagram-reset-view').addEventListener('click', function(){
+        svg.setAttribute('viewBox', naturalView.join(' '));
+    });
+    svg.addEventListener('wheel', function(ev){
+        ev.preventDefault();
+        var vb = currentViewBox();
+        var rect = svg.getBoundingClientRect();
+        var mx = ev.clientX - rect.left, my = ev.clientY - rect.top;
+        var svgX = vb.x + (mx / rect.width) * vb.w;
+        var svgY = vb.y + (my / rect.height) * vb.h;
+        var factor = Math.exp(ev.deltaY * 0.001);
+        var newW = Math.max(MIN_VB_W, Math.min(MAX_VB_W, vb.w * factor));
+        var newH = newW * (vb.h / vb.w);
+        var newX = svgX - (mx / rect.width) * newW;
+        var newY = svgY - (my / rect.height) * newH;
+        svg.setAttribute('viewBox', newX + ' ' + newY + ' ' + newW + ' ' + newH);
+    }, {passive: false});
+    svg.addEventListener('mousedown', function(ev){
+        if(ev.button !== 0 || (ev.target.closest && ev.target.closest('.platform-diagram-node'))){ return; }
+        var vb = currentViewBox();
+        var rect = svg.getBoundingClientRect();
+        var startClientX = ev.clientX, startClientY = ev.clientY;
+        svg.classList.add('platform-diagram-panning');
+        function onPanMove(ev2){
+            var dx = (ev2.clientX - startClientX) * (vb.w / rect.width);
+            var dy = (ev2.clientY - startClientY) * (vb.h / rect.height);
+            svg.setAttribute('viewBox', (vb.x - dx) + ' ' + (vb.y - dy) + ' ' + vb.w + ' ' + vb.h);
+        }
+        function onPanEnd(){
+            window.removeEventListener('mousemove', onPanMove);
+            window.removeEventListener('mouseup', onPanEnd);
+            svg.classList.remove('platform-diagram-panning');
+        }
+        window.addEventListener('mousemove', onPanMove);
+        window.addEventListener('mouseup', onPanEnd);
+    });
     function related(a, b){
         var isRelated = false;
         edges.forEach(function(edge){
@@ -2548,11 +2601,11 @@ function html.diagram_js(nonce)
     // graph's point/circle repulsion, which would either crowd big boxes
     // or over-space small ones at the same "radius."
     var AUTO_BOX_MARGIN = 24;
-    var AUTO_SEPARATION = 0.6;
+    var AUTO_EDGE_GAP = 40;
+    var AUTO_SEPARATION = 0.4;
     var AUTO_SPRING = 0.02;
-    var AUTO_SPRING_LENGTH = 260;
-    var AUTO_DAMPING = 0.8;
-    var AUTO_MAX_SPEED = 25;
+    var AUTO_DAMPING = 0.72;
+    var AUTO_MAX_SPEED = 18;
     var AUTO_CENTER_PULL = 0.001;
     var AUTO_SLEEP_ENERGY = 0.05;
     var autoRunning = false;
@@ -2566,6 +2619,19 @@ function html.diagram_js(nonce)
     function nodeCenter(type){
         var r = nodeRect(type);
         return {x: r.x + r.w / 2, y: r.y + r.h / 2};
+    }
+    // Half-diagonal of each box (the largest gap two boxes could need
+    // regardless of their relative angle) plus a fixed gap, not one
+    // flat distance for every pair -- a flat rest length shorter than
+    // a tall box's own footprint had springs and the AABB separation
+    // force fighting each other every frame (pull together, shove
+    // apart, repeat), which read as boxes "stuck" vibrating against
+    // each other instead of settling.
+    function restLengthFor(a, b){
+        var ra = nodeBase[a], rb = nodeBase[b];
+        var halfA = Math.sqrt(ra.w * ra.w + ra.h * ra.h) / 2;
+        var halfB = Math.sqrt(rb.w * rb.w + rb.h * rb.h) / 2;
+        return halfA + halfB + AUTO_EDGE_GAP;
     }
     function applyOffset(type){
         var node = nodeElementByType[type];
@@ -2600,7 +2666,7 @@ function html.diagram_js(nonce)
             var pa = nodeCenter(from), pb = nodeCenter(to);
             var dx = pb.x - pa.x, dy = pb.y - pa.y;
             var dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
-            var force = (dist - AUTO_SPRING_LENGTH) * AUTO_SPRING;
+            var force = (dist - restLengthFor(from, to)) * AUTO_SPRING;
             var fx = (dx / dist) * force, fy = (dy / dist) * force;
             nodeVel[from].vx += fx; nodeVel[from].vy += fy;
             nodeVel[to].vx -= fx; nodeVel[to].vy -= fy;
@@ -4098,7 +4164,7 @@ function html.render_index(db_path, entity_types, edges, nonce)
     </script>
 </div>
 %s
-""", platform_container_css(800), platform_page_header_css(), html.relation_diagram_css(), html.popover_css(),
+""", platform_container_css(1400), platform_page_header_css(), html.relation_diagram_css(), html.popover_css(),
      index_header, list_or_empty, diagram_html, nonce, html.diagram_js(nonce))
 end
 
