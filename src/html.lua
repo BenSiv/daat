@@ -2618,9 +2618,27 @@ function html.diagram_js(nonce)
     var AUTO_ITERATIONS = 300;
     var AUTO_T0 = Math.max(vb0.width, vb0.height) / 10;
     var AUTO_CENTER_PULL = 0.01;
+    // A node with no edges has nothing else pulling it toward the rest
+    // of the graph -- a connected node is anchored by its spring, but
+    // an isolated one only has this one weak term opposing every other
+    // node's repulsion, so it equilibrates arbitrarily far away
+    // ("lost in the void") unless its own pull is much stronger.
+    var AUTO_CENTER_PULL_ISOLATED = 0.12;
+    // Backstop regardless of how well the force balance is tuned --
+    // nothing should ever be able to drift further than this from
+    // center, isolated or not.
+    var AUTO_MAX_DIST_FROM_CENTER = Math.max(vb0.width, vb0.height) * 0.75;
     var AUTO_CLEANUP_ITERATIONS = 40;
     var AUTO_BOX_MARGIN = 16;
     var autoRunning = false;
+
+    var degree = {};
+    types.forEach(function(type){ degree[type] = 0; });
+    edges.forEach(function(edge){
+        var from = edge.getAttribute('data-from'), to = edge.getAttribute('data-to');
+        if(degree[from] != null){ degree[from]++; }
+        if(degree[to] != null && to !== from){ degree[to]++; }
+    });
 
     function nodeRect(type){
         var base = nodeBase[type], off = nodeOffsets[type];
@@ -2675,11 +2693,24 @@ function html.diagram_js(nonce)
         });
         types.forEach(function(type){
             var c = nodeCenter(type);
-            disp[type].x += (centerX - c.x) * AUTO_CENTER_PULL;
-            disp[type].y += (centerY - c.y) * AUTO_CENTER_PULL;
+            var pull = (degree[type] > 0) ? AUTO_CENTER_PULL : AUTO_CENTER_PULL_ISOLATED;
+            disp[type].x += (centerX - c.x) * pull;
+            disp[type].y += (centerY - c.y) * pull;
             var len = Math.sqrt(disp[type].x * disp[type].x + disp[type].y * disp[type].y) || 0.01;
             var capped = Math.min(len, temperature);
             moveBy(type, (disp[type].x / len) * capped, (disp[type].y / len) * capped);
+
+            // Hard backstop: clamp back onto the max-distance circle
+            // around center regardless of how the force balance played
+            // out this step.
+            var nc = nodeCenter(type);
+            var fromCenterX = nc.x - centerX, fromCenterY = nc.y - centerY;
+            var distFromCenter = Math.sqrt(fromCenterX * fromCenterX + fromCenterY * fromCenterY);
+            if(distFromCenter > AUTO_MAX_DIST_FROM_CENTER){
+                var scale = AUTO_MAX_DIST_FROM_CENTER / distFromCenter;
+                var targetX = centerX + fromCenterX * scale, targetY = centerY + fromCenterY * scale;
+                moveBy(type, targetX - nc.x, targetY - nc.y);
+            }
         });
     }
 
