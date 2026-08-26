@@ -2374,7 +2374,10 @@ function html.render_relation_diagram(db_path, entity_types, edges)
     end
 
     return string.format("""
-<div class="platform-diagram-hint">Hover an entity to see its relations; click its header to browse it.</div>
+<div class="platform-diagram-hint">
+    Hover an entity to see its relations; click its header to browse it; drag a box to rearrange.
+    <button type="button" class="platform-diagram-auto-arrange" id="platform-diagram-auto-arrange">Auto-arrange</button>
+</div>
 <div class="platform-diagram-scroll">
 <svg id="platform-diagram-svg" viewBox="0 0 %d %d" width="%d" height="%d">
     %s
@@ -2386,7 +2389,8 @@ end
 
 function html.relation_diagram_css()
     return """
-        .platform-diagram-hint { color: var(--platform-muted, #64748b); font-size: 0.85rem; margin-bottom: 10px; }
+        .platform-diagram-hint { display: flex; align-items: center; gap: 14px; color: var(--platform-muted, #64748b); font-size: 0.85rem; margin-bottom: 10px; }
+        .platform-diagram-auto-arrange { margin-left: auto; background: none; border: none; padding: 0; color: var(--platform-accent, #4f46e5); font-size: 0.85rem; font-weight: 600; cursor: pointer; text-decoration: underline; flex-shrink: 0; }
         .platform-diagram-scroll { overflow: auto; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); background: var(--platform-bg, #f8fafc); }
         .platform-diagram-edge line { stroke: var(--platform-border, #cbd5e1); stroke-width: 1.5; transition: stroke 0.15s ease, opacity 0.15s ease; }
         .platform-diagram-edge.platform-diagram-edge-active line { stroke: var(--platform-accent, #4f46e5); stroke-width: 2.5; }
@@ -2400,7 +2404,8 @@ function html.relation_diagram_css()
         .platform-diagram-row-name.platform-diagram-row-pk { font-weight: 700; text-decoration: underline; fill: var(--platform-heading, #0f172a); }
         .platform-diagram-row-name.platform-diagram-row-required { font-weight: 700; }
         .platform-diagram-row-type { font-size: 10px; fill: var(--platform-muted, #94a3b8); text-anchor: end; }
-        .platform-diagram-node { cursor: pointer; }
+        .platform-diagram-node { cursor: grab; }
+        .platform-diagram-node.platform-diagram-node-dragging { cursor: grabbing; }
         .platform-diagram-node:hover .platform-diagram-box, .platform-diagram-node:focus .platform-diagram-box { stroke: var(--platform-accent, #4f46e5); stroke-width: 2.5; }
         .platform-diagram-node.platform-diagram-node-dim { opacity: 0.25; }
 """
@@ -2453,6 +2458,190 @@ function html.diagram_js(nonce)
         });
         return isRelated;
     }
+
+    // -- Drag-to-reposition (doc/relation-diagram-interactivity.md).
+    // No physics/simulation here, unlike /knowledge-graph -- this
+    // layout already starts from a sane packed grid, a live sim would
+    // just be solving a problem that doesn't exist for this page. Each
+    // node's own <g> gets a translate() offset (its child rects/text
+    // stay in the server-computed coordinates untouched); edges are
+    // separate elements connecting specific field *rows*, not box
+    // centers, so each one's original x1/y1/x2/y2 is captured once at
+    // load and re-derived from its two endpoint boxes' current offsets
+    // on every move, rather than recomputed from scratch.
+    var LAYOUT_CACHE_KEY = 'platform-relation-diagram-layout-v1';
+    var nodeOffsets = {};
+
+    function loadCachedOffsets(){
+        try {
+            var raw = window.localStorage.getItem(LAYOUT_CACHE_KEY);
+            return raw ? JSON.parse(raw) : null;
+        } catch(err) { return null; }
+    }
+    function saveCachedOffsets(){
+        try { window.localStorage.setItem(LAYOUT_CACHE_KEY, JSON.stringify(nodeOffsets)); }
+        catch(err) { /* private browsing / storage disabled / quota -- skip, not load-bearing */ }
+    }
+    function svgPoint(ev){
+        var pt = svg.createSVGPoint();
+        pt.x = ev.clientX; pt.y = ev.clientY;
+        var ctm = svg.getScreenCTM();
+        if(!ctm){ return {x: ev.clientX, y: ev.clientY}; }
+        var p = pt.matrixTransform(ctm.inverse());
+        return {x: p.x, y: p.y};
+    }
+    function updateEdgesFor(type){
+        edges.forEach(function(edge){
+            var from = edge.getAttribute('data-from'), to = edge.getAttribute('data-to');
+            if(from !== type && to !== type){ return; }
+            var orig = edge._platformOrig;
+            if(!orig){ return; }
+            var fromOff = nodeOffsets[from] || {dx: 0, dy: 0};
+            var toOff = nodeOffsets[to] || {dx: 0, dy: 0};
+            var line = edge.querySelector('line');
+            line.setAttribute('x1', orig.x1 + fromOff.dx);
+            line.setAttribute('y1', orig.y1 + fromOff.dy);
+            line.setAttribute('x2', orig.x2 + toOff.dx);
+            line.setAttribute('y2', orig.y2 + toOff.dy);
+            var texts = edge.querySelectorAll('text');
+            texts[0].setAttribute('x', orig.labels[0].x + fromOff.dx);
+            texts[0].setAttribute('y', orig.labels[0].y + fromOff.dy);
+            texts[1].setAttribute('x', orig.labels[1].x + toOff.dx);
+            texts[1].setAttribute('y', orig.labels[1].y + toOff.dy);
+        });
+    }
+    edges.forEach(function(edge){
+        var line = edge.querySelector('line');
+        var texts = edge.querySelectorAll('text');
+        edge._platformOrig = {
+            x1: parseFloat(line.getAttribute('x1')), y1: parseFloat(line.getAttribute('y1')),
+            x2: parseFloat(line.getAttribute('x2')), y2: parseFloat(line.getAttribute('y2')),
+            labels: [
+                {x: parseFloat(texts[0].getAttribute('x')), y: parseFloat(texts[0].getAttribute('y'))},
+                {x: parseFloat(texts[1].getAttribute('x')), y: parseFloat(texts[1].getAttribute('y'))}
+            ]
+        };
+    });
+    var nodeBase = {};
+    var nodeElementByType = {};
+    nodes.forEach(function(node){
+        var type = node.getAttribute('data-entity-type');
+        nodeOffsets[type] = {dx: 0, dy: 0};
+        nodeElementByType[type] = node;
+        var rect = node.querySelector('.platform-diagram-box');
+        nodeBase[type] = {
+            x: parseFloat(rect.getAttribute('x')), y: parseFloat(rect.getAttribute('y')),
+            w: parseFloat(rect.getAttribute('width')), h: parseFloat(rect.getAttribute('height'))
+        };
+    });
+    var cached = loadCachedOffsets();
+
+    // -- Auto-arrange: a force-directed pass to shorten edges and tend
+    // to reduce crossings, on request rather than on every load (would
+    // otherwise blow away a manual drag arrangement every visit). Runs
+    // from the CURRENT positions -- the packed grid on first load, or
+    // wherever boxes already sit -- not a random scatter like /knowledge-
+    // graph, so it's refining an already-reasonable layout rather than
+    // solving from scratch, and settles fast. Boxes vary in size (field
+    // count), so pairwise separation is AABB-overlap-based (push apart
+    // along whichever axis has less overlap) rather than knowledge_
+    // graph's point/circle repulsion, which would either crowd big boxes
+    // or over-space small ones at the same "radius."
+    var AUTO_BOX_MARGIN = 24;
+    var AUTO_SEPARATION = 0.6;
+    var AUTO_SPRING = 0.02;
+    var AUTO_SPRING_LENGTH = 260;
+    var AUTO_DAMPING = 0.8;
+    var AUTO_MAX_SPEED = 25;
+    var AUTO_CENTER_PULL = 0.001;
+    var AUTO_SLEEP_ENERGY = 0.05;
+    var autoRunning = false;
+    var nodeVel = {};
+    var types = Object.keys(nodeBase);
+
+    function nodeRect(type){
+        var base = nodeBase[type], off = nodeOffsets[type];
+        return {x: base.x + off.dx, y: base.y + off.dy, w: base.w, h: base.h};
+    }
+    function nodeCenter(type){
+        var r = nodeRect(type);
+        return {x: r.x + r.w / 2, y: r.y + r.h / 2};
+    }
+    function applyOffset(type){
+        var node = nodeElementByType[type];
+        if(node){ node.setAttribute('transform', 'translate(' + nodeOffsets[type].dx + ',' + nodeOffsets[type].dy + ')'); }
+        updateEdgesFor(type);
+    }
+
+    function autoStep(centerX, centerY){
+        for(var i = 0; i < types.length; i++){
+            for(var j = i + 1; j < types.length; j++){
+                var a = types[i], b = types[j];
+                var ra = nodeRect(a), rb = nodeRect(b);
+                var ax1 = ra.x - AUTO_BOX_MARGIN, ay1 = ra.y - AUTO_BOX_MARGIN, ax2 = ra.x + ra.w + AUTO_BOX_MARGIN, ay2 = ra.y + ra.h + AUTO_BOX_MARGIN;
+                var overlapX = Math.min(ax2, rb.x + rb.w) - Math.max(ax1, rb.x);
+                var overlapY = Math.min(ay2, rb.y + rb.h) - Math.max(ay1, rb.y);
+                if(overlapX <= 0 || overlapY <= 0){ continue; }
+                var ca = nodeCenter(a), cb = nodeCenter(b);
+                if(overlapX < overlapY){
+                    var dirX = (ca.x <= cb.x) ? -1 : 1;
+                    var fx = dirX * overlapX * AUTO_SEPARATION;
+                    nodeVel[a].vx += fx; nodeVel[b].vx -= fx;
+                } else {
+                    var dirY = (ca.y <= cb.y) ? -1 : 1;
+                    var fy = dirY * overlapY * AUTO_SEPARATION;
+                    nodeVel[a].vy += fy; nodeVel[b].vy -= fy;
+                }
+            }
+        }
+        edges.forEach(function(edge){
+            var from = edge.getAttribute('data-from'), to = edge.getAttribute('data-to');
+            if(!nodeBase[from] || !nodeBase[to] || from === to){ return; }
+            var pa = nodeCenter(from), pb = nodeCenter(to);
+            var dx = pb.x - pa.x, dy = pb.y - pa.y;
+            var dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+            var force = (dist - AUTO_SPRING_LENGTH) * AUTO_SPRING;
+            var fx = (dx / dist) * force, fy = (dy / dist) * force;
+            nodeVel[from].vx += fx; nodeVel[from].vy += fy;
+            nodeVel[to].vx -= fx; nodeVel[to].vy -= fy;
+        });
+        var energy = 0;
+        types.forEach(function(type){
+            var v = nodeVel[type], c = nodeCenter(type);
+            v.vx += (centerX - c.x) * AUTO_CENTER_PULL;
+            v.vy += (centerY - c.y) * AUTO_CENTER_PULL;
+            v.vx *= AUTO_DAMPING; v.vy *= AUTO_DAMPING;
+            v.vx = Math.max(-AUTO_MAX_SPEED, Math.min(AUTO_MAX_SPEED, v.vx));
+            v.vy = Math.max(-AUTO_MAX_SPEED, Math.min(AUTO_MAX_SPEED, v.vy));
+            nodeOffsets[type].dx += v.vx;
+            nodeOffsets[type].dy += v.vy;
+            applyOffset(type);
+            energy += v.vx * v.vx + v.vy * v.vy;
+        });
+        return types.length > 0 ? energy / types.length : 0;
+    }
+
+    function autoLoop(){
+        var vb = svg.viewBox.baseVal;
+        var energy = autoStep(vb.width / 2, vb.height / 2);
+        if(energy > AUTO_SLEEP_ENERGY){
+            requestAnimationFrame(autoLoop);
+        } else {
+            autoRunning = false;
+            saveCachedOffsets();
+        }
+    }
+
+    var autoBtn = document.getElementById('platform-diagram-auto-arrange');
+    if(autoBtn){
+        autoBtn.addEventListener('click', function(){
+            if(autoRunning){ return; }
+            types.forEach(function(type){ nodeVel[type] = {vx: 0, vy: 0}; });
+            autoRunning = true;
+            requestAnimationFrame(autoLoop);
+        });
+    }
+
     nodes.forEach(function(node){
         var type = node.getAttribute('data-entity-type');
         function highlight(){
@@ -2478,7 +2667,43 @@ function html.diagram_js(nonce)
         node.addEventListener('focus', highlight);
         node.addEventListener('mouseleave', clear);
         node.addEventListener('blur', clear);
+
+        if(cached && cached[type]){
+            nodeOffsets[type] = {dx: cached[type].dx, dy: cached[type].dy};
+            node.setAttribute('transform', 'translate(' + nodeOffsets[type].dx + ',' + nodeOffsets[type].dy + ')');
+            updateEdgesFor(type);
+        }
+
+        var moved = false, startX = 0, startY = 0, startOffset = {dx: 0, dy: 0};
+        function onMove(ev){
+            var p = svgPoint(ev);
+            var dx = p.x - startX, dy = p.y - startY;
+            if(Math.abs(dx) > 2 || Math.abs(dy) > 2){ moved = true; }
+            nodeOffsets[type] = {dx: startOffset.dx + dx, dy: startOffset.dy + dy};
+            node.setAttribute('transform', 'translate(' + nodeOffsets[type].dx + ',' + nodeOffsets[type].dy + ')');
+            updateEdgesFor(type);
+        }
+        function onUp(){
+            window.removeEventListener('mousemove', onMove);
+            window.removeEventListener('mouseup', onUp);
+            node.classList.remove('platform-diagram-node-dragging');
+            saveCachedOffsets();
+        }
+        node.addEventListener('mousedown', function(ev){
+            if(ev.button !== 0){ return; }
+            moved = false;
+            var p = svgPoint(ev);
+            startX = p.x; startY = p.y;
+            startOffset = {dx: nodeOffsets[type].dx, dy: nodeOffsets[type].dy};
+            node.classList.add('platform-diagram-node-dragging');
+            node.parentNode.appendChild(node); // bring to front while dragging, above any box it's moved over
+            ev.preventDefault();
+            window.addEventListener('mousemove', onMove);
+            window.addEventListener('mouseup', onUp);
+        });
+
         node.addEventListener('click', function(){
+            if(moved){ return; }
             window.location.href = 'browse?type=' + encodeURIComponent(type);
         });
         node.addEventListener('keydown', function(e){
