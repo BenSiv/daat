@@ -21,6 +21,7 @@ RUN apt-get update -y && apt-get install -y \
         libcrypt-dev \
         cmark-gfm \
         bats \
+        jq \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Optional MariaDB backend support (doc/mariadb-migration.md). Comment
