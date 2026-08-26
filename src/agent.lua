@@ -21,6 +21,7 @@ auth = require("auth")
 template = require("template")
 config = require("config")
 view = require("view")
+web_search = require("web_search")
 
 agent = {}
 
@@ -1058,6 +1059,24 @@ AGENT_TOOLS = {
             },
         },
     },
+    -- destructive=true here isn't about a write -- it's a real data
+    -- exit (the query text, and anything from this conversation the
+    -- model folds into it, leaves this system). Marking it destructive
+    -- gets per-call human approval for free from the same pending-
+    -- action flow every write tool already goes through -- see
+    -- web_search.lua's own header for why this is a plain custom tool,
+    -- not one of a provider's native server-executed search tools.
+    internet_search = {
+        search = {
+            destructive = true,
+            description = "Search the public internet for current information. Returns up to 5 results, each with a title, source URL, and a short snippet. Always cite the source URL when using information from a result in your reply -- never state a web-sourced fact without attributing it to the specific URL it came from.",
+            parameters = {
+                type = "object",
+                properties = {query = {type = "string", description = "search text"}},
+                required = {"query"},
+            },
+        },
+    },
 }
 
 function agent.is_known_tool(tool_name, method_name)
@@ -1714,6 +1733,17 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
         return "Task #" .. tostring(target_id) .. " is still " .. tostring(task.status) .. "."
     end
 
+    if tool_name == "internet_search" and method_name == "search" then
+        if args.query == nil or args.query == "" then
+            return nil, "search requires query"
+        end
+        response, err = web_search.search(args.query)
+        if response == nil then
+            return nil, err
+        end
+        return web_search.format_results(response)
+    end
+
     return nil, "unknown tool: " .. tostring(tool_name) .. "." .. tostring(method_name)
 end
 
@@ -1932,6 +1962,13 @@ about Z -- which do you mean?").
 
 If you don't already know an entity type's fields, call entity.fields first
 rather than guessing field names.
+
+When you use internet_search results in a reply, always cite your sources:
+include the specific URL next to any fact, claim, or quote drawn from a
+result. Never present information from a web search as if it were your own
+knowledge, and never drop the URL just because you already stated it earlier
+in the same reply -- restate it wherever it's needed to trace a claim back to
+its source.
 
 Tools are only for reaching data you don't already have -- looking things
 up, changing them. They are not a gate on what you're allowed to do with
