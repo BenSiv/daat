@@ -3463,7 +3463,9 @@ function html.render_knowledge_graph(nonce)
         var REPULSION = 6000;
         var SPRING = 0.02;
         var SPRING_LENGTH = 70;
-        var DAMPING = 0.85;
+        var SPRING_STRENGTH_CAP = 3; // caps a heavily-reinforced edge's pull -- raw_strength grows unbounded over time (link-strength-redesign.md), layout shouldn't
+        var DAMPING = 0.8; // was 0.85 -- kills more velocity per frame, so overshoot/oscillation dies out instead of visibly jittering
+        var MAX_SPEED = 8; // per-axis px/frame clamp -- keeps any single step's force spike (e.g. two nodes landing very close) from reading as a jerk
         var CENTER_PULL = 0.001;
         var SLEEP_ENERGY = 0.02;
         var simRunning = false;
@@ -3484,9 +3486,14 @@ function html.render_knowledge_graph(nonce)
             links.forEach(function(e) {
                 var a = byId[e.from], b = byId[e.to];
                 if (!a || !b) { return; }
+                // Weighted by the edge's own strength -- previously flat
+                // regardless of raw_strength, so a well-worn connection
+                // and a barely-reinforced one pulled exactly as hard.
+                var strength = (typeof e.strength === 'number') ? e.strength : 1.0;
+                var pull = Math.min(SPRING_STRENGTH_CAP, Math.max(0.2, strength));
                 var dx = b.x - a.x, dy = b.y - a.y;
                 var dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
-                var force = (dist - SPRING_LENGTH) * SPRING;
+                var force = (dist - SPRING_LENGTH) * SPRING * pull;
                 var fx = (dx / dist) * force, fy = (dy / dist) * force;
                 if (!a.fixed) { a.vx += fx; a.vy += fy; }
                 if (!b.fixed) { b.vx -= fx; b.vy -= fy; }
@@ -3498,6 +3505,8 @@ function html.render_knowledge_graph(nonce)
                 n.vy += (h / 2 - n.y) * CENTER_PULL;
                 n.vx *= DAMPING;
                 n.vy *= DAMPING;
+                n.vx = Math.max(-MAX_SPEED, Math.min(MAX_SPEED, n.vx));
+                n.vy = Math.max(-MAX_SPEED, Math.min(MAX_SPEED, n.vy));
                 n.x += n.vx;
                 n.y += n.vy;
                 energy += n.vx * n.vx + n.vy * n.vy;
@@ -3508,10 +3517,16 @@ function html.render_knowledge_graph(nonce)
         function simLoop() {
             var energy = simStep(canvas.width, canvas.height);
             draw();
-            if (energy > SLEEP_ENERGY) {
+            // Per-node average, not the raw sum -- a sum grows with the
+            // pool's own size regardless of how settled any individual
+            // node is, so on a real-sized graph it could sit above a
+            // fixed threshold indefinitely and never actually sleep.
+            var avgEnergy = nodes.length > 0 ? energy / nodes.length : 0;
+            if (avgEnergy > SLEEP_ENERGY) {
                 requestAnimationFrame(simLoop);
             } else {
                 simRunning = false;
+                saveCachedLayout();
             }
         }
 
@@ -3522,18 +3537,83 @@ function html.render_knowledge_graph(nonce)
             }
         }
 
+        // Settled positions persist across page loads in this browser
+        // (per viewer, not shared/synced -- purely a return-visit
+        // convenience, never load-bearing for the graph itself, which
+        // always still comes from /knowledge-graph-data). Saved once
+        // the sim goes idle -- including after a manual drag resettles,
+        // so a rearrangement sticks too, not just the original
+        // auto-layout.
+        var LAYOUT_CACHE_KEY = 'platform-kg-layout-v1';
+
+        function loadCachedLayout() {
+            try {
+                var raw = window.localStorage.getItem(LAYOUT_CACHE_KEY);
+                return raw ? JSON.parse(raw) : null;
+            } catch (err) {
+                return null;
+            }
+        }
+
+        function saveCachedLayout() {
+            try {
+                var positions = {};
+                nodes.forEach(function(n) { positions[n.id] = { x: n.x, y: n.y }; });
+                window.localStorage.setItem(LAYOUT_CACHE_KEY, JSON.stringify(positions));
+            } catch (err) {
+                // Private browsing, storage disabled, quota -- fine to
+                // skip; next load just falls back to a fresh layout.
+            }
+        }
+
         function layout() {
             var w = canvas.width, h = canvas.height;
+            var cached = loadCachedLayout();
+            var neighborsOf = {};
+            links.forEach(function(e) {
+                if (!neighborsOf[e.from]) { neighborsOf[e.from] = []; }
+                if (!neighborsOf[e.to]) { neighborsOf[e.to] = []; }
+                neighborsOf[e.from].push(e.to);
+                neighborsOf[e.to].push(e.from);
+            });
+            var uncachedCount = 0;
             nodes.forEach(function(n) {
-                n.x = Math.random() * w;
-                n.y = Math.random() * h;
+                var pos = cached ? cached[n.id] : null;
+                if (pos) {
+                    n.x = pos.x;
+                    n.y = pos.y;
+                } else {
+                    uncachedCount++;
+                    // A node with no cached position (new since the
+                    // last visit, or no cache at all) spawns near any
+                    // already-positioned neighbor instead of a random
+                    // spot -- reads as "joining its connections," not
+                    // flying in from nowhere -- falling back to random
+                    // only when it has no positioned neighbor either.
+                    var neighborIds = neighborsOf[n.id] || [];
+                    var sumX = 0, sumY = 0, count = 0;
+                    neighborIds.forEach(function(nid) {
+                        var np = cached ? cached[nid] : null;
+                        if (np) { sumX += np.x; sumY += np.y; count++; }
+                    });
+                    if (count > 0) {
+                        n.x = (sumX / count) + (Math.random() - 0.5) * 40;
+                        n.y = (sumY / count) + (Math.random() - 0.5) * 40;
+                    } else {
+                        n.x = Math.random() * w;
+                        n.y = Math.random() * h;
+                    }
+                }
                 n.vx = 0;
                 n.vy = 0;
                 n.fixed = false;
             });
-            // A quick batch settle first so the initial paint isn't a
-            // chaotic random scatter, then hand off to the live loop.
-            for (var iter = 0; iter < 120; iter++) { simStep(w, h); }
+            // A layout that's fully or mostly cached starts near
+            // equilibrium already -- only a from-scratch or
+            // mostly-new-nodes layout needs the larger synchronous
+            // pre-settle so the initial paint isn't a chaotic scatter.
+            var settleIterations = (cached == null || uncachedCount > nodes.length / 2) ? 120 : 20;
+            for (var iter = 0; iter < settleIterations; iter++) { simStep(w, h); }
             wakeSimulation();
         }
 
