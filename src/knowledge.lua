@@ -190,10 +190,10 @@ function knowledge.get_document(db_path, document_id)
     -- Phase 3 cutover (see doc/heat-decay-redesign.md): effective_heat
     -- is now the conserved-pool view, not the old wall-clock decay.
     document.ensure_pool_state(db_path)
-    state_rows = db.query(db_path, "SELECT pool_scale FROM knowledge_pool_state WHERE id = 1;")
+    state_rows = db.query(db_path, "SELECT log_pool_scale FROM knowledge_pool_state WHERE id = 1;")
     pool_scale = 1.0
     if state_rows != nil and state_rows[1] != nil then
-        pool_scale = state_rows[1].pool_scale
+        pool_scale = math.exp(tonumber(state_rows[1].log_pool_scale))
     end
     doc.effective_heat = document.pool_effective_heat(doc.raw_heat, doc.scale_at_write, pool_scale)
     return doc
@@ -1052,10 +1052,10 @@ end
 -- loses nothing a SQL-side ORDER BY would have preserved.
 function attach_and_sort_by_pool_heat(db_path, rows)
     document.ensure_pool_state(db_path)
-    state_rows = db.query(db_path, "SELECT pool_scale FROM knowledge_pool_state WHERE id = 1;")
+    state_rows = db.query(db_path, "SELECT log_pool_scale FROM knowledge_pool_state WHERE id = 1;")
     pool_scale = 1.0
     if state_rows != nil and state_rows[1] != nil then
-        pool_scale = state_rows[1].pool_scale
+        pool_scale = math.exp(tonumber(state_rows[1].log_pool_scale))
     end
     for _, row in ipairs(rows) do
         row.effective_heat = document.pool_effective_heat(row.raw_heat, row.scale_at_write, pool_scale)

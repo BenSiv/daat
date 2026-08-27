@@ -348,6 +348,20 @@ function entity.create(db_path, entity_type, values, author, source)
     extension.enqueue_after_hooks(db_path, config.extensions_dir(),
         "entity.after_create", entity_type, entity_id, values, nil)
 
+    -- Lazy require, not a module-top-level one: entity.lua must never
+    -- require document.lua (document.lua already requires entity.lua;
+    -- the reverse would be circular). Safe here since entity.create
+    -- only ever runs during real request/CLI handling, long after
+    -- every module has already loaded once -- same reasoning as the
+    -- archive/unarchive hooks below. Called from the one choke point
+    -- every document creation passes through (generic CLI/API callers
+    -- included, not just document.create_page's own direct call) so
+    -- knowledge_pool_state.document_count can't drift out from under a
+    -- caller that doesn't know to register it itself -- see
+    -- document.on_entity_created and doc/heat-decay-redesign.md.
+    document_pool_hook = require("document")
+    document_pool_hook.on_entity_created(db_path, entity_type, entity_id)
+
     return entity_id, issues
 end
 

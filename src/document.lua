@@ -218,11 +218,16 @@ end
 -- raw_heat is read against (see document.pool_effective_heat below);
 -- `document_count` is the active (non-archived, non-merged) count,
 -- maintained incrementally so no reinforcement event ever needs a
--- COUNT(*) scan.
+-- COUNT(*) scan. `pool_scale` itself is kept only for rollback (Phase
+-- 4) -- no longer written or read; `log_pool_scale` is authoritative.
+-- See "The representation change" in doc/heat-decay-redesign.md for why
+-- only this shared value needs log-space (each row's own
+-- scale_at_write stays linear, unaffected).
 KNOWLEDGE_POOL_STATE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS knowledge_pool_state (
     id INTEGER PRIMARY KEY,
     pool_scale REAL NOT NULL DEFAULT 1.0,
+    log_pool_scale REAL NOT NULL DEFAULT 0.0,
     document_count INTEGER NOT NULL DEFAULT 0
 );
 """
@@ -234,12 +239,41 @@ CREATE TABLE IF NOT EXISTS knowledge_pool_state (
 -- document.register_pool_document just below, which needs this).
 BASE_HEAT = 1.0
 
+-- Retrofits `log_pool_scale` onto an existing knowledge_pool_state
+-- table (KNOWLEDGE_POOL_STATE_SCHEMA's CREATE TABLE IF NOT EXISTS only
+-- covers a brand-new table). For an install that already has real
+-- traffic -- a `pool_scale` drifted away from its 1.0 default -- seeds
+-- log_pool_scale = ln(pool_scale) from that existing value, a genuine
+-- one-time migration, not a blind reset to 0.0 (see "Migration" in
+-- doc/heat-decay-redesign.md, Phase 4). A no-op every call after the
+-- first, and for a fresh install where the column already came from
+-- the CREATE TABLE itself.
+function ensure_knowledge_pool_state_log_scale_column(db_path)
+    existing = db.get_columns(db_path, "knowledge_pool_state")
+    have = {}
+    for _, name in ipairs(existing) do
+        have[name] = true
+    end
+    if have["log_pool_scale"] != nil then
+        return
+    end
+    db.exec(db_path, "ALTER TABLE knowledge_pool_state ADD COLUMN log_pool_scale REAL NOT NULL DEFAULT 0.0;")
+    rows = db.query(db_path, "SELECT pool_scale FROM knowledge_pool_state WHERE id = 1;")
+    if rows != nil and rows[1] != nil then
+        db.exec(db_path, string.format(
+            "UPDATE knowledge_pool_state SET log_pool_scale = %.17g WHERE id = 1;",
+            math.log(tonumber(rows[1].pool_scale))
+        ))
+    end
+end
+
 -- Seeds the single state row exactly once, from a one-time COUNT(*) --
 -- the only place this design scans the whole pool (see "Migration of
 -- existing values" in doc/heat-decay-redesign.md). A no-op every call
 -- after the first.
 function document.ensure_pool_state(db_path)
     db.exec(db_path, KNOWLEDGE_POOL_STATE_SCHEMA)
+    ensure_knowledge_pool_state_log_scale_column(db_path)
     rows = db.query(db_path, "SELECT id FROM knowledge_pool_state WHERE id = 1;")
     if rows != nil and rows[1] != nil then
         return
@@ -251,9 +285,36 @@ function document.ensure_pool_state(db_path)
         count = tonumber(count_rows[1].n)
     end
     db.exec(db_path, string.format(
-        "%s knowledge_pool_state (id, pool_scale, document_count) VALUES (1, 1.0, %d);",
+        "%s knowledge_pool_state (id, pool_scale, log_pool_scale, document_count) VALUES (1, 1.0, 0.0, %d);",
         db.insert_ignore(db_path), count
     ))
+end
+
+-- Backfill for document_count drift -- the manual correction for
+-- whatever entity.create's own on_entity_created hook can't reach (a
+-- raw SQL insert, a restored backup, a bulk load run before this hook
+-- existed), the same class of command as reindex-embeddings/
+-- resync-links for document.create_page's other two side effects.
+-- Recomputes document_count from a real COUNT(*) over active documents
+-- -- the same one-time scan ensure_pool_state's own initial seed uses
+-- -- and overwrites the stored value with it. Doesn't (can't) recover
+-- any individual document's own raw_heat/scale_at_write for whatever
+-- window it went unregistered; realigns the aggregate invariant
+-- (`total = document_count * BASE_HEAT`) for every reinforcement from
+-- this point on, which is what the conservation guarantee actually
+-- depends on going forward.
+function document.resync_pool_count(db_path)
+    document.ensure_pool_state(db_path)
+    count_rows = db.query(db_path,
+        "SELECT COUNT(*) AS n FROM document WHERE (archived_at IS NULL OR archived_at = '') AND merged_into IS NULL;")
+    count = 0
+    if count_rows != nil and count_rows[1] != nil then
+        count = tonumber(count_rows[1].n)
+    end
+    db.exec(db_path, string.format(
+        "UPDATE knowledge_pool_state SET document_count = %d WHERE id = 1;", count
+    ))
+    return count
 end
 
 -- Registers a document with the pool -- either genuinely new, or
@@ -269,11 +330,11 @@ end
 -- archive time (return_pool_heat), so reusing it here would double it.
 function document.register_pool_document(db_path, document_id)
     document.ensure_pool_state(db_path)
-    state_rows = db.query(db_path, "SELECT pool_scale FROM knowledge_pool_state WHERE id = 1;")
+    state_rows = db.query(db_path, "SELECT log_pool_scale FROM knowledge_pool_state WHERE id = 1;")
     if state_rows == nil or state_rows[1] == nil then
         return
     end
-    pool_scale = tonumber(state_rows[1].pool_scale)
+    pool_scale = math.exp(tonumber(state_rows[1].log_pool_scale))
     db.exec(db_path, string.format(
         "UPDATE document SET raw_heat = %.17g, scale_at_write = %.17g WHERE id = %d;",
         BASE_HEAT, pool_scale, tonumber(document_id)
@@ -666,7 +727,11 @@ end
 -- entity.create/update + document.sync_links together -- the full
 -- "save a document" sequence, shared by the web save route and the agent's
 -- document tool so the two can never drift apart on what "saving a
--- document" actually entails.
+-- document" actually entails. Pool registration itself isn't called
+-- here anymore -- entity.create's own on_entity_created hook does it
+-- for every document creation, this path included (see
+-- document.on_entity_created), so calling it again here would register
+-- the same new row twice.
 function document.create_page(db_path, author, title, parent_id, content, source)
     values = {title = title, content = content, parent_id = parent_id}
     created_id, issues = entity.create(db_path, "document", values, author, source)
@@ -675,7 +740,6 @@ function document.create_page(db_path, author, title, parent_id, content, source
     end
     document.sync_links(db_path, created_id, content)
     document.reindex_embedding(db_path, created_id)
-    document.register_pool_document(db_path, created_id)
     return created_id, issues
 end
 
@@ -1065,12 +1129,13 @@ function document.reinforce_pool_heat(db_path, document_id, delta)
         return nil
     end
 
-    state_rows = db.query(db_path, "SELECT pool_scale, document_count FROM knowledge_pool_state WHERE id = 1;")
+    state_rows = db.query(db_path, "SELECT log_pool_scale, document_count FROM knowledge_pool_state WHERE id = 1;")
     if state_rows == nil or state_rows[1] == nil then
         return nil
     end
-    pool_scale = tonumber(state_rows[1].pool_scale)
+    log_pool_scale = tonumber(state_rows[1].log_pool_scale)
     document_count = tonumber(state_rows[1].document_count)
+    pool_scale = math.exp(log_pool_scale)
 
     doc_rows = db.query(db_path, string.format(
         "SELECT raw_heat, scale_at_write FROM document WHERE id = %d;", tonumber(document_id)
@@ -1082,36 +1147,51 @@ function document.reinforce_pool_heat(db_path, document_id, delta)
 
     total = document_count * BASE_HEAT
     denominator = total - x_eff
-    f = 1.0
-    if denominator > 0 then
-        -- Degenerate pool (one document, or a badly drifted total)
-        -- falls through with f left at 1.0 -- redistributing
-        -- proportionally over nothing left to take from would divide
-        -- by zero or go negative. Skip the shared-pool shrink this
-        -- once; X still gets its own reinforcement below.
-        f = 1 - (delta / denominator)
-    end
 
-    new_pool_scale = pool_scale * f
+    -- Exponential redistribution (doc/heat-decay-redesign.md, Phase 4):
+    -- f = exp(-delta/denominator) stays in (0, 1) for ANY delta >= 0,
+    -- by construction -- unlike the old f = 1 - delta/denominator,
+    -- there is no delta that drives this negative or past zero, so no
+    -- floor/clamp is needed. `extracted` (not the raw `delta`) is what
+    -- X actually receives -- exact conservation falls out of the same
+    -- substitution that makes f safe, not a separate clamp on both
+    -- sides of the transfer.
+    log_f = 0.0
+    extracted = 0.0
+    if denominator > 0 then
+        log_f = -(delta / denominator)
+        extracted = denominator * (1 - math.exp(log_f))
+    end
+    -- denominator <= 0: degenerate pool (one document, or a badly
+    -- drifted total) -- nothing left to redistribute from. log_f/
+    -- extracted stay 0: no shrink applied, X gets nothing extra
+    -- either, matching "a single-document pool must hold x_eff
+    -- exactly at BASE_HEAT forever."
+
+    new_log_pool_scale = log_pool_scale + log_f
+    new_pool_scale = math.exp(new_log_pool_scale)
+
     db.exec(db_path, string.format(
-        "UPDATE knowledge_pool_state SET pool_scale = pool_scale * %.17g WHERE id = 1;", f
+        "UPDATE knowledge_pool_state SET log_pool_scale = log_pool_scale + %.17g WHERE id = 1;", log_f
     ))
 
     -- raw_heat is written as an expression over the row's own live
     -- columns (read by this UPDATE at lock time), not as a value
     -- computed once above and written back absolute -- see the
     -- function comment above for why that's what actually closes the
-    -- same-row concurrency gap.
+    -- same-row concurrency gap. Pure arithmetic (*, /, +) only -- the
+    -- log-space value was already linearized above, so this needs no
+    -- EXP()/LN() SQL function from either SQLite or MariaDB.
     db.exec(db_path, string.format(
         "UPDATE document SET raw_heat = (raw_heat * (%.17g / scale_at_write)) + %.17g, scale_at_write = %.17g WHERE id = %d;",
-        pool_scale, delta, new_pool_scale, tonumber(document_id)
+        pool_scale, extracted, new_pool_scale, tonumber(document_id)
     ))
 
     -- Best-effort return value for callers/logging -- reflects this
     -- call's own read, which is exactly right in the common
     -- uncontended case, but nothing in this codebase reads it for a
     -- decision that depends on it being exact under a genuine race.
-    return x_eff + delta
+    return x_eff + extracted
 end
 
 -- The reverse of reinforce_pool_heat, for a document leaving the pool
@@ -1123,12 +1203,13 @@ end
 function document.return_pool_heat(db_path, document_id)
     document.ensure_pool_state(db_path)
 
-    state_rows = db.query(db_path, "SELECT pool_scale, document_count FROM knowledge_pool_state WHERE id = 1;")
+    state_rows = db.query(db_path, "SELECT log_pool_scale, document_count FROM knowledge_pool_state WHERE id = 1;")
     if state_rows == nil or state_rows[1] == nil then
         return
     end
-    pool_scale = tonumber(state_rows[1].pool_scale)
+    log_pool_scale = tonumber(state_rows[1].log_pool_scale)
     document_count = tonumber(state_rows[1].document_count)
+    pool_scale = math.exp(log_pool_scale)
 
     doc_rows = db.query(db_path, string.format(
         "SELECT raw_heat, scale_at_write FROM document WHERE id = %d;", tonumber(document_id)
@@ -1147,10 +1228,16 @@ function document.return_pool_heat(db_path, document_id)
         return
     end
 
+    -- This f (a departing document returning its heat to survivors,
+    -- the reverse of reinforce_pool_heat above) is always strictly
+    -- positive for document_count >= 2 -- guarded just above -- so
+    -- math.log(f) is always safe here; it's the growth-side analogue
+    -- of the shrink-side bug Phase 4 fixed, and doesn't share that bug
+    -- (see doc/heat-decay-redesign.md, Phase 4).
     f = 1 + ((x_eff - BASE_HEAT) / denominator)
     db.exec(db_path, string.format(
-        "UPDATE knowledge_pool_state SET pool_scale = pool_scale * %.17g, document_count = document_count - 1 WHERE id = 1;",
-        f
+        "UPDATE knowledge_pool_state SET log_pool_scale = log_pool_scale + %.17g, document_count = document_count - 1 WHERE id = 1;",
+        math.log(f)
     ))
 end
 
@@ -1161,6 +1248,22 @@ end
 -- unarchive -- never from inside entity.lua itself, which must never
 -- require document.lua (document.lua already requires entity.lua; the
 -- reverse would be circular).
+-- Called from entity.create's own single choke point (see the comment
+-- there), for every entity_type, not just "document" -- filters here
+-- the same way on_entity_archived/on_entity_unarchived do, so
+-- entity.create itself never needs to know this hook is document-
+-- specific. Covers every creation path uniformly (CLI create/create-
+-- json, the v1 API, the agent's generic entity.create tool, extension
+-- manifests, and document.create_page's own direct entity.create call)
+-- -- document.create_page no longer calls register_pool_document
+-- itself, since this hook now does it for that path too, exactly once.
+function document.on_entity_created(db_path, entity_type, entity_id)
+    if entity_type != "document" then
+        return
+    end
+    document.register_pool_document(db_path, entity_id)
+end
+
 function document.on_entity_archived(db_path, entity_type, entity_id)
     if entity_type != "document" then
         return
@@ -1563,10 +1666,10 @@ function document.search(db_path, query_text, limit, use_semantic)
     -- rather than each row decaying independently against its own
     -- last_retrieved_at.
     document.ensure_pool_state(db_path)
-    pool_state_rows = db.query(db_path, "SELECT pool_scale FROM knowledge_pool_state WHERE id = 1;")
+    pool_state_rows = db.query(db_path, "SELECT log_pool_scale FROM knowledge_pool_state WHERE id = 1;")
     pool_scale = 1.0
     if pool_state_rows != nil and pool_state_rows[1] != nil then
-        pool_scale = pool_state_rows[1].pool_scale
+        pool_scale = math.exp(tonumber(pool_state_rows[1].log_pool_scale))
     end
 
     json = require("dkjson")
@@ -1688,7 +1791,19 @@ function document.do_document(cmd_args, db_path)
         return
     end
 
-    print("Usage: daat document <create-json|reindex-embeddings [entity_id]|resync-links [entity_id]>")
+    -- Backfill for knowledge_pool_state.document_count drift (see
+    -- document.resync_pool_count) -- shouldn't be needed in normal
+    -- operation now that entity.create's own hook registers every
+    -- document creation, but recovers from it if something ever
+    -- bypasses entity.create entirely (a raw SQL import, a restored
+    -- backup predating that hook).
+    if action == "resync-pool" then
+        count = document.resync_pool_count(db_path)
+        print("document_count resynced to " .. tostring(count))
+        return
+    end
+
+    print("Usage: daat document <create-json|reindex-embeddings [entity_id]|resync-links [entity_id]|resync-pool>")
 end
 
 return document

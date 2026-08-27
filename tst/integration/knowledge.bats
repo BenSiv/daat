@@ -131,7 +131,14 @@ search_for_bioreactor_extra() {
 
     run "$BIN" knowledge list 0
     [[ "$output" =~ "Bioreactor Notes" ]]
-    [[ "$output" =~ "raw_heat=1.15" ]]
+    # Bioreactor Notes is the only document in the pool at the moment
+    # this retrieval reinforces it (the chat-session transcript document
+    # below is only created afterward) -- a conserved pool of one has
+    # nothing to redistribute from, so exponential redistribution
+    # (doc/heat-decay-redesign.md, Phase 4) correctly leaves it at
+    # exactly BASE_HEAT rather than manufacturing heat from nothing the
+    # way the old, buggy formula did.
+    [[ "$output" =~ "raw_heat=1" ]]
 }
 
 @test "searching for the same document twice reuses its own row (no duplicate), but retrieval alone never promotes it (content-maturity, not retrieval count)" {
@@ -165,11 +172,17 @@ search_for_bioreactor_extra() {
     # <=120 words) -- it's "simple", landing at tier 1 (Curated Draft).
     long_content=$(printf 'word %.0s' $(seq 1 130))
     "$BIN" entity update document 1 content="$long_content"
+    # Two retrievals to reliably cross due_for_review's retrieval_count
+    # >= 2 gate -- the heat side of that gate (doc/heat-decay-redesign.md,
+    # Phase 4) can no longer be counted on to cross 1.15 from a single
+    # hit: exponential redistribution means a document always receives
+    # strictly less than the raw nominal delta once there's any other
+    # document in the pool to draw from, so retrieval_count is the
+    # reliable trigger here, not heat. document.was_revised is true (a
+    # real entity.update ledger event exists for this document).
+    search_for_bioreactor
     search_for_bioreactor
 
-    # A single retrieval already crosses due_for_review (heat 1.0 -> 1.15
-    # on the very first hit) -- document.was_revised is now true (a real
-    # entity.update ledger event exists for this document).
     run "$BIN" knowledge list 1
     [[ "$output" =~ "Bioreactor Notes" ]]
     run "$BIN" knowledge list 0
