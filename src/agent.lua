@@ -575,6 +575,32 @@ function agent.last_console_query_sql(db_path, session_id)
     return nil
 end
 
+-- True exactly for an assistant row that is a turn's real, final reply
+-- -- i.e. the response run_turn (this file) accepted with no
+-- toolCall block attached (stopReason "stop"/"length"), as opposed to
+-- an earlier round in the same turn that narrated some text ("Let me
+-- check that...") alongside a toolCall it also proposed. Both kinds
+-- of row have the same `role` ("assistant") and, once narration is
+-- present, both can have non-empty display text -- this is the one
+-- signal that tells them apart for the chat widget (html.lua's
+-- render()), so it's computed from the raw stored blocks, before
+-- agent.display_content collapses them down to plain text.
+function agent.assistant_message_is_final(content)
+    if content == nil then
+        return false
+    end
+    decoded, _, _ = json.decode(content)
+    if decoded == nil or decoded.blocks == nil then
+        return false
+    end
+    for _, block in ipairs(decoded.blocks) do
+        if block.type == "toolCall" then
+            return false
+        end
+    end
+    return true
+end
+
 function agent.all_messages(db_path, session_id, include_tool_calls)
     if include_tool_calls == nil then
         include_tool_calls = true
@@ -592,6 +618,9 @@ function agent.all_messages(db_path, session_id, include_tool_calls)
             -- skip: raw tool output, not for a human reading the live
             -- transcript -- see this function's own comment.
         else
+            if row.role == "assistant" then
+                row.is_final = agent.assistant_message_is_final(row.content)
+            end
             row.content = agent.display_content(row.content, row.role, include_tool_calls)
             skip_empty_assistant = include_tool_calls == false and row.role == "assistant" and
                 (row.content == nil or string.gsub(row.content, "%s", "") == "")

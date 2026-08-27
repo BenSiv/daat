@@ -5118,6 +5118,13 @@ function platform_chat_widget_css()
 .platform-chat-compaction_summary { font-style: italic; color: var(--platform-muted, #64748b); }
 .platform-chat-self_check { font-style: italic; color: var(--platform-muted, #64748b); border-left: 3px solid #fbbf24; }
 .platform-chat-out-of-context { opacity: 0.45; }
+/* A turn's real final answer (agent.assistant_message_is_final) vs.
+   every other step in the transcript (narration alongside a tool call,
+   raw tool results, self-check) -- the bottom line should read as the
+   one thing the user actually came for, everything else as a receding
+   "how we got here" trail above it. */
+.platform-chat-final { background: #eef2ff; border: 1px solid var(--platform-accent, #4f46e5); font-size: 0.92rem; }
+.platform-chat-step { opacity: 0.65; font-size: 0.8rem; }
 .platform-chat-pending { padding: 14px; border: 1px solid #fde68a; background: #fffbeb; border-radius: var(--platform-radius-md, 12px); }
 .platform-chat-widget-input {
     display: flex; gap: 6px; padding: 10px; border-top: 1px solid var(--platform-border, #e2e8f0);
@@ -5201,14 +5208,27 @@ function html.render_chat_widget(nonce)
         } else {
             var html = '';
             state.messages.forEach(function(msg){
-                var label = ROLE_LABELS[msg.role] || msg.role;
+                // is_final (agent.assistant_message_is_final, agent.lua)
+                // tells a turn's real bottom-line reply apart from an
+                // earlier round in the same turn that narrated some
+                // text alongside a tool call it also proposed -- both
+                // are role "assistant" with non-empty text, so without
+                // this flag they'd render identically.
+                var isFinal = msg.role === 'assistant' && msg.is_final === true;
+                var label = isFinal ? 'Answer' : (ROLE_LABELS[msg.role] || msg.role);
                 var body = MARKDOWN_ROLES[msg.role] ? msg.content : PlatformJS.escapeHtml(msg.content);
-                html += '<div class="platform-chat-msg platform-chat-' + msg.role + '"><strong>' + PlatformJS.escapeHtml(label) + ':</strong> ' + body + '</div>';
-                // Feedback only makes sense on a real answer -- not on
-                // the user's own message, a tool result, or a
-                // compaction summary the user never actually sees as a
-                // "reply".
-                if (msg.role === 'assistant') {
+                var extraClass = '';
+                if (isFinal) {
+                    extraClass = ' platform-chat-final';
+                } else if (msg.role === 'assistant' || msg.role === 'tool_result' || msg.role === 'self_check') {
+                    extraClass = ' platform-chat-step';
+                }
+                html += '<div class="platform-chat-msg platform-chat-' + msg.role + extraClass + '"><strong>' + PlatformJS.escapeHtml(label) + ':</strong> ' + body + '</div>';
+                // Feedback only makes sense on a turn's real final
+                // answer -- not on the user's own message, a tool
+                // result, in-turn narration, or a compaction summary
+                // the user never actually sees as a "reply".
+                if (isFinal) {
                     html += '<div class="platform-chat-feedback" data-feedback-for="' + msg.id + '">' +
                         '<button type="button" data-feedback-message="' + msg.id + '" data-feedback="up" title="Helpful">👍</button>' +
                         '<button type="button" data-feedback-message="' + msg.id + '" data-feedback="down" title="Not helpful">👎</button>' +
@@ -5347,6 +5367,59 @@ function html.render_chat_widget(nonce)
         return el;
     }
 
+    // Shown the instant the user hits send, before the server has even
+    // seen the message -- run_turn (agent.lua) can take several
+    // round-trips before it returns, and without this the user's own
+    // words disappeared from the screen the moment they hit send (the
+    // input was cleared) until the whole turn finished. This is purely
+    // a placeholder: the very next render(state), whether from a poll
+    // tick or the final response, redraws the real persisted row in
+    // its place (agent.run_turn persists the user message before doing
+    // anything else, so it's already there well before the turn ends).
+    function appendOptimisticUserMessage(text) {
+        var empty = messagesEl.querySelector('.platform-chat-widget-empty');
+        if (empty) { empty.remove(); }
+        var el = document.createElement('div');
+        el.className = 'platform-chat-msg platform-chat-user';
+        el.innerHTML = '<strong>You:</strong> ' + PlatformJS.escapeHtml(text);
+        messagesEl.appendChild(el);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    var HISTORY_POLL_MS = 800;
+    // run_turn (agent.lua) persists each step -- the user message, each
+    // assistant round, every tool result -- to agent_message as it
+    // happens, well before the request that's running it returns. So
+    // rather than sitting on "Thinking..." until the whole (possibly
+    // multi-tool-call) turn completes, poll the same read-only history
+    // endpoint the widget already uses for page-load rehydration and
+    // redraw as real rows land -- no server or provider changes needed,
+    // this is just reading what's already there sooner. `sendPromise`
+    // is the in-flight send/approve call itself; once it resolves (or
+    // fails) polling stops and the final state wins.
+    function pollWhilePending(sessionId, sendPromise) {
+        var thinkingEl = showThinking();
+        var timer = setInterval(function(){
+            fetch('api/chat-widget-history?session_id=' + encodeURIComponent(sessionId))
+                .then(function(res){ if (!res.ok) { throw new Error('poll failed'); } return res.json(); })
+                .then(function(state){
+                    render(state);
+                    thinkingEl = showThinking();
+                })
+                .catch(function(){ /* transient -- the next tick tries again */ });
+        }, HISTORY_POLL_MS);
+        return sendPromise.then(function(state){
+            clearInterval(timer);
+            thinkingEl.remove();
+            render(state);
+            return state;
+        }, function(err){
+            clearInterval(timer);
+            thinkingEl.remove();
+            throw err;
+        });
+    }
+
     // A rejected fetch (network drop, a request landing mid-server-
     // restart, CORS, whatever) would otherwise vanish completely -- the
     // thinking indicator removed and nothing else happening, so a real
@@ -5382,20 +5455,17 @@ function html.render_chat_widget(nonce)
         if (window.PLATFORM_PAGE_CONTEXT && window.PLATFORM_PAGE_CONTEXT.current_user) {
             text = '[Current user: ' + window.PLATFORM_PAGE_CONTEXT.current_user + ']\n' + text;
         }
-        var thinkingEl = showThinking();
+        appendOptimisticUserMessage(typedText);
         ensureSession().then(function(sessionId){
-            return PlatformJS.postJSON('api/chat-widget-send', {session_id: sessionId, message: text});
-        }).then(function(state){ thinkingEl.remove(); render(state); })
-          .catch(function(){ thinkingEl.remove(); showFetchError(); input.value = typedText; });
+            return pollWhilePending(sessionId, PlatformJS.postJSON('api/chat-widget-send', {session_id: sessionId, message: text}));
+        }).catch(function(){ showFetchError(); input.value = typedText; });
     });
 
     messagesEl.addEventListener('click', function(e){
         var sessionId = localStorage.getItem(STORAGE_KEY);
         if (e.target.hasAttribute('data-approve')) {
-            var thinkingEl = showThinking();
-            PlatformJS.postJSON('api/chat-widget-approve', {pending_id: e.target.getAttribute('data-approve'), session_id: sessionId})
-                .then(function(state){ thinkingEl.remove(); render(state); })
-                .catch(function(){ thinkingEl.remove(); showFetchError(); });
+            pollWhilePending(sessionId, PlatformJS.postJSON('api/chat-widget-approve', {pending_id: e.target.getAttribute('data-approve'), session_id: sessionId}))
+                .catch(function(){ showFetchError(); });
         } else if (e.target.hasAttribute('data-deny')) {
             PlatformJS.postJSON('api/chat-widget-deny', {pending_id: e.target.getAttribute('data-deny'), session_id: sessionId}).then(render);
         } else if (e.target.hasAttribute('data-feedback')) {
