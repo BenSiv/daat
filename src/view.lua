@@ -75,7 +75,11 @@ function view.is_select_only(sql_text)
     trimmed = string.gsub(sql_text, "^%s+", "")
     trimmed = string.gsub(trimmed, "%s+$", "")
     lowered = string.lower(trimmed)
-    if string.find(lowered, "^select") == nil then
+    -- A CTE ("WITH x AS (...) SELECT ...") is still a single read-only
+    -- statement -- allowed on the same footing as a plain SELECT, not a
+    -- looser check: the trailing FORBIDDEN_SQL_WORDS/no-semicolon checks
+    -- below still apply to the whole text either way.
+    if string.find(lowered, "^select") == nil and string.find(lowered, "^with%f[%A]") == nil then
         return false
     end
 
@@ -547,11 +551,11 @@ end
 -- FROM clause), including old-style comma-joined table lists
 -- ("FROM a, b" -- not just "FROM a JOIN b"). Scans the whole query
 -- text, not just its top level, so a table referenced only inside a
--- subquery is still caught -- deliberately does NOT special-case CTEs
--- (a WITH-clause alias would be checked against the allowlist and
--- rejected as an unregistered "table" too); a real but accepted
--- limitation for this first version, not a silent gap -- the model
--- can express anything needed here as a direct join instead.
+-- subquery is still caught. A WITH-clause alias (see cte_names below)
+-- is excluded from the allowlist check by the caller -- otherwise a
+-- CTE's own name would be checked against the schema registry and
+-- rejected as an unregistered "table", even though it's a local alias
+-- the query defines itself, not a real table.
 function extract_after_keyword(lowered_sql, keyword, names)
     start = 1
     while true do
@@ -587,6 +591,24 @@ function referenced_table_names(sql_text)
     return names
 end
 
+-- Names a WITH-clause defines ("WITH a AS (...), b AS (...) SELECT ...").
+-- Still string-matching, not a real parser (same accepted rigor level
+-- as guess_tables/referenced_table_names above): "<ident> AS (" is a
+-- specific enough shape that it only matches a CTE definition, never a
+-- column alias (which can't take a parenthesized value) or a derived-
+-- table alias (there the "(" comes before "AS", not after).
+function cte_names(sql_text)
+    names = {}
+    lowered = string.lower(sql_text)
+    if string.find(lowered, "^%s*with%f[%A]") == nil then
+        return names
+    end
+    for ident in string.gmatch(lowered, "([%a_][%w_]*)%s+as%s*%(") do
+        table.insert(names, ident)
+    end
+    return names
+end
+
 -- A separate, smaller default cap than platform_adhoc_row_cap -- that
 -- one is sized for a human reading an HTML table in a browser; this
 -- result goes straight into the model's own prompt/context, where 1000
@@ -608,6 +630,9 @@ function view.run_agent_query(db_path, sql_text)
     allowed = {}
     for _, t in ipairs(schema.list(db_path)) do
         allowed[t.name] = true
+    end
+    for _, name in ipairs(cte_names(sql_text)) do
+        allowed[name] = true
     end
     for _, name in ipairs(referenced) do
         if allowed[name] == nil then

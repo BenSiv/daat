@@ -110,6 +110,24 @@ function test_is_select_only_rejects_ddl()
     check(view.is_select_only("SELECT updated_at FROM sample;") == true, "a column literally named updated_at must not be rejected as containing UPDATE")
 end
 
+function test_is_select_only_accepts_a_leading_with_clause()
+    print("Testing is_select_only: a CTE (WITH ... SELECT) is accepted, same as a plain SELECT")
+    check(view.is_select_only("WITH totals AS (SELECT 1) SELECT * FROM totals;") == true,
+        "a WITH-prefixed query should be accepted")
+    check(view.is_select_only("  WITH totals AS (SELECT 1) SELECT * FROM totals;") == true,
+        "leading whitespace before WITH shouldn't matter")
+    check(view.is_select_only("WITHOUT_A_SPACE_IS_NOT_WITH SELECT 1") == false,
+        "a bare word starting with 'with' isn't the WITH keyword")
+end
+
+function test_is_select_only_still_rejects_ddl_inside_a_with_clause()
+    print("Testing is_select_only: a CTE query still rejects DDL/stacked statements")
+    check(view.is_select_only("WITH totals AS (SELECT 1) DROP TABLE sample;") == false,
+        "DDL after a WITH clause should still be rejected")
+    check(view.is_select_only("WITH totals AS (SELECT 1) SELECT * FROM totals; DROP TABLE sample;") == false,
+        "a stacked statement after a WITH query should still be rejected")
+end
+
 -- Run them
 test_guess_from_table_plain()
 test_guess_from_table_aliased()
@@ -122,6 +140,8 @@ test_reference_columns_across_join()
 test_reference_columns_first_table_wins_collision()
 test_reference_columns_nil_table_list()
 test_is_select_only_rejects_ddl()
+test_is_select_only_accepts_a_leading_with_clause()
+test_is_select_only_still_rejects_ddl_inside_a_with_clause()
 
 if FAILURES > 0 then
     print(FAILURES .. " test(s) failed")

@@ -485,6 +485,28 @@ EOF
     [[ "$output" =~ '```' ]]
 }
 
+@test "plot.from_query accepts a CTE (WITH clause) query -- the real active-samples-over-time shape, not just a plain SELECT" {
+    write_reading_schema
+    "$BIN" entity create reading day=0 value=5 >/dev/null
+    "$BIN" entity create reading day=1 value=8 >/dev/null
+    "$BIN" entity create reading day=2 value=3 >/dev/null
+
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    sql='WITH doubled AS (SELECT day, value * 2 AS doubled_value FROM reading) SELECT day, doubled_value FROM doubled ORDER BY day'
+    args="$(printf '{"sql":"%s","x_column":"day","y_column":"doubled_value"}' "$sql")"
+    scripted="$(tool_call_response "plot.from_query" "$args")"$'\1'"$(done_response "Here you go.")"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"plot doubled values\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ '```plot' ]]
+    [[ "$output" =~ '\"x\":[0,1,2]' ]]
+    [[ "$output" =~ '\"y\":[10,16,6]' ]]
+    [[ ! "$output" =~ "is not a registered entity type" ]]
+    [[ ! "$output" =~ "not a plain SELECT" ]]
+}
+
 @test "plot.from_query reports a clear error when x_column/y_column aren't in the query's own result columns" {
     write_reading_schema
     "$BIN" entity create reading day=0 value=5 >/dev/null
@@ -515,6 +537,24 @@ EOF
     run latest_tool_result "$session_id"
     [[ "$output" =~ "isn't numeric" ]]
     [[ "$output" =~ '"is_error":true' ]]
+}
+
+@test "entity.query accepts a CTE (WITH clause) query, not just a plain SELECT" {
+    write_task_schema
+    "$BIN" entity create task title="Ship it" status=open >/dev/null
+    "$BIN" entity create task title="Also ship it" status=open >/dev/null
+    "$BIN" entity create task title="Done already" status=done >/dev/null
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    sql='WITH open_tasks AS (SELECT * FROM task WHERE status = '"'"'open'"'"') SELECT '"'"'open'"'"' AS status, COUNT(*) AS n FROM open_tasks'
+    scripted="$(tool_call_response "entity.query" "$(printf '{"sql":"%s"}' "$sql")")"$'\1'"$(done_response "Counted.")"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"how many open tasks\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "| 2" ]]
+    [[ ! "$output" =~ "not a plain SELECT" ]]
+    [[ ! "$output" =~ "is not a registered entity type" ]]
 }
 
 @test "entity.query refuses non-SELECT SQL the same way the admin /sql console does" {

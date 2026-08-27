@@ -42,6 +42,15 @@ Deliberately returns fence *text*, not a rendered SVG -- reuses `document.render
 
 Scoped to one series per call deliberately -- every real request so far has been a single series from a single query; a `series_column`-style pivot into multiple series was left out rather than built ahead of a demonstrated need.
 
+### CTE support (`WITH ... SELECT`)
+
+Confirmed live, immediately after shipping `plot.from_query`: the model wrote an "active samples over time" query as a CTE (`WITH daily_changes AS (...), cumulative_changes AS (...) SELECT ...` -- the natural shape for a running-total query), got `"refusing to run: not a plain SELECT"`, concluded the tool couldn't handle it, and silently fell back to `entity.query` + hand-transcription -- the exact failure mode `plot.from_query` exists to remove. Two real gaps in the shared validation (`view.is_select_only` / `view.run_agent_query`, also used by `entity.query` and the `/sql` console), not one:
+
+1. `view.is_select_only` required the statement to literally start with `select` -- a `WITH`-prefixed query failed before anything else was even inspected. Fixed by also accepting a leading `with` (word-boundary-checked, same `%f[]` idiom the DDL-keyword check already uses) -- the no-semicolon and `FORBIDDEN_SQL_WORDS` checks after it still apply to the whole statement unchanged, so this doesn't loosen the actual safety boundary at all.
+2. `view.run_agent_query`'s table allowlist checks every `FROM`/`JOIN` name against the schema registry -- a CTE's own alias (e.g. `daily_changes`) isn't a registered entity type and would be rejected as if it were an unknown table. Fixed with a new `cte_names` helper (`view.lua`, same "best-effort regex, not a real parser" rigor as the file's existing `guess_tables`) that recognizes `<name> AS (` inside a leading `WITH` clause and adds those names to the allowed set alongside real registered tables. A CTE can't be used to smuggle access to a real disallowed table under a borrowed name either: SQL's own CTE scoping means a `WITH sample AS (...)` shadows the real `sample` table for the rest of that query, it doesn't expose it.
+
+Benefits `entity.query` and the `/sql` console identically, since all three share this validation -- not a `plot.from_query`-specific patch.
+
 ## Known limitation
 
 Covers real data plots only (line/scatter/bar), not conceptual diagrams (flowcharts, ER diagrams, sequence diagrams) -- Mermaid would have covered both; this doesn't. Deliberate, matching the explicit "at least for now, we'll see if we need more later" scoping this was built to. See [doc/agent-mermaid-diagrams.md](agent-mermaid-diagrams.md) for where to pick that back up if a real diagramming need shows up.
