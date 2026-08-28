@@ -14,7 +14,7 @@ The sandboxing mechanism (`src/sandbox.lua`) is genuinely minimal: `loadstring` 
 
 **#53 (chat attachments)** needed a new route (`/api/chat-widget-attach`) and a new capability (shelling out to `pdftotext`/`pandoc`). Neither fits any existing hook. It landed as `config.platform_config().chat_attachments_enabled` (default off) -- the same pattern `agent_provider`/`db_backend` already use.
 
-**`web_search.lua`** is a second case: a single hardcoded Google Custom Search integration, with its own header comment stating "There's exactly one search backend today, so this is a plain module, not a swappable-provider abstraction." A deployment wanting Bing, or an internal search API, has no seam to plug into -- forking `web_search.lua` is the only option today.
+**`web_search.lua`** is a second case: a single hardcoded Google Custom Search integration, with its own header comment stating "There's exactly one search backend today, so this is a plain module, not a swappable-provider abstraction." A deployment wanting Bing, or an internal search API, has no seam to plug into -- forking `web_search.lua` is the only option today. *(Update: this exact gap was closed by generalizing `agent_provider.lua`'s own facade pattern into a named third tier -- see doc/architecture.md's "Providers" section -- and migrating search onto it as `search_provider.lua` + `src/provider/search_google_cse.lua`. Read as historical -- the gap described here motivated fixing itself.)*
 
 Both are the same shape: a capability a specific deployment wants, not universal enough for core, with no extension point to land in. The decision here is that this pattern will keep recurring -- worth building the seam once, properly, rather than adding a fourth and fifth config flag later.
 

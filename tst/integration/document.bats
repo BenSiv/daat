@@ -329,7 +329,7 @@ EOF
 @test "an unconfigured/failing embedding provider never fails the page save itself (best-effort)" {
     # Explicitly pinned to vertex with no vertex_project configured
     # (platform.lua's own default field, see config.platform_config())
-    # -- agent_provider_vertex.embeddings returns nil, err gracefully
+    # -- agent_vertex.embeddings returns nil, err gracefully
     # (never throws) -- document.create_page must still succeed and
     # never propagate that failure.
     cat > "${TEST_DIR}/platform.lua" <<'EOF'

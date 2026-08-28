@@ -1,11 +1,11 @@
 #!/usr/bin/env bats
-# tst/integration/web_search.bats
+# tst/integration/search_provider.bats
 # Integration tests for the internet_search.search agent tool
-# (src/web_search.lua, dispatched from src/agent.lua): the destructive-
-# tool approval flow around it, and WEB_SEARCH_TEST_RESULTS (mirrors
-# AGENT_TEST_RESPONSES, but scoped to this one tool's own external side
-# effect -- see src/web_search.lua's own header for why this is the
-# first tool needing that).
+# (src/search_provider.lua's facade, dispatched from src/agent.lua):
+# the destructive-tool approval flow around it, and WEB_SEARCH_TEST_RESULTS
+# (mirrors AGENT_TEST_RESPONSES, but scoped to this one tool's own
+# external side effect -- see src/provider/search_test.lua's own
+# header for why this is the first tool needing that).
 
 load test_helper.bash
 
@@ -77,11 +77,11 @@ start_chat() {
     pending_id=$(json_body "$send_resp" | jq -r '.pending.id')
 
     # Deliberately no WEB_SEARCH_TEST_RESULTS set -- if the backend were
-    # ever called on a denial, and no real credentials exist in this
-    # test environment, that would surface as a credentials error
-    # instead of the plain denial message below, making this a real
-    # (not just asserted) check that denial short-circuits before
-    # web_search.search runs at all.
+    # ever called on a denial, that would surface as the test
+    # provider's own "no results scripted" error instead of the plain
+    # denial message below, making this a real (not just asserted)
+    # check that denial short-circuits before search_provider.search
+    # runs at all.
     run raw_post_json "/api/chat-widget-deny" "{\"pending_id\":${pending_id},\"session_id\":\"${session_id}\"}" "$COOKIE" "$CSRF" "$(done_response "Understood.")"
     [[ "$output" =~ "200 OK" ]]
 
@@ -89,7 +89,7 @@ start_chat() {
     [[ "$output" =~ "denied" ]]
 }
 
-@test "approving a search with no credentials and no test results configured surfaces a clean error, not a crash" {
+@test "approving a search with no test results configured surfaces a clean error, not a crash" {
     resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
     session_id=$(extract_query_param "$resp" "session_id")
 
@@ -101,5 +101,5 @@ start_chat() {
     [[ "$output" =~ "200 OK" ]]
 
     run latest_tool_result "$session_id"
-    [[ "$output" =~ "GOOGLE_SEARCH_API_KEY is not set" ]]
+    [[ "$output" =~ "no results scripted for the test search provider" ]]
 }

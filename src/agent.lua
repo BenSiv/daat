@@ -21,7 +21,7 @@ auth = require("auth")
 template = require("template")
 config = require("config")
 view = require("view")
-web_search = require("web_search")
+search_provider = require("search_provider")
 extension = require("extension")
 
 agent = {}
@@ -366,7 +366,7 @@ function text_only_blocks(blocks)
 end
 
 -- Pulls out Gemini 2.5's own thought-summary blocks (requested via the
--- provider's own thinking config -- see agent_provider_vertex.lua's own
+-- provider's own thinking config -- see agent_vertex.lua's own
 -- .converse()), a real structural signal, not text-pattern matching.
 -- Returns nil (not "") when there's nothing to pull, so callers can
 -- tell "no thinking this turn" apart from "thinking was an empty
@@ -728,7 +728,7 @@ end
 -- (see doc/agent-protocol.md) -- plain, standard JSON Schema, not any
 -- one vendor's dialect. Each agent_provider_<name>.lua translates this
 -- into whatever its own vendor actually requires on the wire (e.g.
--- agent_provider_vertex.lua converts to Gemini's uppercase proto enum,
+-- agent_vertex.lua converts to Gemini's uppercase proto enum,
 -- "OBJECT"/"STRING"/"INTEGER", before calling Vertex -- this file
 -- never speaks that dialect directly; see agent-protocol.md for why
 -- this schema is vendor-neutral rather than Vertex's own convention).
@@ -1130,8 +1130,9 @@ AGENT_TOOLS = {
     -- model folds into it, leaves this system). Marking it destructive
     -- gets per-call human approval for free from the same pending-
     -- action flow every write tool already goes through -- see
-    -- web_search.lua's own header for why this is a plain custom tool,
-    -- not one of a provider's native server-executed search tools.
+    -- search_google_cse.lua's own header for why this is a
+    -- plain custom tool, not one of a provider's native
+    -- server-executed search tools.
     internet_search = {
         search = {
             destructive = true,
@@ -1918,11 +1919,11 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
         if args.query == nil or args.query == "" then
             return nil, "search requires query"
         end
-        response, err = web_search.search(args.query)
+        response, err = search_provider.search(args.query)
         if response == nil then
             return nil, err
         end
-        return web_search.format_results(response)
+        return search_provider.format_results(response)
     end
 
     ext_manifest, ext_tool = find_extension_tool(db_path, tool_name, method_name)
@@ -2002,7 +2003,7 @@ end
 
 -- Builds the real, structured message list agent_provider.converse
 -- sends to the model (this codebase's own canonical shape -- see
--- doc/agent-protocol.md, and agent_provider_vertex.lua's own header
+-- doc/agent-protocol.md, and agent_vertex.lua's own header
 -- for how a provider translates it to/from its real wire format) from
 -- this session's agent_message rows.
 --
@@ -2699,7 +2700,7 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
         -- (auth, rate limit, a malformed request) -- the provider
         -- surfaces the latter as a real, structured reply with
         -- stopReason "error"/"aborted" rather than an exception (see
-        -- agent_provider_vertex.lua's own .converse() comment); treated
+        -- agent_vertex.lua's own .converse() comment); treated
         -- the same way as a connectivity failure from run_turn's own
         -- perspective, since either way there's no usable reply to act
         -- on this turn.

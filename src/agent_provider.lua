@@ -10,12 +10,16 @@
 --     real native tool-calling, not a hand-rolled text tag protocol.
 --   embeddings(model, text) -> (vector, err), optional.
 -- Loaded dynamically by name (config.platform_config().agent_provider,
--- default "vertex" -- agent_provider_vertex.lua's own native structured
--- tool-calling, direct Vertex REST calls) rather than required
--- directly, so swapping providers -- or,
+-- default "vertex" -- src/provider/agent_vertex.lua's own native
+-- structured tool-calling, direct Vertex REST calls) rather than
+-- required directly, so swapping providers -- or,
 -- just as importantly, swapping in the deterministic test provider for
 -- repeatable, cost-free test runs -- is a config change, not a code
--- change.
+-- change. Implementations live under src/provider/ (agent_claude.lua,
+-- agent_vertex.lua, agent_test.lua) -- this facade file itself stays
+-- one level up, since it's the seam every implementation plugs into,
+-- not an implementation itself (see doc/architecture.md's "Providers"
+-- section).
 
 config = require("config")
 
@@ -30,7 +34,7 @@ function agent_provider.name()
 end
 
 function agent_provider.load()
-    ok, mod = pcall(require, "agent_provider_" .. agent_provider.name())
+    ok, mod = pcall(require, "provider.agent_" .. agent_provider.name())
     if ok == false or mod == nil then
         return nil, "could not load agent provider '" .. agent_provider.name() .. "': " .. tostring(mod)
     end

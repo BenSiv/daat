@@ -43,7 +43,7 @@ json = require("dkjson")
 config = require("config")
 external_tool = require("external_tool")
 
-agent_provider_vertex = {}
+agent_vertex = {}
 
 DEFAULT_REGION = "us-central1"
 
@@ -155,7 +155,7 @@ end
 -- functionDeclarations Schema requires the uppercase proto enum instead
 -- ("OBJECT"/"STRING"/"INTEGER") -- a real Vertex call rejects lowercase
 -- `type` outright. This function is this file's own half of that
--- translation (agent_provider_claude.lua
+-- translation (agent_claude.lua
 -- has the equivalent, much smaller, translation for Claude's dialect,
 -- which is already lowercase JSON Schema) -- recurses into `properties`
 -- (each value) and `items` (for arrays); every other key (description,
@@ -314,7 +314,7 @@ function vertex_blocks_from_parts(parts)
     return blocks, has_tool_call
 end
 
--- agent_provider_vertex.converse(model, system_prompt, messages, tools)
+-- agent_vertex.converse(model, system_prompt, messages, tools)
 --   -> (response, err, usage)
 --
 -- Same contract every agent_provider implementation shares (see
@@ -329,7 +329,7 @@ end
 -- behavior, unchanged, shared with .generate()/.embeddings() below) --
 -- the network call itself couldn't be completed at all, nothing
 -- structured to return.
-function agent_provider_vertex.converse(model, system_prompt, messages, tools)
+function agent_vertex.converse(model, system_prompt, messages, tools)
     payload = {contents = vertex_contents_from_messages(messages)}
     if system_prompt != nil and system_prompt != "" then
         payload.systemInstruction = {parts = {{text = system_prompt}}}
@@ -375,7 +375,7 @@ function agent_provider_vertex.converse(model, system_prompt, messages, tools)
     return {content = blocks, stopReason = "stop"}, nil, usage
 end
 
-function agent_provider_vertex.generate(model, system_prompt, prompt)
+function agent_vertex.generate(model, system_prompt, prompt)
     payload = {
         contents = {{role = "user", parts = {{text = prompt}}}},
     }
@@ -397,7 +397,7 @@ function agent_provider_vertex.generate(model, system_prompt, prompt)
     return candidate.content.parts[1].text, nil, usage_from_response(response)
 end
 
-function agent_provider_vertex.embeddings(model, text)
+function agent_vertex.embeddings(model, text)
     response, err = vertex_post(model .. ":predict", {instances = {{content = text}}})
     if response == nil then
         return nil, err
@@ -412,9 +412,9 @@ function agent_provider_vertex.embeddings(model, text)
     return embedding.values
 end
 
--- Exposed purely so tst/unit/agent_provider_vertex.lua can reach it
+-- Exposed purely so tst/unit/agent_vertex.lua can reach it
 -- across the require() boundary -- see the matching comment in
--- agent_provider_claude.lua.
-agent_provider_vertex.vertex_url = vertex_url
+-- agent_claude.lua.
+agent_vertex.vertex_url = vertex_url
 
-return agent_provider_vertex
+return agent_vertex

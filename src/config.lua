@@ -245,6 +245,7 @@ function config.platform_config()
     conf = {
         agent_provider = "vertex",
         agent_model = "gemini-2.5-flash",
+        search_provider = "google_cse",
         vertex_project = nil,
         vertex_region = nil,
         agent_max_turns = 10,
@@ -288,6 +289,9 @@ function config.platform_config()
     end
     if type(parsed.agent_model) == "string" and parsed.agent_model != "" then
         conf.agent_model = parsed.agent_model
+    end
+    if type(parsed.search_provider) == "string" and parsed.search_provider != "" then
+        conf.search_provider = parsed.search_provider
     end
     if type(parsed.vertex_project) == "string" and parsed.vertex_project != "" then
         conf.vertex_project = parsed.vertex_project

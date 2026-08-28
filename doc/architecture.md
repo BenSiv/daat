@@ -40,15 +40,69 @@ daat's own source (`src/`) carries no domain-specific logic and has no required 
 
 Together these are what make the split in doc/schema.md a hard boundary rather than a convention: whatever a deployment actually wants to track (a LIMS's `sample`/`cell_line`/`media_batch`, or anything else entirely) lives entirely in its own `schemas/`/`dropdowns/*.lua` files, interpreted generically by `schema.lua` -- daat's own repo never needs to change, or even know, what those concrete types are. The intent is a base deployment that's robust and minimal on its own, with (almost) all data-shape flexibility pushed out to config-as-code the deployment owns.
 
+## Providers: a third tier between core and extensions
+
+"Core vs. deployment content" above draws one line. In practice there are three tiers, not two -- the third exists in the code already (`agent_provider.lua`) but had never been named or documented as its own category until this section:
+
+1. **Core** (`entity.lua`, `cgi.lua`, `schema.lua`, `agent.lua`'s own `AGENT_TOOLS`, ...): full platform access, ships with daat, reviewed like any other commit, no approval workflow, not swappable.
+2. **Providers** (`agent_provider.lua`/`search_provider.lua` and their implementations under `src/provider/`): also full access, also ships with daat, also no approval workflow -- but organized as a facade dynamically `require`-ing a named implementation module selected by a `platform.lua` field, so switching backends (or substituting a deterministic test stub) is a config change, never a core-file edit.
+3. **Extensions** (a deployment's own `extensions/<name>/`): deployment-authored, sandboxed (`sandbox.extension_env`), capability-checked (`entity.build_ctx`'s narrow `query`/`create_entity`/`update_entity`), admin-approval-gated, invalidated on any capability change -- see "Sandboxed extensibility" below and doc/extensibility.md.
+
+The dividing lines are two independent questions, not one spectrum: *is this deployment-specific, or does it ship with daat itself* (extensions vs. everything else), and *does this need an approval/capability-check boundary at all* (extensions need one because they're someone else's untrusted code; core and providers don't, because both are reviewed the same way daat's own source is). A provider exists because "ships with daat, fully trusted" and "hardcoded into one calling module" are two different properties -- a provider is for capability that's fully trusted but still benefits from being swappable.
+
+Two real providers exist today, both following the exact same shape -- a thin facade file at the top of `src/`, its implementations one level down in `src/provider/`, picked by name via a `platform.lua` field:
+
+- **`agent_provider.lua`** -> `src/provider/agent_claude.lua` / `agent_vertex.lua` / `agent_test.lua`, picked by `agent_provider` (default `"vertex"`).
+- **`search_provider.lua`** -> `src/provider/search_google_cse.lua` / `search_test.lua`, picked by `search_provider` (default `"google_cse"`).
+
+```mermaid
+graph TB
+    subgraph core["Core -- ships with daat, full access, no approval"]
+        cgi["cgi.lua routes"]
+        entitylua["entity.lua / schema.lua"]
+        agenttools["agent.lua: AGENT_TOOLS"]
+    end
+
+    subgraph providers["Providers -- ships with daat, full access, config-selected"]
+        agentprovider["agent_provider.lua (facade)"]
+        searchprovider["search_provider.lua (facade)"]
+        agentclaude["provider/agent_claude.lua"]
+        agentvertex["provider/agent_vertex.lua"]
+        agenttest["provider/agent_test.lua"]
+        searchgcse["provider/search_google_cse.lua"]
+        searchtest["provider/search_test.lua"]
+    end
+
+    subgraph extensions["Extensions -- deployment's own extensions/, sandboxed, capability-checked, approval-gated"]
+        hooks["entity.before_create / after_create hooks"]
+        uiext["capabilities.ui: /ext/name page"]
+        toolext["capabilities.tools: agent tool"]
+    end
+
+    agenttools -- "platform.lua: agent_provider" --> agentprovider
+    agenttools -- "platform.lua: search_provider" --> searchprovider
+    agentprovider -->|require| agentclaude
+    agentprovider -->|require| agentvertex
+    agentprovider -->|require| agenttest
+    searchprovider -->|require| searchgcse
+    searchprovider -->|require| searchtest
+    entitylua -- "entity.build_ctx, capability-checked" --> hooks
+    cgi -- "entity.build_ctx, capability-checked" --> uiext
+    agenttools -- "entity.build_ctx, capability-checked" --> toolext
+```
+
+**Going forward, this is the default shape for any new external-tool integration** -- a facade + at least one named implementation module, config-selected, from the very first version, even before a second real backend exists to switch to. `web_search.lua`'s original shape (a single hardcoded Google Custom Search integration, no facade at all -- see doc/plugin-system-research.md's "gap, and it's not hypothetical" section) was the anti-pattern this fixes, not a model to repeat: it's exactly why `search_provider.lua` exists now. The cost of a facade with only one real implementation is small (one dynamic `require`, one config field); the cost of retrofitting one later, once callers are already coupled to a single hardcoded module, is what actually happened here.
+
 ## Repository layout
 
 ```
 bin/        compiled binary (bld/build.sh's output) -- gitignored, never committed
 bld/        build.sh/test.sh
 doc/        this file, schema.md, extensibility.md
-src/        every *.lua source file -- bld/build.sh globs and bundles all of them
+src/        every *.lua source file, including the src/provider/ subdirectory
+            (see "Providers" above) -- bld/build.sh globs and bundles all of them
             into the single compiled binary, so anything dropped here ships in
-            production, including src/agent_provider_test.lua (see "Chat" below)
+            production, including src/provider/agent_test.lua (see "Chat" below)
 vnd/        vendored, checked-in third-party frontend assets (e.g. the Toast UI
             Editor bundle) -- served via cgi.lua's own /vendor?name=X route,
             no CDN dependency, no build step
@@ -56,7 +110,7 @@ tst/        tst/unit/*.lua (plain Luam scripts, no DB) and
             tst/integration/*.bats (real built binary, real CGI env vars)
 ```
 
-`src/agent_provider_test.lua` is the one file in `src/` that looks like it belongs in `tst/` instead -- it's the deterministic stub LLM backend `platform.lua`'s `agent_provider: "test"` selects (see "Chat"). It has to live in `src/` on purpose: `bld/build.sh` bundles every `src/*.lua` file into the one compiled binary tests run against, and the whole point is that tests exercise that real binary, not a separate test-only build. The tradeoff this creates: nothing today stops `agent_provider: "test"` from ending up in a real deployment's `platform.lua` by mistake (a stray edit, a copy-pasted seed file) -- the app would silently serve canned responses with no error and no visible difference except the content itself. Not fixed as of this writing; worth a safeguard if it ever becomes a real concern.
+`src/provider/agent_test.lua` is the one file in `src/` that looks like it belongs in `tst/` instead -- it's the deterministic stub LLM backend `platform.lua`'s `agent_provider: "test"` selects (see "Chat"). It has to live in `src/` on purpose: `bld/build.sh` bundles every `src/*.lua` file into the one compiled binary tests run against, and the whole point is that tests exercise that real binary, not a separate test-only build. The tradeoff this creates: nothing today stops `agent_provider: "test"` from ending up in a real deployment's `platform.lua` by mistake (a stray edit, a copy-pasted seed file) -- the app would silently serve canned responses with no error and no visible difference except the content itself. Not fixed as of this writing; worth a safeguard if it ever becomes a real concern.
 
 ## History as the source of truth, not a side effect
 
@@ -145,7 +199,7 @@ A built-in assistant, not a bolted-on integration: real per-user conversation se
   |---|---|---|
   | `agent_provider` | `"vertex"` | Which named backend `agent_provider.lua` loads (`"vertex"`, or `"test"` for the deterministic stub) |
   | `agent_model` | `"gemini-2.5-flash"` | The real model name passed to every `generate`/`converse`/`embeddings` call |
-  | `vertex_project` | none (required) | GCP project `agent_provider_vertex.lua`'s REST calls bill against -- never hardcoded |
+  | `vertex_project` | none (required) | GCP project `src/provider/agent_vertex.lua`'s REST calls bill against -- never hardcoded |
   | `vertex_region` | `"us-central1"` | Vertex AI region |
   | `agent_max_turns` | 10 | Main tool-calling turn loop's own budget (`agent.run_turn`) |
   | `agent_research_max_turns` | 6 | `research.investigate`'s isolated sub-loop budget |
@@ -187,7 +241,7 @@ The dividing line isn't "reads vs. writes" or "simple vs. complex" -- it's wheth
 - **Every search is logged and scores tier/heat directly** (`knowledge.search_and_log` wraps `document.search`; `document.search` itself now folds tier/heat reinforcement into its blended lexical+embedding ranking, added only *after* the existing relevance floor -- a heavily-reinforced document that's actually irrelevant to a query is still excluded outright, never ranked highly just because it's "hot"). Documents already folded into a canonical duplicate (`merged_into` set) are excluded from search outright.
 - **Tiers 0-3** (Raw Intake / Curated Draft / Developed Reference / Atomic Record) are driven by **content-processing maturity, not retrieval frequency** (explicit platform-owner redesign; retrieval/heat used to decide the tier directly, and had real problems: "Curated Drafts" implied manual curation when promotion was purely automatic, and "Atomic Records" captured only one of three thresholds a document actually had to clear). A document's `raw_heat` still starts at `BASE_HEAT` (1.0) and is still reinforced by `0.15 + tier_weight` (0/0.10/0.20/0.35 for tiers 0-3) on every retrieval hit, but heat is now a **conserved quantity across the whole pool** rather than a wall-clock-decayed one (see `doc/heat-decay-redesign.md` for the full design and derivation, task #118): the total across every active document always equals `document_count * BASE_HEAT`, and reinforcing one document draws that reinforcement proportionally from every other active document rather than manufacturing new heat from nothing -- `document.pool_effective_heat` is the read-time view of a document's current share. `retrieval_count`/`effective_heat` only decide `knowledge.due_for_review` (retrieval_count>=2 or effective_heat>=1.15 -- a low bar: a single hit's minimum 0.15 delta already crosses it), i.e. whether it's worth spending a ledger round-trip re-checking a document's maturity at all, never which tier it lands in. Once due: Tier 0 -> 1/2/3 requires `document.was_revised` (a real ledger `entity_event` update row exists for this document -- or it was created by `knowledge.distill`, itself a deliberate rewrite) -- otherwise it stays at Tier 0 no matter how many times it's been retrieved. Which of 1/2/3 a revised document reaches then depends on `document.content_shape`: "developed" (multi-section/long -- reaches Tier 2) or "atomic" (short, single-subject, definition-card-shaped -- reaches Tier 3); anything else ("thin"/"simple") is Tier 1. Still genuinely bidirectional -- recomputed fresh from the *current* body every review, not ratcheted upward -- but now that means a document edited back down to a smaller/thinner shape drops back down, not one that's simply stopped being retrieved lately (a well-written Tier-2 article doesn't get worse just because nobody's searched for it this month). Duplicates never move.
 - **Review is rule-based, never an LLM call** for the automatic pass that runs after every retrieval: content shape (heading/paragraph/word counts -- more than one heading or more than six paragraphs is "developed"; <=1 heading, <=2 paragraphs, and 6-120 words is "atomic"; under 6 words is "thin"; otherwise "simple"), duplication (a content hash matched against a lower-id document), title quality (a generic title like "Note" gets regenerated from the document's own first real line), and connectivity (how many other documents were retrieved in the same batch). Content shape/duplication/connectivity/title checks all stay unconditional every review (cheap -- a regex over an already-loaded body, or one indexed `SELECT`); only the tier recompute itself (`document.was_revised`'s ledger query) is gated behind `due_for_review`. **Title retitling and dedup-merging only ever mutate a system/agent-derived document** (`source_type` set) -- a real user-authored document's title or search visibility is never silently changed just because it looks generic or happens to share content with another document; the review status is still recorded for visibility either way.
-- **Full prompt/reasoning/token persistence** (task #87, `knowledge_context`, adapted from `ai_context`): every real model call -- a chat turn, compaction's own summarization call -- persists the *exact* prompt actually sent (`system_prompt` + assembled history, verbatim, not reconstructed later from `agent_message` rows), the model id, and real token counts (`agent_provider_vertex.lua` now parses Vertex's own `usageMetadata`; the deterministic test provider returns matching estimated counts so the same code path is exercised under tests). A reply that leaks visible reasoning (`<think>` tags, "Thinking..." prefixes) gets that reasoning split out into its own document (`source_type = 'reasoning'`, `reasoning_document_id`) rather than a second, parallel log -- reasoning goes through the exact same tiering/retrieval/decay pipeline as everything else, and is attributed to the real logged-in user, not a synthetic actor (the Knowledge Pool folder itself is the only thing authored as `"system"`).
+- **Full prompt/reasoning/token persistence** (task #87, `knowledge_context`, adapted from `ai_context`): every real model call -- a chat turn, compaction's own summarization call -- persists the *exact* prompt actually sent (`system_prompt` + assembled history, verbatim, not reconstructed later from `agent_message` rows), the model id, and real token counts (`src/provider/agent_vertex.lua` now parses Vertex's own `usageMetadata`; the deterministic test provider returns matching estimated counts so the same code path is exercised under tests). A reply that leaks visible reasoning (`<think>` tags, "Thinking..." prefixes) gets that reasoning split out into its own document (`source_type = 'reasoning'`, `reasoning_document_id`) rather than a second, parallel log -- reasoning goes through the exact same tiering/retrieval/decay pipeline as everything else, and is attributed to the real logged-in user, not a synthetic actor (the Knowledge Pool folder itself is the only thing authored as `"system"`).
 - **Chat-reply evaluation + user feedback** (task #87, `knowledge_chat_eval`, adapted from `ai_chat_eval`): every chat reply is classified (`final` / `reasoning-visible` / `error` / `empty`), and the chat widget has a thumbs up/down on each assistant reply (`/api/chat-widget-feedback`, ownership-checked the same way every other chat-widget route already is -- a user can only give feedback on their own conversation's replies).
 - **No more materialization step** -- `knowledge.materialize_note` and its destructive `AGENT_TOOLS.knowledge.materialize` entry were removed under task #106: every pool document already is a real document from the moment it exists, so there's no separate "promote a hidden tracking record into a real document" step left to gate. The old agent-driven review pass (`agent.run_knowledge_review`, `daat knowledge review`) was removed for the same reason -- its one job was deciding what to materialize.
 - **Real agent-driven distillation, on demand** (task #107, `knowledge.distill`): a destructive `AGENT_TOOLS` entry that writes a genuinely new, concise, single-idea document extracted from a source the agent has actually read (via `entity.get`), not a raw mirror of it -- the real replacement for the old materialize/review pass, doing what that pass never actually could (it only ever promoted a tier number). Always starts at tier 0 like any new pool document, filed under the Knowledge Pool folder with `source_type = 'distilled'` pointing back at its source. `knowledge.list`'s tool output includes each document's `content_shape` (`developed`/`atomic`/`thin`/`simple`) so the model can tell what's actually worth distilling from. Triggered explicitly (`daat knowledge distill`, dispatched from `main.lua` directly rather than `knowledge.do_knowledge` itself, for the same knowledge/agent circular-require reason `review` used to be) -- a genuine write, so it pauses for human approval exactly like `document.create`/`entity.create`.

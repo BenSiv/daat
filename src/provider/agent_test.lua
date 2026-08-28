@@ -21,7 +21,7 @@
 -- generate() returns whatever scripted text as-is (no parsing -- its
 -- callers just want plain text). converse() JSON-decodes each scripted
 -- entry into this codebase's own canonical {content, stopReason} shape
--- (agent_provider_vertex.lua's real .converse() returns the same shape,
+-- (agent_vertex.lua's real .converse() returns the same shape,
 -- translated from Vertex's actual wire format) -- e.g.
 -- '{"content":[{"type":"text","text":"hi"}],"stopReason":"stop"}' or
 -- '{"content":[{"type":"toolCall","id":"call_1","name":"document.search","arguments":{"query":"x"}}],"stopReason":"toolUse"}'
@@ -32,7 +32,7 @@
 
 json = require("dkjson")
 
-agent_provider_test = {}
+agent_test = {}
 
 TEST_RESPONSE_INDEX = 0
 
@@ -49,7 +49,7 @@ function estimate_tokens_for_test(text)
     return math.ceil(string.len(text) / 4)
 end
 
-function agent_provider_test.generate(model, system_prompt, prompt)
+function agent_test.generate(model, system_prompt, prompt)
     -- Optional: write the exact system_prompt this call received to a
     -- file, for tests asserting on it directly (e.g. theme.lua's
     -- deployment-configurable system_prompt_extra) rather than
@@ -89,7 +89,7 @@ end
 -- Same scripted-response mechanism as generate() (see this file's own
 -- header) but returns the decoded structured shape converse() callers
 -- expect, rather than raw text.
-function agent_provider_test.converse(model, system_prompt, messages, tools)
+function agent_test.converse(model, system_prompt, messages, tools)
     capture_path = os.getenv("AGENT_TEST_CAPTURE_SYSTEM_PROMPT")
     if capture_path != nil and capture_path != "" then
         capture_file = io.open(capture_path, "w")
@@ -179,7 +179,7 @@ end
 -- A stable, content-derived pseudo-embedding -- not a real semantic
 -- vector, just enough determinism for ranking-formula tests to
 -- exercise the cosine-similarity code path reproducibly.
-function agent_provider_test.embeddings(model, text)
+function agent_test.embeddings(model, text)
     seed = 0
     for i = 1, string.len(text) do
         seed = seed + string.byte(text, i)
@@ -191,4 +191,4 @@ function agent_provider_test.embeddings(model, text)
     return vector
 end
 
-return agent_provider_test
+return agent_test

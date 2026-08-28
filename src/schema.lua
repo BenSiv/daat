@@ -1324,7 +1324,7 @@ end
 
 -- Exposed purely so tst/unit/schema.lua can reach it across the
 -- require() boundary -- see the matching comment in
--- agent_provider_claude.lua.
+-- agent_claude.lua.
 schema.is_multi_field_type = is_multi_field_type
 
 return schema

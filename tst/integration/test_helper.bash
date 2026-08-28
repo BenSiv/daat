@@ -33,7 +33,7 @@ setup_test_env() {
 write_platform_config() {
     local extra_lua_fields="${1:-}"
     cat > "$TEST_DIR/platform.lua" <<EOF
-return {agent_provider = "test"${extra_lua_fields}}
+return {agent_provider = "test", search_provider = "test"${extra_lua_fields}}
 EOF
 }
 
@@ -157,9 +157,9 @@ run_cgi() {
 }
 
 # Builds one scripted structured-tool-call turn for AGENT_TEST_RESPONSES
-# (agent_provider_test.converse expects each "\1"-delimited entry to be
+# (agent_test.converse expects each "\1"-delimited entry to be
 # a JSON object matching agent_provider's own canonical
-# {content, stopReason} shape -- see agent_provider_test.lua's own
+# {content, stopReason} shape -- see agent_test.lua's own
 # header) -- replaces the old <tool>/<method>/<args> tag-text scripting
 # since the pi-ai migration. `dotted_name` is "tool.method" (e.g.
 # "document.search"); `args_json` is a raw JSON object literal -- build
@@ -207,7 +207,7 @@ done_response() {
 
 # Builds one scripted final-answer turn carrying a real Gemini 2.5
 # thought-summary block alongside the final text (task: chat agent
-# thinking visibility) -- mirrors what agent_provider_vertex.lua itself
+# thinking visibility) -- mirrors what agent_vertex.lua itself
 # returns when thinking is enabled (see agent.lua's own
 # extract_thinking_text). Both `thinking_text`/`answer_text` are
 # JSON-escaped the same way done_response's own `text` is.

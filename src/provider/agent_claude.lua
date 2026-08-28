@@ -2,7 +2,7 @@
 -- embeddings interface. Calls the Messages API directly
 -- (https://api.anthropic.com/v1/messages) via a curl shell-out --
 -- same "bind to an existing, battle-tested tool" stance as
--- agent_provider_vertex.lua, no vendored HTTP/TLS client.
+-- agent_vertex.lua, no vendored HTTP/TLS client.
 --
 -- .converse() translates agent.lua's own provider-agnostic canonical
 -- shape (see agent_provider.lua's own header, and doc/agent-protocol.md
@@ -13,7 +13,7 @@
 -- learns anything Claude-specific, the same way it never learns
 -- anything Vertex-specific.
 --
--- Unlike agent_provider_vertex.lua's schema translation (canonical
+-- Unlike agent_vertex.lua's schema translation (canonical
 -- lowercase JSON Schema -> Vertex's uppercase proto enum), Claude's own
 -- `input_schema` is already standard lowercase JSON Schema -- tool
 -- declarations pass through close to as-is here, the concrete payoff
@@ -23,7 +23,7 @@
 -- Claude's tool_use blocks carry a real, stable id from Anthropic
 -- itself (the "toolu_..." prefix) -- unlike Vertex's wire protocol
 -- (which has no id concept for function calls at all, forcing
--- agent_provider_vertex.lua to synthesize one), this file uses
+-- agent_vertex.lua to synthesize one), this file uses
 -- Claude's own id directly as the canonical toolCall block's `id`, and
 -- threads it back verbatim in the following turn's tool_result block.
 --
@@ -42,7 +42,7 @@
 json = require("dkjson")
 external_tool = require("external_tool")
 
-agent_provider_claude = {}
+agent_claude = {}
 
 DEFAULT_MODEL = "claude-sonnet-5"
 ANTHROPIC_VERSION = "2023-06-01"
@@ -60,7 +60,7 @@ end
 -- file (curl -d @file) rather than shell-interpolating the payload
 -- directly -- the only shell-interpolated value is the API key itself
 -- (a fixed credential this process holds, never prompt/response
--- content), matching agent_provider_vertex.lua's own vertex_post().
+-- content), matching agent_vertex.lua's own vertex_post().
 function claude_post(payload_table)
     key, key_err = claude_api_key()
     if key == nil then
@@ -108,7 +108,7 @@ end
 
 -- agent.lua's own AGENT_TOOLS declares `parameters` as plain, standard
 -- JSON Schema already -- exactly what Claude's `input_schema` expects,
--- so this is closer to a pass-through than agent_provider_vertex.lua's
+-- so this is closer to a pass-through than agent_vertex.lua's
 -- equivalent. Still a real, explicit translation step (not a shared
 -- reference to AGENT_TOOLS' own tables) so this file never silently
 -- depends on agent.lua's internal representation staying byte-for-byte
@@ -202,7 +202,7 @@ function claude_blocks_from_content(content)
     return blocks
 end
 
--- agent_provider_claude.converse(model, system_prompt, messages, tools)
+-- agent_claude.converse(model, system_prompt, messages, tools)
 --   -> (response, err, usage)
 --
 -- Same contract every agent_provider implementation shares (see
@@ -231,7 +231,7 @@ end
 -- `nil, err` is reserved for a genuine connectivity/auth-level failure
 -- (claude_post's own behavior) -- the call itself couldn't be
 -- completed, nothing structured to return.
-function agent_provider_claude.converse(model, system_prompt, messages, tools)
+function agent_claude.converse(model, system_prompt, messages, tools)
     if model == nil or model == "" then
         model = DEFAULT_MODEL
     end
@@ -268,7 +268,7 @@ function agent_provider_claude.converse(model, system_prompt, messages, tools)
     return {content = blocks, stopReason = canonical_stop_reason}, nil, usage
 end
 
-function agent_provider_claude.generate(model, system_prompt, prompt)
+function agent_claude.generate(model, system_prompt, prompt)
     if model == nil or model == "" then
         model = DEFAULT_MODEL
     end
@@ -296,14 +296,14 @@ end
 -- support" error for a provider missing this, matching how any other
 -- provider without one is already handled.
 
--- Exposed on the module table purely so tst/unit/agent_provider_claude.lua
+-- Exposed on the module table purely so tst/unit/agent_claude.lua
 -- can reach them -- a bare name here is a genuine local to this file
 -- (see ../../luam/README.md), invisible to a separate test file, same
 -- as everything else in this module that already only calls these by
 -- their plain bare name internally.
-agent_provider_claude.claude_tools_from_canonical = claude_tools_from_canonical
-agent_provider_claude.claude_messages_from_canonical = claude_messages_from_canonical
-agent_provider_claude.claude_blocks_from_content = claude_blocks_from_content
-agent_provider_claude.claude_stop_reason_to_canonical = claude_stop_reason_to_canonical
+agent_claude.claude_tools_from_canonical = claude_tools_from_canonical
+agent_claude.claude_messages_from_canonical = claude_messages_from_canonical
+agent_claude.claude_blocks_from_content = claude_blocks_from_content
+agent_claude.claude_stop_reason_to_canonical = claude_stop_reason_to_canonical
 
-return agent_provider_claude
+return agent_claude

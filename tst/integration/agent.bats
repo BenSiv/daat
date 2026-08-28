@@ -1084,7 +1084,7 @@ EOF
 # against the deterministic test provider; this only needs to confirm
 # the real Vertex AI wiring itself still works.
 
-@test "real Vertex AI: agent_provider_vertex.generate returns a real model response" {
+@test "real Vertex AI: agent_vertex.generate returns a real model response" {
     if [ -z "${VERTEX_PROJECT:-}" ]; then
         skip "VERTEX_PROJECT not set in this environment"
     fi
@@ -1093,12 +1093,12 @@ EOF
     fi
 
     # Explicitly pinned to the vertex provider (also the default) --
-    # this confirms agent_provider_vertex.lua's own direct REST call
+    # this confirms agent_vertex.lua's own direct REST call
     # still works on its own, independent of which provider
     # platform.lua's agent_provider happens to default to. Still a
     # real, live module: document.lua's embeddings call always
     # delegates to it regardless of agent_provider, since
-    # agent_provider_vertex.lua is the only provider with embeddings
+    # agent_vertex.lua is the only provider with embeddings
     # support.
     cat > "${TEST_DIR}/vertex_check.lua" <<EOF
 package.path = "${PROJECT_ROOT}/src/?.lua;" .. package.path
@@ -1173,7 +1173,7 @@ agent_provider = require("agent_provider")
 
 -- Canonical lowercase JSON Schema (doc/agent-protocol.md), matching how
 -- agent.lua's own AGENT_TOOLS actually declares tools now -- exercises
--- agent_provider_vertex.lua's real vertex_schema_from_canonical
+-- agent_vertex.lua's real vertex_schema_from_canonical
 -- translation into Vertex's uppercase proto enum, not a passthrough of
 -- already-uppercase input.
 tools = {
@@ -1263,7 +1263,7 @@ EOF
     fi
 
     # Real production incident: a research.investigate run asked the
-    # model to call two tools in one turn; agent_provider_vertex.lua's
+    # model to call two tools in one turn; agent_vertex.lua's
     # own vertex_contents_from_messages used to turn each canonical
     # toolResult message into its own separate Vertex contents[] entry
     # (one {role="user",...} per result), instead of merging every

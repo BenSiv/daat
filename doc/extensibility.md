@@ -2,6 +2,8 @@
 
 The extension system exists so that behavior specific to one deployment's own needs -- a validation rule, a reaction to an entity being created or changed -- never has to be written into the platform itself. An extension is a small script, version-controlled the same way an entity type definition is, that declares up front what it needs and gets exactly that and nothing more.
 
+This whole document describes one of three trust tiers -- deployment-authored, sandboxed, capability-checked, admin-approval-gated. It's the only one of the three that isn't first-party code: `agent_provider.lua`/`search_provider.lua` and their implementations under `src/provider/` are the middle tier (ships with daat, full access, but swappable via config); everything else in `src/` is core (also full access, not swappable). See doc/architecture.md's "Providers" section for the full three-tier picture and why the line is drawn where it is.
+
 ## Extension layout
 
 ```
