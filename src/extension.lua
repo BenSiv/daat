@@ -102,6 +102,23 @@ function extension.validate_manifest(manifest)
     if manifest.capabilities != nil and type(manifest.capabilities) != "table" then
         return "manifest '" .. tostring(manifest.name) .. "': 'capabilities' must be a table"
     end
+    -- capabilities.ui's mere presence opts an extension into a page at
+    -- /ext/<name> (see doc/plugin-system-research.md) -- no separate
+    -- 'path' field; the route is always derived from the extension's
+    -- own name, which sidesteps path-format/collision validation
+    -- entirely rather than needing it.
+    if manifest.capabilities != nil and manifest.capabilities.ui != nil then
+        ui = manifest.capabilities.ui
+        if type(ui) != "table" then
+            return "manifest '" .. tostring(manifest.name) .. "': capabilities.ui must be a table"
+        end
+        if type(ui.label) != "string" or ui.label == "" then
+            return "manifest '" .. tostring(manifest.name) .. "': capabilities.ui must have a non-empty string 'label'"
+        end
+        if type(ui.icon) != "string" or ui.icon == "" then
+            return "manifest '" .. tostring(manifest.name) .. "': capabilities.ui must have a non-empty string 'icon'"
+        end
+    end
     return nil
 end
 
@@ -140,6 +157,24 @@ function extension.all(ext_dir)
     for _, name in ipairs(extension.names(ext_dir)) do
         manifest, err = extension.load_manifest(ext_dir, name)
         table.insert(result, {name = name, manifest = manifest, err = err})
+    end
+    return result
+end
+
+-- Approved extensions that also declare capabilities.ui -- the one
+-- list both the nav rail (html.page_shell) and the /ext/<name> route
+-- dispatcher (cgi.lua) need; a bad manifest or an unapproved/no-ui
+-- extension is silently excluded here rather than surfaced as an
+-- error, same spirit as extension.matching's own filtering.
+function extension.approved_with_ui(db_path, ext_dir)
+    result = {}
+    for _, entry in ipairs(extension.all(ext_dir)) do
+        if entry.manifest != nil
+           and entry.manifest.capabilities != nil
+           and entry.manifest.capabilities.ui != nil
+           and extension.is_approved(db_path, entry.manifest) then
+            table.insert(result, {name = entry.name, manifest = entry.manifest})
+        end
     end
     return result
 end
@@ -212,6 +247,17 @@ function string_sets_equal(a, b)
     return true
 end
 
+-- Same-shape comparison for capabilities.ui -- its mere presence is a
+-- real capability grant (a page at /ext/<name>, visible to every
+-- user), so editing label/icon -- not just adding/removing the whole
+-- block -- has to invalidate approval the same way any other
+-- capabilities change does.
+function ui_equal(a, b)
+    if a == nil then a = {} end
+    if b == nil then b = {} end
+    return a.label == b.label and a.icon == b.icon
+end
+
 function extension.capabilities_equal(a, b)
     if a == nil then a = {} end
     if b == nil then b = {} end
@@ -225,7 +271,10 @@ function extension.capabilities_equal(a, b)
     if a_net == nil then a_net = "none" end
     b_net = b.net
     if b_net == nil then b_net = "none" end
-    return a_net == b_net
+    if a_net != b_net then
+        return false
+    end
+    return ui_equal(a.ui, b.ui)
 end
 
 -- ---- Admin-approval registry ----
@@ -272,33 +321,52 @@ end
 
 -- ---- Sandboxed invocation ----
 --
--- Loads and calls hook_name (e.g. "on_before"/"on_after") from an
--- extension's main.lua, inside the capability-scoped sandbox its
--- manifest describes. `ctx` is built by the caller (entity.lua owns
--- ctx.query/create_entity/update_entity, since it owns entity CRUD).
--- Returns (true, nil) if main.lua doesn't define hook_name at all --
--- a manifest can declare interest in an event without every extension
--- needing to implement every hook it might see.
-function extension.invoke(ext_dir, name, manifest, hook_name, new_values, old_values, ctx)
+-- Loads an extension's main.lua inside the capability-scoped sandbox
+-- its manifest describes, and returns its hooks table (return
+-- {on_before = ..., on_after = ...}, the same convention manifest.lua
+-- already uses -- never a bare top-level `function on_before() end`
+-- read back out of env afterward: a bare function statement is
+-- implicit-local (see doc/why-luam.md), so it would compile to a real
+-- local invisible to this file no matter what env the chunk ran under;
+-- setfenv only ever redirects a *global* read/write, and a local was
+-- never one).
+--
+-- Shared by extension.invoke (entity hooks) and the UI-route/action
+-- dispatch (cgi.lua) -- both need "load this extension's code, get its
+-- hooks table" and nothing else; what they call on that table differs
+-- per call site. Returns (nil, nil) -- not an error -- when main.lua
+-- doesn't return a hooks table at all, so a manifest can declare
+-- interest in an event/route without every extension needing to
+-- implement every hook it might see. Returns (nil, err) only for a
+-- genuine load/run failure.
+function extension.load_hooks(ext_dir, name, manifest)
     main_src, err = extension.load_main_source(ext_dir, name)
     if main_src == nil then
-        return false, err
+        return nil, err
     end
     env = sandbox.extension_env(manifest.capabilities)
     main_path = paths.joinpath(ext_dir, name, "main.lua")
-    -- main.lua returns its hooks as a table (return {on_before = ...,
-    -- on_after = ...}), the same convention manifest.lua already uses
-    -- -- never a bare top-level `function on_before() end` read back
-    -- out of env afterward. A bare function statement is implicit-
-    -- local (see doc/why-luam.md), so it would compile to a real local
-    -- invisible to this file no matter what env the chunk ran under;
-    -- setfenv only ever redirects a *global* read/write, and a local
-    -- was never one.
     load_ok, hooks = sandbox.run(main_src, main_path, env)
     if load_ok == false then
-        return false, "error running extension main.lua: " .. tostring(hooks)
+        return nil, "error running extension main.lua: " .. tostring(hooks)
     end
     if type(hooks) != "table" then
+        return nil, nil
+    end
+    return hooks, nil
+end
+
+-- Calls hook_name (e.g. "on_before"/"on_after") from an extension's
+-- hooks table. `ctx` is built by the caller (entity.lua owns
+-- ctx.query/create_entity/update_entity, since it owns entity CRUD).
+-- Returns (true, nil) if main.lua doesn't define hook_name at all, or
+-- has no hooks table at all -- see extension.load_hooks' own comment.
+function extension.invoke(ext_dir, name, manifest, hook_name, new_values, old_values, ctx)
+    hooks, err = extension.load_hooks(ext_dir, name, manifest)
+    if hooks == nil then
+        if err != nil then
+            return false, err
+        end
         return true, nil
     end
     hook_fn = hooks[hook_name]

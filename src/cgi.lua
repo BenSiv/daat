@@ -14,6 +14,7 @@ knowledge = require("knowledge")
 agent = require("agent")
 multipart = require("multipart")
 label = require("label")
+extension = require("extension")
 
 cgi = {}
 
@@ -475,7 +476,7 @@ function handle_login(root, db_path, method, nonce, theme)
         if cap == nil then
             body_html = html.render_login("Invalid login or password.", nonce)
             return print_response("401 Unauthorized", "text/html",
-                html.page_shell("Log in", "login", body_html, nonce, false, false, has_tasks_view, theme, nil))
+                html.page_shell("Log in", "login", body_html, nonce, false, false, has_tasks_view, nav_extensions, theme, nil))
         end
 
         session_cookie, cookie_err = auth.issue_session_cookie(root, form.login)
@@ -496,7 +497,7 @@ function handle_login(root, db_path, method, nonce, theme)
 
     body_html = html.render_login(nil, nonce)
     return print_response("200 OK", "text/html",
-        html.page_shell("Log in", "login", body_html, nonce, false, false, has_tasks_view, theme, nil))
+        html.page_shell("Log in", "login", body_html, nonce, false, false, has_tasks_view, nav_extensions, theme, nil))
 end
 
 function cgi.handle_request()
@@ -642,6 +643,10 @@ function cgi.handle_request()
     -- "prioritized_tasks" view -- a fresh/generic install has no
     -- views/ at all, and would otherwise 404 on a raw internal path.
     has_tasks_view = view.load(config.views_dir(root), "prioritized_tasks") != nil
+    -- Computed once here, threaded through every html.page_shell call
+    -- below, rather than each route re-querying it -- same reasoning
+    -- as has_tasks_view just above.
+    nav_extensions = extension.approved_with_ui(db_path, config.extensions_dir(root))
 
     if path_info == "/logout" then
         return print_response("302 Found", "text/plain", "", {
@@ -673,26 +678,26 @@ function cgi.handle_request()
             if not require_csrf(cookies, form.csrf_token) then
                 body = html.render_account(author, default_value(cookies.csrf, ""), "CSRF check failed.", true)
                 return print_response("403 Forbidden", "text/html",
-                    html.page_shell("Account", "", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
+                    html.page_shell("Account", "", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
             end
             if auth.login(db_path, author, default_value(form.current_password, "")) == nil then
                 body = html.render_account(author, default_value(cookies.csrf, ""), "Current password is incorrect.", true)
                 return print_response("200 OK", "text/html",
-                    html.page_shell("Account", "", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
+                    html.page_shell("Account", "", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
             end
             ok, err = auth.set_password(db_path, author, form.new_password)
             if ok == nil then
                 body = html.render_account(author, default_value(cookies.csrf, ""), tostring(err), true)
                 return print_response("200 OK", "text/html",
-                    html.page_shell("Account", "", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
+                    html.page_shell("Account", "", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
             end
             body = html.render_account(author, default_value(cookies.csrf, ""), "Password changed.", false)
             return print_response("200 OK", "text/html",
-                html.page_shell("Account", "", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
+                html.page_shell("Account", "", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
         end
         body = html.render_account(author, default_value(cookies.csrf, ""), nil, false)
         return print_response("200 OK", "text/html",
-            html.page_shell("Account", "", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
+            html.page_shell("Account", "", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
     end
 
     if path_info == "/register" then
@@ -715,7 +720,7 @@ function cgi.handle_request()
         body = html.render(entity_type, layout_json, nonce, locked_fields)
         page_context = {page_type = "entity_register", entity_type = entity_type, title = entity_type .. " · Register"}
         return print_response("200 OK", "text/html",
-            html.page_shell(entity_type .. " · Register", "data", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author, page_context))
+            html.page_shell(entity_type .. " · Register", "data", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author, page_context))
     end
 
     if path_info == "/browse" then
@@ -764,7 +769,7 @@ function cgi.handle_request()
         body = html.render_browse(db_path, entity_type, layout, rows, page, BROWSE_PAGE_SIZE, total, nonce, filter_field, params.filter_value)
         page_context = {page_type = "entity_browse", entity_type = entity_type, title = entity_type .. " · Browse"}
         return print_response("200 OK", "text/html",
-            html.page_shell(entity_type .. " · Browse", "data", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author, page_context))
+            html.page_shell(entity_type .. " · Browse", "data", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author, page_context))
     end
 
     -- A simple, mostly-static landing page -- basic information and
@@ -775,7 +780,7 @@ function cgi.handle_request()
     if path_info == "/" or path_info == "" then
         body = html.render_home(theme, show_sql_nav, show_admin_nav, has_tasks_view)
         return print_response("200 OK", "text/html",
-            html.page_shell(theme.site_name, "home", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
+            html.page_shell(theme.site_name, "home", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
     end
 
     -- What "/" used to render, in full, before Home became its own
@@ -798,7 +803,7 @@ function cgi.handle_request()
         edges = schema.relationships(db_path)
         body = html.render_index(db_path, entity_types, edges, nonce)
         return print_response("200 OK", "text/html",
-            html.page_shell("Data", "data", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
+            html.page_shell("Data", "data", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
     end
 
     -- Landing page for admin/setup-only tooling (SQL console, user
@@ -811,7 +816,7 @@ function cgi.handle_request()
         end
         body = html.render_system(show_sql_nav, show_admin_nav)
         return print_response("200 OK", "text/html",
-            html.page_shell("System", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
+            html.page_shell("System", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
     end
 
     if path_info == "/knowledge" then
@@ -821,7 +826,7 @@ function cgi.handle_request()
         stats = knowledge.stats(db_path)
         body = html.render_knowledge_pool(stats)
         return print_response("200 OK", "text/html",
-            html.page_shell("Knowledge Pool", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
+            html.page_shell("Knowledge Pool", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
     end
 
     -- Backing view for /knowledge's stat cards -- reuses
@@ -839,7 +844,7 @@ function cgi.handle_request()
         rows = knowledge.list_documents(db_path, tier)
         body = html.render_knowledge_documents(rows, tier)
         return print_response("200 OK", "text/html",
-            html.page_shell("Knowledge Pool", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
+            html.page_shell("Knowledge Pool", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
     end
 
     -- Backing view for /knowledge's "N reviewed notes" stat.
@@ -850,7 +855,7 @@ function cgi.handle_request()
         rows = knowledge.reviewed_documents(db_path)
         body = html.render_knowledge_documents(rows, nil, "Reviewed notes")
         return print_response("200 OK", "text/html",
-            html.page_shell("Knowledge Pool", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
+            html.page_shell("Knowledge Pool", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
     end
 
     -- Obsidian-style graph view of the document_link graph (doc/
@@ -863,7 +868,7 @@ function cgi.handle_request()
         end
         body = html.render_knowledge_graph(nonce)
         return print_response("200 OK", "text/html",
-            html.page_shell("Knowledge Pool", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
+            html.page_shell("Knowledge Pool", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
     end
 
     -- JSON data for /knowledge-graph's own client-side render -- nodes
@@ -890,7 +895,7 @@ function cgi.handle_request()
         rows = knowledge.recent_retrievals(db_path, 500)
         body = html.render_knowledge_retrievals(rows)
         return print_response("200 OK", "text/html",
-            html.page_shell("Knowledge Pool", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
+            html.page_shell("Knowledge Pool", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
     end
 
     if path_info == "/detail" then
@@ -920,7 +925,7 @@ function cgi.handle_request()
         page_context = {page_type = "entity_detail", entity_type = entity_type, entity_id = entity_id,
                          title = entity_type .. " #" .. tostring(entity_id)}
         return print_response("200 OK", "text/html",
-            html.page_shell(entity_type .. " #" .. tostring(entity_id), "data", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author, page_context))
+            html.page_shell(entity_type .. " #" .. tostring(entity_id), "data", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author, page_context))
     end
 
     -- Single-row edit form for any entity type -- /register only ever
@@ -954,7 +959,7 @@ function cgi.handle_request()
         page_context = {page_type = "entity_edit", entity_type = entity_type, entity_id = entity_id,
                          title = "Edit " .. entity_type .. " #" .. tostring(entity_id)}
         return print_response("200 OK", "text/html",
-            html.page_shell("Edit " .. entity_type .. " #" .. tostring(entity_id), "data", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author, page_context))
+            html.page_shell("Edit " .. entity_type .. " #" .. tostring(entity_id), "data", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author, page_context))
     end
 
     -- Same visibility as /detail (viewing/printing a label isn't a
@@ -1016,7 +1021,7 @@ function cgi.handle_request()
             active_section = "tasks"
         end
         return print_response("200 OK", "text/html",
-            html.page_shell(view_name, active_section, body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author, page_context))
+            html.page_shell(view_name, active_section, body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author, page_context))
     end
 
     -- Documents (src/document.lua): a real parent_id tree, not a
@@ -1032,7 +1037,7 @@ function cgi.handle_request()
         rows = document.all_active(db_path)
         body = html.render_document_tree(rows, true, nonce)
         return print_response("200 OK", "text/html",
-            html.page_shell("Pages", "documents", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
+            html.page_shell("Pages", "documents", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
     end
 
     if path_info == "/document" then
@@ -1052,7 +1057,7 @@ function cgi.handle_request()
         body = html.render_document(doc, rendered_html, breadcrumbs, children, backlinks, true)
         page_context = {page_type = "document", entity_type = "document", entity_id = doc.id, title = doc.title}
         return print_response("200 OK", "text/html",
-            html.page_shell(doc.title, "documents", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author, page_context))
+            html.page_shell(doc.title, "documents", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author, page_context))
     end
 
     if path_info == "/document-edit" then
@@ -1094,7 +1099,7 @@ function cgi.handle_request()
         body = html.render_document_edit(doc, parent_options_html, default_value(cookies.csrf, ""), nil, nonce, prefill)
         page_context = {page_type = "document_edit", entity_type = "document", entity_id = entity_id, title = "Edit document"}
         return print_response("200 OK", "text/html",
-            html.page_shell("Edit document", "documents", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author, page_context))
+            html.page_shell("Edit document", "documents", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author, page_context))
     end
 
     if path_info == "/document-save" and method == "POST" then
@@ -1116,7 +1121,7 @@ function cgi.handle_request()
                 "Can't move a document underneath its own sub-document.", nonce)
             page_context = {page_type = "document_edit", entity_type = "document", entity_id = entity_id, title = "Edit document"}
             return print_response("200 OK", "text/html",
-                html.page_shell("Edit document", "documents", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author, page_context))
+                html.page_shell("Edit document", "documents", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author, page_context))
         end
 
         saved_id = nil
@@ -1139,7 +1144,7 @@ function cgi.handle_request()
                 issues_to_message(issues), nonce)
             page_context = {page_type = "document_edit", entity_type = "document", entity_id = entity_id, title = "Edit document"}
             return print_response("200 OK", "text/html",
-                html.page_shell("Edit document", "documents", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author, page_context))
+                html.page_shell("Edit document", "documents", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author, page_context))
         end
 
         return print_response("302 Found", "text/plain", "", {"Location: document?entity_id=" .. tostring(saved_id)})
@@ -1187,7 +1192,7 @@ function cgi.handle_request()
         -- to prefill from the agent's last query" (see that function's
         -- own comment for the bug this fixes).
         return print_response("200 OK", "text/html",
-            html.page_shell("SQL", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author,
+            html.page_shell("SQL", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author,
                 {page_type = "sql", title = "SQL", query_ran = (params.q != nil)}))
     end
 
@@ -1198,7 +1203,7 @@ function cgi.handle_request()
         users = auth.list_users(db_path, true)
         body = html.render_admin_users(users, default_value(cookies.csrf, ""), nil, false)
         return print_response("200 OK", "text/html",
-            html.page_shell("Users", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
+            html.page_shell("Users", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
     end
 
     -- Flat, single-segment names (not "/admin/users/create" etc) --
@@ -1225,7 +1230,7 @@ function cgi.handle_request()
             users = auth.list_users(db_path, true)
             body = html.render_admin_users(users, default_value(cookies.csrf, ""), "CSRF check failed.", true)
             return print_response("403 Forbidden", "text/html",
-                html.page_shell("Users", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
+                html.page_shell("Users", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
         end
 
         ok = nil
@@ -1247,7 +1252,7 @@ function cgi.handle_request()
             users = auth.list_users(db_path, true)
             body = html.render_admin_users(users, default_value(cookies.csrf, ""), tostring(err), true)
             return print_response("200 OK", "text/html",
-                html.page_shell("Users", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
+                html.page_shell("Users", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
         end
         return print_response("302 Found", "text/plain", "", {"Location: admin-users"})
     end
@@ -1264,7 +1269,7 @@ function cgi.handle_request()
         keys = auth.list_api_keys(db_path, true)
         body = html.render_admin_api_keys(keys, default_value(cookies.csrf, ""), nil, false, nil)
         return print_response("200 OK", "text/html",
-            html.page_shell("API keys", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
+            html.page_shell("API keys", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
     end
 
     is_admin_api_key_action = path_info == "/admin-api-keys-create" or
@@ -1281,7 +1286,7 @@ function cgi.handle_request()
             keys = auth.list_api_keys(db_path, true)
             body = html.render_admin_api_keys(keys, default_value(cookies.csrf, ""), "CSRF check failed.", true, nil)
             return print_response("403 Forbidden", "text/html",
-                html.page_shell("API keys", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
+                html.page_shell("API keys", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
         end
 
         if path_info == "/admin-api-keys-create" then
@@ -1290,11 +1295,11 @@ function cgi.handle_request()
             if raw_key == nil then
                 body = html.render_admin_api_keys(keys, default_value(cookies.csrf, ""), tostring(err), true, nil)
                 return print_response("200 OK", "text/html",
-                    html.page_shell("API keys", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
+                    html.page_shell("API keys", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
             end
             body = html.render_admin_api_keys(keys, default_value(cookies.csrf, ""), nil, false, raw_key)
             return print_response("200 OK", "text/html",
-                html.page_shell("API keys", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
+                html.page_shell("API keys", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
         end
 
         ok = nil
@@ -1312,7 +1317,7 @@ function cgi.handle_request()
             keys = auth.list_api_keys(db_path, true)
             body = html.render_admin_api_keys(keys, default_value(cookies.csrf, ""), tostring(err), true, nil)
             return print_response("200 OK", "text/html",
-                html.page_shell("API keys", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
+                html.page_shell("API keys", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
         end
         return print_response("302 Found", "text/plain", "", {"Location: admin-api-keys"})
     end
@@ -1323,7 +1328,7 @@ function cgi.handle_request()
         end
         body = html.render_settings(theme, default_value(cookies.csrf, ""), nil, false)
         return print_response("200 OK", "text/html",
-            html.page_shell("Settings", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
+            html.page_shell("Settings", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
     end
 
     if path_info == "/settings-save" and method == "POST" then
@@ -1339,7 +1344,7 @@ function cgi.handle_request()
         if not require_csrf(cookies, form.csrf_token) then
             body = html.render_settings(theme, default_value(cookies.csrf, ""), "CSRF check failed.", true)
             return print_response("403 Forbidden", "text/html",
-                html.page_shell("Settings", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
+                html.page_shell("Settings", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
         end
 
         -- Colors get embedded straight into a <style> block by
@@ -1388,7 +1393,7 @@ function cgi.handle_request()
             current = config.load_theme(root)
             body = html.render_settings(current, default_value(cookies.csrf, ""), default_value(color_error, upload_error), true)
             return print_response("200 OK", "text/html",
-                html.page_shell("Settings", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
+                html.page_shell("Settings", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
         end
 
         new_theme = config.load_theme(root)
@@ -1408,7 +1413,7 @@ function cgi.handle_request()
                 if dest_file == nil then
                     body = html.render_settings(new_theme, default_value(cookies.csrf, ""), tostring(dest_err), true)
                     return print_response("500 Internal Server Error", "text/html",
-                        html.page_shell("Settings", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
+                        html.page_shell("Settings", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
                 end
                 io.write(dest_file, uploaded.data)
                 io.close(dest_file)
@@ -1422,7 +1427,7 @@ function cgi.handle_request()
         if ok == nil then
             body = html.render_settings(new_theme, default_value(cookies.csrf, ""), tostring(err), true)
             return print_response("500 Internal Server Error", "text/html",
-                html.page_shell("Settings", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
+                html.page_shell("Settings", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
         end
         return print_response("302 Found", "text/plain", "", {"Location: settings"})
     end
@@ -1449,7 +1454,7 @@ function cgi.handle_request()
         body = html.render_chat(sessions, current_session_id, nonce)
         page_context = {page_type = "chat", open_chat_session_id = current_session_id}
         return print_response("200 OK", "text/html",
-            html.page_shell("Chat", "chat", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author, page_context))
+            html.page_shell("Chat", "chat", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author, page_context))
     end
 
     -- JSON counterparts of the old full-page chat routes, for the
@@ -1599,7 +1604,7 @@ function cgi.handle_request()
         templates_dir = config.templates_dir(root)
         body = html.render_templates_list(template.all(templates_dir))
         return print_response("200 OK", "text/html",
-            html.page_shell("Templates", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
+            html.page_shell("Templates", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
     end
 
     if path_info == "/template" then
@@ -1617,7 +1622,7 @@ function cgi.handle_request()
         rendered = template.render(template_def)
         body = html.render_template(template_def, rendered, nonce)
         return print_response("200 OK", "text/html",
-            html.page_shell(template_name, "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, theme, author))
+            html.page_shell(template_name, "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
     end
 
     if path_info == "/api/autocomplete" then
@@ -1972,6 +1977,114 @@ function cgi.handle_request()
         end
 
         return print_response("405 Method Not Allowed", "application/json", json.encode({error = "Method not allowed"}))
+    end
+
+    -- Plugin UI surface (doc/plugin-system-research.md): GET /ext/<name>
+    -- renders an approved, capabilities.ui-declaring extension's own
+    -- page; POST /ext/<name>/action runs one of its named action
+    -- handlers and returns the re-rendered canvas. The first genuinely
+    -- dynamic route in this file (every route above is a literal
+    -- path_info == "/..." check) -- checked as a prefix rather than
+    -- one more hardcoded string, and deliberately placed last, right
+    -- before the final 404 fallback, so it can never shadow a real
+    -- built-in route.
+    if string.sub(path_info, 1, 5) == "/ext/" then
+        ext_name = string.match(path_info, "^/ext/([^/]+)$")
+        is_action_path = false
+        if ext_name == nil then
+            ext_name = string.match(path_info, "^/ext/([^/]+)/action$")
+            is_action_path = true
+        end
+        if ext_name == nil then
+            return print_response("404 Not Found", "text/plain", "Not Found")
+        end
+
+        ext_dir = config.extensions_dir(root)
+        manifest, manifest_err = extension.load_manifest(ext_dir, ext_name)
+        -- 404, not 403 -- an unapproved or non-UI extension's route
+        -- shouldn't even reveal that it exists, same reasoning as
+        -- chat_attachments_enabled's own gate (cgi.lua's other
+        -- config-gated route).
+        plugin_ok = manifest != nil and manifest.capabilities != nil
+            and manifest.capabilities.ui != nil and extension.is_approved(db_path, manifest)
+        if plugin_ok == false then
+            return print_response("404 Not Found", "text/plain", "Not Found")
+        end
+
+        if is_action_path == false and method == "GET" then
+            page_context = {page_type = "extension", title = manifest.capabilities.ui.label}
+            hooks, hooks_err = extension.load_hooks(ext_dir, ext_name, manifest)
+            if hooks == nil or type(hooks.render) != "function" then
+                return print_response("404 Not Found", "text/plain", "Not Found")
+            end
+            ctx = entity.build_ctx(db_path, manifest)
+            render_ok, render_result = pcall(hooks.render, ctx)
+            elements = nil
+            if render_ok == true and type(render_result) == "table" then
+                elements = render_result.elements
+            end
+            if elements == nil then
+                elements = {}
+            end
+            validate_err = html.validate_canvas(elements)
+            if render_ok == false or validate_err != nil then
+                error_message = validate_err
+                if render_ok == false then
+                    error_message = tostring(render_result)
+                end
+                body = "<div class=\"fossil-doc\"><div class=\"platform-error-banner\">Plugin error: " ..
+                    html.html_escape(error_message) .. "</div></div>"
+                return print_response("500 Internal Server Error", "text/html",
+                    html.page_shell(manifest.capabilities.ui.label, "ext:" .. ext_name, body, nonce,
+                        show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author, page_context))
+            end
+            body = html.render_plugin_page(manifest.capabilities.ui.label, elements, nonce)
+            return print_response("200 OK", "text/html",
+                html.page_shell(manifest.capabilities.ui.label, "ext:" .. ext_name, body, nonce,
+                    show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author, page_context))
+        end
+
+        if is_action_path == true and method == "POST" then
+            if not require_csrf(cookies) then
+                return print_response("403 Forbidden", "application/json", json.encode({error = "CSRF check failed"}))
+            end
+            input = io.read("*all")
+            body_data, _, decode_err = json.decode(input)
+            if body_data == nil or type(body_data.action) != "string" then
+                return print_response("400 Bad Request", "application/json", json.encode({error = "Invalid request"}))
+            end
+            hooks, hooks_err = extension.load_hooks(ext_dir, ext_name, manifest)
+            action_fn = nil
+            if hooks != nil and type(hooks.actions) == "table" then
+                action_fn = hooks.actions[body_data.action]
+            end
+            if type(action_fn) != "function" then
+                return print_response("404 Not Found", "application/json", json.encode({error = "unknown action"}))
+            end
+            action_args = body_data.args
+            if action_args == nil then
+                action_args = {}
+            end
+            ctx = entity.build_ctx(db_path, manifest)
+            action_ok, action_result = pcall(action_fn, ctx, action_args)
+            if action_ok == false then
+                return print_response("500 Internal Server Error", "application/json", json.encode({error = tostring(action_result)}))
+            end
+            elements = nil
+            if type(action_result) == "table" then
+                elements = action_result.elements
+            end
+            if elements == nil then
+                elements = {}
+            end
+            validate_err = html.validate_canvas(elements)
+            if validate_err != nil then
+                return print_response("500 Internal Server Error", "application/json", json.encode({error = "invalid canvas: " .. validate_err}))
+            end
+            return print_response("200 OK", "application/json", json.encode({html = html.render_canvas(elements)}))
+        end
+
+        return print_response("404 Not Found", "text/plain", "Not Found")
     end
 
     return print_response("404 Not Found", "text/plain", "Not Found")

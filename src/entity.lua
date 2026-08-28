@@ -42,7 +42,7 @@ end
 -- extension.lua, because it needs entity.create/entity.update -- see
 -- extension.lua's header comment for why that module can't require this
 -- one back.
-function build_ctx(db_path, manifest)
+function entity.build_ctx(db_path, manifest)
     capabilities = manifest.capabilities
     ctx = {}
 
@@ -109,7 +109,7 @@ function run_before_hooks(db_path, entity_type, new_values, old_values, is_updat
 
     for _, entry in ipairs(extension.matching(ext_dir, event_name, entity_type)) do
         if extension.is_approved(db_path, entry.manifest) then
-            ctx = build_ctx(db_path, entry.manifest)
+            ctx = entity.build_ctx(db_path, entry.manifest)
             invoke_ok, result = extension.invoke(ext_dir, entry.name, entry.manifest, "on_before",
                 new_values, old_values, ctx)
             if invoke_ok then
@@ -846,7 +846,7 @@ function entity.run_pending_jobs(db_path, limit)
             if job.old_values_json != nil then
                 old_values = json.decode(job.old_values_json)
             end
-            ctx = build_ctx(db_path, manifest)
+            ctx = entity.build_ctx(db_path, manifest)
             invoke_ok, result = extension.invoke(ext_dir, job.extension_name, manifest, "on_after",
                 new_values, old_values, ctx)
             if invoke_ok then
@@ -1265,6 +1265,9 @@ function entity.do_extension(cmd_args, db_path)
         print("entity_types: " .. table.concat(manifest.entity_types, ", "))
         print("capabilities: read=" .. table.concat(read_list, ",") ..
               " write=" .. table.concat(write_list, ",") .. " net=" .. net)
+        if caps.ui != nil then
+            print("route:        /ext/" .. manifest.name .. " (" .. caps.ui.icon .. " " .. caps.ui.label .. ")")
+        end
         if extension.is_approved(db_path, manifest) then
             print("status:       approved")
         elseif extension.approved_capabilities(db_path, name) == nil then

@@ -401,6 +401,172 @@ function platform_error_banner_css()
 """
 end
 
+-- "daat canvas" -- a plugin's page is a plain Lua table of predefined
+-- elements (heading/text/table/button), never raw HTML/JS from the
+-- plugin (see doc/plugin-system-research.md). Modeled directly on
+-- template.lua's own section.type dispatch (validate/render pairs,
+-- one function per type) -- the same "typed-table -> trusted renderer"
+-- shape, just aimed at live HTML instead of a Markdown snippet.
+-- Vocabulary is deliberately small; grow it only when a real plugin
+-- needs a new element type, the same way template.lua's own vocabulary
+-- grew by four types over real demand, not speculatively.
+function platform_canvas_css()
+    return """
+        .platform-canvas-heading { margin: 0 0 12px 0; font-size: 1.2rem; font-weight: 700; color: var(--platform-heading, #0f172a); }
+        .platform-canvas-text { margin: 0 0 16px 0; color: var(--platform-text, #334155); }
+        .platform-canvas-table { width: 100%%; border-collapse: separate; border-spacing: 0; }
+        .platform-canvas-table th, .platform-canvas-table td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--platform-border, #e2e8f0); font-size: 0.9rem; }
+        .platform-canvas-table th { background: var(--platform-bg-2, #f1f5f9); font-weight: 600; font-size: 0.78rem; color: var(--platform-th-text, #475569); text-transform: uppercase; letter-spacing: 0.06em; }
+        .platform-canvas-table td { background: #ffffff; }
+        .platform-canvas-element { margin-bottom: 16px; }
+"""
+end
+
+-- Checks each element's `type` against the known vocabulary and that
+-- type's required fields -- the same role template.validate plays for
+-- template sections. Returns an error string, or nil if every element
+-- is well-formed.
+function html.validate_canvas(elements)
+    if type(elements) != "table" then
+        return "canvas must be a list of elements"
+    end
+    for i, element in ipairs(elements) do
+        if element.type == "heading" or element.type == "text" then
+            if type(element.text) != "string" or element.text == "" then
+                return string.format("canvas element #%d (%s): missing 'text'", i, element.type)
+            end
+        elseif element.type == "table" then
+            if type(element.columns) != "table" or #element.columns == 0 then
+                return string.format("canvas element #%d (table): must have a non-empty 'columns' list", i)
+            end
+            if type(element.rows) != "table" then
+                return string.format("canvas element #%d (table): must have a 'rows' list", i)
+            end
+        elseif element.type == "button" then
+            if type(element.label) != "string" or element.label == "" then
+                return string.format("canvas element #%d (button): missing 'label'", i)
+            end
+            if type(element.action) != "string" or element.action == "" then
+                return string.format("canvas element #%d (button): missing 'action'", i)
+            end
+        else
+            return string.format("canvas element #%d: invalid type '%s'", i, tostring(element.type))
+        end
+    end
+    return nil
+end
+
+function render_canvas_table(element)
+    header_cells = ""
+    for _, col in ipairs(element.columns) do
+        header_cells = header_cells .. "<th>" .. html.html_escape(tostring(col)) .. "</th>"
+    end
+    body_rows = ""
+    for _, row in ipairs(element.rows) do
+        cells = ""
+        for _, value in ipairs(row) do
+            cells = cells .. "<td>" .. html.html_escape(tostring(value)) .. "</td>"
+        end
+        body_rows = body_rows .. "<tr>" .. cells .. "</tr>"
+    end
+    return "<div class=\"platform-canvas-element platform-table-wrapper\"><table class=\"platform-canvas-table\"><thead><tr>" ..
+        header_cells .. "</tr></thead><tbody>" .. body_rows .. "</tbody></table></div>"
+end
+
+function render_canvas_button(element)
+    json = require("dkjson")
+    args = element.args
+    if args == nil then
+        args = {}
+    end
+    -- html.html_escape, not json_for_script -- this JSON lands inside
+    -- an HTML attribute value (data-args="..."), not a <script> body,
+    -- so it needs ordinary attribute escaping (quotes/angle brackets),
+    -- not json_for_script's own </script>-breakout escaping.
+    return string.format(
+        "<div class=\"platform-canvas-element\"><button type=\"button\" class=\"btn btn-primary platform-canvas-action\" data-action=\"%s\" data-args=\"%s\">%s</button></div>",
+        html.html_escape(element.action), html.html_escape(json.encode(args)), html.html_escape(element.label)
+    )
+end
+
+-- Turns a validated element list into real HTML -- the only place that
+-- happens; a plugin never supplies markup itself, only these typed
+-- tables (see this function's own header comment above
+-- platform_canvas_css). Caller is expected to have already checked
+-- html.validate_canvas -- an invalid element here just renders nothing
+-- for that one entry rather than crashing the whole page.
+function html.render_canvas(elements)
+    parts = {}
+    for _, element in ipairs(elements) do
+        if element.type == "heading" then
+            table.insert(parts, "<h3 class=\"platform-canvas-element platform-canvas-heading\">" .. html.html_escape(element.text) .. "</h3>")
+        elseif element.type == "text" then
+            table.insert(parts, "<p class=\"platform-canvas-element platform-canvas-text\">" .. html.html_escape(element.text) .. "</p>")
+        elseif element.type == "table" then
+            table.insert(parts, render_canvas_table(element))
+        elseif element.type == "button" then
+            table.insert(parts, render_canvas_button(element))
+        end
+    end
+    return table.concat(parts)
+end
+
+-- The small click-delegation script every plugin page needs: a button
+-- (.platform-canvas-action, rendered by render_canvas_button above)
+-- posts its declared action+args to this exact page's own /action
+-- sub-path (cgi.lua's POST /ext/<name>/action) and swaps the response's
+-- re-rendered canvas HTML straight in -- the plugin never gets a live
+-- event loop or client-side code of its own, only "this named,
+-- capability-checked action happened, here's the new canvas."
+function html.canvas_js(nonce)
+    return string.format("""
+<script nonce="%s">
+(function(){
+    var container = document.querySelector('.platform-canvas-container');
+    if (!container) { return; }
+    container.addEventListener('click', function(e){
+        var btn = e.target.closest('.platform-canvas-action');
+        if (!btn) { return; }
+        var action = btn.getAttribute('data-action');
+        var args = {};
+        try { args = JSON.parse(btn.getAttribute('data-args') || '{}'); } catch (parseErr) {}
+        btn.disabled = true;
+        PlatformJS.postJSON(window.location.pathname + '/action', {action: action, args: args})
+            .then(function(result){
+                btn.disabled = false;
+                if (result && result.html != null) { container.innerHTML = result.html; }
+            })
+            .catch(function(){ btn.disabled = false; });
+    });
+})();
+</script>
+""", nonce)
+end
+
+-- A plugin's whole page: the canvas its render() hook returned, wrapped
+-- in the same .platform-container shell every other page uses. Only
+-- cgi.lua's own GET /ext/<name> route calls this -- the extension
+-- itself never sees or supplies any of this markup.
+function html.render_plugin_page(label, elements, nonce)
+    escaped_label = html.html_escape(label)
+    page_header = render_page_header(escaped_label, nil, nil)
+    return string.format("""
+<div class="fossil-doc" data-title="%s">
+    <style>
+%s
+%s
+%s
+    </style>
+    <div class="platform-container">
+        %s
+        <div class="platform-canvas-container">%s</div>
+    </div>
+</div>
+%s
+""", escaped_label, platform_container_css(), platform_button_css(), platform_canvas_css(),
+     page_header, html.render_canvas(elements), html.canvas_js(nonce))
+end
+
 -- Generic hover-popover component, for "reveal detail on hover instead
 -- of cramming it into the default view" -- the design principle behind
 -- moving Data-index row counts and SQL-result entity previews off the
@@ -932,7 +1098,7 @@ end
 -- the model always knows who it's talking to and can default owner/
 -- assignee-style fields to the current user, the way a human filling
 -- out the same form naturally would.
-function html.page_shell(title, active, body, nonce, show_sql, show_admin, has_tasks_view, theme, author, page_context)
+function html.page_shell(title, active, body, nonce, show_sql, show_admin, has_tasks_view, nav_extensions, theme, author, page_context)
     if theme == nil then
         theme = {site_name = "Platform", colors = {}}
     end
@@ -971,6 +1137,21 @@ function html.page_shell(title, active, body, nonce, show_sql, show_admin, has_t
         end
         if show_sql or show_admin then
             table.insert(nav_items, {key = "system", href = "system", label = "System", icon = ICON_SYSTEM})
+        end
+        -- One rail entry per approved, UI-capable extension
+        -- (extension.approved_with_ui, computed once by the caller) --
+        -- see doc/plugin-system-research.md. icon is manifest-supplied
+        -- (a plain emoji, not trusted SVG like ICON_HOME/etc. above),
+        -- so it's html_escape'd here before landing in the same `icon`
+        -- field the render loop below inserts unescaped.
+        if nav_extensions != nil then
+            for _, entry in ipairs(nav_extensions) do
+                ui = entry.manifest.capabilities.ui
+                table.insert(nav_items, {
+                    key = "ext:" .. entry.name, href = "ext/" .. entry.name,
+                    label = ui.label, icon = html.html_escape(ui.icon),
+                })
+            end
         end
     end
 
