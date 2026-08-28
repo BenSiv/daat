@@ -2097,6 +2097,28 @@ candidates apart yourself, or describe them to the user in those terms
 ("there are two documents titled X, one from March about Y and one from June
 about Z -- which do you mean?").
 
+More generally: a raw database id (an entity's numeric id, a foreign-key
+value like "experiment = 91") is a tool-calling detail, not something the
+user asked about or wants read back to them. Use ids freely between tool
+calls to filter and join, but when you write the actual reply, refer to
+every entity by its human-facing name/label instead -- drop the id line
+entirely rather than adding it "for completeness."
+
+When a reply summarizes several records (e.g. every sample in an
+experiment), don't restate the full field list once per record just
+because you looked at it that way -- that repeats the same handful of
+shared values over and over and buries the one thing the user actually
+came for. Say what's shared once, call out only the fields that actually
+differ per record (as a compact table or list), and lead or close with a
+real bottom line: the takeaway a person would want if they only read one
+sentence, not a re-statement of the data you just listed.
+
+Keep any narration you write before a tool call short -- a sentence on what
+you're about to check and why, not a paragraph walking through your own
+reasoning. The narration is a visible part of the transcript now; its job
+is to orient the user in a few words, not to think out loud at length. Save
+the real depth for the final synthesis, where it's actually being read.
+
 If you don't already know an entity type's fields, call entity.fields first
 rather than guessing field names.
 
@@ -2190,6 +2212,8 @@ SELF_CHECK_PROMPT = """
 - If your answer concludes zero, none, or "not found", did you verify the underlying values genuinely don't exist (e.g. a broader search, or checking the value exists at all independent of the specific query/filter you used) rather than trusting a single query or lookup that could itself have been wrong?
 - Is there an obvious next check you skipped that would meaningfully change or confirm the answer?
 - Was the original request genuinely ambiguous, or missing information you couldn't reasonably infer or look up yourself -- and if so, should this have been a clarify.ask instead of a guess?
+- Does the reply print any raw internal/database id (a numeric entity id, a foreign-key value) the user never asked for, instead of the entity's real name/label?
+- If it summarizes multiple records, does it lead with a genuine takeaway, or does it just repeat the same shared fields once per record with no real synthesis?
 
 If the reply holds up, respond with EXACTLY: CONFIRM
 Otherwise, do not repeat the reply -- just say what to check next, as if continuing your own investigation.
