@@ -41,14 +41,11 @@
 
 json = require("dkjson")
 config = require("config")
+external_tool = require("external_tool")
 
 agent_provider_vertex = {}
 
 DEFAULT_REGION = "us-central1"
-
-function shell_quote(s)
-    return "'" .. string.gsub(s, "'", "'\\''") .. "'"
-end
 
 function vertex_config()
     conf = config.platform_config()
@@ -67,14 +64,9 @@ end
 -- short-lived (about an hour) and re-fetching costs one extra `gcloud`
 -- invocation, negligible next to the LLM call itself.
 function vertex_access_token()
-    handle = io.popen("gcloud auth application-default print-access-token 2>/dev/null", "r")
-    if handle == nil then
-        return nil, "cannot run gcloud"
-    end
-    token = io.read(handle, "*all")
-    io.close(handle)
+    token, err = external_tool.capture("gcloud auth application-default print-access-token 2>/dev/null")
     if token == nil then
-        return nil, "no output from gcloud"
+        return nil, "cannot get gcloud access token: " .. tostring(err)
     end
     token = string.gsub(token, "%s+$", "")
     if token == "" then
@@ -113,30 +105,17 @@ function vertex_post(model_and_method_path, payload_table)
         return nil, token_err
     end
 
-    tmp_path = os.tmpname()
-    file = io.open(tmp_path, "w")
-    if file == nil then
-        return nil, "cannot create temp file for request body"
-    end
-    io.write(file, json.encode(payload_table))
-    io.close(file)
-
     url = vertex_url(project, region, model_and_method_path)
 
-    cmd = "curl -s -X POST " .. shell_quote(url) ..
-        " -H " .. shell_quote("Authorization: Bearer " .. token) ..
-        " -H " .. shell_quote("Content-Type: application/json") ..
-        " -d @" .. shell_quote(tmp_path)
+    response_text, _ = external_tool.with_temp_file(json.encode(payload_table), "w", function(tmp_path)
+        cmd = "curl -s -X POST " .. external_tool.shell_quote(url) ..
+            " -H " .. external_tool.shell_quote("Authorization: Bearer " .. token) ..
+            " -H " .. external_tool.shell_quote("Content-Type: application/json") ..
+            " -d @" .. external_tool.shell_quote(tmp_path)
+        return external_tool.capture(cmd)
+    end)
 
-    handle = io.popen(cmd, "r")
-    response_text = nil
-    if handle != nil then
-        response_text = io.read(handle, "*all")
-        io.close(handle)
-    end
-    os.remove(tmp_path)
-
-    if response_text == nil or response_text == "" then
+    if response_text == nil then
         return nil, "no response from Vertex AI (curl/network failure)"
     end
 

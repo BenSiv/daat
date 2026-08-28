@@ -22,15 +22,12 @@
 -- creates that half, only the API key itself.
 
 json = require("dkjson")
+external_tool = require("external_tool")
 
 web_search = {}
 
 SEARCH_API_URL = "https://www.googleapis.com/customsearch/v1"
 RESULT_COUNT = 5
-
-function shell_quote(s)
-    return "'" .. string.gsub(s, "'", "'\\''") .. "'"
-end
 
 function search_credentials()
     key = os.getenv("GOOGLE_SEARCH_API_KEY")
@@ -104,20 +101,15 @@ function web_search.search(query)
         return nil, cred_err
     end
 
-    cmd = "curl -s -G " .. shell_quote(SEARCH_API_URL) ..
-        " --data-urlencode " .. shell_quote("key=" .. key) ..
-        " --data-urlencode " .. shell_quote("cx=" .. cx) ..
-        " --data-urlencode " .. shell_quote("q=" .. query) ..
-        " --data-urlencode " .. shell_quote("num=" .. tostring(RESULT_COUNT))
+    cmd = "curl -s -G " .. external_tool.shell_quote(SEARCH_API_URL) ..
+        " --data-urlencode " .. external_tool.shell_quote("key=" .. key) ..
+        " --data-urlencode " .. external_tool.shell_quote("cx=" .. cx) ..
+        " --data-urlencode " .. external_tool.shell_quote("q=" .. query) ..
+        " --data-urlencode " .. external_tool.shell_quote("num=" .. tostring(RESULT_COUNT))
 
-    handle = io.popen(cmd, "r")
-    response_text = nil
-    if handle != nil then
-        response_text = io.read(handle, "*all")
-        io.close(handle)
-    end
+    response_text, _ = external_tool.capture(cmd)
 
-    if response_text == nil or response_text == "" then
+    if response_text == nil then
         return nil, "no response from Google Search API (curl/network failure)"
     end
 

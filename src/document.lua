@@ -38,6 +38,7 @@ db = require("db")
 schema = require("schema")
 entity = require("entity")
 json = require("dkjson")
+external_tool = require("external_tool")
 gnuplot = require("gnuplot")
 
 document = {}
@@ -815,29 +816,79 @@ function document.render_markdown(content)
     if content == nil or content == "" then
         return ""
     end
-    tmp_path = os.tmpname()
-    file = io.open(tmp_path, "w")
-    if file == nil then
-        return ""
-    end
-    io.write(file, content)
-    io.close(file)
-
-    handle = io.popen("cmark-gfm -e table -e strikethrough -e autolink " .. shell_quote(tmp_path), "r")
-    html = ""
-    if handle != nil then
-        html = io.read(handle, "*all")
-        io.close(handle)
-    end
-    os.remove(tmp_path)
+    html, _ = external_tool.with_temp_file(content, "w", function(tmp_path)
+        return external_tool.capture("cmark-gfm -e table -e strikethrough -e autolink " .. external_tool.shell_quote(tmp_path))
+    end)
     if html == nil then
         html = ""
     end
     return document.render_plot_fences(html)
 end
 
-function shell_quote(s)
-    return "'" .. string.gsub(s, "'", "'\\''") .. "'"
+-- Max chars returned to the chat agent for one attachment -- roughly
+-- the same order of magnitude as agent.estimate_tokens' chars/4 budget
+-- heuristic (agent.lua) already used for compaction decisions. A whole
+-- large PDF dumped into one turn's context is exactly the kind of thing
+-- that budget is meant to guard against.
+ATTACHMENT_TEXT_MAX_CHARS = 20000
+
+-- Chat-widget file attachments (`/api/chat-widget-attach`, cgi.lua) --
+-- "documents for context," not vision/images and not a real platform
+-- Document: the extracted text is folded into that one turn's outgoing
+-- message client-side and never persisted as its own row anywhere.
+-- Only PDF/.docx for now (the two most common cases) rather than a
+-- general office-format converter -- anything else is a clear,
+-- immediate error instead of a best-effort partial extraction.
+--
+-- Unlike render_markdown's silent "" on failure, this returns an
+-- explicit nil, err -- an attachment failure has to be visible to the
+-- user, not swallowed into an empty-context turn. Gated by
+-- config.platform_config().chat_attachments_enabled at the route level
+-- (cgi.lua) -- this function itself just extracts text; it doesn't
+-- know or care whether the feature is turned on for this deployment.
+function document.extract_attachment_text(filename, data)
+    if filename == nil then
+        return nil, "No filename given."
+    end
+    extension_match = string.match(filename, "%.([^.]+)$")
+    extension = ""
+    if extension_match != nil then
+        extension = string.lower(extension_match)
+    end
+    if extension != "pdf" and extension != "docx" then
+        return nil, "Unsupported file type -- only PDF and .docx are supported right now."
+    end
+
+    binary = "pandoc"
+    if extension == "pdf" then
+        binary = "pdftotext"
+    end
+    if external_tool.available(binary) == false then
+        return nil, binary .. " is not installed on this deployment."
+    end
+
+    text, _ = external_tool.with_temp_file(data, "wb", function(tmp_path)
+        -- -f docx is required, not optional: os.tmpname() produces an
+        -- extensionless path, and pandoc otherwise guesses input
+        -- format from the filename -- with no extension to go on it
+        -- silently falls back to "markdown" and tries to parse the raw
+        -- docx (zip) binary as text, producing garbage instead of an
+        -- error (confirmed directly: without -f docx this returns
+        -- literal "PK..." noise).
+        if extension == "pdf" then
+            return external_tool.capture("pdftotext " .. external_tool.shell_quote(tmp_path) .. " - 2>/dev/null")
+        end
+        return external_tool.capture("pandoc -f docx -t plain " .. external_tool.shell_quote(tmp_path) .. " 2>/dev/null")
+    end)
+
+    if text == nil then
+        return nil, "Could not extract text from this file."
+    end
+    if string.len(text) > ATTACHMENT_TEXT_MAX_CHARS then
+        text = string.sub(text, 1, ATTACHMENT_TEXT_MAX_CHARS) ..
+            "\n\n[...truncated, showing the first " .. tostring(ATTACHMENT_TEXT_MAX_CHARS) .. " characters...]"
+    end
+    return text
 end
 
 --------------------------------------------------------------------------

@@ -857,7 +857,7 @@ function html.page_shell(title, active, body, nonce, show_sql, show_admin, has_t
     -- response its own JS isn't expecting, not a real conversation.
     chat_widget_html = ""
     if author != nil then
-        chat_widget_html = html.render_chat_widget(nonce)
+        chat_widget_html = html.render_chat_widget(nonce, config.platform_config().chat_attachments_enabled == true)
     end
 
     return string.format("""<!doctype html>
@@ -4896,6 +4896,18 @@ function html.render_document_edit(doc, parent_options_html, csrf_token, error_m
             color: var(--platform-accent, #4f46e5); background: var(--platform-bg-2, #f1f5f9);
             border-radius: 4px; padding: 0 4px; font-weight: 600;
         }
+        .platform-mention-wrap { position: relative; }
+        .platform-mention-results {
+            display: none; position: absolute; top: 40px; left: 8px; min-width: 220px; max-width: 340px;
+            background: #ffffff; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-sm, 8px);
+            max-height: 240px; overflow-y: auto; z-index: 1000;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+        }
+        .platform-mention-results.platform-mention-open { display: block; }
+        .platform-mention-item { display: flex; justify-content: space-between; gap: 10px; padding: 8px 12px; font-size: 0.88rem; cursor: pointer; }
+        .platform-mention-item:hover { background: var(--platform-bg-2, #f1f5f9); }
+        .platform-mention-item span.platform-mention-type { color: var(--platform-muted, #64748b); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; }
+        .platform-mention-empty { padding: 10px 12px; color: var(--platform-muted, #64748b); font-size: 0.88rem; }
     </style>
     <div class="platform-container">
         %s
@@ -4912,7 +4924,10 @@ function html.render_document_edit(doc, parent_options_html, csrf_token, error_m
                 </select>
                 <button type="submit" class="btn btn-primary">Save</button>
             </div>
-            <div id="platform-toastui-editor"></div>
+            <div class="platform-mention-wrap">
+                <div id="platform-toastui-editor"></div>
+                <div class="platform-mention-results" id="platform-mention-results"></div>
+            </div>
         </form>
     </div>
     <script src="vendor?name=toastui-editor-all.min.js" nonce="%s"></script>
@@ -4932,7 +4947,7 @@ function html.render_document_edit(doc, parent_options_html, csrf_token, error_m
             initialEditType: 'markdown',
             previewStyle: 'vertical',
             initialValue: "%s",
-            placeholder: 'Write in Markdown. Link to other documents with [[title]] or [[folder/title]].',
+            placeholder: 'Write in Markdown. Link to other documents with [[title]] or [[folder/title]], or type @ to reference an entity.',
             // WYSIWYG mode has no built-in notion of this project's own
             // "[[title]]" link syntax -- without a widget rule it shows
             // as inert literal text. This only styles it as recognized
@@ -4954,6 +4969,68 @@ function html.render_document_edit(doc, parent_options_html, csrf_token, error_m
         var hiddenContent = document.getElementById('platform-document-content-hidden');
         form.addEventListener('submit', function(){
             hiddenContent.value = editor.getMarkdown();
+        });
+
+        // @mention: type @ to search entities (entity.search_across_types
+        // via /api/entity-search, the same endpoint the global entity-
+        // search page already uses) and insert a real Markdown link on
+        // selection -- [label](detail?type=...&entity_id=...), not this
+        // project's own [[title]] syntax, so document.sync_links' own
+        // [[...]] regex (src/document.lua) never sees it: a mention can
+        // never become a document_link row or a knowledge-graph edge,
+        // by construction, not by a separate filter.
+        var mentionResults = document.getElementById('platform-mention-results');
+        var mentionState = null; // {line, atCh, ch} while a "@query" is live
+        function closeMentions() {
+            mentionState = null;
+            mentionResults.classList.remove('platform-mention-open');
+            mentionResults.innerHTML = '';
+        }
+        function renderMentions(items) {
+            if (!mentionState) { return; }
+            if (items.length === 0) {
+                mentionResults.innerHTML = '<div class="platform-mention-empty">No matching entities.</div>';
+            } else {
+                mentionResults.innerHTML = items.map(function(item){
+                    return '<div class="platform-mention-item" data-label="' + PlatformJS.escapeHtml(item.label) +
+                        '" data-type="' + PlatformJS.escapeHtml(item.entity_type) + '" data-id="' + item.id + '">' +
+                        PlatformJS.escapeHtml(item.label) + '<span class="platform-mention-type">' + PlatformJS.escapeHtml(item.entity_type) + '</span></div>';
+                }).join('');
+            }
+            mentionResults.classList.add('platform-mention-open');
+        }
+        var searchMentions = PlatformJS.debounce(function(query){
+            PlatformJS.fetchJSON('api/entity-search?query=' + encodeURIComponent(query)).then(renderMentions);
+        }, 200);
+        editor.on('keyup', function(){
+            var sel = editor.getSelection();
+            var pos = sel[1]; // [line, ch] -- end of selection, the cursor when collapsed
+            var lineText = editor.getMarkdown().split('\n')[pos[0]] || '';
+            var beforeCursor = lineText.slice(0, pos[1]);
+            // Requires @ to start a token (line start or preceded by
+            // whitespace) so "user@example.com" never triggers this,
+            // same convention Slack/GitHub mentions use.
+            var match = beforeCursor.match(/(^|\s)@([\w-]*)$/);
+            if (!match) { closeMentions(); return; }
+            var query = match[2];
+            mentionState = {line: pos[0], atCh: pos[1] - query.length - 1, ch: pos[1]};
+            if (query.length === 0) { closeMentions(); mentionState = {line: pos[0], atCh: pos[1] - 1, ch: pos[1]}; return; }
+            searchMentions(query);
+        });
+        mentionResults.addEventListener('mousedown', function(e){
+            // mousedown, not click -- fires before the editor's own
+            // blur/selection-change handling, so mentionState is still
+            // the one captured on the keyup that opened this popover.
+            var item = e.target.closest('.platform-mention-item');
+            if (!item || !mentionState) { return; }
+            e.preventDefault();
+            var link = '[' + item.getAttribute('data-label') + '](detail?type=' + item.getAttribute('data-type') + '&entity_id=' + item.getAttribute('data-id') + ')';
+            editor.replaceSelection(link, [mentionState.line, mentionState.atCh], [mentionState.line, mentionState.ch]);
+            closeMentions();
+        });
+        PlatformJS.onOutsideClick(null, function(){ return mentionState ? mentionResults : null; }, closeMentions);
+        document.addEventListener('keydown', function(e){
+            if (e.key === 'Escape' && mentionState) { closeMentions(); }
         });
     })();
     </script>
@@ -5133,6 +5210,21 @@ function platform_chat_widget_css()
     flex: 1; padding: 8px 10px; border: 1px solid var(--platform-border, #e2e8f0);
     border-radius: var(--platform-radius-sm, 8px); font-size: 0.85rem;
 }
+.platform-chat-widget-attach-btn {
+    background: none; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-sm, 8px);
+    font-size: 1rem; padding: 6px 10px; cursor: pointer; line-height: 1;
+}
+.platform-chat-widget-attach-btn:hover { background: var(--platform-bg-2, #f1f5f9); }
+.platform-chat-widget-attach-btn:disabled { cursor: default; opacity: 0.5; }
+.platform-chat-widget-attachment {
+    display: none; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 6px 10px; margin: 0 10px; font-size: 0.8rem; color: var(--platform-text, #334155);
+    background: var(--platform-bg-2, #f1f5f9); border-radius: var(--platform-radius-sm, 8px);
+}
+.platform-chat-widget-attachment button {
+    background: none; border: none; cursor: pointer; color: var(--platform-muted, #64748b); font-size: 0.9rem; line-height: 1; padding: 0 2px;
+}
+.platform-chat-widget-attachment-error { color: #991b1b; background: #fef2f2; }
 .platform-chat-widget-empty { padding: 20px; text-align: center; color: var(--platform-muted, #64748b); font-size: 0.85rem; }
 .platform-chat-widget-thinking { padding: 8px 10px; color: var(--platform-muted, #64748b); font-size: 0.85rem; font-style: italic; }
 .platform-chat-widget-error { padding: 8px 10px; color: #991b1b; background: #fef2f2; border: 1px solid #fecaca; border-radius: var(--platform-radius-sm, 8px); font-size: 0.85rem; margin: 4px 0; }
@@ -5151,7 +5243,12 @@ function platform_chat_widget_css()
 """
 end
 
-function html.render_chat_widget(nonce)
+function html.render_chat_widget(nonce, attachments_enabled)
+    attach_html = ""
+    if attachments_enabled == true then
+        attach_html = "<button type=\"button\" class=\"platform-chat-widget-attach-btn\" id=\"platform-chat-widget-attach-btn\" title=\"Attach a PDF or Word document for context\">&#128206;</button>" ..
+            "<input type=\"file\" id=\"platform-chat-widget-file\" accept=\".pdf,.docx\" style=\"display:none;\">"
+    end
     return string.format("""
 <div class="platform-chat-widget" id="platform-chat-widget">
     <div class="platform-chat-widget-panel">
@@ -5160,7 +5257,9 @@ function html.render_chat_widget(nonce)
         <div class="platform-chat-widget-messages" id="platform-chat-widget-messages">
             <p class="platform-chat-widget-empty">Ask something, or ask the assistant to search or create a document...</p>
         </div>
+        <div class="platform-chat-widget-attachment" id="platform-chat-widget-attachment"></div>
         <form class="platform-chat-widget-input" id="platform-chat-widget-form">
+            %s
             <input type="text" id="platform-chat-widget-text" placeholder="Message" required autofocus>
             <button type="submit" class="btn btn-primary">Send</button>
         </form>
@@ -5175,6 +5274,9 @@ function html.render_chat_widget(nonce)
     var messagesEl = document.getElementById('platform-chat-widget-messages');
     var form = document.getElementById('platform-chat-widget-form');
     var input = document.getElementById('platform-chat-widget-text');
+    var attachBtn = document.getElementById('platform-chat-widget-attach-btn');
+    var fileInput = document.getElementById('platform-chat-widget-file');
+    var attachmentEl = document.getElementById('platform-chat-widget-attachment');
 
     // Builds a short, readable description from whatever page_shell
     // (see its own header comment) put in window.PLATFORM_PAGE_CONTEXT
@@ -5436,6 +5538,75 @@ function html.render_chat_widget(nonce)
         messagesEl.scrollTop = messagesEl.scrollHeight;
     }
 
+    // Attachments (brex #53) -- "documents for context," not vision or
+    // a real platform Document: /api/chat-widget-attach (cgi.lua)
+    // extracts a PDF/.docx's text and hands it straight back, stateless
+    // -- nothing is persisted server-side until the text is folded into
+    // the next outgoing message below and sent through the normal
+    // chat-widget-send path, one-shot (cleared the moment a message is
+    // actually sent, never re-attached to a later message).
+    var pendingAttachment = null; // {filename, text}
+
+    function clearAttachment() {
+        pendingAttachment = null;
+        fileInput.value = '';
+        attachmentEl.style.display = 'none';
+        attachmentEl.className = 'platform-chat-widget-attachment';
+        attachmentEl.innerHTML = '';
+    }
+
+    function showAttachmentStatus(text, isError) {
+        attachmentEl.style.display = 'flex';
+        attachmentEl.className = 'platform-chat-widget-attachment' + (isError ? ' platform-chat-widget-attachment-error' : '');
+        attachmentEl.textContent = text;
+    }
+
+    // attachBtn/fileInput only exist in the DOM at all when
+    // config.platform_config().chat_attachments_enabled is on for this
+    // deployment (html.render_chat_widget's own attach_html) -- guard
+    // the whole wiring, not just individual calls, so a disabled
+    // deployment's widget script has nothing left that ever touches
+    // these two elements.
+    if (attachBtn) {
+        attachBtn.addEventListener('click', function(){ fileInput.click(); });
+
+        fileInput.addEventListener('change', function(){
+            var file = fileInput.files[0];
+            if (!file) { return; }
+            showAttachmentStatus('Attaching ' + file.name + '...', false);
+            attachBtn.disabled = true;
+            var formData = new FormData();
+            formData.append('file', file);
+            fetch('api/chat-widget-attach', {
+                method: 'POST',
+                headers: {'X-CSRF-Token': PlatformJS.getCsrfToken()},
+                body: formData
+            }).then(function(res){
+                return res.json().then(function(data){ return {ok: res.ok, data: data}; });
+            }).then(function(result){
+                attachBtn.disabled = false;
+                if (!result.ok || !result.data || result.data.error) {
+                    showAttachmentStatus((result.data && result.data.error) || 'Could not attach this file.', true);
+                    fileInput.value = '';
+                    return;
+                }
+                pendingAttachment = {filename: result.data.filename, text: result.data.text};
+                attachmentEl.style.display = 'flex';
+                attachmentEl.className = 'platform-chat-widget-attachment';
+                attachmentEl.innerHTML = '<span>Attached: ' + PlatformJS.escapeHtml(result.data.filename) + '</span>' +
+                    '<button type="button" id="platform-chat-widget-attachment-clear" title="Remove">&times;</button>';
+            }).catch(function(){
+                attachBtn.disabled = false;
+                showAttachmentStatus('Could not attach this file.', true);
+                fileInput.value = '';
+            });
+        });
+    }
+
+    attachmentEl.addEventListener('click', function(e){
+        if (e.target.id === 'platform-chat-widget-attachment-clear') { clearAttachment(); }
+    });
+
     form.addEventListener('submit', function(e){
         e.preventDefault();
         var typedText = input.value;
@@ -5454,6 +5625,19 @@ function html.render_chat_widget(nonce)
         }
         if (window.PLATFORM_PAGE_CONTEXT && window.PLATFORM_PAGE_CONTEXT.current_user) {
             text = '[Current user: ' + window.PLATFORM_PAGE_CONTEXT.current_user + ']\n' + text;
+        }
+        // Outermost wrapper (matches agent.display_content's own strip
+        // order, agent.lua -- it peels this off first, then Current
+        // user/page) -- one-shot: cleared the moment it's folded in, so
+        // a later message never carries a stale attachment along.
+        if (pendingAttachment) {
+            // Dash delimiters, not triple-double-quotes -- this whole
+            // template is itself a Luam long string (html.lua) using
+            // that same triple-double-quote token, so using it here
+            // too would terminate the outer string early (confirmed --
+            // it did, as a real parse error, before this fix).
+            text = '[Attached file: ' + pendingAttachment.filename + ']\n---\n' + pendingAttachment.text + '\n---\n\n' + text;
+            clearAttachment();
         }
         appendOptimisticUserMessage(typedText);
         ensureSession().then(function(sessionId){
@@ -5516,7 +5700,7 @@ function html.render_chat_widget(nonce)
     }
 })();
 </script>
-""", ICON_CHAT_BUBBLE, nonce)
+""", attach_html, ICON_CHAT_BUBBLE, nonce)
 end
 
 return html

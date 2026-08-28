@@ -1492,6 +1492,45 @@ function cgi.handle_request()
         return print_response("200 OK", "application/json", json.encode(chat_widget_state(db_path, body_data.session_id)))
     end
 
+    -- "Documents for context," not vision/images and not a real
+    -- platform Document (see brex #53) -- deliberately stateless: the
+    -- extracted text is handed straight back and never touches
+    -- agent_message/sessions or gets persisted anywhere. The widget
+    -- folds it into the next outgoing chat-widget-send message
+    -- client-side, so it becomes part of that one turn's own message
+    -- row the same way any other typed text does -- no new storage.
+    --
+    -- A fixed size cap (unlike settings-save's logo upload, which has
+    -- none) -- that flow is a controlled, admin-only upload; this one is
+    -- regular authenticated-user input feeding an external conversion
+    -- process, a real resource-exhaustion surface that warrants an
+    -- explicit limit even though it's not this codebase's usual norm.
+    if path_info == "/api/chat-widget-attach" and method == "POST" then
+        -- 404, not 403 -- a deployment that hasn't opted in
+        -- (config.platform_config().chat_attachments_enabled, off by
+        -- default) shouldn't even reveal that this route exists.
+        if config.platform_config().chat_attachments_enabled != true then
+            return print_response("404 Not Found", "application/json", json.encode({error = "not found"}))
+        end
+        if not require_csrf(cookies) then
+            return print_response("403 Forbidden", "application/json", json.encode({error = "CSRF check failed"}))
+        end
+        raw_body = io.read("*all")
+        if raw_body != nil and string.len(raw_body) > 15 * 1024 * 1024 then
+            return print_response("400 Bad Request", "application/json", json.encode({error = "File too large (max 15MB)."}))
+        end
+        form = multipart.parse(os.getenv("CONTENT_TYPE"), raw_body)
+        uploaded = form.file
+        if type(uploaded) != "table" or uploaded.data == nil or uploaded.data == "" then
+            return print_response("400 Bad Request", "application/json", json.encode({error = "No file given."}))
+        end
+        text, err = document.extract_attachment_text(uploaded.filename, uploaded.data)
+        if text == nil then
+            return print_response("400 Bad Request", "application/json", json.encode({error = err}))
+        end
+        return print_response("200 OK", "application/json", json.encode({text = text, filename = uploaded.filename}))
+    end
+
     if path_info == "/api/chat-widget-approve" and method == "POST" then
         if not require_csrf(cookies) then
             return print_response("403 Forbidden", "application/json", json.encode({error = "CSRF check failed"}))

@@ -40,16 +40,13 @@
 -- way PLATFORM_MARIADB_PASSWORD already is -- see apache-platform.conf).
 
 json = require("dkjson")
+external_tool = require("external_tool")
 
 agent_provider_claude = {}
 
 DEFAULT_MODEL = "claude-sonnet-5"
 ANTHROPIC_VERSION = "2023-06-01"
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
-
-function shell_quote(s)
-    return "'" .. string.gsub(s, "'", "'\\''") .. "'"
-end
 
 function claude_api_key()
     key = os.getenv("ANTHROPIC_API_KEY")
@@ -70,29 +67,16 @@ function claude_post(payload_table)
         return nil, key_err
     end
 
-    tmp_path = os.tmpname()
-    file = io.open(tmp_path, "w")
-    if file == nil then
-        return nil, "cannot create temp file for request body"
-    end
-    io.write(file, json.encode(payload_table))
-    io.close(file)
+    response_text, _ = external_tool.with_temp_file(json.encode(payload_table), "w", function(tmp_path)
+        cmd = "curl -s -X POST " .. external_tool.shell_quote(ANTHROPIC_API_URL) ..
+            " -H " .. external_tool.shell_quote("x-api-key: " .. key) ..
+            " -H " .. external_tool.shell_quote("anthropic-version: " .. ANTHROPIC_VERSION) ..
+            " -H " .. external_tool.shell_quote("content-type: application/json") ..
+            " -d @" .. external_tool.shell_quote(tmp_path)
+        return external_tool.capture(cmd)
+    end)
 
-    cmd = "curl -s -X POST " .. shell_quote(ANTHROPIC_API_URL) ..
-        " -H " .. shell_quote("x-api-key: " .. key) ..
-        " -H " .. shell_quote("anthropic-version: " .. ANTHROPIC_VERSION) ..
-        " -H " .. shell_quote("content-type: application/json") ..
-        " -d @" .. shell_quote(tmp_path)
-
-    handle = io.popen(cmd, "r")
-    response_text = nil
-    if handle != nil then
-        response_text = io.read(handle, "*all")
-        io.close(handle)
-    end
-    os.remove(tmp_path)
-
-    if response_text == nil or response_text == "" then
+    if response_text == nil then
         return nil, "no response from Claude API (curl/network failure)"
     end
 

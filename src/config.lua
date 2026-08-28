@@ -256,6 +256,11 @@ function config.platform_config()
         agent_compaction_threshold = 4000,
         platform_adhoc_row_cap = 1000,
         extension_max_job_attempts = 5,
+        -- Off by default -- a deployment opts in once pdftotext/pandoc
+        -- (see doc's own Dockerfile) are actually installed, rather
+        -- than the platform deciding every deployment wants a chat
+        -- file-upload surface and its two extra system dependencies.
+        chat_attachments_enabled = false,
         db_backend = "sqlite",
         mariadb_host = "127.0.0.1",
         mariadb_port = 3306,
@@ -316,6 +321,9 @@ function config.platform_config()
     end
     if type(parsed.extension_max_job_attempts) == "number" then
         conf.extension_max_job_attempts = parsed.extension_max_job_attempts
+    end
+    if type(parsed.chat_attachments_enabled) == "boolean" then
+        conf.chat_attachments_enabled = parsed.chat_attachments_enabled
     end
     if parsed.db_backend == "mariadb" then
         conf.db_backend = "mariadb"

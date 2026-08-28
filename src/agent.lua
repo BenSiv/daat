@@ -412,6 +412,7 @@ function agent.display_content(content, role, include_tool_calls)
     if content == nil then
         return content
     end
+    content = string.gsub(content, "^%[Attached file: .-%]\n%-%-%-\n.-\n%-%-%-\n\n", "")
     content = string.gsub(content, "^%[Current user: .-%]\n", "")
     content = string.gsub(content, "^%[Current page: .-%]\n\n", "")
 
