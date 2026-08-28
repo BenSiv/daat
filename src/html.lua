@@ -112,6 +112,92 @@ function platform_container_css()
 """, PLATFORM_GUTTER, PLATFORM_CONTENT_MAX_WIDTH, PLATFORM_GUTTER * 2)
 end
 
+-- The icon nav rail's own width -- shared with the chat widget's own
+-- stretch-to-nav-edge limit (platform_chat_widget_css) the same way
+-- PLATFORM_GUTTER is shared between the main content gutter and the
+-- chat widget's offset. Before this, .platform-nav's width and the
+-- chat panel's max-width calc each carried their own literal "72px"
+-- that happened to agree only because a human kept them in sync by
+-- hand -- structurally identical to the gutter/chat-offset drift this
+-- same session already fixed once, just not yet caught here. One
+-- number now, not two coincidentally-matching ones.
+PLATFORM_NAV_WIDTH = 72
+
+-- Extracted out of html.page_shell's own giant template literal so
+-- PLATFORM_NAV_WIDTH can reach the one CSS rule that needs it
+-- (.platform-nav's own width) without renumbering that literal's
+-- existing, already-long positional string.format argument list --
+-- same "small format() island, threaded in as one more %s" technique
+-- platform_chat_widget_css uses internally.
+function platform_nav_css()
+    return string.format("""
+.platform-nav {
+    width: %dpx;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
+    padding: 12px 8px;
+    background: var(--platform-bg, #ffffff);
+    border-right: 1px solid var(--platform-border, #e2e8f0);
+    min-height: 100vh;
+}
+""", PLATFORM_NAV_WIDTH) .. """
+.platform-nav-link {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 12px;
+    border-radius: var(--platform-radius-sm, 8px);
+    color: var(--platform-th-text, #475569);
+    text-decoration: none;
+    transition: var(--platform-transition, all 0.15s ease);
+}
+.platform-nav-link:hover { background: var(--platform-bg-2, #f1f5f9); color: var(--platform-heading, #0f172a); }
+.platform-nav-link-active { background: var(--platform-accent, #4f46e5); color: #ffffff; }
+.platform-nav-spacer { flex: 1; }
+.platform-nav-label {
+    position: absolute;
+    left: calc(100% + 8px);
+    top: 50%;
+    transform: translateY(-50%);
+    padding: 6px 10px;
+    white-space: nowrap;
+    background: var(--platform-heading, #1e293b);
+    color: #ffffff;
+    border-radius: var(--platform-radius-sm, 8px);
+    font-size: 0.8rem;
+    font-weight: 600;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    z-index: 20;
+    transition: var(--platform-transition, all 0.15s ease);
+}
+.platform-nav-link:hover .platform-nav-label, .platform-nav-link:focus .platform-nav-label { opacity: 1; visibility: visible; }
+.platform-nav-user {
+    padding: 10px 6px;
+    border-top: 1px solid var(--platform-border, #e2e8f0);
+    text-align: center;
+}
+.platform-nav-user-name {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--platform-muted, #64748b);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    margin-bottom: 4px;
+}
+.platform-nav-user a { display: block; font-size: 0.75rem; color: var(--platform-accent, #4f46e5); text-decoration: none; font-weight: 600; }
+.platform-nav-user a:hover { text-decoration: underline; }
+.platform-nav-brand { display: block; padding: 4px; margin-bottom: 8px; text-align: center; }
+.platform-nav-brand img { width: 100%; max-width: 40px; height: auto; display: block; margin: 0 auto; }
+"""
+end
+
 -- .platform-table-wrapper (the scroll/border/background shell around a
 -- data table) and .platform-empty (its "no rows" placeholder) were
 -- hand-copied into nine different render_* functions' own <style>
@@ -1248,69 +1334,7 @@ body {
     font-family: 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     background: var(--platform-bg-2, #f1f5f9);
 }
-.platform-nav {
-    width: 72px;
-    flex-shrink: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 2px;
-    padding: 12px 8px;
-    background: var(--platform-bg, #ffffff);
-    border-right: 1px solid var(--platform-border, #e2e8f0);
-    min-height: 100vh;
-}
-.platform-nav-link {
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 12px;
-    border-radius: var(--platform-radius-sm, 8px);
-    color: var(--platform-th-text, #475569);
-    text-decoration: none;
-    transition: var(--platform-transition, all 0.15s ease);
-}
-.platform-nav-link:hover { background: var(--platform-bg-2, #f1f5f9); color: var(--platform-heading, #0f172a); }
-.platform-nav-link-active { background: var(--platform-accent, #4f46e5); color: #ffffff; }
-.platform-nav-spacer { flex: 1; }
-.platform-nav-label {
-    position: absolute;
-    left: calc(100%% + 8px);
-    top: 50%%;
-    transform: translateY(-50%%);
-    padding: 6px 10px;
-    white-space: nowrap;
-    background: var(--platform-heading, #1e293b);
-    color: #ffffff;
-    border-radius: var(--platform-radius-sm, 8px);
-    font-size: 0.8rem;
-    font-weight: 600;
-    opacity: 0;
-    visibility: hidden;
-    pointer-events: none;
-    z-index: 20;
-    transition: var(--platform-transition, all 0.15s ease);
-}
-.platform-nav-link:hover .platform-nav-label, .platform-nav-link:focus .platform-nav-label { opacity: 1; visibility: visible; }
-.platform-nav-user {
-    padding: 10px 6px;
-    border-top: 1px solid var(--platform-border, #e2e8f0);
-    text-align: center;
-}
-.platform-nav-user-name {
-    font-size: 0.7rem;
-    font-weight: 600;
-    color: var(--platform-muted, #64748b);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    margin-bottom: 4px;
-}
-.platform-nav-user a { display: block; font-size: 0.75rem; color: var(--platform-accent, #4f46e5); text-decoration: none; font-weight: 600; }
-.platform-nav-user a:hover { text-decoration: underline; }
-.platform-nav-brand { display: block; padding: 4px; margin-bottom: 8px; text-align: center; }
-.platform-nav-brand img { width: 100%%; max-width: 40px; height: auto; display: block; margin: 0 auto; }
+%s
 .platform-main { flex: 1; min-width: 0; }
 %s
 </style>
@@ -1328,7 +1352,7 @@ body {
 %s
 </body>
 </html>
-""", html.html_escape(title), nonce, page_context_json, platform_common_js(nonce), root_css, platform_chat_widget_css(), brand_html, table.concat(nav_links, ""), user_box, body,
+""", html.html_escape(title), nonce, page_context_json, platform_common_js(nonce), root_css, platform_nav_css(), platform_chat_widget_css(), brand_html, table.concat(nav_links, ""), user_box, body,
      chat_widget_html)
 end
 
@@ -5366,21 +5390,21 @@ function platform_chat_widget_css()
        that size is already known to render every row correctly. */
     min-width: 320px; min-height: 320px;
     /* Stretchable up to the exact same rectangle the main content area
-       occupies: left edge flush with the nav rail (72px -- .platform-nav's
-       own width; kept a literal here rather than a second shared
-       constant, since resizing the nav rail itself is a separate
-       concern from this widget's own reach), right edge at this same
-       %dpx gutter the widget is itself offset by, top edge at that
-       same %dpx gutter (matching platform_container_css's own top
-       margin) -- bottom edge is already pinned via bottom:64px above
-       the toggle button, hence the extra 64px subtracted below. */
-    max-width: calc(100vw - %dpx - 72px);
+       occupies: left edge flush with the nav rail (PLATFORM_NAV_WIDTH
+       -- the same constant .platform-nav's own width uses, via
+       platform_nav_css, not a second independently-set literal),
+       right edge at this same gutter the widget is itself offset by
+       (PLATFORM_GUTTER), top edge at that same gutter (matching
+       platform_container_css's own top margin) -- bottom edge is
+       already pinned via bottom:64px above the toggle button, hence
+       the extra 64px subtracted below. */
+    max-width: calc(100vw - %dpx - %dpx);
     max-height: calc(100vh - %dpx - 64px - %dpx);
     background: var(--platform-bg, #ffffff); border: 1px solid var(--platform-border, #e2e8f0);
     border-radius: var(--platform-radius-md, 12px); box-shadow: 0 10px 30px rgba(0,0,0,0.2);
     display: none; flex-direction: column; overflow: hidden;
 }
-""", PLATFORM_GUTTER, PLATFORM_GUTTER, PLATFORM_GUTTER, PLATFORM_GUTTER, PLATFORM_GUTTER) .. """
+""", PLATFORM_GUTTER, PLATFORM_NAV_WIDTH, PLATFORM_GUTTER, PLATFORM_GUTTER) .. """
 .platform-chat-widget.platform-chat-widget-open .platform-chat-widget-panel { display: flex; }
 /* Native CSS `resize: both` always draws its drag handle at the
    element's own bottom-right corner -- wrong here, since this panel
