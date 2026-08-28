@@ -5778,22 +5778,36 @@ function html.render_chat_widget(nonce, attachments_enabled)
     // is the in-flight send/approve call itself; once it resolves (or
     // fails) polling stops and the final state wins.
     function pollWhilePending(sessionId, sendPromise) {
+        // `settled` guards against a tick whose fetch was already in
+        // flight (HISTORY_POLL_MS is 800ms -- easy to have one in flight
+        // at any moment) when sendPromise resolves: clearInterval only
+        // stops *future* ticks, it doesn't cancel one already started, so
+        // that tick's own .then() can still fire after the block below
+        // already removed thinkingEl and rendered the real final state --
+        // and unconditionally re-adding a Stop button at that point left
+        // a live, clickable "Thinking... Stop" sitting under an already-
+        // answered reply (found live: reported as "the Stop button
+        // didn't stop the agent" -- clicking a Stop tied to a turn that
+        // finished before the button even reappeared can't do anything).
+        var settled = false;
         var thinkingEl = showThinking(sessionId);
         var timer = setInterval(function(){
             fetch('api/chat-widget-history?session_id=' + encodeURIComponent(sessionId))
                 .then(function(res){ if (!res.ok) { throw new Error('poll failed'); } return res.json(); })
                 .then(function(state){
                     render(state);
-                    thinkingEl = showThinking(sessionId);
+                    if (!settled) { thinkingEl = showThinking(sessionId); }
                 })
                 .catch(function(){ /* transient -- the next tick tries again */ });
         }, HISTORY_POLL_MS);
         return sendPromise.then(function(state){
+            settled = true;
             clearInterval(timer);
             thinkingEl.remove();
             render(state);
             return state;
         }, function(err){
+            settled = true;
             clearInterval(timer);
             thinkingEl.remove();
             throw err;
