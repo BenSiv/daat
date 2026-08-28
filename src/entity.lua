@@ -1268,6 +1268,13 @@ function entity.do_extension(cmd_args, db_path)
         if caps.ui != nil then
             print("route:        /ext/" .. manifest.name .. " (" .. caps.ui.icon .. " " .. caps.ui.label .. ")")
         end
+        if caps.tools != nil then
+            for _, tool in ipairs(caps.tools) do
+                destructive = tool.destructive == true
+                print("tool:         " .. manifest.name .. "." .. tool.name ..
+                      " destructive=" .. tostring(destructive) .. " -- " .. tool.description)
+            end
+        end
         if extension.is_approved(db_path, manifest) then
             print("status:       approved")
         elseif extension.approved_capabilities(db_path, name) == nil then

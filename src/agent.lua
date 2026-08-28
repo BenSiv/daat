@@ -22,6 +22,7 @@ template = require("template")
 config = require("config")
 view = require("view")
 web_search = require("web_search")
+extension = require("extension")
 
 agent = {}
 
@@ -1144,20 +1145,51 @@ AGENT_TOOLS = {
     },
 }
 
-function agent.is_known_tool(tool_name, method_name)
-    group = AGENT_TOOLS[tool_name]
-    if group == nil then
-        return false
+-- The extension-tools plugin surface (doc/plugin-system-research.md,
+-- brex 278013129): an approved extension's capabilities.tools entries
+-- are dispatched under tool_name = the extension's own manifest.name
+-- (validated collision-free against AGENT_TOOLS' own top-level keys at
+-- manifest-validate time, see extension.lua's RESERVED_TOOL_NAMES), so
+-- they slot into the exact same tool_name.method_name lookup built-ins
+-- use, with no remapping table at all. Returns the matching manifest
+-- and tool spec, or nil if tool_name isn't an approved extension's own
+-- name or it declares no matching method.
+function find_extension_tool(db_path, tool_name, method_name)
+    for _, entry in ipairs(extension.approved_with_tools(db_path, config.extensions_dir())) do
+        if entry.name == tool_name then
+            for _, tool in ipairs(entry.manifest.capabilities.tools) do
+                if tool.name == method_name then
+                    return entry.manifest, tool
+                end
+            end
+            return nil
+        end
     end
-    return group[method_name] != nil
+    return nil
 end
 
-function agent.is_destructive(tool_name, method_name)
+function agent.is_known_tool(db_path, tool_name, method_name)
     group = AGENT_TOOLS[tool_name]
-    if group == nil or group[method_name] == nil then
+    if group != nil then
+        return group[method_name] != nil
+    end
+    manifest, tool = find_extension_tool(db_path, tool_name, method_name)
+    return tool != nil
+end
+
+function agent.is_destructive(db_path, tool_name, method_name)
+    group = AGENT_TOOLS[tool_name]
+    if group != nil then
+        if group[method_name] == nil then
+            return false
+        end
+        return group[method_name].destructive == true
+    end
+    manifest, tool = find_extension_tool(db_path, tool_name, method_name)
+    if tool == nil then
         return false
     end
-    return group[method_name].destructive == true
+    return tool.destructive == true
 end
 
 -- Flattens AGENT_TOOLS into the function-declaration list the real
@@ -1165,8 +1197,10 @@ end
 -- named "toolname.methodname" (dots are valid in a Gemini function
 -- name) so agent.execute_tool's own tool_name/method_name
 -- split-on-dot dispatch needs no remapping table at all in either
--- direction.
-function agent.tool_declarations()
+-- direction. Approved extension tools are appended the same way, under
+-- their own manifest.name, so the model sees them with no
+-- special-casing on the provider side.
+function agent.tool_declarations(db_path)
     declarations = {}
     for tool_name, methods in pairs(AGENT_TOOLS) do
         for method_name, spec in pairs(methods) do
@@ -1174,6 +1208,15 @@ function agent.tool_declarations()
                 name = tool_name .. "." .. method_name,
                 description = spec.description,
                 parameters = spec.parameters,
+            })
+        end
+    end
+    for _, entry in ipairs(extension.approved_with_tools(db_path, config.extensions_dir())) do
+        for _, tool in ipairs(entry.manifest.capabilities.tools) do
+            table.insert(declarations, {
+                name = entry.name .. "." .. tool.name,
+                description = tool.description,
+                parameters = tool.parameters,
             })
         end
     end
@@ -1882,6 +1925,30 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
         return web_search.format_results(response)
     end
 
+    ext_manifest, ext_tool = find_extension_tool(db_path, tool_name, method_name)
+    if ext_manifest != nil then
+        hooks, hooks_err = extension.load_hooks(config.extensions_dir(), tool_name, ext_manifest)
+        if hooks == nil then
+            if hooks_err != nil then
+                return nil, hooks_err
+            end
+            return nil, "extension '" .. tool_name .. "' does not implement tool '" .. method_name .. "'"
+        end
+        handler = nil
+        if type(hooks.tools) == "table" then
+            handler = hooks.tools[method_name]
+        end
+        if type(handler) != "function" then
+            return nil, "extension '" .. tool_name .. "' does not implement tool '" .. method_name .. "'"
+        end
+        ctx = entity.build_ctx(db_path, ext_manifest)
+        call_ok, result, call_err = pcall(handler, ctx, args)
+        if call_ok == false then
+            return nil, tostring(result)
+        end
+        return result, call_err
+    end
+
     return nil, "unknown tool: " .. tostring(tool_name) .. "." .. tostring(method_name)
 end
 
@@ -2329,7 +2396,7 @@ that plainly along with what you tried, rather than guessing.
 -- so the model isn't even told they exist from inside a pass that's meant
 -- to be read-only investigation, not a place a write could plausibly
 -- come from.
-function research_tool_declarations()
+function research_tool_declarations(db_path)
     declarations = {}
     for tool_name, methods in pairs(AGENT_TOOLS) do
         if tool_name != "research" and tool_name != "clarify" and tool_name != "background" then
@@ -2341,6 +2408,17 @@ function research_tool_declarations()
                         parameters = spec.parameters,
                     })
                 end
+            end
+        end
+    end
+    for _, entry in ipairs(extension.approved_with_tools(db_path, config.extensions_dir())) do
+        for _, tool in ipairs(entry.manifest.capabilities.tools) do
+            if tool.destructive != true then
+                table.insert(declarations, {
+                    name = entry.name .. "." .. tool.name,
+                    description = tool.description,
+                    parameters = tool.parameters,
+                })
             end
         end
     end
@@ -2369,7 +2447,7 @@ function run_research_loop(db_path, author, session_id, model, question, max_tur
         max_turns = config.platform_config().agent_research_max_turns
     end
     messages = {{role = "user", content = question}}
-    tools = research_tool_declarations()
+    tools = research_tool_declarations(db_path)
     last_text = nil
 
     for turn = 1, max_turns do
@@ -2410,10 +2488,10 @@ function run_research_loop(db_path, author, session_id, model, question, max_tur
             tool_name, method_name = split_tool_name(tool_call.name)
             result_text = nil
             is_error = false
-            if tool_name == nil or not agent.is_known_tool(tool_name, method_name) then
+            if tool_name == nil or not agent.is_known_tool(db_path, tool_name, method_name) then
                 result_text = "ERROR: unknown tool " .. tostring(tool_call.name)
                 is_error = true
-            elseif agent.is_destructive(tool_name, method_name) or tool_name == "research" or tool_name == "clarify" or tool_name == "background" then
+            elseif agent.is_destructive(db_path, tool_name, method_name) or tool_name == "research" or tool_name == "clarify" or tool_name == "background" then
                 result_text = "ERROR: research is read-only and can't ask the user directly or hand off further -- cannot perform destructive actions, delegate further, ask a clarifying question, or start a background task; report what you've found (including any real ambiguity) instead"
                 is_error = true
             else
@@ -2599,7 +2677,7 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
         history_messages = build_history_messages(active)
         audit_prompt = json.encode(history_messages)
 
-        response, err, usage = agent_provider.converse(model, system_prompt, history_messages, agent.tool_declarations())
+        response, err, usage = agent_provider.converse(model, system_prompt, history_messages, agent.tool_declarations(db_path))
         if response == nil then
             -- Persisted, not just returned -- so a provider failure is
             -- never silently invisible: without a recorded row, the
@@ -2715,7 +2793,7 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
                     tool_call.arguments = {}
                 end
                 tool_name, method_name = split_tool_name(tool_call.name)
-                if tool_name == nil or not agent.is_known_tool(tool_name, method_name) then
+                if tool_name == nil or not agent.is_known_tool(db_path, tool_name, method_name) then
                     agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name,
                         "ERROR: unknown tool " .. tostring(tool_call.name), true)
                 elseif tool_name == "clarify" and method_name == "ask" then
@@ -2727,7 +2805,7 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
                         agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name,
                             "ERROR: skipped -- only one clarifying question can be asked per turn", true)
                     end
-                elseif agent.is_destructive(tool_name, method_name) then
+                elseif agent.is_destructive(db_path, tool_name, method_name) then
                     if pending_call == nil then
                         pending_call = {tool_call = tool_call, tool_name = tool_name, method_name = method_name}
                     else

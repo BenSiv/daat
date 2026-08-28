@@ -87,6 +87,15 @@ function extension.names(ext_dir)
     return names
 end
 
+-- Every top-level AGENT_TOOLS group name (src/agent.lua) -- an
+-- extension's own name can never collide with one of these, since
+-- capabilities.tools entries dispatch under tool_name = manifest.name.
+RESERVED_TOOL_NAMES = {
+    document = true, entity = true, plot = true, template = true,
+    knowledge = true, view = true, research = true, clarify = true,
+    background = true, internet_search = true,
+}
+
 -- Structural validation only -- does the manifest make sense on its own
 -- terms (mirrors schema.validate's role for schema files).
 function extension.validate_manifest(manifest)
@@ -117,6 +126,35 @@ function extension.validate_manifest(manifest)
         end
         if type(ui.icon) != "string" or ui.icon == "" then
             return "manifest '" .. tostring(manifest.name) .. "': capabilities.ui must have a non-empty string 'icon'"
+        end
+    end
+    -- capabilities.tools' entries are dispatched under tool_name =
+    -- manifest.name (see agent.execute_tool's extension fallback) --
+    -- reusing the plain tool_name.method_name convention every built-in
+    -- AGENT_TOOLS entry already uses, with no separate namespace. That
+    -- only works if an extension's own name can never collide with one
+    -- of those built-in top-level groups, so it's rejected here, once,
+    -- rather than needing a remapping table at dispatch time.
+    if manifest.capabilities != nil and manifest.capabilities.tools != nil then
+        if RESERVED_TOOL_NAMES[manifest.name] == true then
+            return "manifest '" .. tostring(manifest.name) .. "': extension name collides with a built-in tool group"
+        end
+        if type(manifest.capabilities.tools) != "table" then
+            return "manifest '" .. tostring(manifest.name) .. "': capabilities.tools must be a list"
+        end
+        for _, tool in ipairs(manifest.capabilities.tools) do
+            if type(tool) != "table" then
+                return "manifest '" .. tostring(manifest.name) .. "': capabilities.tools entries must be tables"
+            end
+            if type(tool.name) != "string" or tool.name == "" then
+                return "manifest '" .. tostring(manifest.name) .. "': capabilities.tools entry must have a non-empty string 'name'"
+            end
+            if type(tool.description) != "string" or tool.description == "" then
+                return "manifest '" .. tostring(manifest.name) .. "': capabilities.tools entry '" .. tool.name .. "' must have a non-empty string 'description'"
+            end
+            if type(tool.parameters) != "table" then
+                return "manifest '" .. tostring(manifest.name) .. "': capabilities.tools entry '" .. tool.name .. "' must have a 'parameters' table"
+            end
         end
     end
     return nil
@@ -172,6 +210,25 @@ function extension.approved_with_ui(db_path, ext_dir)
         if entry.manifest != nil
            and entry.manifest.capabilities != nil
            and entry.manifest.capabilities.ui != nil
+           and extension.is_approved(db_path, entry.manifest) then
+            table.insert(result, {name = entry.name, manifest = entry.manifest})
+        end
+    end
+    return result
+end
+
+-- Approved extensions that also declare capabilities.tools -- the one
+-- list the agent-tools registry/dispatch (agent.lua) needs, same
+-- exclusion spirit as approved_with_ui: a bad manifest or an
+-- unapproved/tool-less extension is silently excluded, not surfaced as
+-- an error.
+function extension.approved_with_tools(db_path, ext_dir)
+    result = {}
+    for _, entry in ipairs(extension.all(ext_dir)) do
+        if entry.manifest != nil
+           and entry.manifest.capabilities != nil
+           and entry.manifest.capabilities.tools != nil
+           and #entry.manifest.capabilities.tools > 0
            and extension.is_approved(db_path, entry.manifest) then
             table.insert(result, {name = entry.name, manifest = entry.manifest})
         end
@@ -258,6 +315,59 @@ function ui_equal(a, b)
     return a.label == b.label and a.icon == b.icon
 end
 
+-- Order-independent structural equality -- needed because
+-- extension.approve stores capabilities as a JSON round-trip
+-- (extension.approved_capabilities decodes it back), and dkjson's own
+-- encode has no canonical key ordering: two Lua tables built from the
+-- exact same JSON can iterate their hash parts in different orders, so
+-- comparing json.encode(a) == json.encode(b) string-for-string is
+-- unreliable (this broke every capabilities.tools comparison the
+-- first time it was tried -- see tst/integration/extension.bats'
+-- tool-demo cases).
+function deep_equal(a, b)
+    if type(a) != type(b) then
+        return false
+    end
+    if type(a) != "table" then
+        return a == b
+    end
+    for k, v in pairs(a) do
+        if deep_equal(v, b[k]) == false then
+            return false
+        end
+    end
+    for k, _ in pairs(b) do
+        if a[k] == nil then
+            return false
+        end
+    end
+    return true
+end
+
+function tool_spec_equal(a, b)
+    return a.name == b.name and a.description == b.description
+        and a.destructive == b.destructive
+        and deep_equal(a.parameters, b.parameters)
+end
+
+-- Same-shape comparison for capabilities.tools -- like capabilities.ui,
+-- its presence is a real grant (a new tool the chat agent can call), so
+-- editing a declared tool's description/parameters/destructive flag --
+-- not just adding/removing one -- has to invalidate approval too.
+function tools_equal(a, b)
+    if a == nil then a = {} end
+    if b == nil then b = {} end
+    if #a != #b then
+        return false
+    end
+    for i, tool in ipairs(a) do
+        if tool_spec_equal(tool, b[i]) == false then
+            return false
+        end
+    end
+    return true
+end
+
 function extension.capabilities_equal(a, b)
     if a == nil then a = {} end
     if b == nil then b = {} end
@@ -274,7 +384,10 @@ function extension.capabilities_equal(a, b)
     if a_net != b_net then
         return false
     end
-    return ui_equal(a.ui, b.ui)
+    if ui_equal(a.ui, b.ui) == false then
+        return false
+    end
+    return tools_equal(a.tools, b.tools)
 end
 
 -- ---- Admin-approval registry ----

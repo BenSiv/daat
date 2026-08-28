@@ -89,11 +89,69 @@ x = 1
     check(result == nil, "expected nil result")
 end
 
+-- capabilities.tools validation (agent-tools plugin surface, brex
+-- 278013129) -- see extension.validate_manifest's own comment for why
+-- an extension's name can never collide with a built-in AGENT_TOOLS
+-- group: capabilities.tools entries dispatch under tool_name =
+-- manifest.name, with no separate namespace.
+function base_manifest(name)
+    return {name = name, events = {}, entity_types = {}}
+end
+
+function test_valid_tools_capability_passes_validation()
+    print("Testing a well-formed capabilities.tools entry passes validation")
+    manifest = base_manifest("widget-tools")
+    manifest.capabilities = {read = {}, write = {}, net = "none", tools = {
+        {name = "lookup", description = "Looks something up.", parameters = {type = "object", properties = {}}},
+    }}
+    err = extension.validate_manifest(manifest)
+    check(err == nil, "expected no error, got: " .. tostring(err))
+end
+
+function test_tools_entry_missing_description_is_rejected()
+    print("Testing a capabilities.tools entry without a description is rejected")
+    manifest = base_manifest("widget-tools")
+    manifest.capabilities = {tools = {{name = "lookup", parameters = {}}}}
+    err = extension.validate_manifest(manifest)
+    check(err != nil, "expected a validation error for a missing description")
+end
+
+function test_tools_entry_missing_parameters_is_rejected()
+    print("Testing a capabilities.tools entry without a parameters table is rejected")
+    manifest = base_manifest("widget-tools")
+    manifest.capabilities = {tools = {{name = "lookup", description = "x"}}}
+    err = extension.validate_manifest(manifest)
+    check(err != nil, "expected a validation error for a missing parameters table")
+end
+
+function test_extension_name_colliding_with_builtin_tool_group_is_rejected()
+    print("Testing an extension named after a built-in AGENT_TOOLS group is rejected once it declares capabilities.tools")
+    manifest = base_manifest("entity")
+    manifest.capabilities = {tools = {
+        {name = "lookup", description = "x", parameters = {}},
+    }}
+    err = extension.validate_manifest(manifest)
+    check(err != nil, "expected a validation error for a reserved extension name")
+end
+
+function test_extension_without_tools_can_still_use_a_reserved_name()
+    print("Testing the reserved-name check only fires once an extension actually declares capabilities.tools")
+    manifest = base_manifest("entity")
+    manifest.capabilities = {read = {"entity"}}
+    err = extension.validate_manifest(manifest)
+    check(err == nil, "expected no error: no capabilities.tools means no dispatch collision to guard against")
+end
+
 -- Run them
 test_hook_returned_in_table_is_invoked()
 test_missing_hook_is_a_graceful_noop()
 test_bare_function_statement_no_longer_exposes_a_hook()
 test_no_return_value_at_all_is_also_a_graceful_noop()
+test_valid_tools_capability_passes_validation()
+test_tools_entry_missing_description_is_rejected()
+test_tools_entry_missing_parameters_is_rejected()
+test_extension_name_colliding_with_builtin_tool_group_is_rejected()
+test_extension_without_tools_can_still_use_a_reserved_name()
 
 if FAILURES > 0 then
     print(FAILURES .. " test(s) failed")
