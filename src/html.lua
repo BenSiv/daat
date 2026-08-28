@@ -66,14 +66,21 @@ end
 -- The ".platform-container" shell (card look: padding/shadow/border/
 -- rounded corners) was copy-pasted, identically byte-for-byte except
 -- max_width, into every render_* function's own inline <style> block --
--- ten separate copies. One shared definition instead; each caller
--- supplies just the max-width its own page already used (1200/1100/
--- 900/800), so this is a pure de-duplication, not a visual change
--- anywhere.
-function platform_container_css(max_width)
-    if max_width == nil then
-        max_width = 1200
-    end
+-- ten separate copies, each supplying whatever max-width its own page
+-- happened to have picked (1200/1400/1100/1000/900/800), with no
+-- reason for most of the differences beyond drift. One shared,
+-- parameterless definition instead: PLATFORM_CONTENT_MAX_WIDTH is a
+-- single generous ceiling, not a per-page design width -- min(...,
+-- 95vw) already means it only ever matters on unusually wide screens,
+-- so every normal-to-large screen just fills ~95% of the viewport
+-- instead of landing on whichever number a given page happened to
+-- carry. (Two pages -- render_login/render_account -- still include
+-- this CSS but never apply the .platform-container class at all; their
+-- actual card is the separately-sized .platform-login-card/
+-- .platform-account-card, so this rule is inert there either way.)
+PLATFORM_CONTENT_MAX_WIDTH = 2400
+
+function platform_container_css()
     return string.format("""
         .platform-container {
             font-family: 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -83,10 +90,33 @@ function platform_container_css(max_width)
             border-radius: var(--platform-radius-lg, 16px);
             box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.05);
             margin: 20px auto;
-            max-width: %dpx;
+            max-width: min(%dpx, 95vw);
             border: 1px solid var(--platform-bg-2, #f1f5f9);
         }
-""", max_width)
+""", PLATFORM_CONTENT_MAX_WIDTH)
+end
+
+-- .platform-table-wrapper (the scroll/border/background shell around a
+-- data table) and .platform-empty (its "no rows" placeholder) were
+-- hand-copied into nine different render_* functions' own <style>
+-- blocks, byte-identical apart from one unexplained margin-top variant
+-- -- the same drift shape platform_container_css's old max_width
+-- parameter had. One shared copy instead; a page that needs only one
+-- of the two rules (e.g. render_detail has no empty-state, render_index/
+-- render_templates_list have no table) just leaves the other unused,
+-- same as this codebase already tolerates elsewhere (e.g. render_login/
+-- render_account include platform_container_css() without ever
+-- applying .platform-container at all). Two pages need a genuinely
+-- different look on top of this base -- html.render's editable
+-- registration grid, and html.render_sql's results table sitting below
+-- a query editor -- both call this for the shared base, then layer
+-- their own small override rule after it rather than re-declaring the
+-- whole thing.
+function platform_table_wrapper_css()
+    return """
+        .platform-table-wrapper { overflow-x: auto; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); background: var(--platform-bg, #f8fafc); }
+        .platform-empty { padding: 32px; text-align: center; color: var(--platform-muted, #64748b); background: var(--platform-bg, #f8fafc); border: 1px dashed var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); }
+"""
 end
 
 -- Shared .btn/.btn-primary/.btn-secondary/.btn-delete/.btn-danger rules --
@@ -235,6 +265,29 @@ function render_page_header(title, extra, action)
         action = ""
     end
     return "<div class=\"platform-header\"><div><h2>" .. title .. "</h2>" .. extra .. "</div>" .. action .. "</div>"
+end
+
+-- The post-action status banner ("User created", "Wrong password", ...)
+-- shown at the top of render_admin_users/render_admin_api_keys/
+-- render_settings -- both this Lua and its .platform-admin-message*
+-- CSS (platform_admin_message_css() below) were hand-copied
+-- identically into all three. One shared pair instead.
+function render_admin_message(message, is_error)
+    if message == nil or message == "" then
+        return ""
+    end
+    css_class = "platform-admin-message"
+    if is_error == true then
+        css_class = "platform-admin-message platform-admin-message-error"
+    end
+    return "<div class=\"" .. css_class .. "\">" .. html.html_escape(message) .. "</div>"
+end
+
+function platform_admin_message_css()
+    return """
+        .platform-admin-message { padding: 10px 12px; margin-bottom: 16px; border-radius: var(--platform-radius-item, 10px); background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; font-size: 0.9rem; }
+        .platform-admin-message-error { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
+"""
 end
 
 -- Generic hover-popover component, for "reveal detail on hover instead
@@ -872,7 +925,16 @@ function html.page_shell(title, active, body, nonce, show_sql, show_admin, has_t
 <style>
 %s
 * { box-sizing: border-box; }
-html, body { margin: 0; height: 100%%; }
+/* min-height, not height -- height:100%% pins body's own box (and its
+   background paint) to exactly one viewport tall; a page whose content
+   is taller than that overflows the box while its background stops
+   dead at the one-screen mark, which is exactly what showed up as
+   "background/sidebar end partway down a long page." min-height lets
+   the box grow to the real content height while still guaranteeing a
+   full screen on short pages, so .platform-nav's own min-height:100vh
+   below (a floor, not a cap) still reaches the bottom of the viewport
+   there too. */
+html, body { margin: 0; min-height: 100vh; }
 body {
     display: flex;
     font-family: 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -986,14 +1048,11 @@ function html.render(entity_type, layout_json, nonce, locked_fields)
             color: #ef4444;
             font-weight: bold;
         }
-        .platform-table-wrapper {
-            overflow-x: auto;
-            margin-bottom: 24px;
-            border: 1px solid var(--platform-border, #e2e8f0);
-            border-radius: var(--platform-radius-md, 12px);
-            box-shadow: inset 0 2px 4px 0 rgba(0,0,0,0.02);
-            background: var(--platform-bg, #f8fafc);
-        }
+        %s
+        /* The registration grid is editable cells, not a plain
+           read-only table -- the inset shadow and bottom margin are
+           deliberate on top of the shared base, not drift. */
+        .platform-table-wrapper { margin-bottom: 24px; box-shadow: inset 0 2px 4px 0 rgba(0,0,0,0.02); }
         #registration-table {
             width: 100%%;
             border-collapse: separate;
@@ -1304,7 +1363,7 @@ function html.render(entity_type, layout_json, nonce, locked_fields)
         document.getElementById("btn-submit-batch").addEventListener("click", submitBatch);
     </script>
 </div>
-""", escaped_type, platform_container_css(1200), platform_page_header_css(), platform_button_css(), register_header, nonce, json_for_script(layout_json), js_string_literal(entity_type), json_for_script(locked_fields_json))
+""", escaped_type, platform_container_css(), platform_page_header_css(), platform_table_wrapper_css(), platform_button_css(), register_header, nonce, json_for_script(layout_json), js_string_literal(entity_type), json_for_script(locked_fields_json))
 end
 
 -- Single-row edit form for an existing entity -- the generic-entity
@@ -1459,7 +1518,7 @@ function html.render_entity_edit(entity_type, layout_json, row_json, entity_id, 
         document.getElementById("btn-save").addEventListener("click", submitEdit);
     </script>
 </div>
-""", escaped_type, escaped_entity_id, platform_container_css(1200), platform_button_css(), platform_page_header_css(),
+""", escaped_type, escaped_entity_id, platform_container_css(), platform_button_css(), platform_page_header_css(),
      edit_header,
      nonce, json_for_script(layout_json), json_for_script(row_json), js_string_literal(entity_type), tostring(entity_id))
 end
@@ -1743,12 +1802,7 @@ function html.render_browse(db_path, entity_type, layout, rows, page, page_size,
 %s
 %s
         %s
-        .platform-table-wrapper {
-            overflow-x: auto;
-            border: 1px solid var(--platform-border, #e2e8f0);
-            border-radius: var(--platform-radius-md, 12px);
-            background: var(--platform-bg, #f8fafc);
-        }
+        %s
         #browse-table { width: 100%%; border-collapse: separate; border-spacing: 0; min-width: 600px; }
         #browse-table th, #browse-table td {
             padding: 12px 16px;
@@ -1767,14 +1821,6 @@ function html.render_browse(db_path, entity_type, layout, rows, page, page_size,
         #browse-table td { background: #ffffff; }
         #browse-table a { color: var(--platform-accent, #4f46e5); text-decoration: none; font-weight: 600; }
         #browse-table a:hover { text-decoration: underline; }
-        .platform-empty {
-            padding: 32px;
-            text-align: center;
-            color: var(--platform-muted, #64748b);
-            background: var(--platform-bg, #f8fafc);
-            border: 1px dashed var(--platform-border, #e2e8f0);
-            border-radius: var(--platform-radius-md, 12px);
-        }
         .platform-pager {
             display: flex;
             justify-content: space-between;
@@ -1795,7 +1841,7 @@ function html.render_browse(db_path, entity_type, layout, rows, page, page_size,
     </div>
 </div>
 %s
-""", escaped_type, platform_container_css(1200), platform_page_header_css(), platform_button_css(), html.popover_css(), browse_header, table_or_empty, pager, html.popover_js(nonce))
+""", escaped_type, platform_container_css(), platform_page_header_css(), platform_button_css(), platform_table_wrapper_css(), html.popover_css(), browse_header, table_or_empty, pager, html.popover_js(nonce))
 end
 
 -- Detail view: current field values plus the full ledger history for
@@ -1870,7 +1916,6 @@ function html.render_detail(db_path, entity_type, layout, row, history, nonce, h
         .detail-row { display: flex; flex-direction: column; gap: 4px; }
         .detail-label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--platform-muted, #64748b); font-weight: 600; }
         .detail-value { font-size: 0.95rem; color: var(--platform-heading, #0f172a); word-break: break-word; }
-        .platform-table-wrapper { overflow-x: auto; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); background: var(--platform-bg, #f8fafc); }
         #history-table { width: 100%%; border-collapse: separate; border-spacing: 0; min-width: 700px; }
         #history-table th, #history-table td {
             padding: 12px 16px;
@@ -1928,7 +1973,7 @@ function html.render_detail(db_path, entity_type, layout, row, history, nonce, h
 </div>
 %s
 %s
-""", escaped_type, title_id_part, platform_container_css(1200), platform_button_css(), platform_page_header_css(), html.popover_css(), detail_header, fields_html, related_html, history_rows, html.popover_js(nonce), print_label_js_block)
+""", escaped_type, title_id_part, platform_container_css(), platform_button_css() .. platform_table_wrapper_css(), platform_page_header_css(), html.popover_css(), detail_header, fields_html, related_html, history_rows, html.popover_js(nonce), print_label_js_block)
 end
 
 -- "Related records" -- every real, plain `reference` field
@@ -2129,7 +2174,6 @@ function html.render_view(view_def, rows, param_value)
     <style>
 %s
 %s
-        .platform-table-wrapper { overflow-x: auto; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); background: var(--platform-bg, #f8fafc); }
         .platform-view-table { width: 100%%; border-collapse: separate; border-spacing: 0; min-width: 600px; }
         .platform-view-table th, .platform-view-table td { padding: 12px 16px; text-align: left; border-bottom: 1px solid var(--platform-border, #e2e8f0); font-size: 0.9rem; }
         .platform-view-table th {
@@ -2141,21 +2185,13 @@ function html.render_view(view_def, rows, param_value)
             letter-spacing: 0.06em;
         }
         .platform-view-table td { background: #ffffff; }
-        .platform-empty {
-            padding: 32px;
-            text-align: center;
-            color: var(--platform-muted, #64748b);
-            background: var(--platform-bg, #f8fafc);
-            border: 1px dashed var(--platform-border, #e2e8f0);
-            border-radius: var(--platform-radius-md, 12px);
-        }
     </style>
     <div class="platform-container">
         %s
         %s
     </div>
 </div>
-""", escaped_title, platform_container_css(1200), platform_page_header_css(), view_header, table_or_empty)
+""", escaped_title, platform_container_css() .. platform_table_wrapper_css(), platform_page_header_css(), view_header, table_or_empty)
 end
 
 -- Expands `{{view:view_name:123}}` markers in already-rendered document
@@ -2904,7 +2940,7 @@ function html.render_login(error_message, nonce)
         <button type="submit" class="btn btn-primary">Log in</button>
     </form>
 </div>
-""", platform_container_css(800), platform_button_css(), error_html)
+""", platform_container_css(), platform_button_css(), error_html)
 end
 
 -- Self-service password change -- every capability level (baseline "i"
@@ -2970,7 +3006,7 @@ function html.render_account(username, csrf_token, message, is_error)
         </form>
     </div>
 </div>
-""", platform_container_css(800), platform_button_css(), html.html_escape(username), message_html, html.html_escape(csrf_token))
+""", platform_container_css(), platform_button_css(), html.html_escape(username), message_html, html.html_escape(csrf_token))
 end
 
 -- Minimal admin-only user management page -- Admin ("a") capability
@@ -2985,14 +3021,7 @@ end
 function html.render_admin_users(users, csrf_token, message, is_error)
     escaped_csrf = html.html_escape(csrf_token)
 
-    message_html = ""
-    if message != nil and message != "" then
-        css_class = "platform-admin-message"
-        if is_error == true then
-            css_class = "platform-admin-message platform-admin-message-error"
-        end
-        message_html = "<div class=\"" .. css_class .. "\">" .. html.html_escape(message) .. "</div>"
-    end
+    message_html = render_admin_message(message, is_error)
 
     rows_html = ""
     for _, u in ipairs(users) do
@@ -3046,8 +3075,6 @@ function html.render_admin_users(users, csrf_token, message, is_error)
 %s
 %s
 %s
-        .platform-admin-message { padding: 10px 12px; margin-bottom: 16px; border-radius: var(--platform-radius-item, 10px); background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; font-size: 0.9rem; }
-        .platform-admin-message-error { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
         .platform-admin-create-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 24px; padding: 16px; background: var(--platform-bg, #f8fafc); border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); }
         .platform-admin-create-form input[type=text], .platform-admin-create-form input[type=password] {
             padding: 8px 10px; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-sm, 8px); font-size: 0.9rem;
@@ -3077,7 +3104,7 @@ function html.render_admin_users(users, csrf_token, message, is_error)
         </table>
     </div>
 </div>
-""", platform_container_css(1000), platform_button_css(), platform_page_header_css(), render_page_header("Manage users", nil, nil), message_html, escaped_csrf, rows_html)
+""", platform_container_css(), platform_button_css(), platform_page_header_css() .. platform_admin_message_css(), render_page_header("Manage users", nil, nil), message_html, escaped_csrf, rows_html)
 end
 
 -- Admin UI for the api_key table, mirroring render_admin_users
@@ -3088,14 +3115,7 @@ end
 function html.render_admin_api_keys(keys, csrf_token, message, is_error, new_raw_key)
     escaped_csrf = html.html_escape(csrf_token)
 
-    message_html = ""
-    if message != nil and message != "" then
-        css_class = "platform-admin-message"
-        if is_error == true then
-            css_class = "platform-admin-message platform-admin-message-error"
-        end
-        message_html = "<div class=\"" .. css_class .. "\">" .. html.html_escape(message) .. "</div>"
-    end
+    message_html = render_admin_message(message, is_error)
 
     new_key_html = ""
     if new_raw_key != nil and new_raw_key != "" then
@@ -3153,8 +3173,6 @@ function html.render_admin_api_keys(keys, csrf_token, message, is_error, new_raw
 %s
 %s
 %s
-        .platform-admin-message { padding: 10px 12px; margin-bottom: 16px; border-radius: var(--platform-radius-item, 10px); background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; font-size: 0.9rem; }
-        .platform-admin-message-error { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
         .platform-admin-new-key code { display: inline-block; margin-left: 8px; padding: 2px 8px; background: #fff; border: 1px solid #bbf7d0; border-radius: 6px; font-size: 0.9rem; }
         .platform-admin-create-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 24px; padding: 16px; background: var(--platform-bg, #f8fafc); border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); }
         .platform-admin-create-form input[type=text] {
@@ -3185,7 +3203,7 @@ function html.render_admin_api_keys(keys, csrf_token, message, is_error, new_raw
         </table>
     </div>
 </div>
-""", platform_container_css(1000), platform_button_css(), platform_page_header_css(), render_page_header("Manage API keys", nil, nil), message_html, new_key_html, escaped_csrf, rows_html)
+""", platform_container_css(), platform_button_css(), platform_page_header_css() .. platform_admin_message_css(), render_page_header("Manage API keys", nil, nil), message_html, new_key_html, escaped_csrf, rows_html)
 end
 
 -- Settings: a real UI for theme.lua's own fields, instead
@@ -3199,14 +3217,7 @@ end
 function html.render_settings(theme, csrf_token, message, is_error)
     escaped_csrf = html.html_escape(csrf_token)
 
-    message_html = ""
-    if message != nil and message != "" then
-        css_class = "platform-admin-message"
-        if is_error == true then
-            css_class = "platform-admin-message platform-admin-message-error"
-        end
-        message_html = "<div class=\"" .. css_class .. "\">" .. html.html_escape(message) .. "</div>"
-    end
+    message_html = render_admin_message(message, is_error)
 
     hide_heading_checked = ""
     if theme.hide_home_heading == true then
@@ -3244,8 +3255,6 @@ function html.render_settings(theme, csrf_token, message, is_error)
 %s
 %s
 %s
-        .platform-admin-message { padding: 10px 12px; margin-bottom: 16px; border-radius: var(--platform-radius-item, 10px); background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; font-size: 0.9rem; }
-        .platform-admin-message-error { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
         .platform-settings-section { margin-bottom: 28px; padding: 16px; background: var(--platform-bg, #f8fafc); border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); }
         .platform-settings-section h3 { margin: 0 0 12px 0; font-size: 1.05rem; }
         .platform-settings-section label { display: block; font-size: 0.85rem; color: var(--platform-muted, #64748b); margin-bottom: 4px; }
@@ -3305,7 +3314,7 @@ function html.render_settings(theme, csrf_token, message, is_error)
         </form>
     </div>
 </div>
-""", platform_container_css(900), platform_button_css(), platform_page_header_css(), render_page_header("Settings", nil, nil), message_html, escaped_csrf,
+""", platform_container_css(), platform_button_css(), platform_page_header_css() .. platform_admin_message_css(), render_page_header("Settings", nil, nil), message_html, escaped_csrf,
      html.html_escape(theme.site_name), hide_heading_checked, html.html_escape(logo_status),
      color_rows, html.html_escape(system_prompt_extra_value))
 end
@@ -3389,7 +3398,7 @@ function html.render_home(theme, show_sql, show_admin, has_tasks_view)
         </ul>
     </div>
 </div>
-""", platform_container_css(1200), platform_sitemap_css(), platform_page_header_css(), home_header,
+""", platform_container_css(), platform_sitemap_css(), platform_page_header_css(), home_header,
      render_sitemap_item("document-edit", "New Document", "Write a new document from scratch."),
      render_sitemap_item("documents", "Documents", "Browse all documents, organized as a tree."),
      render_sitemap_item("data", "Data", "Registered entity types, row counts, and relations."),
@@ -3428,7 +3437,7 @@ function html.render_system(show_sql, show_admin)
         </ul>
     </div>
 </div>
-""", platform_container_css(1200), platform_sitemap_css(), platform_page_header_css(), render_page_header("System", nil, nil), items)
+""", platform_container_css(), platform_sitemap_css(), platform_page_header_css(), render_page_header("System", nil, nil), items)
 end
 
 -- Content-maturity ladder (see document.promotion_target_tier's own
@@ -3526,7 +3535,7 @@ function html.render_knowledge_pool(stats)
         <p style="margin-top: 14px;"><a class="btn btn-secondary" href="knowledge-graph">Explore the knowledge graph &rarr;</a></p>
     </div>
 </div>
-""", platform_container_css(1200), platform_button_css(), platform_page_header_css(),
+""", platform_container_css(), platform_button_css(), platform_page_header_css(),
      render_page_header("Knowledge Pool", "<p>Notes promote through processing tiers as they're retrieved and reinforced; every retrieval is logged.</p>", nil),
      stats.note_count, stats.retrieval_count, stats.reviewed_note_count,
      stats.session_count, tier_tiles)
@@ -4000,7 +4009,7 @@ function html.render_knowledge_graph(nonce)
     })();
     </script>
 </div>
-""", platform_container_css(1200), platform_button_css(), platform_page_header_css(),
+""", platform_container_css(), platform_button_css(), platform_page_header_css(),
      kg_header, legend_items, nonce)
 end
 
@@ -4052,19 +4061,17 @@ function html.render_knowledge_documents(rows, tier, title_override)
 %s
 %s
 %s
-        .platform-table-wrapper { overflow-x: auto; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); background: var(--platform-bg, #f8fafc); }
         .platform-view-table { width: 100%%; border-collapse: separate; border-spacing: 0; min-width: 600px; }
         .platform-view-table th, .platform-view-table td { padding: 12px 16px; text-align: left; border-bottom: 1px solid var(--platform-border, #e2e8f0); font-size: 0.9rem; }
         .platform-view-table th { background: var(--platform-bg-2, #f1f5f9); font-weight: 600; font-size: 0.78rem; color: var(--platform-th-text, #475569); text-transform: uppercase; letter-spacing: 0.06em; }
         .platform-view-table td { background: #ffffff; }
-        .platform-empty { padding: 32px; text-align: center; color: var(--platform-muted, #64748b); background: var(--platform-bg, #f8fafc); border: 1px dashed var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); }
     </style>
     <div class="platform-container">
         %s
         %s
     </div>
 </div>
-""", escaped_title, platform_container_css(1200), platform_button_css(), platform_page_header_css(), kd_header, table_or_empty)
+""", escaped_title, platform_container_css(), platform_button_css() .. platform_table_wrapper_css(), platform_page_header_css(), kd_header, table_or_empty)
 end
 
 -- Backing table for /knowledge's "N retrieval runs" stat -- reuses
@@ -4094,19 +4101,17 @@ function html.render_knowledge_retrievals(rows)
 %s
 %s
 %s
-        .platform-table-wrapper { overflow-x: auto; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); background: var(--platform-bg, #f8fafc); }
         .platform-view-table { width: 100%%; border-collapse: separate; border-spacing: 0; min-width: 600px; }
         .platform-view-table th, .platform-view-table td { padding: 12px 16px; text-align: left; border-bottom: 1px solid var(--platform-border, #e2e8f0); font-size: 0.9rem; }
         .platform-view-table th { background: var(--platform-bg-2, #f1f5f9); font-weight: 600; font-size: 0.78rem; color: var(--platform-th-text, #475569); text-transform: uppercase; letter-spacing: 0.06em; }
         .platform-view-table td { background: #ffffff; }
-        .platform-empty { padding: 32px; text-align: center; color: var(--platform-muted, #64748b); background: var(--platform-bg, #f8fafc); border: 1px dashed var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); }
     </style>
     <div class="platform-container">
         %s
         %s
     </div>
 </div>
-""", platform_container_css(1200), platform_button_css(), platform_page_header_css(), header, table_or_empty)
+""", platform_container_css(), platform_button_css() .. platform_table_wrapper_css(), platform_page_header_css(), header, table_or_empty)
 end
 
 function html.render_index(db_path, entity_types, edges, nonce)
@@ -4181,14 +4186,6 @@ function html.render_index(db_path, entity_types, edges, nonce)
         .platform-index-list a { flex: 1; display: block; padding: 12px 16px; color: var(--platform-accent, #4f46e5); text-decoration: none; font-weight: 600; text-transform: capitalize; }
         .platform-index-list a:hover { background: var(--platform-bg-2, #f1f5f9); border-radius: var(--platform-radius-item, 10px) 0 0 var(--platform-radius-item, 10px); }
 %s
-        .platform-empty {
-            padding: 32px;
-            text-align: center;
-            color: var(--platform-muted, #64748b);
-            background: var(--platform-bg, #f8fafc);
-            border: 1px dashed var(--platform-border, #e2e8f0);
-            border-radius: var(--platform-radius-md, 12px);
-        }
     </style>
     %s
     <div class="platform-container">
@@ -4235,7 +4232,7 @@ function html.render_index(db_path, entity_types, edges, nonce)
     </script>
 </div>
 %s
-""", platform_container_css(1400), platform_page_header_css(), html.relation_diagram_css(), html.popover_css(),
+""", platform_container_css(), platform_page_header_css(), html.relation_diagram_css() .. platform_table_wrapper_css(), html.popover_css(),
      index_header, list_or_empty, diagram_html, nonce, html.diagram_js(nonce))
 end
 
@@ -4283,21 +4280,13 @@ function html.render_templates_list(entries)
         .platform-index-list a:hover { text-decoration: underline; }
         .platform-index-list p { margin: 6px 0 0 0; color: var(--platform-muted, #64748b); font-size: 0.88rem; }
         .platform-template-error { color: #991b1b; background: #fef2f2; border: 1px solid #fecaca; border-radius: var(--platform-radius-item, 10px); padding: 14px 16px; }
-        .platform-empty {
-            padding: 32px;
-            text-align: center;
-            color: var(--platform-muted, #64748b);
-            background: var(--platform-bg, #f8fafc);
-            border: 1px dashed var(--platform-border, #e2e8f0);
-            border-radius: var(--platform-radius-md, 12px);
-        }
     </style>
     <div class="platform-container">
         %s
         %s
     </div>
 </div>
-""", platform_container_css(800), platform_button_css(), platform_page_header_css(),
+""", platform_container_css(), platform_button_css() .. platform_table_wrapper_css(), platform_page_header_css(),
      render_page_header("Entry templates", "<p>Pick a template to see its rendered Markdown.</p>", nil), list_or_empty)
 end
 
@@ -4349,7 +4338,7 @@ function html.render_template(def, rendered_markdown, nonce)
         <textarea class="platform-snippet" id="platform-template-content" readonly>%s</textarea>
     </div>
 </div>
-""", escaped_label, platform_container_css(900), platform_button_css(), platform_page_header_css(), template_header, escaped_body)
+""", escaped_label, platform_container_css(), platform_button_css(), platform_page_header_css(), template_header, escaped_body)
 end
 
 -- Ad-hoc SQL console (Setup/Admin only -- see cgi.lua's /sql route):
@@ -4478,12 +4467,16 @@ function html.render_sql(db_path, sql_text, column_names, rows, err, ref_columns
             color: #991b1b;
         }
         .platform-sql-count { color: var(--platform-muted, #64748b); font-size: 0.85rem; margin-top: 8px; }
-        .platform-table-wrapper { overflow-x: auto; margin-top: 20px; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); background: var(--platform-bg, #f8fafc); }
+        %s
+        /* Extra spacing below the query editor above -- the shared
+           base rule (platform_table_wrapper_css()) has no opinion on
+           that, since most of its other callers put a table first,
+           not after an editor. */
+        .platform-table-wrapper, .platform-empty { margin-top: 20px; }
         #sql-table { width: 100%%; border-collapse: separate; border-spacing: 0; min-width: 600px; }
         #sql-table th, #sql-table td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--platform-border, #e2e8f0); font-size: 0.85rem; }
         #sql-table th { background: var(--platform-bg-2, #f1f5f9); font-weight: 600; font-size: 0.75rem; color: var(--platform-th-text, #475569); text-transform: uppercase; letter-spacing: 0.06em; }
         #sql-table td { background: #ffffff; }
-        .platform-empty { margin-top: 20px; padding: 24px; text-align: center; color: var(--platform-muted, #64748b); background: var(--platform-bg, #f8fafc); border: 1px dashed var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); }
         %s
     </style>
     <div class="platform-container">
@@ -4496,7 +4489,7 @@ function html.render_sql(db_path, sql_text, column_names, rows, err, ref_columns
     </div>
 </div>
 %s
-""", platform_container_css(1100), platform_page_header_css(), platform_button_css(), html.popover_css() .. embed_css, sql_header, escaped_sql, result_html, html.popover_js(nonce))
+""", platform_container_css(), platform_page_header_css(), platform_button_css(), platform_table_wrapper_css(), html.popover_css() .. embed_css, sql_header, escaped_sql, result_html, html.popover_js(nonce))
 end
 
 --------------------------------------------------------------------------
@@ -4759,7 +4752,7 @@ function html.render_document_tree(rows, can_create, nonce)
     })();
     </script>
 </div>
-""", platform_container_css(900), platform_button_css(), platform_page_header_css(), doc_tree_header, tree_html,
+""", platform_container_css(), platform_button_css(), platform_page_header_css(), doc_tree_header, tree_html,
      nonce, document_search_index_json(rows))
 end
 
@@ -4838,7 +4831,7 @@ function html.render_document(doc, rendered_html, breadcrumbs, children, backlin
         %s
     </div>
 </div>
-""", escaped_doc_title, platform_container_css(900), platform_button_css(),
+""", escaped_doc_title, platform_container_css(), platform_button_css(),
      platform_page_header_css(), html.plot_css(), breadcrumb_html, doc_header, rendered_html, children_block, backlinks_block)
 end
 
@@ -5035,7 +5028,7 @@ function html.render_document_edit(doc, parent_options_html, csrf_token, error_m
     })();
     </script>
 </div>
-""", heading, platform_container_css(1200), platform_button_css(), platform_page_header_css(), doc_edit_header, error_html,
+""", heading, platform_container_css(), platform_button_css(), platform_page_header_css(), doc_edit_header, error_html,
      html.html_escape(csrf_token), entity_id_value, title_value, parent_options_html,
      nonce, nonce, js_string_literal(content_value_raw))
 end
@@ -5122,7 +5115,7 @@ function html.render_chat(sessions, current_session_id, nonce)
         %s
     </div>
 </div>
-""", platform_container_css(1200), platform_page_header_css(),
+""", platform_container_css(), platform_page_header_css(),
      render_page_header("Chat", "<p>Pick a conversation to continue it in the chat widget.</p>", nil),
      sessions_html)
 end

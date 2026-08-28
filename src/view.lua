@@ -14,6 +14,7 @@ paths = require("paths")
 lfs = require("lfs")
 sandbox = require("sandbox")
 schema = require("schema")
+file_util = require("file_util")
 
 view = {}
 
@@ -31,16 +32,6 @@ CREATE TABLE IF NOT EXISTS view_approval (
 
 function view.init_schema(db_path)
     return db.exec(db_path, string.format(view.SCHEMA, db.now_expr(db_path)))
-end
-
-function read_file(path)
-    file = io.open(path, "r")
-    if file == nil then
-        return nil
-    end
-    source = io.read(file, "*all")
-    io.close(file)
-    return source
 end
 
 function view.names(views_dir)
@@ -178,7 +169,7 @@ end
 
 function view.load(views_dir, name)
     path = paths.joinpath(views_dir, name .. ".lua")
-    source = read_file(path)
+    source = file_util.read(path)
     if source == nil then
         return nil, "cannot open view: " .. path
     end
