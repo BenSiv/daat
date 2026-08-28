@@ -5390,21 +5390,28 @@ function platform_chat_widget_css()
        that size is already known to render every row correctly. */
     min-width: 320px; min-height: 320px;
     /* Stretchable up to the exact same rectangle the main content area
-       occupies: left edge flush with the nav rail (PLATFORM_NAV_WIDTH
-       -- the same constant .platform-nav's own width uses, via
-       platform_nav_css, not a second independently-set literal),
-       right edge at this same gutter the widget is itself offset by
+       occupies -- not just up to the nav rail's own edge, but to where
+       .platform-container's content actually starts, which is one more
+       PLATFORM_GUTTER past the nav rail (platform_container_css's own
+       side gutter, calc(100%% - 2*gutter), applies *inside*
+       .platform-main, on top of the nav rail -- missing that here
+       let the panel stretch until it touched the nav rail with zero
+       gap, short of matching the content area's own left edge). Left
+       edge at PLATFORM_NAV_WIDTH + PLATFORM_GUTTER (the same constant
+       .platform-nav's own width uses, via platform_nav_css, plus the
+       container's own gutter -- not independently-set literals), right
+       edge at this same gutter the widget is itself offset by
        (PLATFORM_GUTTER), top edge at that same gutter (matching
        platform_container_css's own top margin) -- bottom edge is
        already pinned via bottom:64px above the toggle button, hence
        the extra 64px subtracted below. */
-    max-width: calc(100vw - %dpx - %dpx);
+    max-width: calc(100vw - %dpx - %dpx - %dpx);
     max-height: calc(100vh - %dpx - 64px - %dpx);
     background: var(--platform-bg, #ffffff); border: 1px solid var(--platform-border, #e2e8f0);
     border-radius: var(--platform-radius-md, 12px); box-shadow: 0 10px 30px rgba(0,0,0,0.2);
     display: none; flex-direction: column; overflow: hidden;
 }
-""", PLATFORM_GUTTER, PLATFORM_NAV_WIDTH, PLATFORM_GUTTER, PLATFORM_GUTTER) .. """
+""", PLATFORM_GUTTER, PLATFORM_NAV_WIDTH, PLATFORM_GUTTER, PLATFORM_GUTTER, PLATFORM_GUTTER) .. """
 .platform-chat-widget.platform-chat-widget-open .platform-chat-widget-panel { display: flex; }
 /* Native CSS `resize: both` always draws its drag handle at the
    element's own bottom-right corner -- wrong here, since this panel

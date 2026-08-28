@@ -40,8 +40,14 @@ teardown() {
     gutter_doubled=$(printf '%s' "$flat" | grep -oP 'max-width: min\([0-9]+px, calc\(100% - \K[0-9]+(?=px\)\))')
     chat_right=$(printf '%s' "$flat" | grep -oP '\.platform-chat-widget \{ position: fixed; right: \K[0-9]+(?=px;)')
     chat_bottom=$(printf '%s' "$flat" | grep -oP '\.platform-chat-widget \{ position: fixed; right: [0-9]+px; bottom: \K[0-9]+(?=px;)')
-    panel_max_width_gutter=$(printf '%s' "$flat" | grep -oP 'max-width: calc\(100vw - \K[0-9]+(?=px - [0-9]+px\);)')
-    panel_max_width_nav=$(printf '%s' "$flat" | grep -oP 'max-width: calc\(100vw - [0-9]+px - \K[0-9]+(?=px\);)')
+    # max-width has three subtracted terms: the widget's own right
+    # gutter, the nav rail's width, and a second gutter -- .platform-container's
+    # own left inset *within* .platform-main, on top of the nav rail --
+    # matching the exact rectangle the main content area's own visible
+    # content occupies, not just up to the nav rail's bare edge.
+    panel_max_width_right_gutter=$(printf '%s' "$flat" | grep -oP 'max-width: calc\(100vw - \K[0-9]+(?=px - [0-9]+px - [0-9]+px\);)')
+    panel_max_width_nav=$(printf '%s' "$flat" | grep -oP 'max-width: calc\(100vw - [0-9]+px - \K[0-9]+(?=px - [0-9]+px\);)')
+    panel_max_width_left_gutter=$(printf '%s' "$flat" | grep -oP 'max-width: calc\(100vw - [0-9]+px - [0-9]+px - \K[0-9]+(?=px\);)')
     panel_max_height_top=$(printf '%s' "$flat" | grep -oP 'max-height: calc\(100vh - \K[0-9]+(?=px - 64px - [0-9]+px\);)')
     panel_max_height_bottom=$(printf '%s' "$flat" | grep -oP 'max-height: calc\(100vh - [0-9]+px - 64px - \K[0-9]+(?=px\);)')
 
@@ -52,7 +58,8 @@ teardown() {
     # All of these are the *same* gutter value (PLATFORM_GUTTER).
     [ "$chat_right" -eq "$((gutter_doubled / 2))" ]
     [ "$chat_bottom" -eq "$chat_right" ]
-    [ "$panel_max_width_gutter" -eq "$chat_right" ]
+    [ "$panel_max_width_right_gutter" -eq "$chat_right" ]
+    [ "$panel_max_width_left_gutter" -eq "$chat_right" ]
     [ "$panel_max_height_top" -eq "$chat_right" ]
     [ "$panel_max_height_bottom" -eq "$chat_right" ]
 
