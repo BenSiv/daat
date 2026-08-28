@@ -80,6 +80,22 @@ end
 -- .platform-account-card, so this rule is inert there either way.)
 PLATFORM_CONTENT_MAX_WIDTH = 2400
 
+-- The standard page gutter -- shared by the main content area's own
+-- top margin and side gutters (platform_container_css) and the
+-- floating chat widget's own right/bottom offset and stretch limits
+-- (platform_chat_widget_css), so the two stay in lockstep by
+-- construction instead of by coincidence (both happened to independently
+-- land on 20px before this). Previously platform_container_css's own
+-- side gutter came from `max-width: min(2400px, 95vw)` -- `vw` is
+-- relative to the *whole* viewport, ignoring that .platform-container
+-- actually sits inside .platform-main (viewport width minus the nav
+-- rail), so the real rendered gutter shrank to a few px (or 0) on most
+-- real screen widths, well below this constant's own value and nothing
+-- like the chat widget's fixed 20px. calc(100% - 2*PLATFORM_GUTTER)
+-- below is relative to .platform-container's actual containing block
+-- instead, which fixes that.
+PLATFORM_GUTTER = 20
+
 function platform_container_css()
     return string.format("""
         .platform-container {
@@ -89,11 +105,11 @@ function platform_container_css()
             padding: 28px;
             border-radius: var(--platform-radius-lg, 16px);
             box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.05);
-            margin: 20px auto;
-            max-width: min(%dpx, 95vw);
+            margin: %dpx auto;
+            max-width: min(%dpx, calc(100%% - %dpx));
             border: 1px solid var(--platform-bg-2, #f1f5f9);
         }
-""", PLATFORM_CONTENT_MAX_WIDTH)
+""", PLATFORM_GUTTER, PLATFORM_CONTENT_MAX_WIDTH, PLATFORM_GUTTER * 2)
 end
 
 -- .platform-table-wrapper (the scroll/border/background shell around a
@@ -5328,8 +5344,9 @@ end
 -- resume via page_context.open_chat_session_id (see below), which wins
 -- over whatever was already cached.
 function platform_chat_widget_css()
-    return """
-.platform-chat-widget { position: fixed; right: 20px; bottom: 20px; z-index: 1000; font-family: inherit; }
+    return string.format("""
+.platform-chat-widget { position: fixed; right: %dpx; bottom: %dpx; z-index: 1000; font-family: inherit; }
+""", PLATFORM_GUTTER, PLATFORM_GUTTER) .. """
 .platform-chat-widget-toggle {
     width: 56px; height: 56px; border-radius: 50%;
     background: var(--platform-accent, #4f46e5); color: #ffffff; border: none;
@@ -5338,13 +5355,32 @@ function platform_chat_widget_css()
     transition: var(--platform-transition, all 0.15s ease);
 }
 .platform-chat-widget-toggle:hover { filter: brightness(1.08); }
+""" .. string.format("""
 .platform-chat-widget-panel {
     position: absolute; right: 0; bottom: 64px; width: 320px; height: 440px;
-    min-width: 280px; min-height: 320px; max-width: 90vw; max-height: 80vh;
+    /* min-width was 280px -- narrower than the panel's own default
+       (320px) and the input row's real min-content width (attach
+       button + text input + Send button + gaps/padding), so shrinking
+       to that minimum clipped the Send button against this panel's own
+       overflow:hidden. Never go below the default width instead --
+       that size is already known to render every row correctly. */
+    min-width: 320px; min-height: 320px;
+    /* Stretchable up to the exact same rectangle the main content area
+       occupies: left edge flush with the nav rail (72px -- .platform-nav's
+       own width; kept a literal here rather than a second shared
+       constant, since resizing the nav rail itself is a separate
+       concern from this widget's own reach), right edge at this same
+       %dpx gutter the widget is itself offset by, top edge at that
+       same %dpx gutter (matching platform_container_css's own top
+       margin) -- bottom edge is already pinned via bottom:64px above
+       the toggle button, hence the extra 64px subtracted below. */
+    max-width: calc(100vw - %dpx - 72px);
+    max-height: calc(100vh - %dpx - 64px - %dpx);
     background: var(--platform-bg, #ffffff); border: 1px solid var(--platform-border, #e2e8f0);
     border-radius: var(--platform-radius-md, 12px); box-shadow: 0 10px 30px rgba(0,0,0,0.2);
     display: none; flex-direction: column; overflow: hidden;
 }
+""", PLATFORM_GUTTER, PLATFORM_GUTTER, PLATFORM_GUTTER, PLATFORM_GUTTER, PLATFORM_GUTTER) .. """
 .platform-chat-widget.platform-chat-widget-open .platform-chat-widget-panel { display: flex; }
 /* Native CSS `resize: both` always draws its drag handle at the
    element's own bottom-right corner -- wrong here, since this panel
