@@ -627,7 +627,12 @@ function view.run_agent_query(db_path, sql_text)
     end
     for _, name in ipairs(referenced) do
         if allowed[name] == nil then
-            return nil, nil, "refusing to run: '" .. name .. "' is not a registered entity type -- only registered entity tables can be queried this way"
+            message = "refusing to run: '" .. name .. "' is not a registered entity type -- only registered entity tables can be queried this way"
+            suggestion = schema.suggest_type(db_path, name)
+            if suggestion != nil then
+                message = message .. " (did you mean '" .. suggestion .. "'?)"
+            end
+            return nil, nil, message
         end
     end
 
@@ -654,6 +659,7 @@ function view.run_agent_query(db_path, sql_text)
         column_names = {}
     end
     truncated = false
+    total_count = nil
     if capped == true and #rows > row_cap then
         truncated = true
         capped_rows = {}
@@ -661,8 +667,17 @@ function view.run_agent_query(db_path, sql_text)
             table.insert(capped_rows, rows[i])
         end
         rows = capped_rows
+        -- One extra query, only paid when we already know the cap was hit:
+        -- tells the caller (and the model reading the tool result) the
+        -- real match count instead of just "more than the cap", which
+        -- otherwise makes it impossible to tell a 201-row result apart
+        -- from a 90,000-row one.
+        count_ok, count_rows = pcall(db.query, db_path, "SELECT COUNT(*) AS n FROM (" .. body .. ") AS _agent_query_count;")
+        if count_ok == true and count_rows != nil and count_rows[1] != nil then
+            total_count = tonumber(count_rows[1].n)
+        end
     end
-    return column_names, rows, nil, truncated
+    return column_names, rows, nil, truncated, total_count
 end
 
 -- CLI entry point: `daat view <list|show|approve|revoke> [args]`

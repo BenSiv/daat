@@ -5452,7 +5452,23 @@ function platform_chat_widget_css()
 }
 .platform-chat-widget-attachment-error { color: #991b1b; background: #fef2f2; }
 .platform-chat-widget-empty { padding: 20px; text-align: center; color: var(--platform-muted, #64748b); font-size: 0.85rem; }
-.platform-chat-widget-thinking { padding: 8px 10px; color: var(--platform-muted, #64748b); font-size: 0.85rem; font-style: italic; }
+/* flex + wrap, not a plain inline flow: the "Thinking..." text plus the
+   Stop button need to never clip against the panel's overflow:hidden,
+   including at the panel's own verified minimum width (320px, see
+   .platform-chat-widget-panel's own comment on why that minimum can't
+   shrink further) -- wrapping to a second line if space is ever tighter
+   than that (a custom deployment theme, a much smaller font) costs
+   nothing here, unlike the input row's own min-content-width problem
+   that comment describes, since this row isn't the last line before a
+   hard cutoff. */
+.platform-chat-widget-thinking { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 8px 10px; color: var(--platform-muted, #64748b); font-size: 0.85rem; font-style: italic; }
+.platform-chat-widget-stop {
+    font-style: normal; background: none; border: 1px solid var(--platform-border, #e2e8f0);
+    border-radius: var(--platform-radius-sm, 8px); font-size: 0.8rem; padding: 2px 8px;
+    cursor: pointer; color: #991b1b;
+}
+.platform-chat-widget-stop:hover { background: #fef2f2; }
+.platform-chat-widget-stop:disabled { cursor: default; opacity: 0.6; }
 .platform-chat-widget-error { padding: 8px 10px; color: #991b1b; background: #fef2f2; border: 1px solid #fecaca; border-radius: var(--platform-radius-sm, 8px); font-size: 0.85rem; margin: 4px 0; }
 .platform-chat-feedback { display: flex; gap: 4px; margin: 2px 0 8px 0; }
 .platform-chat-feedback button {
@@ -5686,10 +5702,22 @@ function html.render_chat_widget(nonce, attachments_enabled)
         render(null);
     });
 
-    function showThinking() {
+    // sessionId is embedded as a data-stop attribute, not closed over,
+    // because the Stop button is found later purely via messagesEl's
+    // own delegated click listener (same pattern as data-approve/
+    // data-deny/data-feedback below) -- it has to survive this element
+    // being replaced on every poll tick without re-registering a
+    // listener each time.
+    function showThinking(sessionId) {
         var el = document.createElement('div');
         el.className = 'platform-chat-widget-thinking';
-        el.textContent = 'Thinking...';
+        el.textContent = 'Thinking... ';
+        var stopBtn = document.createElement('button');
+        stopBtn.type = 'button';
+        stopBtn.className = 'platform-chat-widget-stop';
+        stopBtn.textContent = 'Stop';
+        stopBtn.setAttribute('data-stop', sessionId);
+        el.appendChild(stopBtn);
         messagesEl.appendChild(el);
         messagesEl.scrollTop = messagesEl.scrollHeight;
         return el;
@@ -5726,13 +5754,13 @@ function html.render_chat_widget(nonce, attachments_enabled)
     // is the in-flight send/approve call itself; once it resolves (or
     // fails) polling stops and the final state wins.
     function pollWhilePending(sessionId, sendPromise) {
-        var thinkingEl = showThinking();
+        var thinkingEl = showThinking(sessionId);
         var timer = setInterval(function(){
             fetch('api/chat-widget-history?session_id=' + encodeURIComponent(sessionId))
                 .then(function(res){ if (!res.ok) { throw new Error('poll failed'); } return res.json(); })
                 .then(function(state){
                     render(state);
-                    thinkingEl = showThinking();
+                    thinkingEl = showThinking(sessionId);
                 })
                 .catch(function(){ /* transient -- the next tick tries again */ });
         }, HISTORY_POLL_MS);
@@ -5878,6 +5906,20 @@ function html.render_chat_widget(nonce, attachments_enabled)
                 .catch(function(){ showFetchError(); });
         } else if (e.target.hasAttribute('data-deny')) {
             PlatformJS.postJSON('api/chat-widget-deny', {pending_id: e.target.getAttribute('data-deny'), session_id: sessionId}).then(render);
+        } else if (e.target.hasAttribute('data-stop')) {
+            // Fire-and-forget: this doesn't resolve the in-flight
+            // chat-widget-send call itself -- it just flags the session
+            // so run_turn's own loop (agent.lua) notices and stops
+            // between turns, which is what makes that original call
+            // resolve sooner. pollWhilePending's own poll/resolve
+            // handling then renders the resulting "stopped" message the
+            // same way it renders any other final reply -- nothing
+            // extra to do here beyond disabling the button so a slow
+            // stop (up to one more full turn) doesn't invite repeat
+            // clicks.
+            e.target.disabled = true;
+            e.target.textContent = 'Stopping…';
+            PlatformJS.postJSON('api/chat-widget-stop', {session_id: e.target.getAttribute('data-stop')}).catch(function(){});
         } else if (e.target.hasAttribute('data-feedback')) {
             var messageId = e.target.getAttribute('data-feedback-message');
             var feedback = e.target.getAttribute('data-feedback');

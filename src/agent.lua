@@ -138,9 +138,24 @@ function ensure_agent_pending_action_columns(db_path)
     end
 end
 
+-- Lets a human interrupt an in-progress turn loop between steps -- see
+-- agent.request_cancel below. Added via migration, same pattern/reasoning
+-- as ensure_agent_pending_action_columns above.
+function ensure_agent_session_columns(db_path)
+    existing = db.get_columns(db_path, "agent_session")
+    have = {}
+    for _, name in ipairs(existing) do
+        have[name] = true
+    end
+    if have["cancel_requested"] == nil then
+        db.exec(db_path, "ALTER TABLE agent_session ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0;")
+    end
+end
+
 function agent.init_schema(db_path)
     ok, err = db.exec(db_path, agent_schema_sql(db_path))
     ensure_agent_pending_action_columns(db_path)
+    ensure_agent_session_columns(db_path)
     return ok, err
 end
 
@@ -194,6 +209,40 @@ function agent.get_session(db_path, session_id, login)
         return nil
     end
     return rows[1]
+end
+
+-- Lets a human interrupt an in-progress turn loop between steps, not
+-- mid-model-call -- there's no way to abort an in-flight provider
+-- request from a separate process, so agent.run_turn's own loop (below)
+-- only checks this at the top of each turn, before spending the next
+-- model call. Ownership-checked via agent.get_session the same way
+-- every other session-scoped write already is: a user can only stop
+-- their own session, never someone else's by guessing a session id.
+-- Mechanically this works the same way an approval decision reaches a
+-- running turn today: a real, persisted flag a concurrent request writes,
+-- checked by whichever process is actually looping (see cgi.lua's CGI
+-- process-per-request model -- a second /api/chat-widget-stop request
+-- runs in its own process while the first request's run_turn is still
+-- executing, both against the same store).
+function agent.request_cancel(db_path, session_id, login)
+    session = agent.get_session(db_path, session_id, login)
+    if session == nil then
+        return false
+    end
+    db.exec(db_path, string.format("UPDATE agent_session SET cancel_requested = 1 WHERE id = %s;", db.quote(session_id)))
+    return true
+end
+
+function agent.cancel_requested(db_path, session_id)
+    rows = db.query(db_path, string.format("SELECT cancel_requested FROM agent_session WHERE id = %s;", db.quote(session_id)))
+    if rows == nil or rows[1] == nil then
+        return false
+    end
+    return tonumber(rows[1].cancel_requested) == 1
+end
+
+function agent.clear_cancel(db_path, session_id)
+    db.exec(db_path, string.format("UPDATE agent_session SET cancel_requested = 0 WHERE id = %s;", db.quote(session_id)))
 end
 
 -- Derives a short session title from a real user message, once, if the
@@ -838,7 +887,7 @@ AGENT_TOOLS = {
         },
         query = {
             destructive = false,
-            description = "Run a read-only SQL SELECT against registered entity tables, for anything entity.list's own single-table exact-match filter can't express: joins across related types (call entity.relationships first to find the join path), counts, aggregates, grouping. Table and column names are this deployment's real registered entity type/field names -- call entity.list_types/entity.fields/entity.relationships first if unsure, don't guess. Must be a single plain SELECT statement (no semicolons, no INSERT/UPDATE/DELETE/DDL) referencing only registered entity tables -- anything else is refused. Results are row-capped (this deployment's own configured limit) -- add your own LIMIT or narrow the query if a result comes back truncated.",
+            description = "Run a read-only SQL SELECT against registered entity tables, for anything entity.list's own single-table exact-match filter can't express: joins across related types (call entity.relationships first to find the join path), counts, aggregates, grouping. Table and column names are this deployment's real registered entity type/field names -- call entity.list_types/entity.fields/entity.relationships first if unsure, don't guess. Must be a single plain SELECT statement (no semicolons, no INSERT/UPDATE/DELETE/DDL) referencing only registered entity tables -- anything else is refused. Results are row-capped (this deployment's own configured limit) -- add your own LIMIT or narrow the query if a result comes back truncated (the truncation note tells you the true total match count, so you know whether narrowing is even worth it). Prefer expressing grouping/matching/deduplication logic (e.g. 'which groups of rows share the exact same set of X') as SQL itself -- GROUP BY with GROUP_CONCAT to build a per-group signature, then compare signatures -- rather than fetching many rows and comparing them yourself; there is no code-execution tool, so 'processed afterward' means reasoned over in your own reply, which doesn't scale to large row counts the way one aggregate query does. If a question genuinely can't be answered without paging through everything (no aggregate expresses it), use background.start rather than looping entity.query with an increasing OFFSET in the foreground -- and if you do page manually anyway, always add an explicit ORDER BY on a unique column (e.g. id): without one, SQL row order across separate LIMIT/OFFSET calls isn't guaranteed, so later pages can silently repeat or skip rows.",
             parameters = {
                 type = "object",
                 properties = {sql = {type = "string", description = "a single SELECT statement"}},
@@ -1263,6 +1312,23 @@ function excerpt(text, max_length)
     return truncated .. "..."
 end
 
+-- Error text for an entity_type argument that isn't registered, with a
+-- suggested correction when schema.suggest_type finds one close enough
+-- (e.g. the plural "samples" -> "sample") -- shared by every entity.*
+-- tool handler below so a bad type name costs the model one tool call
+-- with an actionable message, not a second round trip to entity.list_types
+-- to guess its way to the real name.
+function unknown_entity_type_message(db_path, entity_type)
+    message = "unknown entity type: " .. tostring(entity_type)
+    suggestion = schema.suggest_type(db_path, entity_type)
+    if suggestion != nil then
+        message = message .. " -- did you mean '" .. suggestion .. "'?"
+    else
+        message = message .. " -- call entity.list_types for the full list"
+    end
+    return message
+end
+
 -- Compact "field=value; field=value" text for one entity.get/list row,
 -- for the model to read -- sorted so output is deterministic rather
 -- than depending on pairs()'s unspecified iteration order.
@@ -1426,9 +1492,12 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
         if args.entity_type == nil then
             return nil, "fields requires entity_type"
         end
+        if schema.is_registered(db_path, args.entity_type) == false then
+            return nil, unknown_entity_type_message(db_path, args.entity_type)
+        end
         fields = schema.fields(db_path, args.entity_type)
         if #fields == 0 then
-            return nil, "unknown entity type, or it has no fields: " .. tostring(args.entity_type)
+            return "'" .. tostring(args.entity_type) .. "' is a registered entity type with no custom fields (only the system-managed id/created/updated columns)."
         end
         lines = {}
         for _, f in ipairs(fields) do
@@ -1458,7 +1527,7 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
         if args.sql == nil then
             return nil, "query requires sql"
         end
-        column_names, rows, err, truncated = view.run_agent_query(db_path, args.sql)
+        column_names, rows, err, truncated, total_count = view.run_agent_query(db_path, args.sql)
         if column_names == nil then
             return nil, tostring(err)
         end
@@ -1476,7 +1545,11 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
         end
         result = table.concat(lines, "\n")
         if truncated == true then
-            result = result .. "\n\n(truncated at " .. tostring(#rows) .. " rows -- add your own LIMIT or narrow the query for a complete result)"
+            if total_count != nil then
+                result = result .. "\n\n(showing " .. tostring(#rows) .. " of " .. tostring(total_count) .. " total matching rows -- add your own LIMIT or narrow the query for a complete result)"
+            else
+                result = result .. "\n\n(truncated at " .. tostring(#rows) .. " rows -- add your own LIMIT or narrow the query for a complete result)"
+            end
         end
         return result
     end
@@ -1485,7 +1558,7 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
         if args.sql == nil or args.x_column == nil or args.y_column == nil then
             return nil, "from_query requires sql, x_column, and y_column"
         end
-        column_names, rows, err, truncated = view.run_agent_query(db_path, args.sql)
+        column_names, rows, err, truncated, total_count = view.run_agent_query(db_path, args.sql)
         if column_names == nil then
             return nil, tostring(err)
         end
@@ -1549,7 +1622,11 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
 
         fence = "```plot\n" .. json.encode(spec) .. "\n```"
         if truncated == true then
-            fence = fence .. "\n\n(query truncated at " .. tostring(#rows) .. " rows -- add your own LIMIT or narrow the query for a complete chart)"
+            if total_count != nil then
+                fence = fence .. "\n\n(chart shows " .. tostring(#rows) .. " of " .. tostring(total_count) .. " total matching rows -- add your own LIMIT or narrow the query for a complete chart)"
+            else
+                fence = fence .. "\n\n(query truncated at " .. tostring(#rows) .. " rows -- add your own LIMIT or narrow the query for a complete chart)"
+            end
         end
         return fence
     end
@@ -1557,6 +1634,9 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
     if tool_name == "entity" and method_name == "list" then
         if args.entity_type == nil then
             return nil, "list requires entity_type"
+        end
+        if schema.is_registered(db_path, args.entity_type) == false then
+            return nil, unknown_entity_type_message(db_path, args.entity_type)
         end
         limit = tonumber(args.limit)
         if limit == nil then
@@ -1585,6 +1665,9 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
         target_id = tonumber(args.entity_id)
         if args.entity_type == nil or target_id == nil then
             return nil, "get requires entity_type and entity_id"
+        end
+        if schema.is_registered(db_path, args.entity_type) == false then
+            return nil, unknown_entity_type_message(db_path, args.entity_type)
         end
         row = entity.get(db_path, args.entity_type, target_id)
         if row == nil then
@@ -2208,6 +2291,16 @@ or "what's the common theme here", do that analysis yourself in your
 reply -- never tell the user you can't, or hand back the raw data
 unprocessed, just because no tool is literally named for it.
 
+There is no code-execution tool -- you cannot run Python, JS, or anything
+else to process data after fetching it. "Do the analysis yourself" above
+means reasoning over what a tool call already returned, which works for a
+handful of rows but not for precisely matching, deduplicating, or grouping
+hundreds/thousands of them by hand across many turns. For that class of
+question, push the logic into the SQL itself (entity.query supports GROUP
+BY, GROUP_CONCAT-style signatures, and other aggregates -- see its own
+description) instead of planning to fetch everything page by page and
+compute the answer afterward.
+
 To plot numeric data (a document you write, or a chat reply), use a fenced
 code block whose language is "plot" containing a single JSON object -- do
 not write gnuplot script or any other plotting syntax yourself. Shape:
@@ -2287,6 +2380,55 @@ SELF_CHECK_PROMPT = """
 If the reply holds up, respond with EXACTLY: CONFIRM
 Otherwise, do not repeat the reply -- just say what to check next, as if continuing your own investigation.
 """
+
+TURN_LIMIT_WRAPUP_PROMPT = """
+[Automated: you've used your entire step budget for this task without reaching a final answer.] Write a short status update for the user, in your own words:
+- What you were trying to find or do, and what you've actually confirmed or ruled out so far -- cite real values from your own tool results above, not vague generalities.
+- Say plainly whether your approach so far was on track and just needs more steps, or whether -- on reflection -- a different approach would get there faster (e.g. one aggregate query instead of paging through rows one batch at a time). The user can't judge this from the raw tool history alone; your own assessment is what lets them decide.
+- End with a direct question: continue as-is, or take a different approach?
+Do not call any tools -- this is a plain text reply only, and no tool call would run even if you proposed one.
+"""
+
+STOP_REQUESTED_WRAPUP_PROMPT = """
+[Automated: the user asked you to stop before you gave a final answer.] Write a short status update for the user, in your own words: what you were trying to find or do, and what you've actually confirmed or ruled out so far -- cite real values from your own tool results above, not vague generalities. Do not call any tools -- this is a plain text reply only, and no tool call would run even if you proposed one.
+"""
+
+-- Spends one more no-tools model call (same shape as run_self_check's
+-- own) to have the model explain, in its own words, where an
+-- interrupted investigation actually got to -- shared by both ways
+-- agent.run_turn's loop can end without a real answer: the turn budget
+-- running out, and the user hitting Stop mid-session. A canned string
+-- can only ever say "I didn't finish"; the model that did the work is
+-- the one that can say whether it was on the right track, which is what
+-- the user actually needs to decide whether to let it continue.
+-- `prompt_text` frames why the loop is stopping (see the two prompts
+-- above); `fallback_text` is what gets persisted if this call itself
+-- fails -- fails open, same reasoning as run_self_check's own comment:
+-- there's no budget left to retry, so a plain honest message beats
+-- silence.
+function run_turn_wrapup(db_path, session_id, login, system_prompt, model, prompt_text, fallback_text)
+    wrapup_history = build_history_messages(agent.active_messages(db_path, session_id))
+    table.insert(wrapup_history, {role = "user", content = prompt_text})
+    wrapup_audit_prompt = json.encode(wrapup_history)
+    wrapup_response, wrapup_err, wrapup_usage = agent_provider.converse(model, system_prompt, wrapup_history, {})
+
+    message_text = nil
+    if wrapup_response != nil and wrapup_response.stopReason != "error" and wrapup_response.stopReason != "aborted" then
+        wrapup_blocks = wrapup_response.content
+        if wrapup_blocks == nil then
+            wrapup_blocks = {}
+        end
+        message_text = display_blocks(wrapup_blocks)
+    end
+    if message_text == nil or string.gsub(message_text, "%s", "") == "" then
+        message_text = fallback_text
+    end
+
+    message_id = agent.add_message(db_path, session_id, "assistant", json.encode({blocks = {{type = "text", text = message_text}}}), true)
+    context_id = knowledge.record_context(db_path, session_id, message_id, wrapup_audit_prompt, model, nil, wrapup_usage)
+    knowledge.record_chat_eval(db_path, session_id, context_id, message_id, agent_provider.name(), model, false, message_text)
+    return message_text
+end
 
 -- A structural, code-enforced verification step, not a prompt
 -- reminder -- runs on every proposed final answer, unconditionally.
@@ -2653,6 +2795,7 @@ end
 --   {status = "done", message = "..."}
 --   {status = "pending_approval", pending_id = N, tool = "...", method = "...", args = {...}}
 --   {status = "turn_limit", message = "..."}
+--   {status = "stopped", message = "..."} -- see agent.request_cancel
 --   {status = "error", message = "..."}
 --
 -- Each call gets its own fresh turn budget (agent_max_turns, see
@@ -2672,8 +2815,26 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
 
     agent.compact_if_needed(db_path, session_id, system_prompt, model)
 
+    -- Deliberately NOT cleared here at function start: the widget only
+    -- ever shows a Stop button while a send is actually in flight, and a
+    -- click lands as a genuinely concurrent second request (see
+    -- cgi.lua's own comment on chat-widget-stop) -- it can beat this
+    -- call past its own session lookup/config read and land before the
+    -- loop below gets to check for it even once. Clearing the flag here
+    -- unconditionally would silently swallow exactly that click. The
+    -- loop's own check just below is what actually consumes the flag
+    -- (checked, then cleared, every time it's found set) -- that's the
+    -- only place a stale flag can ever survive past.
     max_turns = config.platform_config().agent_max_turns
     for turn = 1, max_turns do
+        if agent.cancel_requested(db_path, session_id) == true then
+            agent.clear_cancel(db_path, session_id)
+            stop_message = run_turn_wrapup(db_path, session_id, login, system_prompt, model, STOP_REQUESTED_WRAPUP_PROMPT,
+                "Stopped at your request. Whatever I found along the way is visible above in the tool call history.")
+            sync_session_document(db_path, login, session_id)
+            return {status = "stopped", message = stop_message}
+        end
+
         active = agent.active_messages(db_path, session_id)
         history_messages = build_history_messages(active)
         audit_prompt = json.encode(history_messages)
@@ -2851,8 +3012,22 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
         end
     end
 
+    -- Found live: /api/chat-widget-send calls agent.run_turn and discards
+    -- what it returns, so a turn-limit outcome that only lived in this
+    -- function's own result table was completely invisible in the chat
+    -- widget -- the loop's last tool result just sat there with nothing
+    -- after it, no error, no partial answer, nothing. Every other exit
+    -- path already writes a real, persisted assistant message; this one
+    -- now does too, via run_turn_wrapup -- which also doubles as the
+    -- explicit "continue?" question needed for a plain chat reply to
+    -- resume the same investigation with a fresh budget (see this
+    -- function's own header comment on resume-gets-a-fresh-budget).
+    turn_limit_message = run_turn_wrapup(db_path, session_id, login, system_prompt, model, TURN_LIMIT_WRAPUP_PROMPT,
+        "I wasn't able to finish answering this within the allotted number of steps (" .. tostring(max_turns) ..
+        " tool-assisted turns). Whatever I found along the way is visible above in the tool call history -- " ..
+        "reply and I'll pick up where I left off, or redirect me to a different approach.")
     sync_session_document(db_path, login, session_id)
-    return {status = "turn_limit", message = "Unable to complete tool-assisted run in " .. tostring(max_turns) .. " turns."}
+    return {status = "turn_limit", message = turn_limit_message}
 end
 
 -- The agent-driven distillation pass -- unlike knowledge.

@@ -1152,6 +1152,61 @@ function schema.is_registered(db_path, entity_type)
     return rows != nil and #rows > 0
 end
 
+-- Plain Levenshtein edit distance -- only used below to guess an intended
+-- entity type name, never on a performance-sensitive path, so no need for
+-- anything fancier.
+function levenshtein(a, b)
+    la, lb = #a, #b
+    if la == 0 then
+        return lb
+    end
+    if lb == 0 then
+        return la
+    end
+    prev = {}
+    for j = 0, lb do
+        prev[j] = j
+    end
+    for i = 1, la do
+        curr = {[0] = i}
+        for j = 1, lb do
+            cost = 1
+            if string.sub(a, i, i) == string.sub(b, j, j) then
+                cost = 0
+            end
+            curr[j] = math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost)
+        end
+        prev = curr
+    end
+    return prev[lb]
+end
+
+-- Best-guess registered entity type for a name that turned out not to be
+-- registered -- e.g. an agent (or API caller) passing the plural "samples"
+-- when the real type is "sample". Returns nil when nothing registered is
+-- close enough: a wrong-but-confident suggestion is worse than none for a
+-- caller deciding whether to retry with it. Found live: an agent burned a
+-- whole extra tool call listing every entity type just to self-correct
+-- this exact plural guess, because the error it got back for "samples"
+-- gave it nothing to go on.
+function schema.suggest_type(db_path, entity_type)
+    if type(entity_type) != "string" or entity_type == "" then
+        return nil
+    end
+    name = string.lower(entity_type)
+    best, best_dist = nil, nil
+    for _, t in ipairs(schema.list(db_path)) do
+        candidate = string.lower(t.name)
+        dist = levenshtein(name, candidate)
+        max_len = math.max(#name, #candidate)
+        threshold = math.max(1, math.floor(max_len / 3))
+        if dist <= threshold and (best_dist == nil or dist < best_dist) then
+            best, best_dist = t.name, dist
+        end
+    end
+    return best
+end
+
 -- Task #93's reason-for-change opt-in flags for one registered entity
 -- type -- what entity.update/entity.archive check before requiring
 -- (or not) a non-empty `reason` argument. Defaults both false for an

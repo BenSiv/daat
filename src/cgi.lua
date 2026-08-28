@@ -1497,6 +1497,31 @@ function cgi.handle_request()
         return print_response("200 OK", "application/json", json.encode(chat_widget_state(db_path, body_data.session_id)))
     end
 
+    -- Fired by the widget's own Stop button while a /api/chat-widget-send
+    -- request for the same session is still in flight -- a real,
+    -- concurrent second request (the CGI process-per-request model
+    -- already means these run as separate OS processes against the same
+    -- store), not something the in-flight run_turn call polls back to
+    -- this same handler for. agent.request_cancel does its own ownership
+    -- check (returns false for someone else's session, same as every
+    -- other chat-widget route's agent.get_session check) -- 404 either
+    -- way rather than distinguishing "wrong owner" from "no such
+    -- session" to an unauthenticated-feeling prober.
+    if path_info == "/api/chat-widget-stop" and method == "POST" then
+        if not require_csrf(cookies) then
+            return print_response("403 Forbidden", "application/json", json.encode({error = "CSRF check failed"}))
+        end
+        input = io.read("*all")
+        body_data, _, err = json.decode(input)
+        if body_data == nil then
+            return print_response("400 Bad Request", "application/json", json.encode({error = "Invalid JSON: " .. tostring(err)}))
+        end
+        if agent.request_cancel(db_path, body_data.session_id, author) == false then
+            return print_response("404 Not Found", "application/json", json.encode({error = "no such chat session"}))
+        end
+        return print_response("200 OK", "application/json", json.encode({ok = true}))
+    end
+
     -- "Documents for context," not vision/images and not a real
     -- platform Document (see brex #53) -- deliberately stateless: the
     -- extracted text is handed straight back and never touches

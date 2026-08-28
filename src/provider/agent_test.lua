@@ -117,13 +117,16 @@ function agent_test.converse(model, system_prompt, messages, tools)
     -- A real tool-calling turn always passes a non-empty tools list
     -- (agent.tool_declarations() is never empty) -- an empty/nil tools
     -- list is a structural signal this is a no-tools call instead (in
-    -- this app, only run_self_check makes one). Defaults to CONFIRM so
-    -- every existing scripted test's own AGENT_TEST_RESPONSES sequence
-    -- keeps completing in exactly the turn count it was written
-    -- against, undisturbed -- self-check calls don't consume from that
-    -- list at all. AGENT_TEST_SELF_CHECK_RESPONSE lets a test opt into
-    -- a specific (e.g. non-confirm) self-check reply instead, to test
-    -- the reject-and-continue path on purpose.
+    -- this app, run_self_check and run_turn's own turn-limit wrap-up
+    -- reflection are the only two). Defaults to CONFIRM so every existing
+    -- scripted test's own AGENT_TEST_RESPONSES sequence keeps completing
+    -- in exactly the turn count it was written against, undisturbed --
+    -- neither kind of no-tools call consumes from that list at all.
+    -- AGENT_TEST_SELF_CHECK_RESPONSE lets a test opt into a specific
+    -- reply for either one instead (whichever a given test actually
+    -- triggers) -- e.g. a non-confirm self-check reply to test the
+    -- reject-and-continue path, or wrap-up status text for a turn-limit
+    -- test, on purpose.
     if tools == nil or #tools == 0 then
         override = os.getenv("AGENT_TEST_SELF_CHECK_RESPONSE")
         if override != nil and override != "" then

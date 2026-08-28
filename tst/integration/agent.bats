@@ -1029,6 +1029,95 @@ EOF
     [ "$output" -eq 1 ]
 }
 
+@test "genuinely exhausting agent_max_turns on real tool calls leaves a visible wrap-up message, not silence (found live: celleste-lims eval)" {
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    # Every scripted turn keeps calling a tool, never giving a plain
+    # answer -- the model genuinely runs out of budget mid-investigation,
+    # the same way the live report that found this bug did. The
+    # turn-limit exit path then spends one more no-tools call (same
+    # shape as run_self_check's own) to have the model explain where it
+    # got to -- scripted here via AGENT_TEST_SELF_CHECK_RESPONSE, the
+    # no-tools-call override shared by both call sites (see
+    # agent_test.lua's own comment on that).
+    write_platform_config ', agent_max_turns = 2'
+    scripted="$(tool_call_response "entity.list_types" "{}")"$'\1'"$(tool_call_response "entity.list_types" "{}")"
+    printf '{"session_id":"%s","message":"investigate something big"}' "$session_id" | \
+        AGENT_TEST_RESPONSES="$scripted" \
+        AGENT_TEST_SELF_CHECK_RESPONSE="$(done_response "I confirmed chemical #17 is Agar but only paged through part of the ingredient join before running out of steps -- want me to continue, or switch to a single aggregate query instead?")" \
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/chat-widget-send" QUERY_STRING="" \
+        HTTP_COOKIE="$COOKIE" HTTP_X_CSRF_TOKEN="$CSRF" "$BIN" >/dev/null
+
+    # 2 tool-calling turns (each persists its own assistant row, same as
+    # any turn) plus the wrap-up reflection's own final assistant row.
+    # Before the fix, that third row never got written at all -- the
+    # widget just showed the last tool result with nothing after it, no
+    # error, no partial answer.
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM agent_message WHERE session_id = '${session_id}' AND role = 'assistant';"
+    [ "$output" -eq 3 ]
+
+    run raw_get "/api/chat-widget-history" "session_id=${session_id}" "$COOKIE"
+    [[ "$output" =~ "switch to a single aggregate query instead" ]]
+}
+
+@test "chat-widget-stop requires the matching CSRF token" {
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    run raw_post_json "/api/chat-widget-stop" "{\"session_id\":\"${session_id}\"}" "$COOKIE" "wrong"
+    [[ "$output" =~ "403 Forbidden" ]]
+}
+
+@test "chat-widget-stop refuses a session belonging to a different user" {
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    run raw_post_json "/api/chat-widget-stop" "{\"session_id\":\"${session_id}\"}" "$BOB_COOKIE" "$BOB_CSRF"
+    [[ "$output" =~ "404 Not Found" ]]
+
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT cancel_requested FROM agent_session WHERE id = '${session_id}';"
+    [ "$output" -eq 0 ]
+}
+
+@test "a cancel_requested flag set before chat-widget-send stops the loop at the next turn boundary, with a real wrap-up message (found live: celleste-lims eval, 'stop button' follow-up)" {
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    # Simulates a Stop click landing just before chat-widget-send would
+    # have run -- the real browser races a second, genuinely concurrent
+    # request against this one, but the loop-side behavior being tested
+    # (the check at the top of the turn loop, before the next model call)
+    # is the same either way and this way is deterministic, not a timing
+    # race the test itself has to win.
+    run raw_post_json "/api/chat-widget-stop" "{\"session_id\":\"${session_id}\"}" "$COOKIE" "$CSRF"
+    [[ "$output" =~ "200 OK" ]]
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT cancel_requested FROM agent_session WHERE id = '${session_id}';"
+    [ "$output" -eq 1 ]
+
+    # If the loop failed to stop at turn 1, it would consume this
+    # scripted tool call and keep going -- so seeing it NOT happen (the
+    # cancel wrap-up text below, not this) is itself part of what proves
+    # the check actually ran before the next model call, not after.
+    scripted="$(tool_call_response "entity.list_types" "{}")"
+    printf '{"session_id":"%s","message":"investigate something big"}' "$session_id" | \
+        AGENT_TEST_RESPONSES="$scripted" \
+        AGENT_TEST_SELF_CHECK_RESPONSE="$(done_response "I'd confirmed chemical #17 is Agar before you asked me to stop -- happy to keep going from there whenever you like.")" \
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/chat-widget-send" QUERY_STRING="" \
+        HTTP_COOKIE="$COOKIE" HTTP_X_CSRF_TOKEN="$CSRF" "$BIN" >/dev/null
+
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM agent_message WHERE session_id = '${session_id}' AND role = 'assistant';"
+    [ "$output" -eq 1 ]
+
+    run raw_get "/api/chat-widget-history" "session_id=${session_id}" "$COOKIE"
+    [[ "$output" =~ "happy to keep going from there" ]]
+
+    # Consumed, not left set -- otherwise the *next* unrelated send on
+    # this session would stop immediately too.
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT cancel_requested FROM agent_session WHERE id = '${session_id}';"
+    [ "$output" -eq 0 ]
+}
+
 @test "agent_query_row_cap (platform.lua) is configurable -- entity.query truncates at the configured cap, not just the 200 default" {
     write_task_schema
     "$BIN" entity create task title="First" status=open >/dev/null
@@ -1045,7 +1134,7 @@ EOF
         HTTP_COOKIE="$COOKIE" HTTP_X_CSRF_TOKEN="$CSRF" "$BIN" >/dev/null
 
     run latest_tool_result "$session_id"
-    [[ "$output" =~ "truncated at 1 rows" ]]
+    [[ "$output" =~ "showing 1 of 3 total matching rows" ]]
 }
 
 @test "compaction marks old turns out of context (dimmed) but never deletes them" {
