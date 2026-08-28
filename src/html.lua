@@ -119,6 +119,107 @@ function platform_table_wrapper_css()
 """
 end
 
+-- .cell-input/.error-badge/.autocomplete-results/.status-msg: html.render
+-- (the registration batch table) and html.render_entity_edit (the
+-- single-row edit form) each hand-copied their own version of these,
+-- and had drifted for real, not just cosmetically -- render_entity_edit
+-- never picked up the focus ring, the error box-shadow, or the
+-- status-msg fade-in animation render() has. Worse: render()'s own
+-- ".autocomplete-item" selector is dead CSS that has never matched
+-- anything -- PlatformJS.setupAutocomplete (this file's own shared
+-- suggestion-dropdown JS) builds each option as a bare <div> with no
+-- class at all, so only render_entity_edit's ".autocomplete-results
+-- div" selector was ever real; /register's own autocomplete dropdown
+-- has been rendering completely unstyled (no padding, no hover
+-- highlight) the whole time. One shared, correct copy now. Callers
+-- needing a narrower layout (render_entity_edit's own max-width: 640px
+-- on .status-msg, matching its single-column form) layer that as a
+-- small override after this, same as platform_table_wrapper_css's own
+-- per-page overrides.
+function platform_cell_editor_css()
+    return """
+        .cell-input {
+            width: 100%%;
+            padding: 9px 12px;
+            border: 1px solid var(--platform-border-2, #cbd5e1);
+            border-radius: var(--platform-radius-sm, 8px);
+            font-size: 0.9rem;
+            background: #ffffff;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            box-sizing: border-box;
+            color: var(--platform-input-text, #1e293b);
+        }
+        .cell-input:focus {
+            border-color: var(--platform-accent-2, #6366f1);
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
+            background: #fff;
+        }
+        .cell-input.error {
+            border-color: #f87171;
+            background-color: #fef2f2;
+            box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.08);
+        }
+        .error-badge {
+            color: #ef4444;
+            font-size: 0.75rem;
+            margin-top: 4px;
+            display: block;
+            font-weight: 500;
+        }
+        .autocomplete-results {
+            position: absolute;
+            top: 100%%;
+            left: 0;
+            right: 0;
+            background: #ffffff;
+            border: 1px solid var(--platform-border, #e2e8f0);
+            border-radius: var(--platform-radius-sm, 8px);
+            max-height: 220px;
+            overflow-y: auto;
+            z-index: 1000;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            margin-top: 6px;
+            padding: 4px 0;
+        }
+        .autocomplete-results div {
+            padding: 9px 14px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            transition: all 0.15s ease;
+            color: var(--platform-text, #334155);
+        }
+        .autocomplete-results div:hover { background: var(--platform-bg-2, #f1f5f9); color: var(--platform-heading, #0f172a); }
+        .status-msg {
+            margin-top: 24px;
+            padding: 14px 20px;
+            border-radius: var(--platform-radius-sm, 8px);
+            font-size: 0.95rem;
+            display: none;
+            font-weight: 500;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.02);
+        }
+        .status-msg.success {
+            display: block;
+            background: #f0fdf4;
+            color: #166534;
+            border: 1px solid #bbf7d0;
+            animation: fadeIn 0.25s ease;
+        }
+        .status-msg.error {
+            display: block;
+            background: #fef2f2;
+            color: #991b1b;
+            border: 1px solid #fecaca;
+            animation: fadeIn 0.25s ease;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(4px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+"""
+end
+
 -- Shared .btn/.btn-primary/.btn-secondary/.btn-delete/.btn-danger rules --
 -- previously three separate, hand-copied inline copies (render(),
 -- render_browse(), render_sql()) that had quietly drifted apart:
@@ -287,6 +388,16 @@ function platform_admin_message_css()
     return """
         .platform-admin-message { padding: 10px 12px; margin-bottom: 16px; border-radius: var(--platform-radius-item, 10px); background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; font-size: 0.9rem; }
         .platform-admin-message-error { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
+"""
+end
+
+-- A plain inline error banner -- render_login's own ".platform-login-
+-- error" rule, reused verbatim under that login-specific name by
+-- render_document_edit for an unrelated save error. Same rule, generic
+-- name instead of a borrowed one.
+function platform_error_banner_css()
+    return """
+        .platform-error-banner { color: #991b1b; background: #fef2f2; border: 1px solid #fecaca; border-radius: var(--platform-radius-item, 10px); padding: 10px 12px; margin-bottom: 14px; font-size: 0.88rem; }
 """
 end
 
@@ -1091,58 +1202,6 @@ function html.render(entity_type, layout_json, nonce, locked_fields)
             color: var(--platform-muted, #64748b);
             font-style: italic;
         }
-        .cell-input {
-            width: 100%%;
-            padding: 9px 12px;
-            border: 1px solid var(--platform-border-2, #cbd5e1);
-            border-radius: var(--platform-radius-sm, 8px);
-            font-size: 0.9rem;
-            background: #ffffff;
-            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-            box-sizing: border-box;
-            color: var(--platform-input-text, #1e293b);
-        }
-        .cell-input:focus {
-            border-color: var(--platform-accent-2, #6366f1);
-            outline: none;
-            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
-            background: #fff;
-        }
-        .cell-input.error {
-            border-color: #f87171;
-            background-color: #fef2f2;
-            box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.08);
-        }
-        .error-badge {
-            color: #ef4444;
-            font-size: 0.75rem;
-            margin-top: 4px;
-            display: block;
-            font-weight: 500;
-        }
-        .autocomplete-results {
-            position: absolute;
-            top: 100%%;
-            left: 0;
-            right: 0;
-            background: #ffffff;
-            border: 1px solid var(--platform-border, #e2e8f0);
-            border-radius: var(--platform-radius-sm, 8px);
-            max-height: 220px;
-            overflow-y: auto;
-            z-index: 1000;
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
-            margin-top: 6px;
-            padding: 4px 0;
-        }
-        .autocomplete-item {
-            padding: 9px 14px;
-            cursor: pointer;
-            font-size: 0.85rem;
-            transition: all 0.15s ease;
-            color: var(--platform-text, #334155);
-        }
-        .autocomplete-item:hover { background: var(--platform-bg-2, #f1f5f9); color: var(--platform-heading, #0f172a); }
         .platform-actions {
             display: flex;
             gap: 14px;
@@ -1150,33 +1209,6 @@ function html.render(entity_type, layout_json, nonce, locked_fields)
             align-items: center;
         }
         %s
-        .status-msg {
-            margin-top: 24px;
-            padding: 14px 20px;
-            border-radius: var(--platform-radius-sm, 8px);
-            font-size: 0.95rem;
-            display: none;
-            font-weight: 500;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.02);
-        }
-        .status-msg.success {
-            display: block;
-            background: #f0fdf4;
-            color: #166534;
-            border: 1px solid #bbf7d0;
-            animation: fadeIn 0.25s ease;
-        }
-        .status-msg.error {
-            display: block;
-            background: #fef2f2;
-            color: #991b1b;
-            border: 1px solid #fecaca;
-            animation: fadeIn 0.25s ease;
-        }
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(4px); }
-            to   { opacity: 1; transform: translateY(0); }
-        }
     </style>
 
     <div class="platform-container">
@@ -1363,7 +1395,7 @@ function html.render(entity_type, layout_json, nonce, locked_fields)
         document.getElementById("btn-submit-batch").addEventListener("click", submitBatch);
     </script>
 </div>
-""", escaped_type, platform_container_css(), platform_page_header_css(), platform_table_wrapper_css(), platform_button_css(), register_header, nonce, json_for_script(layout_json), js_string_literal(entity_type), json_for_script(locked_fields_json))
+""", escaped_type, platform_container_css(), platform_page_header_css(), platform_table_wrapper_css(), platform_button_css() .. platform_cell_editor_css(), register_header, nonce, json_for_script(layout_json), js_string_literal(entity_type), json_for_script(locked_fields_json))
 end
 
 -- Single-row edit form for an existing entity -- the generic-entity
@@ -1393,24 +1425,10 @@ function html.render_entity_edit(entity_type, layout_json, row_json, entity_id, 
         .platform-edit-field label { display: block; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--platform-muted, #64748b); font-weight: 600; margin-bottom: 6px; }
         .platform-edit-field label .req-dot { color: #ef4444; font-weight: bold; }
         .platform-edit-field { position: relative; }
-        .cell-input {
-            width: 100%%; padding: 9px 12px; border: 1px solid var(--platform-border-2, #cbd5e1);
-            border-radius: var(--platform-radius-sm, 8px); font-size: 0.9rem; background: #ffffff;
-            box-sizing: border-box; color: var(--platform-input-text, #1e293b);
-        }
-        .cell-input.error { border-color: #f87171; background-color: #fef2f2; }
-        .error-badge { color: #ef4444; font-size: 0.75rem; margin-top: 4px; display: block; font-weight: 500; }
-        .autocomplete-results {
-            position: absolute; top: 100%%; left: 0; right: 0; background: #ffffff;
-            border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-sm, 8px);
-            max-height: 220px; overflow-y: auto; z-index: 1000;
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05); margin-top: 6px;
-        }
-        .autocomplete-results div { padding: 8px 12px; cursor: pointer; font-size: 0.88rem; }
-        .autocomplete-results div:hover { background: var(--platform-bg-2, #f1f5f9); }
-        .status-msg { display: none; padding: 12px 16px; border-radius: var(--platform-radius-sm, 8px); font-size: 0.9rem; margin-top: 16px; max-width: 640px; }
-        .status-msg.success { display: block; background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
-        .status-msg.error { display: block; background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
+        /* This form is a single narrow column (.platform-edit-fields'
+           own max-width: 640px above) -- keep the shared status-msg
+           the same width rather than letting it stretch full-width. */
+        .status-msg { max-width: 640px; }
     </style>
 
     <div class="platform-container">
@@ -1518,7 +1536,7 @@ function html.render_entity_edit(entity_type, layout_json, row_json, entity_id, 
         document.getElementById("btn-save").addEventListener("click", submitEdit);
     </script>
 </div>
-""", escaped_type, escaped_entity_id, platform_container_css(), platform_button_css(), platform_page_header_css(),
+""", escaped_type, escaped_entity_id, platform_container_css(), platform_button_css(), platform_page_header_css() .. platform_cell_editor_css(),
      edit_header,
      nonce, json_for_script(layout_json), json_for_script(row_json), js_string_literal(entity_type), tostring(entity_id))
 end
@@ -2910,7 +2928,7 @@ function html.render_login(error_message, nonce)
     error_html = ""
     if error_message != nil and error_message != "" then
         error_html = render_lib.render(
-            "<div class=\"platform-login-error\">{{ error_message }}</div>",
+            "<div class=\"platform-error-banner\">{{ error_message }}</div>",
             {error_message = error_message}
         )
     end
@@ -2927,7 +2945,6 @@ function html.render_login(error_message, nonce)
             width: 100%%; box-sizing: border-box; padding: 8px 10px; margin-bottom: 14px;
             border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-item, 10px); font-size: 0.95rem;
         }
-        .platform-login-error { color: #991b1b; background: #fef2f2; border: 1px solid #fecaca; border-radius: var(--platform-radius-item, 10px); padding: 10px 12px; margin-bottom: 14px; font-size: 0.88rem; }
         .platform-login-card .btn { width: 100%%; }
     </style>
     <form class="platform-login-card" method="POST" action="/login">
@@ -2940,7 +2957,7 @@ function html.render_login(error_message, nonce)
         <button type="submit" class="btn btn-primary">Log in</button>
     </form>
 </div>
-""", platform_container_css(), platform_button_css(), error_html)
+""", platform_container_css(), platform_button_css() .. platform_error_banner_css(), error_html)
 end
 
 -- Self-service password change -- every capability level (baseline "i"
@@ -4869,7 +4886,7 @@ function html.render_document_edit(doc, parent_options_html, csrf_token, error_m
 
     error_html = ""
     if error_message != nil and error_message != "" then
-        error_html = "<div class=\"platform-login-error\">" .. html.html_escape(error_message) .. "</div>"
+        error_html = "<div class=\"platform-error-banner\">" .. html.html_escape(error_message) .. "</div>"
     end
 
     doc_edit_header = render_page_header(heading, nil, nil)
@@ -4880,7 +4897,6 @@ function html.render_document_edit(doc, parent_options_html, csrf_token, error_m
 %s
 %s
 %s
-        .platform-login-error { color: #991b1b; background: #fef2f2; border: 1px solid #fecaca; border-radius: var(--platform-radius-item, 10px); padding: 10px 12px; margin-bottom: 14px; font-size: 0.88rem; }
         .platform-document-edit-fields { display: flex; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
         .platform-document-edit-fields input[type=text], .platform-document-edit-fields select {
             padding: 8px 10px; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-sm, 8px); font-size: 0.9rem;
@@ -5028,7 +5044,7 @@ function html.render_document_edit(doc, parent_options_html, csrf_token, error_m
     })();
     </script>
 </div>
-""", heading, platform_container_css(), platform_button_css(), platform_page_header_css(), doc_edit_header, error_html,
+""", heading, platform_container_css(), platform_button_css(), platform_page_header_css() .. platform_error_banner_css(), doc_edit_header, error_html,
      html.html_escape(csrf_token), entity_id_value, title_value, parent_options_html,
      nonce, nonce, js_string_literal(content_value_raw))
 end
