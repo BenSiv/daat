@@ -465,6 +465,18 @@ SELECT * FROM task
     [[ "$output" =~ "not a registered entity type" ]]
 }
 
+@test "entity.query distinguishes a real-but-excluded knowledge-pool companion table (document_link) from an unregistered/typo'd one" {
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(tool_call_response "entity.query" '{"sql":"SELECT * FROM document_link"}')"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"how connected are documents\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "intentionally excluded from entity.query" ]]
+    [[ ! "$output" =~ "did you mean" ]]
+}
+
 write_reading_schema() {
     mkdir -p schemas
     cat > schemas/reading.lua <<'EOF'

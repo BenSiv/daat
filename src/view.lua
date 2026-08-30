@@ -536,6 +536,21 @@ end
 -- schema_sync_state, or any other internal table entity.list/get
 -- could never expose either).
 
+-- Deliberately narrow, not "every hand-rolled table" (document_embedding,
+-- agent_session/message/pending_action/background_task, the knowledge_*
+-- event logs, ...) -- just the two document.lua's own KNOWLEDGE_POOL_SQL_NOTE
+-- already names to the model as legitimate, non-sensitive companion tables
+-- for heat/connectivity queries (see doc.knowledge_pool_sql_columns_text).
+-- Widening this list is a real per-table security judgment call, not a
+-- mechanical copy-paste -- the comment right above run_agent_query names
+-- agent_message/agent_pending_action specifically as tables that must stay
+-- opaque to the model, and auth_user/api_key hold real secrets; none of
+-- those belong here just because they're also hand-rolled.
+KNOWLEDGE_POOL_COMPANION_TABLES = {
+    document_link = true,
+    knowledge_pool_state = true,
+}
+
 -- Collects every identifier immediately following `keyword` (word-
 -- boundary matched, same convention as FORBIDDEN_SQL_WORDS -- so a
 -- column literally named e.g. "from_date" is never mistaken for a
@@ -627,6 +642,20 @@ function view.run_agent_query(db_path, sql_text)
     end
     for _, name in ipairs(referenced) do
         if allowed[name] == nil then
+            if KNOWLEDGE_POOL_COMPANION_TABLES[name] == true then
+                -- A real table, not a typo -- just intentionally excluded
+                -- from this tool (system/derived event logs, never
+                -- schema.register()'d; see doc/architecture.md's own
+                -- "Hand-rolled tables" list). Distinguished from the
+                -- generic "unregistered type" message below so the
+                -- caller (the model, per its own system-prompt
+                -- instruction to self-verify SQL via this tool before
+                -- presenting it) doesn't mistake this refusal for a
+                -- broken query and "fix" it into something else --
+                -- it's still valid SQL for the admin /sql console,
+                -- which has no such restriction.
+                return nil, nil, "refusing to run: '" .. name .. "' is a real table, but intentionally excluded from entity.query (a hand-rolled system/derived log, not a registered entity type) -- this isn't a typo or a broken query, just not self-verifiable through this tool; it's still valid SQL for the admin /sql console"
+            end
             message = "refusing to run: '" .. name .. "' is not a registered entity type -- only registered entity tables can be queried this way"
             suggestion = schema.suggest_type(db_path, name)
             if suggestion != nil then
