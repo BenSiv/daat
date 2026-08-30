@@ -352,6 +352,21 @@ EOF
     [[ "$output" =~ "status (select, required)" ]]
 }
 
+@test "entity.fields('document') also surfaces the knowledge-pool SQL columns, not just the editable schema" {
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(tool_call_response "entity.fields" '{"entity_type":"document"}')"$'\1'"$(done_response "Listed.")"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"what columns does document have for heat and tier\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "title (text, required)" ]]
+    [[ "$output" =~ "retrieval_count -- direct search-hit count" ]]
+    [[ "$output" =~ "source_type --" ]]
+    [[ "$output" =~ "knowledge_pool_state" ]]
+    [[ "$output" =~ "document_link" ]]
+}
+
 write_task_note_schema() {
     mkdir -p schemas
     cat > schemas/task_note.lua <<'EOF'

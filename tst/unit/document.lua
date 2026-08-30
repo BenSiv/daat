@@ -169,6 +169,28 @@ function test_tier_weight_known_and_unknown_tiers()
     check(document.tier_weight(99) == 0.0, "unknown tier should default to 0.0")
 end
 
+-- Ground truth for the chat agent's entity.fields('document') dispatch
+-- (agent.lua): these are the exact column names it appends after the
+-- editable schema, so a query touching heat/tier/retrieval/source has a
+-- real name to name instead of inventing a table (confirmed live: the
+-- agent invented "knowledge_entries"/"record_type" before this existed).
+function test_knowledge_pool_sql_columns_text_names_the_real_columns()
+    print("Testing knowledge_pool_sql_columns_text lists every real knowledge-pool column and the companion tables")
+    text = document.knowledge_pool_sql_columns_text()
+    for _, name in ipairs({
+        "tier", "retrieval_count", "last_retrieved_at", "source_type",
+        "source_id", "source_ref", "external_id", "content_hash",
+        "duplicate_of", "merged_into", "raw_heat", "scale_at_write",
+    }) do
+        check(string.find(text, name, 1, true) != nil, "expected column '" .. name .. "' to be named, got:\n" .. text)
+    end
+    check(string.find(text, "knowledge_pool_state", 1, true) != nil, "expected the knowledge_pool_state companion table to be named")
+    check(string.find(text, "document_link", 1, true) != nil, "expected the document_link companion table to be named")
+    -- The dead legacy 'heat' column should never be recommended on its
+    -- own -- only ever mentioned as part of steering away from it.
+    check(string.find(text, "ignore it", 1, true) != nil, "expected an explicit steer away from the legacy 'heat' column")
+end
+
 function test_weighted_spreading_delta_degenerate_case_matches_old_flat_split()
     print("Testing weighted_spreading_delta reduces to the old flat 1/fan_count split when every edge is unreinforced")
     -- 4 neighbors, every edge still at BASE_LINK_STRENGTH (1.0) --
@@ -329,6 +351,7 @@ test_pool_effective_heat_reads_raw_heat_unchanged_when_pool_scale_matches()
 test_pool_effective_heat_applies_accumulated_shrink()
 test_pool_effective_heat_falls_back_to_base_heat_on_missing_data()
 test_tier_weight_known_and_unknown_tiers()
+test_knowledge_pool_sql_columns_text_names_the_real_columns()
 test_weighted_spreading_delta_degenerate_case_matches_old_flat_split()
 test_weighted_spreading_delta_gives_a_reinforced_edge_a_bigger_share()
 test_weighted_spreading_delta_never_exceeds_the_direct_hit_factor()

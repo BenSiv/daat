@@ -1507,6 +1507,16 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
             end
             table.insert(lines, string.format("%s (%s%s)", f.name, f.type, required))
         end
+        -- `document` also carries knowledge-pool columns intentionally kept
+        -- out of schema.fields (see document.lua's KNOWLEDGE_POOL_SQL_COLUMNS
+        -- comment) -- surface them here too, so a query touching
+        -- heat/tier/retrieval/source has real column names to ground in
+        -- instead of inventing a table.
+        if args.entity_type == "document" then
+            table.insert(lines, "")
+            table.insert(lines, "Additional columns on the real `document` table, queryable in SQL but not part of the editable schema above (the knowledge-pool mechanism's own tier/heat/retrieval/source tracking):")
+            table.insert(lines, document.knowledge_pool_sql_columns_text())
+        end
         return table.concat(lines, "\n")
     end
 
@@ -2273,6 +2283,13 @@ the real depth for the final synthesis, where it's actually being read.
 
 If you don't already know an entity type's fields, call entity.fields first
 rather than guessing field names.
+
+When asked to write a SQL query rather than run one (e.g. "write me a query
+for X", "what SQL would show Y"), still call entity.query yourself first to
+confirm it actually runs against the real schema before giving the query
+back as your final answer -- don't hand back untested SQL just because the
+user asked for the text rather than the result. If it errors, fix it and
+re-check rather than presenting the broken version.
 
 When you use internet_search results in a reply, always cite your sources:
 include the specific URL next to any fact, claim, or quote drawn from a

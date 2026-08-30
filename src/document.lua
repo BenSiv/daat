@@ -196,6 +196,42 @@ function ensure_document_knowledge_columns(db_path)
     end
 end
 
+-- Ground truth for the chat agent when it's asked to write ad-hoc SQL
+-- touching heat/tier/retrieval/source: since these columns are
+-- deliberately absent from DOCUMENT_SCHEMA.fields (see
+-- ensure_document_knowledge_columns above), entity.fields('document')
+-- used to return only parent_id/title/content -- the model had no real
+-- column names to ground a query in, and would invent a fictional table
+-- instead of naming the real one (confirmed live: it asked for "heat" by
+-- inventing "knowledge_entries"/"record_type", which don't exist).
+-- agent.lua's entity.fields dispatch appends this after the normal
+-- editable-field listing -- read-only documentation, never a
+-- schema.fields()/DOCUMENT_SCHEMA source, so it can't leak into the edit
+-- form the way adding these to DOCUMENT_SCHEMA.fields would.
+KNOWLEDGE_POOL_SQL_COLUMNS = {
+    {name = "tier", note = "0-3, knowledge-pool maturity tier"},
+    {name = "retrieval_count", note = "direct search-hit count"},
+    {name = "last_retrieved_at", note = "timestamp of last search hit"},
+    {name = "source_type", note = "'chat_session' | 'reasoning' | 'distilled' | NULL (NULL means either directly user-authored, or synced in from an external system)"},
+    {name = "source_id", note = "meaning depends on source_type"},
+    {name = "source_ref", note = "e.g. the chat session id, when source_type = 'chat_session'"},
+    {name = "external_id", note = "set when this document was synced in from an external system (e.g. Benchling); NULL for anything authored directly here"},
+    {name = "content_hash", note = "used for duplicate detection"},
+    {name = "duplicate_of", note = "FK to document.id, set once this row is folded into a canonical duplicate"},
+    {name = "merged_into", note = "same as duplicate_of -- rows with this set are excluded from search"},
+    {name = "raw_heat", note = "conserved-pool raw heat -- do not average this column alone, see scale_at_write"},
+    {name = "scale_at_write", note = "combine as raw_heat * (EXP(knowledge_pool_state.log_pool_scale) / scale_at_write) for the real effective_heat; the separate 'heat' column is legacy and never updated -- ignore it"},
+}
+KNOWLEDGE_POOL_SQL_NOTE = "Related tables, hand-rolled rather than schema.register()'d so entity.list_types/fields never mentions them either: knowledge_pool_state (one row, id=1: pool_scale/log_pool_scale/document_count) and document_link (from_document_id, to_document_id, link_text, source ['authored'|'co_retrieval'], raw_strength, archived_at)."
+
+function document.knowledge_pool_sql_columns_text()
+    lines = {}
+    for _, col in ipairs(KNOWLEDGE_POOL_SQL_COLUMNS) do
+        table.insert(lines, string.format("%s -- %s", col.name, col.note))
+    end
+    return table.concat(lines, "\n") .. "\n" .. KNOWLEDGE_POOL_SQL_NOTE
+end
+
 -- Real MySQL has no "CREATE INDEX IF NOT EXISTS" (a syntax error, not a
 -- no-op, unlike MariaDB) -- same reasoning as knowledge.lua's own
 -- ensure_knowledge_indexes (now folded in here).
