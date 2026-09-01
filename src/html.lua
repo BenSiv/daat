@@ -3217,18 +3217,43 @@ end
 -- self-service password change and log out, so no new sidebar links
 -- are ever needed for account-level actions.
 function html.render_account(username, csrf_token, message, is_error)
-    render_lib = require("render")
+    page_lib = require("page")
 
-    message_html = ""
+    message_css_class = "platform-account-message"
+    if is_error == true then
+        message_css_class = "platform-account-message platform-account-message-error"
+    end
+
+    sections = {}
     if message != nil and message != "" then
-        css_class = "platform-account-message"
-        if is_error == true then
-            css_class = "platform-account-message platform-account-message-error"
-        end
-        message_html = render_lib.render(
-            "<div class=\"" .. css_class .. "\">{{ message }}</div>",
-            {message = message}
-        )
+        table.insert(sections, {type = "message", css_class = message_css_class, text = message})
+    end
+    table.insert(sections, {type = "subheading", text = "Change password"})
+    table.insert(sections, {
+        type = "form",
+        method = "POST",
+        action = "account",
+        fields = {
+            {type = "hidden", name = "csrf_token", value = csrf_token},
+            {type = "password", name = "current_password", label = "Current password", autocomplete = "current-password", required = true},
+            {type = "password", name = "new_password", label = "New password", autocomplete = "new-password", required = true},
+        },
+        submit_label = "Change password",
+    })
+    table.insert(sections, {type = "subheading", text = "Log out"})
+    table.insert(sections, {
+        type = "form",
+        css_class = "platform-account-logout-form",
+        method = "GET",
+        action = "logout",
+        fields = {},
+        submit_class = "btn-secondary",
+        submit_label = "Log out",
+    })
+
+    validate_err = page_lib.validate(sections)
+    if validate_err != nil then
+        error(validate_err)
     end
 
     return string.format("""
@@ -3253,23 +3278,9 @@ function html.render_account(username, csrf_token, message, is_error)
     <div class="platform-account-card">
         <h2>Account</h2>
         <p class="platform-account-username">Signed in as <strong>%s</strong></p>
-        %s
-        <h3>Change password</h3>
-        <form method="POST" action="account">
-            <input type="hidden" name="csrf_token" value="%s">
-            <label for="current_password">Current password</label>
-            <input type="password" id="current_password" name="current_password" autocomplete="current-password" required>
-            <label for="new_password">New password</label>
-            <input type="password" id="new_password" name="new_password" autocomplete="new-password" required>
-            <button type="submit" class="btn btn-primary">Change password</button>
-        </form>
-        <h3>Log out</h3>
-        <form class="platform-account-logout-form" method="GET" action="logout">
-            <button type="submit" class="btn btn-secondary">Log out</button>
-        </form>
-    </div>
+%s    </div>
 </div>
-""", platform_container_css(), platform_button_css(), html.html_escape(username), message_html, html.html_escape(csrf_token))
+""", platform_container_css(), platform_button_css(), html.html_escape(username), page_lib.render(sections))
 end
 
 -- Minimal admin-only user management page -- Admin ("a") capability
