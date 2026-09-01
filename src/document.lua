@@ -232,6 +232,26 @@ function document.knowledge_pool_sql_columns_text()
     return table.concat(lines, "\n") .. "\n" .. KNOWLEDGE_POOL_SQL_NOTE
 end
 
+-- Same treatment as KNOWLEDGE_POOL_SQL_COLUMNS above, for a genuinely
+-- separate table rather than document's own extra columns -- so
+-- entity.fields('document_embedding') answers with real columns instead
+-- of agent.lua falling through to the generic "unknown entity type"
+-- message.
+DOCUMENT_EMBEDDING_SQL_COLUMNS = {
+    {name = "document_id", note = "primary key, FK to document.id"},
+    {name = "model", note = "which embedding model produced this vector"},
+    {name = "vector_json", note = "the cached embedding vector, JSON-encoded"},
+    {name = "updated_at", note = "timestamp of the last reindex"},
+}
+
+function document.embedding_sql_columns_text()
+    lines = {}
+    for _, col in ipairs(DOCUMENT_EMBEDDING_SQL_COLUMNS) do
+        table.insert(lines, string.format("%s -- %s", col.name, col.note))
+    end
+    return table.concat(lines, "\n")
+end
+
 -- Real MySQL has no "CREATE INDEX IF NOT EXISTS" (a syntax error, not a
 -- no-op, unlike MariaDB) -- same reasoning as knowledge.lua's own
 -- ensure_knowledge_indexes (now folded in here).

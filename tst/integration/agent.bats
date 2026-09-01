@@ -367,6 +367,44 @@ EOF
     [[ "$output" =~ "document_link" ]]
 }
 
+@test "entity.fields('agent_session') surfaces its real SQL columns even though it's not a registered entity type" {
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(tool_call_response "entity.fields" '{"entity_type":"agent_session"}')"$'\1'"$(done_response "Listed.")"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"what columns does agent_session have\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "hand-rolled rather than schema.register()'d" ]]
+    [[ "$output" =~ "login --" ]]
+    [[ "$output" =~ "created_at --" ]]
+}
+
+@test "entity.fields('knowledge_context') surfaces its real SQL columns, same pattern as agent_session" {
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(tool_call_response "entity.fields" '{"entity_type":"knowledge_context"}')"$'\1'"$(done_response "Listed.")"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"what columns does knowledge_context have\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "hand-rolled rather than schema.register()'d" ]]
+    [[ "$output" =~ "prompt --" ]]
+    [[ "$output" =~ "total_tokens --" ]]
+}
+
+@test "entity.fields('agent_message') still returns the generic unknown-type message, not its real columns" {
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(tool_call_response "entity.fields" '{"entity_type":"agent_message"}')"$'\1'"$(done_response "Listed.")"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"what columns does agent_message have\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "unknown entity type" ]]
+    [[ ! "$output" =~ "role --" ]]
+}
+
 write_task_note_schema() {
     mkdir -p schemas
     cat > schemas/task_note.lua <<'EOF'

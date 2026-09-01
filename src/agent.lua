@@ -117,6 +117,33 @@ function agent_schema_sql(db_path)
     )
 end
 
+-- Same treatment as document.lua's KNOWLEDGE_POOL_SQL_COLUMNS:
+-- agent_session is hand-rolled, not schema.register()'d, so
+-- entity.fields would otherwise fall through to "unknown entity type"
+-- for it. agent_message/agent_pending_action/agent_background_task are
+-- deliberately NOT given this treatment, even though they're just as
+-- hand-rolled -- agent_message holds every chat turn's raw content
+-- across every user's session, and agent_pending_action holds
+-- not-yet-approved destructive tool-call arguments; view.lua's
+-- run_agent_query security-boundary comment already names both as
+-- tables that "must stay opaque to the model." This is a deliberate
+-- exclusion, not an oversight -- do not extend this note to include them.
+AGENT_SESSION_SQL_COLUMNS = {
+    {name = "id", note = "primary key, VARCHAR(255)"},
+    {name = "login", note = "the session's owner -- every read/write is ownership-checked against this"},
+    {name = "title", note = "chat title, may be NULL until set"},
+    {name = "created_at", note = "timestamp the session started"},
+    {name = "updated_at", note = "timestamp of the session's last activity"},
+}
+
+function agent.session_sql_columns_text()
+    lines = {}
+    for _, col in ipairs(AGENT_SESSION_SQL_COLUMNS) do
+        table.insert(lines, string.format("%s -- %s", col.name, col.note))
+    end
+    return table.concat(lines, "\n")
+end
+
 -- tool_call_id: the id for the toolCall block that produced this
 -- pending action -- needed to correlate the eventual approved/denied
 -- result back to it via a real toolResult message. This codebase's own
@@ -1318,6 +1345,25 @@ end
 -- tool handler below so a bad type name costs the model one tool call
 -- with an actionable message, not a second round trip to entity.list_types
 -- to guess its way to the real name.
+-- Tables that are real, hand-rolled (never schema.register()'d) but
+-- still get a real-columns answer from entity.fields instead of falling
+-- through to unknown_entity_type_message -- the same treatment
+-- document.lua's KNOWLEDGE_POOL_SQL_COLUMNS already gets for document's
+-- own extra columns, extended here to the knowledge-pool's event-log
+-- tables and agent_session. Checked before
+-- schema.is_registered below, since none of these are registered entity
+-- types at all. agent_message/agent_pending_action/agent_background_task
+-- are deliberately absent -- see agent_session's own SQL note above.
+HAND_ROLLED_ENTITY_FIELDS = {
+    agent_session = function() return agent.session_sql_columns_text() end,
+    document_embedding = function() return document.embedding_sql_columns_text() end,
+    knowledge_retrieval = function() return knowledge.hand_rolled_sql_columns_text("knowledge_retrieval") end,
+    knowledge_retrieval_document = function() return knowledge.hand_rolled_sql_columns_text("knowledge_retrieval_document") end,
+    knowledge_review = function() return knowledge.hand_rolled_sql_columns_text("knowledge_review") end,
+    knowledge_context = function() return knowledge.hand_rolled_sql_columns_text("knowledge_context") end,
+    knowledge_chat_eval = function() return knowledge.hand_rolled_sql_columns_text("knowledge_chat_eval") end,
+}
+
 function unknown_entity_type_message(db_path, entity_type)
     message = "unknown entity type: " .. tostring(entity_type)
     suggestion = schema.suggest_type(db_path, entity_type)
@@ -1491,6 +1537,9 @@ function agent.execute_tool(db_path, author, session_id, tool_name, method_name,
     if tool_name == "entity" and method_name == "fields" then
         if args.entity_type == nil then
             return nil, "fields requires entity_type"
+        end
+        if HAND_ROLLED_ENTITY_FIELDS[args.entity_type] != nil then
+            return "'" .. args.entity_type .. "' is a real table, hand-rolled rather than schema.register()'d -- it has no editable schema, but these are its actual SQL columns:\n" .. HAND_ROLLED_ENTITY_FIELDS[args.entity_type]()
         end
         if schema.is_registered(db_path, args.entity_type) == false then
             return nil, unknown_entity_type_message(db_path, args.entity_type)

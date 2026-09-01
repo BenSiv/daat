@@ -70,11 +70,31 @@ function test_due_for_link_review_first_time_and_reevaluation_step()
     check(knowledge.due_for_link_review({decision = "declined", last_co_count = 3}, 9) == true, "co_count well past the re-evaluation step should be due")
 end
 
+function test_hand_rolled_sql_columns_text_covers_every_event_log_table()
+    print("Testing hand_rolled_sql_columns_text names the real columns for each knowledge event-log table")
+    cases = {
+        knowledge_retrieval = {"id", "session_id", "query_text", "hit_count", "created_at"},
+        knowledge_retrieval_document = {"retrieval_id", "document_id", "rank", "score", "tier_weight", "reinforcement_delta"},
+        knowledge_review = {"atomicity_status", "connectivity_status", "duplication_status", "title_status"},
+        knowledge_context = {"prompt", "model_id", "reasoning_document_id", "prompt_tokens", "completion_tokens", "total_tokens"},
+        knowledge_chat_eval = {"provider", "model", "reply_kind", "quality_status", "user_feedback"},
+    }
+    for table_name, columns in pairs(cases) do
+        text = knowledge.hand_rolled_sql_columns_text(table_name)
+        check(text != nil, "expected a non-nil result for '" .. table_name .. "'")
+        for _, name in ipairs(columns) do
+            check(string.find(text, name, 1, true) != nil, "expected column '" .. name .. "' for " .. table_name .. ", got:\n" .. tostring(text))
+        end
+    end
+    check(knowledge.hand_rolled_sql_columns_text("not_a_real_table") == nil, "expected nil for an unrecognized table name")
+end
+
 -- Run them
 test_reply_has_visible_reasoning_detects_markers()
 test_classify_reply_four_way_split()
 test_co_retrieval_eligible_threshold_and_hub_ratio()
 test_due_for_link_review_first_time_and_reevaluation_step()
+test_hand_rolled_sql_columns_text_covers_every_event_log_table()
 
 if FAILURES > 0 then
     print(FAILURES .. " test(s) failed")

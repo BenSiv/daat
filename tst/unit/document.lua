@@ -191,6 +191,14 @@ function test_knowledge_pool_sql_columns_text_names_the_real_columns()
     check(string.find(text, "ignore it", 1, true) != nil, "expected an explicit steer away from the legacy 'heat' column")
 end
 
+function test_embedding_sql_columns_text_names_the_real_columns()
+    print("Testing embedding_sql_columns_text lists document_embedding's real columns")
+    text = document.embedding_sql_columns_text()
+    for _, name in ipairs({"document_id", "model", "vector_json", "updated_at"}) do
+        check(string.find(text, name, 1, true) != nil, "expected column '" .. name .. "' to be named, got:\n" .. text)
+    end
+end
+
 function test_weighted_spreading_delta_degenerate_case_matches_old_flat_split()
     print("Testing weighted_spreading_delta reduces to the old flat 1/fan_count split when every edge is unreinforced")
     -- 4 neighbors, every edge still at BASE_LINK_STRENGTH (1.0) --
@@ -352,6 +360,7 @@ test_pool_effective_heat_applies_accumulated_shrink()
 test_pool_effective_heat_falls_back_to_base_heat_on_missing_data()
 test_tier_weight_known_and_unknown_tiers()
 test_knowledge_pool_sql_columns_text_names_the_real_columns()
+test_embedding_sql_columns_text_names_the_real_columns()
 test_weighted_spreading_delta_degenerate_case_matches_old_flat_split()
 test_weighted_spreading_delta_gives_a_reinforced_edge_a_bigger_share()
 test_weighted_spreading_delta_never_exceeds_the_direct_hit_factor()

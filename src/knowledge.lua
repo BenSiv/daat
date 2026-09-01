@@ -172,6 +172,80 @@ function knowledge.init_schema(db_path)
     ensure_knowledge_indexes(db_path)
 end
 
+-- Same treatment as document.lua's KNOWLEDGE_POOL_SQL_COLUMNS: these are
+-- hand-rolled event-log tables, not schema.register()'d, so
+-- entity.fields would otherwise fall through to "unknown entity type"
+-- for any of them -- a console request like "average messages per chat
+-- session" hits the identical invented-table-name risk, just against
+-- these instead of document.
+HAND_ROLLED_TABLE_COLUMNS = {
+    knowledge_retrieval = {
+        {name = "id", note = "primary key"},
+        {name = "session_id", note = "agent_session.id this retrieval happened within"},
+        {name = "query_text", note = "the search query text"},
+        {name = "hit_count", note = "number of documents this retrieval matched"},
+        {name = "created_at", note = "timestamp of the retrieval event"},
+    },
+    knowledge_retrieval_document = {
+        {name = "retrieval_id", note = "FK to knowledge_retrieval.id"},
+        {name = "document_id", note = "FK to document.id"},
+        {name = "rank", note = "position of this document in the retrieval's results (backtick-quoted in SQL -- a reserved word in MySQL 8.0)"},
+        {name = "score", note = "raw retrieval score for this hit"},
+        {name = "tier_weight", note = "weight applied for the document's tier at retrieval time"},
+        {name = "reinforcement_delta", note = "heat/tier reinforcement this hit produced"},
+    },
+    knowledge_review = {
+        {name = "id", note = "primary key"},
+        {name = "retrieval_id", note = "FK to knowledge_retrieval.id"},
+        {name = "document_id", note = "FK to document.id"},
+        {name = "atomicity_status", note = "rule-based review outcome: is this document one coherent idea"},
+        {name = "connectivity_status", note = "rule-based review outcome: is this document linked to related documents"},
+        {name = "duplication_status", note = "rule-based review outcome: does this document duplicate another"},
+        {name = "title_status", note = "rule-based review outcome: is the title specific, not generic"},
+        {name = "action_summary", note = "human-readable summary of what the review did, if anything"},
+        {name = "created_at", note = "timestamp of the review"},
+    },
+    knowledge_context = {
+        {name = "id", note = "primary key"},
+        {name = "session_id", note = "agent_session.id this prompt was sent within"},
+        {name = "message_id", note = "FK to agent_message.id -- the reply this context produced"},
+        {name = "prompt", note = "the exact verbatim prompt/message-history JSON sent to the model (LONGTEXT -- routinely exceeds a plain TEXT column's cap)"},
+        {name = "model_id", note = "which model actually served this turn"},
+        {name = "reasoning_document_id", note = "FK to document.id (source_type='reasoning') -- reasoning text goes through the same pool as everything else, not a separate log"},
+        {name = "prompt_tokens", note = "real token count for the prompt"},
+        {name = "completion_tokens", note = "real token count for the completion"},
+        {name = "total_tokens", note = "prompt_tokens + completion_tokens"},
+        {name = "created_at", note = "timestamp of the turn"},
+    },
+    knowledge_chat_eval = {
+        {name = "id", note = "primary key"},
+        {name = "session_id", note = "agent_session.id"},
+        {name = "context_id", note = "FK to knowledge_context.id"},
+        {name = "message_id", note = "FK to agent_message.id -- denormalized here too, so the chat widget's feedback route can look this up directly without a join"},
+        {name = "provider", note = "which model provider served this reply"},
+        {name = "model", note = "which model served this reply"},
+        {name = "reply_kind", note = "'final' | 'reasoning-visible' | 'error' | 'empty'"},
+        {name = "quality_status", note = "rule-based classification of the reply's quality"},
+        {name = "reasoning_status", note = "rule-based classification of the reply's reasoning"},
+        {name = "action_summary", note = "human-readable summary of what this reply did, if anything"},
+        {name = "user_feedback", note = "the chat widget's thumbs up/down, if given"},
+        {name = "feedback_at", note = "timestamp of the feedback, if given"},
+        {name = "created_at", note = "timestamp of the reply"},
+    },
+}
+
+function knowledge.hand_rolled_sql_columns_text(table_name)
+    columns = HAND_ROLLED_TABLE_COLUMNS[table_name]
+    if columns == nil then
+        return nil
+    end
+    lines = {}
+    for _, col in ipairs(columns) do
+        table.insert(lines, string.format("%s -- %s", col.name, col.note))
+    end
+    return table.concat(lines, "\n")
+end
+
 -- A document counts as "in the pool" for stats/listing once it's
 -- actually been retrieved, or was created as system/agent-derived
 -- content in the first place -- distinguishing that from every other
