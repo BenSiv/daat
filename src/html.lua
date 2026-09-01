@@ -96,22 +96,6 @@ PLATFORM_CONTENT_MAX_WIDTH = 2400
 -- instead, which fixes that.
 PLATFORM_GUTTER = 20
 
-function platform_container_css()
-    return string.format("""
-        .platform-container {
-            font-family: 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            color: var(--platform-text, #334155);
-            background: #ffffff;
-            padding: 28px;
-            border-radius: var(--platform-radius-lg, 16px);
-            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.05);
-            margin: %dpx auto;
-            max-width: min(%dpx, calc(100%% - %dpx));
-            border: 1px solid var(--platform-bg-2, #f1f5f9);
-        }
-""", PLATFORM_GUTTER, PLATFORM_CONTENT_MAX_WIDTH, PLATFORM_GUTTER * 2)
-end
-
 -- The icon nav rail's own width -- shared with the chat widget's own
 -- stretch-to-nav-edge limit (platform_chat_widget_css) the same way
 -- PLATFORM_GUTTER is shared between the main content gutter and the
@@ -123,6 +107,45 @@ end
 -- number now, not two coincidentally-matching ones.
 PLATFORM_NAV_WIDTH = 72
 
+-- One shared context table for every layout CSS block below, rendered
+-- via render.lua's named {{{ }}} placeholders instead of positional
+-- string.format args -- the exact bug class PLATFORM_GUTTER/
+-- PLATFORM_NAV_WIDTH's own comments describe (two literals that only
+-- coincidentally agreed) had a second form: a shared value threaded
+-- into a five-argument string.format call by *position*, one
+-- transposition away from silently rendering the wrong number with no
+-- error. gutter_x2 is precomputed here rather than written as two
+-- separate {{{layout.gutter}}} subtractions in the template, so the
+-- rendered CSS text stays byte-identical to what string.format
+-- produced before this. Defined before every function below that
+-- closes over it -- Luam's implicit-local scoping (like Lua's real
+-- `local`) only takes effect from this point in the chunk onward, so
+-- a function defined earlier that referenced this name would silently
+-- resolve it as an unset global instead.
+PLATFORM_LAYOUT = {
+    gutter = PLATFORM_GUTTER,
+    gutter_x2 = PLATFORM_GUTTER * 2,
+    nav_width = PLATFORM_NAV_WIDTH,
+    content_max_width = PLATFORM_CONTENT_MAX_WIDTH,
+}
+
+function platform_container_css()
+    render_lib = require("render")
+    return render_lib.render("""
+        .platform-container {
+            font-family: 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            color: var(--platform-text, #334155);
+            background: #ffffff;
+            padding: 28px;
+            border-radius: var(--platform-radius-lg, 16px);
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.05);
+            margin: {{{layout.gutter}}}px auto;
+            max-width: min({{{layout.content_max_width}}}px, calc(100% - {{{layout.gutter_x2}}}px));
+            border: 1px solid var(--platform-bg-2, #f1f5f9);
+        }
+""", {layout = PLATFORM_LAYOUT})
+end
+
 -- Extracted out of html.page_shell's own giant template literal so
 -- PLATFORM_NAV_WIDTH can reach the one CSS rule that needs it
 -- (.platform-nav's own width) without renumbering that literal's
@@ -130,9 +153,10 @@ PLATFORM_NAV_WIDTH = 72
 -- same "small format() island, threaded in as one more %s" technique
 -- platform_chat_widget_css uses internally.
 function platform_nav_css()
-    return string.format("""
+    render_lib = require("render")
+    return render_lib.render("""
 .platform-nav {
-    width: %dpx;
+    width: {{{layout.nav_width}}}px;
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
@@ -143,7 +167,7 @@ function platform_nav_css()
     border-right: 1px solid var(--platform-border, #e2e8f0);
     min-height: 100vh;
 }
-""", PLATFORM_NAV_WIDTH) .. """
+""", {layout = PLATFORM_LAYOUT}) .. """
 .platform-nav-link {
     position: relative;
     display: flex;
@@ -5368,9 +5392,10 @@ end
 -- resume via page_context.open_chat_session_id (see below), which wins
 -- over whatever was already cached.
 function platform_chat_widget_css()
-    return string.format("""
-.platform-chat-widget { position: fixed; right: %dpx; bottom: %dpx; z-index: 1000; font-family: inherit; }
-""", PLATFORM_GUTTER, PLATFORM_GUTTER) .. """
+    render_lib = require("render")
+    return render_lib.render("""
+.platform-chat-widget { position: fixed; right: {{{layout.gutter}}}px; bottom: {{{layout.gutter}}}px; z-index: 1000; font-family: inherit; }
+""", {layout = PLATFORM_LAYOUT}) .. """
 .platform-chat-widget-toggle {
     width: 56px; height: 56px; border-radius: 50%;
     background: var(--platform-accent, #4f46e5); color: #ffffff; border: none;
@@ -5379,7 +5404,7 @@ function platform_chat_widget_css()
     transition: var(--platform-transition, all 0.15s ease);
 }
 .platform-chat-widget-toggle:hover { filter: brightness(1.08); }
-""" .. string.format("""
+""" .. render_lib.render("""
 .platform-chat-widget-panel {
     position: absolute; right: 0; bottom: 64px; width: 320px; height: 440px;
     /* min-width was 280px -- narrower than the panel's own default
@@ -5393,7 +5418,7 @@ function platform_chat_widget_css()
        occupies -- not just up to the nav rail's own edge, but to where
        .platform-container's content actually starts, which is one more
        PLATFORM_GUTTER past the nav rail (platform_container_css's own
-       side gutter, calc(100%% - 2*gutter), applies *inside*
+       side gutter, calc(100% - 2*gutter), applies *inside*
        .platform-main, on top of the nav rail -- missing that here
        let the panel stretch until it touched the nav rail with zero
        gap, short of matching the content area's own left edge). Left
@@ -5405,13 +5430,13 @@ function platform_chat_widget_css()
        platform_container_css's own top margin) -- bottom edge is
        already pinned via bottom:64px above the toggle button, hence
        the extra 64px subtracted below. */
-    max-width: calc(100vw - %dpx - %dpx - %dpx);
-    max-height: calc(100vh - %dpx - 64px - %dpx);
+    max-width: calc(100vw - {{{layout.gutter}}}px - {{{layout.nav_width}}}px - {{{layout.gutter}}}px);
+    max-height: calc(100vh - {{{layout.gutter}}}px - 64px - {{{layout.gutter}}}px);
     background: var(--platform-bg, #ffffff); border: 1px solid var(--platform-border, #e2e8f0);
     border-radius: var(--platform-radius-md, 12px); box-shadow: 0 10px 30px rgba(0,0,0,0.2);
     display: none; flex-direction: column; overflow: hidden;
 }
-""", PLATFORM_GUTTER, PLATFORM_NAV_WIDTH, PLATFORM_GUTTER, PLATFORM_GUTTER, PLATFORM_GUTTER) .. """
+""", {layout = PLATFORM_LAYOUT}) .. """
 .platform-chat-widget.platform-chat-widget-open .platform-chat-widget-panel { display: flex; }
 /* Native CSS `resize: both` always draws its drag handle at the
    element's own bottom-right corner -- wrong here, since this panel
