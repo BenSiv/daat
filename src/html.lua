@@ -3166,16 +3166,26 @@ end
 -- Unauthenticated -- no popover/autocomplete JS needed, so unlike
 -- every other render_* page here, no nonce-gated <script> at all.
 function html.render_login(error_message, nonce)
-    -- render.lua demo: autoescapes error_message by construction rather
-    -- than relying on remembering to call html.html_escape here.
-    render_lib = require("render")
+    page_lib = require("page")
 
-    error_html = ""
-    if error_message != nil and error_message != "" then
-        error_html = render_lib.render(
-            "<div class=\"platform-error-banner\">{{ error_message }}</div>",
-            {error_message = error_message}
-        )
+    sections = {
+        {
+            type = "form",
+            css_class = "platform-login-card",
+            method = "POST",
+            action = "/login",
+            heading = "Log in",
+            message = error_message,
+            fields = {
+                {type = "text", name = "login", label = "Login", autocomplete = "username", required = true},
+                {type = "password", name = "password", label = "Password", autocomplete = "current-password", required = true},
+            },
+            submit_label = "Log in",
+        },
+    }
+    validate_err = page_lib.validate(sections)
+    if validate_err != nil then
+        error(validate_err)
     end
 
     return string.format("""
@@ -3192,17 +3202,8 @@ function html.render_login(error_message, nonce)
         }
         .platform-login-card .btn { width: 100%%; }
     </style>
-    <form class="platform-login-card" method="POST" action="/login">
-        <h2>Log in</h2>
-        %s
-        <label for="login">Login</label>
-        <input type="text" id="login" name="login" autocomplete="username" required>
-        <label for="password">Password</label>
-        <input type="password" id="password" name="password" autocomplete="current-password" required>
-        <button type="submit" class="btn btn-primary">Log in</button>
-    </form>
-</div>
-""", platform_container_css(), platform_button_css() .. platform_error_banner_css(), error_html)
+%s</div>
+""", platform_container_css(), platform_button_css() .. platform_error_banner_css(), page_lib.render(sections))
 end
 
 -- Self-service password change -- every capability level (baseline "i"
