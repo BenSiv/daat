@@ -71,3 +71,37 @@ EOF
     run "$BIN" schema add schemas/bad_type.lua
     [[ "$output" =~ "Error" ]]
 }
+
+@test "schema sync registers files in any filesystem order, not just dependency order" {
+    # Real incident, 2026-09-01: a from-scratch sync failed because
+    # lfs.dir's order isn't dependency order -- a multi_reference field's
+    # junction table needs the referenced type's own table to already
+    # exist. Named so the referencing file alphabetically (and by
+    # creation time, in case a filesystem's readdir happens to follow
+    # either) sorts before the type it references, to reproduce the
+    # failure mode this test guards against rather than accidentally
+    # passing either order.
+    mkdir -p schemas
+    cat > schemas/aaa_junction.lua <<'EOF'
+return {
+  name = "junction",
+  fields = {
+    {name = "targets", type = "multi_reference", entity_type = "target"},
+  },
+}
+EOF
+    cat > schemas/zzz_target.lua <<'EOF'
+return {
+  name = "target",
+  fields = {
+    {name = "label", type = "text"},
+  },
+}
+EOF
+    run "$BIN" schema sync
+    [ "$status" -eq 0 ]
+
+    run "$BIN" schema list
+    [[ "$output" =~ "junction" ]]
+    [[ "$output" =~ "target" ]]
+}

@@ -984,15 +984,51 @@ function schema.sync_all(db_path, root)
     if attr == nil or attr.mode != "directory" then
         return false, "schemas directory not found: " .. schemas_dir
     end
+
+    defs = {}
     for file_name in lfs.dir(schemas_dir) do
         if string.match(file_name, "%.lua$") != nil then
             full_path = paths.joinpath(schemas_dir, file_name)
-            def, err = schema.load_file(full_path)
-            if def != nil then
-                schema.register(db_path, def)
+            def, load_err = schema.load_file(full_path)
+            if def == nil then
+                return false, "failed to load " .. full_path .. ": " .. tostring(load_err)
             end
+            table.insert(defs, def)
         end
     end
+
+    -- lfs.dir's order is filesystem-arbitrary, not dependency order -- a
+    -- multi_reference/multi_select field's junction table needs the
+    -- referenced entity type's own table to already exist for its FK.
+    -- Every previously-existing deployment happened to work because
+    -- schemas accumulated one at a time over real time (whatever a new
+    -- schema referenced already existed by then) -- a genuinely fresh
+    -- sync of every file at once, in undefined order, has no such
+    -- guarantee (confirmed live, 2026-09-01: a from-scratch sync failed
+    -- registering a schema whose multi_reference pointed at a type
+    -- lfs.dir happened to list later). Retry across passes instead of
+    -- registering strictly once per file, so file order stops mattering
+    -- -- a pass that registers nothing new means what's left is a real
+    -- error (an actual typo or a genuine cycle), not an ordering issue.
+    last_error = nil
+    while #defs > 0 do
+        still_pending = {}
+        registered_this_pass = 0
+        for _, def in ipairs(defs) do
+            ok, register_err = pcall(schema.register, db_path, def)
+            if ok == true then
+                registered_this_pass = registered_this_pass + 1
+            else
+                table.insert(still_pending, def)
+                last_error = register_err
+            end
+        end
+        if registered_this_pass == 0 then
+            return false, "schema sync stalled, no progress in a pass -- last error: " .. tostring(last_error)
+        end
+        defs = still_pending
+    end
+
     schema.store_sync_signature(db_path, signature)
     return true
 end
