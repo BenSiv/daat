@@ -2,7 +2,7 @@
 
 ## Current state (updated 2026-07-25 -- production moved off SQLite)
 
-Production now runs on managed Cloud SQL for MySQL, not a single SQLite file on the boot disk. This doc originally described a SQLite-era plan (Litestream/backup-cron, still relevant to a from-source/dev SQLite install); see `doc/mariadb-migration.md` Phase 4 for how and when the cutover happened, and `doc/architecture.md`'s "Storage" section for the current dual-backend picture (`src/db.lua` dispatches on `config.db_backend()`).
+Production now runs on managed Cloud SQL for MySQL, not a single SQLite file on the boot disk. This doc originally described a SQLite-era plan (Litestream/backup-cron, still relevant to a from-source/dev SQLite install); see `doc/mariadb-migration.md` Phase 4 for how and when the cutover happened, and `doc/architecture.md`'s "Storage" section for the current dual-backend picture (`db.lua` -- now shared infrastructure in `../luam/lib/` -- dispatches on `db_path`'s own runtime shape).
 
 For a **from-source or local dev install still running SQLite** (`.store/store.db`, single file, no network binding), the original problem statement and Phases 1-3 below still apply as-is. For **production**, most of what those phases exist to provide is already covered by Cloud SQL itself:
 
@@ -40,6 +40,6 @@ Write the actual steps taken down in this section once run for real.
 ## Critical files
 - `/root/software/infra/gcp/lims/main.tf` -- `google_sql_database_instance.platform`, its `backup_configuration` block, instance tier/zone
 - `/root/software/infra/gcp/lims/module/platform_compute/templates/startup-platform.sh.tpl` -- where the app's DB connection is configured (seeds `platform.lua`'s `db_backend`, Cloud SQL Auth Proxy sidecar)
-- `/root/projects/daat/src/db.lua` -- backend dispatch (`is_mariadb()`); where a `PRAGMA journal_mode=WAL` call would be added for the SQLite dev path
+- `/root/projects/luam/lib/db.lua` -- backend dispatch (`is_mariadb()`); where a `PRAGMA journal_mode=WAL` call would be added for the SQLite dev path
 - `/root/projects/daat/doc/mariadb-migration.md` -- the full cutover history/rationale
 - `/root/projects/daat/doc/architecture.md` -- "Storage" section, current dual-backend picture

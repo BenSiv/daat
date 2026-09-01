@@ -12,7 +12,6 @@ json = require("dkjson")
 paths = require("paths")
 lfs = require("lfs")
 sandbox = require("sandbox")
-file_util = require("file_util")
 config = require("config")
 
 extension = {}
@@ -164,7 +163,7 @@ end
 -- same data-only way a schema file is (see doc/schema.md).
 function extension.load_manifest(ext_dir, name)
     manifest_path = paths.joinpath(ext_dir, name, "manifest.lua")
-    source = file_util.read(manifest_path)
+    source = paths.read_file(manifest_path)
     if source == nil then
         return nil, "cannot open manifest: " .. manifest_path
     end
@@ -181,7 +180,7 @@ end
 
 function extension.load_main_source(ext_dir, name)
     main_path = paths.joinpath(ext_dir, name, "main.lua")
-    source = file_util.read(main_path)
+    source = paths.read_file(main_path)
     if source == nil then
         return nil, "cannot open main.lua: " .. main_path
     end

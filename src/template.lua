@@ -41,7 +41,6 @@
 paths = require("paths")
 lfs = require("lfs")
 sandbox = require("sandbox")
-file_util = require("file_util")
 
 template = {}
 
@@ -91,7 +90,7 @@ end
 
 function template.load(templates_dir, name)
     path = paths.joinpath(templates_dir, name .. ".lua")
-    source = file_util.read(path)
+    source = paths.read_file(path)
     if source == nil then
         return nil, "cannot open template: " .. path
     end

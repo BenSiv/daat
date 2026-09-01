@@ -133,7 +133,7 @@ The log is the answer to "what changed, when, and by whom" for any entity -- app
 
 ### Storage
 
-Runs on SQLite by default (a from-source/dev install with zero setup), and on MariaDB-compatible MySQL in production (Cloud SQL, since the migration documented in `doc/mariadb-migration.md`) when real concurrency/scale demands it. The storage layer (`src/db.lua`) is a small, deliberately thin adapter (`config.db_backend()` picks the backend; `is_mariadb()` gates the handful of call sites where the two engines' dialects genuinely differ) so the history/entity logic above it never needs to know which backend is live.
+Runs on SQLite by default (a from-source/dev install with zero setup), and on MariaDB-compatible MySQL in production (Cloud SQL, since the migration documented in `doc/mariadb-migration.md`) when real concurrency/scale demands it. The storage layer (`db.lua`, shared infrastructure in `../luam/lib/`, not daat's own `src/`) is a small, deliberately thin adapter (`config.db_backend()` picks the backend; `is_mariadb()` gates the handful of call sites where the two engines' dialects genuinely differ) so the history/entity logic above it never needs to know which backend is live.
 
 Multiple independent installations (each with its own users and data) are isolated by construction, not by an installation id filtering a shared table: one SQLite file per installation for the dev/default path, or one database per installation on a shared MariaDB server in the managed-backend case -- either way, enough concurrency headroom for many people using one installation's data at once.
 

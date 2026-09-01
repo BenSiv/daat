@@ -14,7 +14,6 @@ paths = require("paths")
 lfs = require("lfs")
 sandbox = require("sandbox")
 schema = require("schema")
-file_util = require("file_util")
 
 view = {}
 
@@ -169,7 +168,7 @@ end
 
 function view.load(views_dir, name)
     path = paths.joinpath(views_dir, name .. ".lua")
-    source = file_util.read(path)
+    source = paths.read_file(path)
     if source == nil then
         return nil, "cannot open view: " .. path
     end
