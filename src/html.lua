@@ -3293,13 +3293,33 @@ end
 -- custom request header, so the double-submit token has to travel as
 -- form data instead (see cgi.lua's require_csrf).
 function html.render_admin_users(users, csrf_token, message, is_error)
-    escaped_csrf = html.html_escape(csrf_token)
+    page_lib = require("page")
 
-    message_html = render_admin_message(message, is_error)
+    message_css_class = "platform-admin-message"
+    if is_error == true then
+        message_css_class = "platform-admin-message platform-admin-message-error"
+    end
 
-    rows_html = ""
+    sections = {}
+    if message != nil and message != "" then
+        table.insert(sections, {type = "message", css_class = message_css_class, text = message})
+    end
+    table.insert(sections, {
+        type = "form",
+        method = "POST",
+        action = "admin-users-create",
+        css_class = "platform-admin-create-form",
+        fields = {
+            {type = "hidden", name = "csrf_token", value = csrf_token},
+            {type = "text", name = "login", placeholder = "login", required = true},
+            {type = "password", name = "password", placeholder = "password", required = true},
+            {type = "text", name = "cap", placeholder = "capabilities (e.g. i)", size = "10"},
+        },
+        submit_label = "Create user",
+    })
+
+    rows = {}
     for _, u in ipairs(users) do
-        escaped_login = html.html_escape(u.login)
         status = "active"
         if u.archived_at != nil and u.archived_at != "" then
             status = "archived"
@@ -3313,34 +3333,51 @@ function html.render_admin_users(users, csrf_token, message, is_error)
             archive_button_class = "btn-secondary"
         end
 
-        rows_html = rows_html .. string.format("""
-        <tr>
-            <td>%s</td>
-            <td>
-                <form method="POST" action="admin-users-capabilities" class="platform-admin-inline-form">
-                    <input type="hidden" name="csrf_token" value="%s">
-                    <input type="hidden" name="login" value="%s">
-                    <input type="text" name="cap" value="%s" size="6">
-                    <button type="submit" class="btn btn-secondary">Set</button>
-                </form>
-            </td>
-            <td>%s</td>
-            <td>
-                <form method="POST" action="admin-users-password" class="platform-admin-inline-form">
-                    <input type="hidden" name="csrf_token" value="%s">
-                    <input type="hidden" name="login" value="%s">
-                    <input type="password" name="password" placeholder="new password" required>
-                    <button type="submit" class="btn btn-secondary">Set</button>
-                </form>
-                <form method="POST" action="admin-users-%s" class="platform-admin-inline-form">
-                    <input type="hidden" name="csrf_token" value="%s">
-                    <input type="hidden" name="login" value="%s">
-                    <button type="submit" class="btn %s">%s</button>
-                </form>
-            </td>
-        </tr>
-""", escaped_login, escaped_csrf, escaped_login, html.html_escape(u.cap), status,
-     escaped_csrf, escaped_login, archive_action, escaped_csrf, escaped_login, archive_button_class, archive_label)
+        table.insert(rows, {
+            {u.login},
+            {
+                {
+                    type = "form", method = "POST", action = "admin-users-capabilities", css_class = "platform-admin-inline-form",
+                    fields = {
+                        {type = "hidden", name = "csrf_token", value = csrf_token},
+                        {type = "hidden", name = "login", value = u.login},
+                        {type = "text", name = "cap", value = u.cap, size = "6"},
+                    },
+                    submit_class = "btn-secondary", submit_label = "Set",
+                },
+            },
+            {status},
+            {
+                {
+                    type = "form", method = "POST", action = "admin-users-password", css_class = "platform-admin-inline-form",
+                    fields = {
+                        {type = "hidden", name = "csrf_token", value = csrf_token},
+                        {type = "hidden", name = "login", value = u.login},
+                        {type = "password", name = "password", placeholder = "new password", required = true},
+                    },
+                    submit_class = "btn-secondary", submit_label = "Set",
+                },
+                {
+                    type = "form", method = "POST", action = "admin-users-" .. archive_action, css_class = "platform-admin-inline-form",
+                    fields = {
+                        {type = "hidden", name = "csrf_token", value = csrf_token},
+                        {type = "hidden", name = "login", value = u.login},
+                    },
+                    submit_class = archive_button_class, submit_label = archive_label,
+                },
+            },
+        })
+    end
+    table.insert(sections, {
+        type = "table",
+        css_class = "platform-admin-users",
+        columns = {"Login", "Capabilities", "Status", "Actions"},
+        rows = rows,
+    })
+
+    validate_err = page_lib.validate(sections)
+    if validate_err != nil then
+        error(validate_err)
     end
 
     return string.format("""
@@ -3362,23 +3399,9 @@ function html.render_admin_users(users, csrf_token, message, is_error)
     </style>
     <div class="platform-container">
         %s
-        %s
-        <form method="POST" action="admin-users-create" class="platform-admin-create-form">
-            <input type="hidden" name="csrf_token" value="%s">
-            <input type="text" name="login" placeholder="login" required>
-            <input type="password" name="password" placeholder="password" required>
-            <input type="text" name="cap" placeholder="capabilities (e.g. i)" size="10">
-            <button type="submit" class="btn btn-primary">Create user</button>
-        </form>
-        <table class="platform-admin-users">
-            <thead><tr><th>Login</th><th>Capabilities</th><th>Status</th><th>Actions</th></tr></thead>
-            <tbody>
-%s
-            </tbody>
-        </table>
-    </div>
+%s    </div>
 </div>
-""", platform_container_css(), platform_button_css(), platform_page_header_css() .. platform_admin_message_css(), render_page_header("Manage users", nil, nil), message_html, escaped_csrf, rows_html)
+""", platform_container_css(), platform_button_css(), platform_page_header_css() .. platform_admin_message_css(), render_page_header("Manage users", nil, nil), page_lib.render(sections))
 end
 
 -- Admin UI for the api_key table, mirroring render_admin_users
