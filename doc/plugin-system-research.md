@@ -8,7 +8,7 @@ Originated as research against brex task 737181736, prompted by a real gap hit w
 
 `doc/extensibility.md` documents the shape precisely: an extension is `manifest.lua` + `main.lua` under `extensions/<name>/`, declaring `events` (`entity.before_create`/`before_update`/`after_create`/`after_update`/`after_archive`), `entity_types`, and `capabilities` (`read`/`write` scoped to `entity`, plus `net = "outbound"`). It needs explicit admin approval before any hook runs, and a capability change invalidates that approval until re-reviewed.
 
-The sandboxing mechanism (`src/sandbox.lua`) is genuinely minimal: `loadstring` + `setfenv` against a restricted environment (`pairs`/`ipairs`/`string`/`table`/`math`/`pcall`/`error` -- no `io`, no `os`, no `require` unless a capability explicitly adds one, e.g. `socket` for `net=outbound`). The real trust boundary isn't the sandbox's own restrictions so much as `entity.lua`'s `build_ctx` (`src/entity.lua:45-99`): a plain table of closures (`ctx.query`, `ctx.create_entity`, `ctx.update_entity`), each checking the manifest's declared capability before ever touching the real, trusted `entity.create`/`entity.update`/`db.query`. A hook body only ever sees `ctx`, never the real functions directly.
+The sandboxing mechanism (`sandbox.lua`, shared infrastructure in `../luam/lib/`) is genuinely minimal: `loadstring` + `setfenv` against a restricted environment (`pairs`/`ipairs`/`string`/`table`/`math`/`pcall`/`error` -- no `io`, no `os`, no `require` unless a capability explicitly adds one, e.g. `socket` for `net=outbound`). The real trust boundary isn't the sandbox's own restrictions so much as `entity.lua`'s `build_ctx` (`src/entity.lua:45-99`): a plain table of closures (`ctx.query`, `ctx.create_entity`, `ctx.update_entity`), each checking the manifest's declared capability before ever touching the real, trusted `entity.create`/`entity.update`/`db.query`. A hook body only ever sees `ctx`, never the real functions directly.
 
 ## The gap, and it's not hypothetical -- two real cases, more expected
 
@@ -50,7 +50,7 @@ Both surfaces (UI and tools) share one underlying idea -- a new, narrow capabili
 
 - `doc/extensibility.md` -- current extension model, capabilities, "what extensions cannot do today."
 - `doc/architecture.md` -- overall system shape, single-deployment model.
-- `src/sandbox.lua` -- the actual sandboxing mechanism (`base_env`, `sandbox.extension_env`, `sandbox.load`/`sandbox.run`).
+- `../luam/lib/sandbox.lua` -- the actual sandboxing mechanism (`base_env`, `sandbox.extension_env`, `sandbox.load`/`sandbox.run`).
 - `src/entity.lua:45-99` (`build_ctx`) -- the capability-checked-closure pattern any new `ctx.*` addition should follow.
 - `src/template.lua:65-165` -- the existing typed-section-table -> trusted-renderer pattern the UI canvas is modeled directly on.
 - `src/html.lua:955-994` -- `nav_items`, the existing ordered-list shape a plugin nav entry would extend.

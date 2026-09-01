@@ -69,7 +69,6 @@ cd dev && ./deploy.sh
 - `knowledge.lua` -- the knowledge pool (tiering/heat on documents)
 - `agent.lua` + `agent_provider*.lua` -- the chat/assistant subsystem and its pluggable LLM backends
 - `extension.lua` / `view.lua` -- the drop-in extensibility mechanisms (see below)
-- `sandbox.lua` -- the shared capability-scoped execution environment used by schema loading, views, and extensions
 - `html.lua` / `render.lua` / `template.lua` -- rendering
 - `db.lua` / `config.lua` / `init.lua` / `multipart.lua` / `label.lua` -- storage adapter, deployment config, `daat init`, CGI form parsing, ZPL labels
 
@@ -77,7 +76,7 @@ cd dev && ./deploy.sh
 
 - **Entity/schema/ledger model** -- every change is recorded first in an append-only event log; a typed table per entity type is projected from that log for fast querying. The log is the source of truth. See `architecture.md` ("History as the source of truth") and `schema.md`.
 - **Traceability** -- archiving/unarchiving are additive log entries, never a row removal. Listing excludes archived rows by default; a direct lookup or full history always works regardless of archive state. Same convention for accounts.
-- **Sandboxing** -- schema definitions, extension hooks, and views are all untrusted source loaded into a restricted environment exposing only the capabilities that role (or that extension's approved manifest) actually needs. One mechanism, `src/sandbox.lua`, covers all three. See `architecture.md` ("Sandboxed extensibility") and `extensibility.md`.
+- **Sandboxing** -- schema definitions, extension hooks, and views are all untrusted source loaded into a restricted environment exposing only the capabilities that role (or that extension's approved manifest) actually needs. One mechanism, `sandbox.lua` -- shared, daat-agnostic infrastructure that lives in `../luam/lib/`, not daat's own `src/` -- covers all three. See `architecture.md` ("Sandboxed extensibility") and `extensibility.md`.
 - **Auth** -- every route but `/login`/`/logout` requires a session; permissions are re-read from the account's current row on *every* request, never trusted from the session itself, so a permission change or account archive takes effect on the very next request. See `architecture.md` ("Auth") and `api.md`.
 - **Chat/agent** -- per-user DB-backed sessions, a small explicit tool registry, a pluggable LLM backend behind a neutral protocol (`agent-protocol.md`), and a hard human-approval gate before any tool call that changes data can run.
 - **Glossary discipline** -- `glossary.md` is treated as authoritative for terminology (Document, not page/Notebook; Entity, not record; View vs. Extension vs. Hook kept deliberately distinct). Check it before introducing new UI copy, doc prose, or tool descriptions -- this is a hard rule in this codebase, not a suggestion.
