@@ -1679,6 +1679,28 @@ function html.render_entity_edit(entity_type, layout_json, row_json, entity_id, 
     escaped_entity_id = tostring(entity_id)
     edit_header = render_page_header("Edit " .. escaped_type .. " #" .. escaped_entity_id,
         "<a class=\"btn btn-secondary\" href=\"detail?type=" .. escaped_type .. "&entity_id=" .. escaped_entity_id .. "\">&larr; Back to detail</a>", nil)
+
+    -- Same two shapes html.render's own registration grid already
+    -- built these types for (see doc/templating.md) -- reused verbatim
+    -- here, no new vocabulary needed. This page's own `style` is the
+    -- real reason `actions.style` exists at all: this fields list
+    -- carries no bottom margin of its own (unlike register's neighbor,
+    -- a table wrapper that already does), so its action group needs
+    -- the extra top margin explicitly.
+    page_lib = require("page")
+    sections = {
+        {
+            type = "actions",
+            buttons = {{label = "Save changes", id = "btn-save", css_class = "btn btn-primary"}},
+            style = "margin-top: 20px;",
+        },
+        {type = "status_placeholder", id = "status-message", css_class = "status-msg"},
+    }
+    validate_err = page_lib.validate(sections)
+    if validate_err != nil then
+        error(validate_err)
+    end
+    actions_html = page_lib.render(sections)
     return string.format("""
 <div class="fossil-doc" data-title="Edit %s #%s">
     <style>
@@ -1700,11 +1722,7 @@ function html.render_entity_edit(entity_type, layout_json, row_json, entity_id, 
 
         <div class="platform-edit-fields" id="edit-fields"><!-- fields injected --></div>
 
-        <div class="platform-actions" style="margin-top: 20px;">
-            <button type="button" class="btn btn-primary" id="btn-save">Save changes</button>
-        </div>
-
-        <div id="status-message" class="status-msg"></div>
+        %s
     </div>
 
     <script nonce="%s">
@@ -1801,7 +1819,7 @@ function html.render_entity_edit(entity_type, layout_json, row_json, entity_id, 
     </script>
 </div>
 """, escaped_type, escaped_entity_id, platform_container_css(), platform_button_css(), platform_page_header_css() .. platform_cell_editor_css(),
-     edit_header,
+     edit_header, actions_html,
      nonce, json_for_script(layout_json), json_for_script(row_json), js_string_literal(entity_type), tostring(entity_id))
 end
 
