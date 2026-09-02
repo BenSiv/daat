@@ -28,7 +28,36 @@ render_lib = require("render")
 
 page = {}
 
-FORM_FIELD_TYPES = {text = true, password = true, hidden = true}
+FORM_FIELD_TYPES = {text = true, password = true, hidden = true, checkbox = true, file = true, textarea = true}
+
+-- Validates one field list (a form's own top-level `fields`, or one of
+-- its `groups[i].fields` -- see `form`'s own validation below for why
+-- a form can have both). Split out so both call the exact same rules,
+-- not two copies of them.
+function validate_fields(fields, label)
+    for j, field in ipairs(fields) do
+        if FORM_FIELD_TYPES[field.type] == nil then
+            return string.format("%s field #%d: invalid type '%s'", label, j, tostring(field.type))
+        end
+        if type(field.name) != "string" or field.name == "" then
+            return string.format("%s field #%d: missing 'name'", label, j)
+        end
+        if field.type == "hidden" then
+            if type(field.value) != "string" then
+                return string.format("%s field #%d (hidden): missing 'value'", label, j)
+            end
+        elseif field.label != nil and (type(field.label) != "string" or field.label == "") then
+            -- label is optional (an inline table-cell field renders
+            -- with no visible <label>, see .platform-admin-inline-form
+            -- callers) -- but if given at all, it has to be real text.
+            return string.format("%s field #%d: 'label' must be a non-empty string if given", label, j)
+        end
+        if field.wrapper_class != nil and (type(field.wrapper_class) != "string" or field.wrapper_class == "") then
+            return string.format("%s field #%d: 'wrapper_class' must be a non-empty string if given", label, j)
+        end
+    end
+    return nil
+end
 
 -- Validates one section, returning an error string prefixed with
 -- `label` (e.g. "page section #3" at the top level, or a nested
@@ -69,23 +98,47 @@ function validate_section(section, label)
         if type(section.fields) != "table" then
             return label .. " (form): missing 'fields'"
         end
-        for j, field in ipairs(section.fields) do
-            if FORM_FIELD_TYPES[field.type] == nil then
-                return string.format("%s (form) field #%d: invalid type '%s'", label, j, tostring(field.type))
+        fields_err = validate_fields(section.fields, label .. " (form)")
+        if fields_err != nil then
+            return fields_err
+        end
+        -- groups: fields visually grouped under their own heading
+        -- inside this same <form> (settings' Site/Branding/Colors/Chat
+        -- assistant sections) -- HTML forms can't nest, so this is how
+        -- one real <form> with one real submit button still gets more
+        -- than one flat field list. section.fields stays for anything
+        -- that isn't part of a visible group (a form-wide hidden CSRF
+        -- token); groups is only for fields with a heading to sit
+        -- under. Both can be present on the same form at once.
+        if section.groups != nil then
+            if type(section.groups) != "table" then
+                return label .. " (form): 'groups' must be a list if given"
             end
-            if type(field.name) != "string" or field.name == "" then
-                return string.format("%s (form) field #%d: missing 'name'", label, j)
-            end
-            if field.type == "hidden" then
-                if type(field.value) != "string" then
-                    return string.format("%s (form) field #%d (hidden): missing 'value'", label, j)
+            for g, group in ipairs(section.groups) do
+                group_label = string.format("%s (form) group #%d", label, g)
+                if type(group.css_class) != "string" or group.css_class == "" then
+                    return group_label .. ": missing 'css_class'"
                 end
-            elseif field.label != nil and (type(field.label) != "string" or field.label == "") then
-                -- label is optional (an inline table-cell field renders
-                -- with no visible <label>, see .platform-admin-inline-form
-                -- callers) -- but if given at all, it has to be real text.
-                return string.format("%s (form) field #%d: 'label' must be a non-empty string if given", label, j)
+                if type(group.heading) != "string" or group.heading == "" then
+                    return group_label .. ": missing 'heading'"
+                end
+                if group.intro != nil and (type(group.intro) != "string" or group.intro == "") then
+                    return group_label .. ": 'intro' must be a non-empty string if given"
+                end
+                if group.fields_wrapper_class != nil and (type(group.fields_wrapper_class) != "string" or group.fields_wrapper_class == "") then
+                    return group_label .. ": 'fields_wrapper_class' must be a non-empty string if given"
+                end
+                if type(group.fields) != "table" then
+                    return group_label .. ": missing 'fields'"
+                end
+                group_fields_err = validate_fields(group.fields, group_label)
+                if group_fields_err != nil then
+                    return group_fields_err
+                end
             end
+        end
+        if section.enctype != nil and (type(section.enctype) != "string" or section.enctype == "") then
+            return label .. " (form): 'enctype' must be a non-empty string if given"
         end
         if type(section.submit_label) != "string" or section.submit_label == "" then
             return label .. " (form): missing 'submit_label'"
@@ -187,14 +240,81 @@ function render_page_secret_reveal(css_class, instruction, value)
 end
 
 -- One optional HTML attribute, escaped, omitted entirely when `value`
--- is absent -- shared by every optional string-valued <input>
--- attribute (value/placeholder/size/autocomplete) instead of a
--- separate hand-written branch per attribute.
+-- is nil -- shared by every optional string-valued <input> attribute
+-- (value/placeholder/size/autocomplete/accept) instead of a separate
+-- hand-written branch per attribute. Only nil omits it -- an empty
+-- string is a real, different value (a color field with nothing typed
+-- into it yet still needs value="", not the attribute vanishing
+-- entirely) and renders as an empty attribute, not nothing.
 function attr_fragment(name, value)
-    if value == nil or value == "" then
+    if value == nil then
         return ""
     end
     return " " .. name .. "=\"" .. html_lib.html_escape(tostring(value)) .. "\""
+end
+
+-- The <label>+<input>/<textarea> pair for one field, everything except
+-- the hidden type and the optional wrapper_class handled by
+-- render_page_field itself below. label_line is "" (not a blank line)
+-- when field.label is nil -- an inline, no-label field (an admin
+-- table's compact per-row inputs, shown via placeholder instead) never
+-- had a spare blank line where its label would have been, and neither
+-- should this. Checkbox is the one type whose label comes AFTER its
+-- input rather than before (matching a native checkbox's usual reading
+-- order: the box, then what it means).
+function render_page_field_inner(field)
+    -- id only when there's a real label for it to target -- an
+    -- unmatched id is dead weight, not a neutral default.
+    id_attr = ""
+    label_line = ""
+    if field.label != nil then
+        id_attr = attr_fragment("id", field.name)
+        label_line = render_lib.render(
+            "        <label for=\"{{ name }}\">{{ label }}</label>\n",
+            {name = field.name, label = field.label}
+        )
+    end
+
+    if field.type == "checkbox" then
+        checked_attr = ""
+        if field.checked == true then
+            checked_attr = " checked"
+        end
+        input_line = render_lib.render(
+            "        <input type=\"checkbox\"{{{ id_attr }}} name=\"{{ name }}\"{{{ value_attr }}}{{{ checked_attr }}}>\n",
+            {name = field.name, id_attr = id_attr, value_attr = attr_fragment("value", field.value), checked_attr = checked_attr}
+        )
+        return input_line .. label_line
+    end
+
+    if field.type == "textarea" then
+        value = field.value
+        if value == nil then
+            value = ""
+        end
+        input_line = render_lib.render(
+            "        <textarea{{{ id_attr }}} name=\"{{ name }}\"{{{ placeholder_attr }}}>{{ value }}</textarea>\n",
+            {name = field.name, id_attr = id_attr, placeholder_attr = attr_fragment("placeholder", field.placeholder), value = value}
+        )
+        return label_line .. input_line
+    end
+
+    required_attr = ""
+    if field.required == true then
+        required_attr = " required"
+    end
+
+    extra_attrs = attr_fragment("value", field.value) ..
+        attr_fragment("placeholder", field.placeholder) ..
+        attr_fragment("size", field.size) ..
+        attr_fragment("autocomplete", field.autocomplete) ..
+        attr_fragment("accept", field.accept)
+
+    input_line = render_lib.render(
+        "        <input type=\"{{{ type }}}\"{{{ id_attr }}} name=\"{{ name }}\"{{{ extra_attrs }}}{{{ required_attr }}}>\n",
+        {name = field.name, type = field.type, id_attr = id_attr, extra_attrs = extra_attrs, required_attr = required_attr}
+    )
+    return label_line .. input_line
 end
 
 function render_page_field(field)
@@ -205,47 +325,70 @@ function render_page_field(field)
         )
     end
 
-    required_attr = ""
-    if field.required == true then
-        required_attr = " required"
+    inner = render_page_field_inner(field)
+    if field.wrapper_class == nil then
+        return inner
     end
-
-    -- id only when there's a real label for it to target -- an
-    -- inline, no-label field (an admin table's compact per-row inputs,
-    -- shown via placeholder instead) never had one before this
-    -- vocabulary existed, and an unmatched id is dead weight, not a
-    -- neutral default.
-    label_inner = ""
-    id_attr = ""
-    if field.label != nil then
-        label_inner = render_lib.render(
-            "        <label for=\"{{ name }}\">{{ label }}</label>\n",
-            {name = field.name, label = field.label}
-        )
-        id_attr = attr_fragment("id", field.name)
-    end
-
-    extra_attrs = attr_fragment("value", field.value) ..
-        attr_fragment("placeholder", field.placeholder) ..
-        attr_fragment("size", field.size) ..
-        attr_fragment("autocomplete", field.autocomplete)
-
-    return label_inner .. render_lib.render(
-        "        <input type=\"{{{ type }}}\"{{{ id_attr }}} name=\"{{ name }}\"{{{ extra_attrs }}}{{{ required_attr }}}>\n",
-        {
-            name = field.name,
-            type = field.type,
-            id_attr = id_attr,
-            extra_attrs = extra_attrs,
-            required_attr = required_attr,
-        }
+    return render_lib.render(
+        "    <div class=\"{{{ wrapper_class }}}\">\n{{{ inner }}}    </div>\n",
+        {wrapper_class = field.wrapper_class, inner = inner}
     )
+end
+
+-- One group of fields under its own heading, inside a form -- HTML
+-- forms can't nest, so this is the shape a real page (settings'
+-- Site/Branding/Colors/Chat assistant) uses instead: one real <form>,
+-- several visually distinct field groups inside it.
+function render_page_group(group)
+    fields_html = {}
+    for _, field in ipairs(group.fields) do
+        table.insert(fields_html, render_page_field(field))
+    end
+    fields_joined = table.concat(fields_html)
+    -- An optional extra wrapper around the WHOLE field list (not each
+    -- field individually, that's a field's own wrapper_class) -- e.g.
+    -- settings' Colors group needs one shared grid container around
+    -- all of its color fields together, on top of each color field's
+    -- own individual wrapper_class.
+    if group.fields_wrapper_class != nil then
+        fields_joined = render_lib.render(
+            "    <div class=\"{{{ wrapper_class }}}\">\n{{{ fields }}}    </div>\n",
+            {wrapper_class = group.fields_wrapper_class, fields = fields_joined}
+        )
+    end
+    intro_inner = ""
+    if group.intro != nil then
+        intro_inner = render_lib.render(
+            "<p style=\"margin-top:0;color:var(--platform-muted,#64748b);font-size:0.9rem;\">{{ intro }}</p>",
+            {intro = group.intro}
+        )
+    end
+    return render_lib.render("""
+    <div class="{{{ css_class }}}">
+        <h3>{{ heading }}</h3>
+        {{{ intro_inner }}}
+{{{ fields_html }}}    </div>
+""", {
+        css_class = group.css_class,
+        heading = group.heading,
+        intro_inner = intro_inner,
+        fields_html = fields_joined,
+    })
 end
 
 function render_page_form(section)
     fields_html = {}
     for _, field in ipairs(section.fields) do
         table.insert(fields_html, render_page_field(field))
+    end
+
+    groups_html = ""
+    if section.groups != nil then
+        group_parts = {}
+        for _, group in ipairs(section.groups) do
+            table.insert(group_parts, render_page_group(group))
+        end
+        groups_html = table.concat(group_parts)
     end
 
     heading_inner = ""
@@ -263,24 +406,28 @@ function render_page_form(section)
         css_class_attr = " class=\"" .. section.css_class .. "\""
     end
 
+    enctype_attr = attr_fragment("enctype", section.enctype)
+
     submit_class = "btn-primary"
     if section.submit_class != nil then
         submit_class = section.submit_class
     end
 
     return render_lib.render("""
-    <form{{{ css_class_attr }}} method="{{{ method }}}" action="{{{ action }}}">
+    <form{{{ css_class_attr }}} method="{{{ method }}}" action="{{{ action }}}"{{{ enctype_attr }}}>
         {{{ heading_inner }}}
         {{{ message_inner }}}
-{{{ fields_html }}}        <button type="submit" class="btn {{{ submit_class }}}">{{ submit_label }}</button>
+{{{ fields_html }}}{{{ groups_html }}}        <button type="submit" class="btn {{{ submit_class }}}">{{ submit_label }}</button>
     </form>
 """, {
         css_class_attr = css_class_attr,
         method = section.method,
         action = section.action,
+        enctype_attr = enctype_attr,
         heading_inner = heading_inner,
         message_inner = message_inner,
         fields_html = table.concat(fields_html),
+        groups_html = groups_html,
         submit_class = submit_class,
         submit_label = section.submit_label,
     })

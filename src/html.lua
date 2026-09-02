@@ -3529,13 +3529,11 @@ end
 -- values read once at CGI-process start, not something safe to change
 -- from inside a running request.
 function html.render_settings(theme, csrf_token, message, is_error)
-    escaped_csrf = html.html_escape(csrf_token)
+    page_lib = require("page")
 
-    message_html = render_admin_message(message, is_error)
-
-    hide_heading_checked = ""
-    if theme.hide_home_heading == true then
-        hide_heading_checked = " checked"
+    message_css_class = "platform-admin-message"
+    if is_error == true then
+        message_css_class = "platform-admin-message platform-admin-message-error"
     end
 
     system_prompt_extra_value = ""
@@ -3543,24 +3541,83 @@ function html.render_settings(theme, csrf_token, message, is_error)
         system_prompt_extra_value = theme.system_prompt_extra
     end
 
-    color_rows = ""
+    color_fields = {}
     for _, key in ipairs(THEME_COLOR_KEYS) do
         value = ""
         if theme.colors != nil and theme.colors[key] != nil then
             value = theme.colors[key]
         end
-        label = string.gsub(key, "_", " ")
-        color_rows = color_rows .. string.format("""
-            <div class="platform-settings-color">
-                <label for="color_%s">%s</label>
-                <input type="text" id="color_%s" name="color_%s" value="%s" placeholder="e.g. #4f46e5" size="12">
-            </div>
-""", key, html.html_escape(label), key, key, html.html_escape(value))
+        table.insert(color_fields, {
+            type = "text", name = "color_" .. key, label = string.gsub(key, "_", " "),
+            value = value, placeholder = "e.g. #4f46e5", size = "12", wrapper_class = "platform-settings-color",
+        })
     end
 
     logo_status = "No logo uploaded -- the sidebar shows the default icon and \"Platform\" as plain text."
     if theme.has_logo == true then
         logo_status = "A logo is set. Uploading a new file below replaces it; there is no separate \"remove\" action today -- redeploy tooling or a direct theme-assets/ edit still handles removal."
+    end
+
+    sections = {}
+    if message != nil and message != "" then
+        table.insert(sections, {type = "message", css_class = message_css_class, text = message})
+    end
+    table.insert(sections, {
+        type = "form",
+        method = "POST",
+        action = "settings-save",
+        enctype = "multipart/form-data",
+        fields = {
+            {type = "hidden", name = "csrf_token", value = csrf_token},
+        },
+        groups = {
+            {
+                css_class = "platform-settings-section",
+                heading = "Site",
+                fields = {
+                    {type = "text", name = "site_name", label = "Site name", value = theme.site_name, placeholder = "Platform"},
+                    {
+                        type = "checkbox", name = "hide_home_heading",
+                        label = "Hide the site name heading on Home (use when the logo already reads as a wordmark)",
+                        value = "1", checked = (theme.hide_home_heading == true), wrapper_class = "platform-settings-checkbox",
+                    },
+                },
+            },
+            {
+                css_class = "platform-settings-section",
+                heading = "Branding",
+                intro = logo_status,
+                fields = {
+                    {type = "file", name = "logo_file", label = "Sidebar mark (square, theme-assets/logo.png)", accept = "image/png"},
+                    {type = "file", name = "logo_full_file", label = "Full wordmark shown on Home (theme-assets/logo-full.png)", accept = "image/png"},
+                    {type = "file", name = "favicon_file", label = "Favicon (theme-assets/favicon.png)", accept = "image/png"},
+                },
+            },
+            {
+                css_class = "platform-settings-section",
+                heading = "Colors",
+                intro = "Leave any field blank to use the default indigo/slate palette for that color.",
+                fields_wrapper_class = "platform-settings-colors",
+                fields = color_fields,
+            },
+            {
+                css_class = "platform-settings-section",
+                heading = "Chat assistant",
+                fields = {
+                    {
+                        type = "textarea", name = "system_prompt_extra", label = "Extra system prompt instructions",
+                        value = system_prompt_extra_value,
+                        placeholder = "e.g. This deployment tracks bioreactor runs -- always ask for the run ID before creating a sample.",
+                    },
+                },
+            },
+        },
+        submit_label = "Save settings",
+    })
+
+    validate_err = page_lib.validate(sections)
+    if validate_err != nil then
+        error(validate_err)
     end
 
     return string.format("""
@@ -3584,53 +3641,9 @@ function html.render_settings(theme, csrf_token, message, is_error)
     </style>
     <div class="platform-container">
         %s
-        %s
-        <form method="POST" action="settings-save" enctype="multipart/form-data">
-            <input type="hidden" name="csrf_token" value="%s">
-
-            <div class="platform-settings-section">
-                <h3>Site</h3>
-                <label for="site_name">Site name</label>
-                <input type="text" id="site_name" name="site_name" value="%s" placeholder="Platform">
-
-                <div class="platform-settings-checkbox">
-                    <input type="checkbox" id="hide_home_heading" name="hide_home_heading" value="1"%s>
-                    <label for="hide_home_heading">Hide the site name heading on Home (use when the logo already reads as a wordmark)</label>
-                </div>
-            </div>
-
-            <div class="platform-settings-section">
-                <h3>Branding</h3>
-                <p style="margin-top:0;color:var(--platform-muted,#64748b);font-size:0.9rem;">%s</p>
-                <label for="logo_file">Sidebar mark (square, theme-assets/logo.png)</label>
-                <input type="file" id="logo_file" name="logo_file" accept="image/png">
-                <label for="logo_full_file">Full wordmark shown on Home (theme-assets/logo-full.png)</label>
-                <input type="file" id="logo_full_file" name="logo_full_file" accept="image/png">
-                <label for="favicon_file">Favicon (theme-assets/favicon.png)</label>
-                <input type="file" id="favicon_file" name="favicon_file" accept="image/png">
-            </div>
-
-            <div class="platform-settings-section">
-                <h3>Colors</h3>
-                <p style="margin-top:0;color:var(--platform-muted,#64748b);font-size:0.9rem;">Leave any field blank to use the default indigo/slate palette for that color.</p>
-                <div class="platform-settings-colors">
-%s
-                </div>
-            </div>
-
-            <div class="platform-settings-section">
-                <h3>Chat assistant</h3>
-                <label for="system_prompt_extra">Extra system prompt instructions</label>
-                <textarea id="system_prompt_extra" name="system_prompt_extra" placeholder="e.g. This deployment tracks bioreactor runs -- always ask for the run ID before creating a sample.">%s</textarea>
-            </div>
-
-            <button type="submit" class="btn btn-primary">Save settings</button>
-        </form>
-    </div>
+%s    </div>
 </div>
-""", platform_container_css(), platform_button_css(), platform_page_header_css() .. platform_admin_message_css(), render_page_header("Settings", nil, nil), message_html, escaped_csrf,
-     html.html_escape(theme.site_name), hide_heading_checked, html.html_escape(logo_status),
-     color_rows, html.html_escape(system_prompt_extra_value))
+""", platform_container_css(), platform_button_css(), platform_page_header_css() .. platform_admin_message_css(), render_page_header("Settings", nil, nil), page_lib.render(sections))
 end
 
 -- v1 landing page: basic information and quick links, deliberately
