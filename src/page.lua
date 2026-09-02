@@ -95,6 +95,18 @@ function validate_section(section, label)
         if type(section.action) != "string" or section.action == "" then
             return label .. " (form): missing 'action'"
         end
+        if section.heading != nil and (type(section.heading) != "string" or section.heading == "") then
+            return label .. " (form): 'heading' must be a non-empty string if given"
+        end
+        if section.message != nil and (type(section.message) != "string" or section.message == "") then
+            return label .. " (form): 'message' must be a non-empty string if given"
+        end
+        if section.css_class != nil and (type(section.css_class) != "string" or section.css_class == "") then
+            return label .. " (form): 'css_class' must be a non-empty string if given"
+        end
+        if section.submit_class != nil and (type(section.submit_class) != "string" or section.submit_class == "") then
+            return label .. " (form): 'submit_class' must be a non-empty string if given"
+        end
         if type(section.fields) != "table" then
             return label .. " (form): missing 'fields'"
         end
@@ -144,6 +156,9 @@ function validate_section(section, label)
             return label .. " (form): missing 'submit_label'"
         end
     elseif section.type == "table" then
+        if section.css_class != nil and (type(section.css_class) != "string" or section.css_class == "") then
+            return label .. " (table): 'css_class' must be a non-empty string if given"
+        end
         if type(section.columns) != "table" or #section.columns == 0 then
             return label .. " (table): must have a non-empty 'columns' list"
         end
@@ -401,10 +416,7 @@ function render_page_form(section)
         message_inner = render_page_message("platform-error-banner", section.message)
     end
 
-    css_class_attr = ""
-    if section.css_class != nil then
-        css_class_attr = " class=\"" .. section.css_class .. "\""
-    end
+    css_class_attr = attr_fragment("class", section.css_class)
 
     enctype_attr = attr_fragment("enctype", section.enctype)
 
@@ -469,10 +481,7 @@ function render_page_table(section)
         end
         body_rows = body_rows .. "<tr>" .. cells .. "</tr>"
     end
-    css_class_attr = ""
-    if section.css_class != nil then
-        css_class_attr = " class=\"" .. section.css_class .. "\""
-    end
+    css_class_attr = attr_fragment("class", section.css_class)
     return render_lib.render(
         "    <table{{{ css_class_attr }}}><thead><tr>{{{ header_cells }}}</tr></thead><tbody>{{{ body_rows }}}</tbody></table>\n",
         {css_class_attr = css_class_attr, header_cells = header_cells, body_rows = body_rows}
