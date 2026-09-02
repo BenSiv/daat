@@ -25,4 +25,5 @@ exec "$LUAM_DIR/bin/luam" "$LUAM_DIR/lib/static/build.lua" \
     --bin daat \
     --with sqlite3,lfs,bcrypt,hmac,mariadb \
     --luamdir "$LUAM_DIR" \
+    --always_include provider \
     "$@"
