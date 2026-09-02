@@ -128,7 +128,7 @@ function extension.validate_manifest(manifest)
         end
     end
     -- capabilities.tools' entries are dispatched under tool_name =
-    -- manifest.name (see agent.execute_tool's extension fallback) --
+    -- manifest.name (see agent_tools.execute_tool's extension fallback) --
     -- reusing the plain tool_name.method_name convention every built-in
     -- AGENT_TOOLS entry already uses, with no separate namespace. That
     -- only works if an extension's own name can never collide with one

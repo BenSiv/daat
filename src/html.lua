@@ -1212,7 +1212,7 @@ end
 
 -- page_context: what the chat widget/agent is told about "where the
 -- user currently is" (see doc/architecture.md's "Chat" section,
--- render_chat_widget's script, and agent.default_system_prompt).
+-- render_chat_widget's script, and agent_tools.default_system_prompt).
 -- Callers that know more than the bare nav section (a document's own
 -- id, an entity's type+id, a view's name) should pass their own richer
 -- table; nil falls back to just {page_type = active, title = title} --
@@ -5935,7 +5935,7 @@ function html.render_chat_widget(nonce, attachments_enabled)
     // restart, CORS, whatever) would otherwise vanish completely -- the
     // thinking indicator removed and nothing else happening, so a real
     // failure looks identical to "nothing was typed". This is a
-    // different gap than agent.execute_tool's own errors (agent.lua,
+    // different gap than agent_tools.execute_tool's own errors (agent.lua,
     // server-persisted, shows as a real transcript row) -- a fetch that
     // never reaches the server has nothing for the server to persist,
     // so this has to be a client-side-only message instead.

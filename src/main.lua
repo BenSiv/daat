@@ -37,6 +37,7 @@ do_knowledge = knowledge.do_knowledge
 -- `daat knowledge distill`, is dispatched from here instead of
 -- inside knowledge.do_knowledge.
 agent = require("agent")
+agent_tools = require("agent_tools")
 
 cgi = require("cgi")
 
@@ -129,7 +130,7 @@ function main()
     -- Dispatched here, not inside knowledge.do_knowledge -- see the
     -- require("agent") comment above for why.
     if command == "knowledge" and cmd_args[1] == "distill" then
-        session_id, result = agent.run_knowledge_distillation(db_path, os.getenv("USER"), agent.default_model())
+        session_id, result = agent_tools.run_knowledge_distillation(db_path, os.getenv("USER"), agent.default_model())
         if session_id == nil then
             print("Error: " .. tostring(result))
             return
