@@ -5,8 +5,10 @@
 -- Application Default Credentials access token -- not a vendored
 -- HTTP/TLS client or a Google client library, matching the "bind to an
 -- existing, battle-tested tool" stance already used for bcrypt/HMAC/
--- cmark. Verified against a real project: gemini-2.5-flash for
--- generation, text-embedding-005 for embeddings, both in us-central1.
+-- cmark. Verified against a real project (celleste-elab): gemini-3.5-
+-- flash-lite for generation (brex 153144598 -- migrated off gemini-2.5-
+-- flash ahead of its 2026-10-20 Vertex deprecation), text-embedding-005
+-- for embeddings, both confirmed live.
 --
 -- .converse() (native structured tool-calling) translates agent.lua's
 -- own provider-agnostic canonical shape (see agent_provider.lua's own
@@ -16,22 +18,51 @@
 -- vertex_contents_from_messages/vertex_blocks_from_parts below -- agent.lua
 -- itself never changes and never learns anything Vertex-specific.
 -- Real wire shapes here, verified live against the actual API:
--- functionCall/functionResponse parts carry no id of their own on the
--- wire at all (correlation is by name, not id -- none is ever echoed
--- back across a multi-turn round trip), thinking parts are {text,
--- thought=true}, and a tool-call part's thoughtSignature (Gemini 2.5's
--- own reasoning-continuity token, that exact camelCase name since it's
--- Vertex's own wire field, not this codebase's choice) is optional for
--- correctness but preserved anyway on our own toolCall block as a plain
--- snake_case thinking_signature -- self-contained round-trip plumbing
--- between this file's own vertex_blocks_from_parts/
--- vertex_contents_from_messages, not part of the pre-existing
--- stopReason/toolCallId-style canonical contract agent.lua actually
--- reads, so it follows this codebase's own Lua naming rather than
--- Vertex's own. finishReason is "STOP" identically whether a turn ends
--- in a tool call or a final answer -- stopReason has to be derived from
--- whether a functionCall part is actually present, not from finishReason
--- alone.
+-- thinking parts are {text, thought=true}, and any part -- a
+-- functionCall, or the final text/thinking part of a response -- may
+-- carry a thoughtSignature (that exact camelCase name since it's
+-- Vertex's own wire field, not this codebase's choice), preserved on
+-- our own block as a plain snake_case thinking_signature -- self-
+-- contained round-trip plumbing between this file's own
+-- vertex_blocks_from_parts/vertex_contents_from_messages, not part of
+-- the pre-existing stopReason/toolCallId-style canonical contract
+-- agent.lua actually reads, so it follows this codebase's own Lua
+-- naming rather than Vertex's own. On a Gemini 3.x model this is not
+-- merely a round-trip nicety for a functionCall part specifically:
+-- omitting a functionCall's own thoughtSignature on the very next
+-- request is a real, confirmed-live 400 INVALID_ARGUMENT ("Function
+-- call ... is missing a thought_signature"), not just degraded
+-- reasoning quality -- Gemini 2.5 never enforced this. On a parallel
+-- tool-call turn (2+ functionCall parts in one response), Vertex
+-- attaches thoughtSignature to the first functionCall part only;
+-- confirmed live that a subsequent parallel call in the same response
+-- carries none, and none needs to be echoed back for it either -- this
+-- file's per-part capture already handles that correctly by construc-
+-- tion, since a part with no signature on the wire just never sets
+-- thinking_signature on its own block. On a plain final-answer part,
+-- returning a captured signature is recommended (better reasoning
+-- continuity across turns) but not enforced -- confirmed live that
+-- omitting it there causes no error.
+--
+-- A landmine worth naming explicitly, since it looks like the obvious
+-- fix and isn't: Gemini 3 also started returning a real `id` alongside
+-- every functionCall (e.g. "call_1419080") -- the direct Gemini API's
+-- own docs say to echo it back on the matching functionResponse's own
+-- `id` field for correlation. Do NOT do that here: confirmed live that
+-- Vertex AI's generateContent proto (unlike the direct Gemini API)
+-- rejects a functionCall/functionResponse part that carries an `id` at
+-- all, 400 INVALID_ARGUMENT, a known cross-vendor compatibility gap as
+-- of this writing. This file deliberately keeps synthesizing its own
+-- call_N ids for agent.lua's own tool_result correlation (see
+-- vertex_blocks_from_parts below) and never reads or sends Vertex's
+-- real functionCall.id at all -- correlation by name, in declaration
+-- order, remains correct here since Vertex's own functionResponse
+-- parts are matched to functionCall parts positionally within one
+-- contents[] entry, not by id.
+--
+-- finishReason is "STOP" identically whether a turn ends in a tool call
+-- or a final answer -- stopReason has to be derived from whether a
+-- functionCall part is actually present, not from finishReason alone.
 --
 -- Requires `gcloud` on PATH, already authenticated (`gcloud auth
 -- application-default login`), and two platform.lua fields (see
@@ -45,7 +76,15 @@ external_tool = require("external_tool")
 
 agent_vertex = {}
 
-DEFAULT_REGION = "us-central1"
+-- Confirmed live: gemini-3.5-flash-lite (config.lua's own default
+-- agent_model as of brex 153144598) 404s on a regional endpoint like
+-- us-central1 -- "global" is not just an option for a 3.x-family model,
+-- it's the only location that actually serves one. Falls back to this
+-- only when platform.lua sets no vertex_region of its own; a
+-- deployment that deliberately picked a regional model (or a real
+-- future one that does support regional locations) can still override
+-- it explicitly.
+DEFAULT_REGION = "global"
 
 function vertex_config()
     conf = config.platform_config()
@@ -227,12 +266,24 @@ function vertex_contents_from_messages(messages)
         elseif msg.role == "assistant" then
             parts = {}
             for _, block in ipairs(msg.content) do
+                part = nil
                 if block.type == "text" and block.text != nil then
-                    table.insert(parts, {text = block.text})
+                    part = {text = block.text}
                 elseif block.type == "thinking" and block.thinking != nil then
-                    table.insert(parts, {text = block.thinking, thought = true})
+                    part = {text = block.thinking, thought = true}
                 elseif block.type == "toolCall" then
                     part = {functionCall = {name = block.name, args = block.arguments}}
+                end
+                if part != nil then
+                    -- thoughtSignature is mandatory to echo back on a
+                    -- functionCall part (see this file's own header --
+                    -- omitting it on a Gemini 3.x model is a real,
+                    -- confirmed-live 400, not just a quality nicety) and
+                    -- merely recommended on a text/thinking part -- both
+                    -- cases are the same "if we captured one on the way
+                    -- in, send the same one back verbatim" rule, so
+                    -- there's no reason to special-case which block
+                    -- types get it.
                     if block.thinking_signature != nil then
                         part.thoughtSignature = block.thinking_signature
                     end
@@ -283,15 +334,17 @@ end
 -- candidates[1].content.parts into the canonical block shape, plus
 -- whether any part was a tool call (stopReason has to be derived from
 -- this, not from finishReason alone -- see this file's own header).
--- Tool-call ids are synthesized here, fresh per response -- Vertex's
--- own wire protocol has no id concept for function calls at all, so
--- these only ever need to be unique within this one turn, for
--- agent.lua's own tool_result correlation.
+-- Tool-call ids are synthesized here, fresh per response, deliberately
+-- ignoring Gemini 3's own real functionCall.id -- see this file's own
+-- header on why Vertex's proto can't take that id back on a
+-- functionResponse -- so these only ever need to be unique within this
+-- one turn, for agent.lua's own tool_result correlation.
 function vertex_blocks_from_parts(parts)
     blocks = {}
     has_tool_call = false
     call_index = 0
     for _, part in ipairs(parts) do
+        block = nil
         if part.functionCall != nil then
             has_tool_call = true
             call_index = call_index + 1
@@ -301,14 +354,26 @@ function vertex_blocks_from_parts(parts)
                 name = part.functionCall.name,
                 arguments = part.functionCall.args,
             }
+        elseif part.thought == true and part.text != nil then
+            block = {type = "thinking", thinking = part.text}
+        elseif part.text != nil then
+            block = {type = "text", text = part.text}
+        end
+        if block != nil then
+            -- Confirmed live: on a Gemini 3.x model, thoughtSignature
+            -- can land on a functionCall part (mandatory to echo back)
+            -- or on the final text/thinking part of a response
+            -- (recommended, not enforced) -- captured uniformly here so
+            -- vertex_contents_from_messages' own send-back logic doesn't
+            -- need to special-case which block type it came from. On a
+            -- parallel tool-call turn, only the first functionCall part
+            -- carries one; a later part in the same response simply has
+            -- none here, which is already the correct thing to send
+            -- back (nothing).
             if part.thoughtSignature != nil then
                 block.thinking_signature = part.thoughtSignature
             end
             table.insert(blocks, block)
-        elseif part.thought == true and part.text != nil then
-            table.insert(blocks, {type = "thinking", thinking = part.text})
-        elseif part.text != nil then
-            table.insert(blocks, {type = "text", text = part.text})
         end
     end
     return blocks, has_tool_call
@@ -416,5 +481,7 @@ end
 -- across the require() boundary -- see the matching comment in
 -- agent_claude.lua.
 agent_vertex.vertex_url = vertex_url
+agent_vertex.vertex_blocks_from_parts = vertex_blocks_from_parts
+agent_vertex.vertex_contents_from_messages = vertex_contents_from_messages
 
 return agent_vertex

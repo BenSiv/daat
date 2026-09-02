@@ -208,9 +208,9 @@ A built-in assistant, not a bolted-on integration: real per-user conversation se
   | `platform.lua` field | Default | Controls |
   |---|---|---|
   | `agent_provider` | `"vertex"` | Which named backend `agent_provider.lua` loads (`"vertex"`, or `"test"` for the deterministic stub) |
-  | `agent_model` | `"gemini-2.5-flash"` | The real model name passed to every `generate`/`converse`/`embeddings` call |
+  | `agent_model` | `"gemini-3.5-flash-lite"` | The real model name passed to every `generate`/`converse`/`embeddings` call |
   | `vertex_project` | none (required) | GCP project `src/provider/agent_vertex.lua`'s REST calls bill against -- never hardcoded |
-  | `vertex_region` | `"us-central1"` | Vertex AI region |
+  | `vertex_region` | `"global"` | Vertex AI region -- `"global"` is the only location that serves the default 3.x-family model as of this writing; a deployment on an older/regional model can still override this |
   | `agent_max_turns` | 10 | Main tool-calling turn loop's own budget (`agent.run_turn`) |
   | `agent_research_max_turns` | 6 | `research.investigate`'s isolated sub-loop budget |
   | `agent_background_max_turns` | 20 | `background.start`'s worker-drained task budget -- looser than the interactive ones since it isn't bound to one HTTP request |

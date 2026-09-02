@@ -663,7 +663,7 @@ end
 -- calls an external API from a save/review path (e.g. document.
 -- reindex_embedding) -- a provider hiccup here must never fail the
 -- review pass, let alone the search request that triggered it.
-DISTILL_MODEL = "gemini-2.5-flash"
+DISTILL_MODEL = "gemini-3.5-flash-lite"
 
 DISTILL_SYSTEM_PROMPT = """
 Extract the single core idea from the following document into a new, concise, self-contained note in your own words -- not a verbatim copy. Remove anything not essential to that one idea. Reply with the distilled note text only: no title, no preamble, no commentary. If the document already covers exactly one focused idea and there is nothing meaningful to extract, reply with exactly: NONE

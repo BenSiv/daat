@@ -186,9 +186,9 @@ EXAMPLE_PLATFORM_LUA = """-- Every field here is optional; see doc/architecture.
 -- this deployment actually needs to override.
 return {
   -- agent_provider = "vertex",
-  -- agent_model = "gemini-2.5-flash",
+  -- agent_model = "gemini-3.5-flash-lite",
   -- vertex_project = "your-gcp-project",
-  -- vertex_region = "us-central1",
+  -- vertex_region = "global",
   -- agent_max_turns = 10,
   -- agent_research_max_turns = 6,
   -- agent_background_max_turns = 20,

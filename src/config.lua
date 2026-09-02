@@ -244,7 +244,7 @@ function config.platform_config()
 
     conf = {
         agent_provider = "vertex",
-        agent_model = "gemini-2.5-flash",
+        agent_model = "gemini-3.5-flash-lite",
         search_provider = "google_cse",
         vertex_project = nil,
         vertex_region = nil,

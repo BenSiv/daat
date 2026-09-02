@@ -1257,11 +1257,11 @@ EOF
     cat > "${TEST_DIR}/vertex_check.lua" <<EOF
 package.path = "${PROJECT_ROOT}/src/?.lua;" .. package.path
 agent_provider = require("agent_provider")
-result, err = agent_provider.generate("gemini-2.5-flash", "Reply in exactly one word, uppercase.", "What sound does a cow make?")
+result, err = agent_provider.generate("gemini-3.5-flash-lite", "Reply in exactly one word, uppercase.", "What sound does a cow make?")
 print("RESULT:", result, "ERR:", err)
 EOF
     cat > "${TEST_DIR}/platform.lua" <<EOF
-return {agent_provider = "vertex", vertex_project = "${VERTEX_PROJECT}", vertex_region = "${VERTEX_REGION:-us-central1}"}
+return {agent_provider = "vertex", vertex_project = "${VERTEX_PROJECT}", vertex_region = "${VERTEX_REGION:-global}"}
 EOF
     if [ -z "${LUAM_DIR:-}" ]; then
         LUAM_DIR=$(cd "${PROJECT_ROOT}/../luam" && pwd)
@@ -1285,7 +1285,7 @@ EOF
     cat > "${TEST_DIR}/vertex_converse_check.lua" <<EOF
 package.path = "${PROJECT_ROOT}/src/?.lua;" .. package.path
 agent_provider = require("agent_provider")
-response, err = agent_provider.converse("gemini-2.5-flash", "Reply in exactly one word, uppercase.",
+response, err = agent_provider.converse("gemini-3.5-flash-lite", "Reply in exactly one word, uppercase.",
     {{role = "user", content = "What sound does a cow make?"}}, {})
 stop = nil
 if response != nil then
@@ -1294,7 +1294,7 @@ end
 print("STOP:", stop, "ERR:", err)
 EOF
     cat > "${TEST_DIR}/platform.lua" <<EOF
-return {agent_provider = "vertex", vertex_project = "${VERTEX_PROJECT}", vertex_region = "${VERTEX_REGION:-us-central1}"}
+return {agent_provider = "vertex", vertex_project = "${VERTEX_PROJECT}", vertex_region = "${VERTEX_REGION:-global}"}
 EOF
     if [ -z "${LUAM_DIR:-}" ]; then
         LUAM_DIR=$(cd "${PROJECT_ROOT}/../luam" && pwd)
@@ -1338,7 +1338,7 @@ tools = {
     }},
 }
 
-response, err = agent_provider.converse("gemini-2.5-flash",
+response, err = agent_provider.converse("gemini-3.5-flash-lite",
     "You must use the add tool to answer arithmetic questions -- never compute it yourself.",
     {{role = "user", content = "What is 15 plus 27? Use the add tool."}}, tools)
 stop1 = nil
@@ -1372,7 +1372,7 @@ if tool_call != nil then
         {role = "toolResult", toolCallId = tool_call.id, toolName = tool_call.name,
             content = {{type = "text", text = "42"}}, isError = false},
     }
-    response2, err2 = agent_provider.converse("gemini-2.5-flash",
+    response2, err2 = agent_provider.converse("gemini-3.5-flash-lite",
         "You must use the add tool to answer arithmetic questions -- never compute it yourself.",
         history, tools)
 end
@@ -1391,7 +1391,7 @@ end
 print("FINAL:", final_text)
 EOF
     cat > "${TEST_DIR}/platform.lua" <<EOF
-return {agent_provider = "vertex", vertex_project = "${VERTEX_PROJECT}", vertex_region = "${VERTEX_REGION:-us-central1}"}
+return {agent_provider = "vertex", vertex_project = "${VERTEX_PROJECT}", vertex_region = "${VERTEX_REGION:-global}"}
 EOF
     if [ -z "${LUAM_DIR:-}" ]; then
         LUAM_DIR=$(cd "${PROJECT_ROOT}/../luam" && pwd)
@@ -1444,7 +1444,7 @@ tools = {
     }},
 }
 
-response, err = agent_provider.converse("gemini-2.5-flash",
+response, err = agent_provider.converse("gemini-3.5-flash-lite",
     "You must use the add and multiply tools for arithmetic -- never compute yourself. If asked for both a sum and a product, call BOTH tools in the same turn.",
     {{role = "user", content = "What is 15 plus 27, AND what is 6 times 7? Use both tools in parallel."}}, tools)
 stop1 = nil
@@ -1471,7 +1471,7 @@ for _, tool_call in ipairs(tool_calls) do
         content = {{type = "text", text = result_text}}, isError = false})
 end
 
-response2, err2 = agent_provider.converse("gemini-2.5-flash",
+response2, err2 = agent_provider.converse("gemini-3.5-flash-lite",
     "You must use the add and multiply tools for arithmetic -- never compute yourself. If asked for both a sum and a product, call BOTH tools in the same turn.",
     history, tools)
 stop2 = nil
@@ -1479,7 +1479,7 @@ if response2 != nil then stop2 = response2.stopReason end
 print("STOP2:", stop2, "ERR2:", err2)
 EOF
     cat > "${TEST_DIR}/platform.lua" <<EOF
-return {agent_provider = "vertex", vertex_project = "${VERTEX_PROJECT}", vertex_region = "${VERTEX_REGION:-us-central1}"}
+return {agent_provider = "vertex", vertex_project = "${VERTEX_PROJECT}", vertex_region = "${VERTEX_REGION:-global}"}
 EOF
     if [ -z "${LUAM_DIR:-}" ]; then
         LUAM_DIR=$(cd "${PROJECT_ROOT}/../luam" && pwd)
