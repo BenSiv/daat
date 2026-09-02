@@ -111,5 +111,5 @@ Surfaced via `daat knowledge <stats|list|show|promote|distill>` on the CLI, and 
 - `doc/glossary.md` -- terms this codebase should use consistently (Document vs page/Notebook, Entity vs record, Knowledge Pool tiers, capability names).
 - `doc/link-adjudication-alternatives.md` -- a design perspective from comparing notes with the open-ontologies project: an auditable, rule-based alternative to today's LLM-judged co-retrieval linking.
 - `doc/why-luam.md` -- why daat is written in Luam specifically: how each of Luam's own design tenets shows up in daat's code, and why Python or JavaScript couldn't get there.
-- `doc/templating.md` -- the `{{ }}`/`{{{ }}}` interpolation convention (`render.lua`), shared layout tokens (`PLATFORM_LAYOUT`), and a real Luam scoping gotcha to avoid repeating.
+- `doc/templating.md` -- how `html.lua` builds pages: the `{{ }}`/`{{{ }}}` interpolation convention (`render.lua`), `page.lua`'s typed-section vocabulary for daat's own trusted pages (and why it's a separate mechanism from the extension canvas), and the scope boundary for which pages fit that pattern at all -- plus real gotchas hit along the way, worth knowing before touching either.
 - `doc/prior-art.md` -- the requirements a system like daat actually needs to meet, and where existing wikis, LIMS platforms, and note-taking tools fall short of them.

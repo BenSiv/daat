@@ -69,7 +69,7 @@ cd dev && ./deploy.sh
 - `knowledge.lua` -- the knowledge pool (tiering/heat on documents)
 - `agent.lua` + `agent_provider*.lua` -- the chat/assistant subsystem and its pluggable LLM backends
 - `extension.lua` / `view.lua` -- the drop-in extensibility mechanisms (see below)
-- `html.lua` / `render.lua` / `template.lua` -- rendering
+- `html.lua` / `render.lua` / `template.lua` / `page.lua` -- rendering (`page.lua` is daat's own first-party page-section vocabulary, deliberately separate from `html.lua`'s extension canvas -- see `doc/templating.md`)
 - `config.lua` / `init.lua` / `multipart.lua` / `label.lua` -- deployment config, `daat init`, CGI form parsing, ZPL labels (the storage adapter itself, `db.lua`, is shared infrastructure in `../luam/lib/`, not daat's own `src/`)
 
 ## Architecture concepts to know before contributing
@@ -79,6 +79,7 @@ cd dev && ./deploy.sh
 - **Sandboxing** -- schema definitions, extension hooks, and views are all untrusted source loaded into a restricted environment exposing only the capabilities that role (or that extension's approved manifest) actually needs. One mechanism, `sandbox.lua` -- shared, daat-agnostic infrastructure that lives in `../luam/lib/`, not daat's own `src/` -- covers all three. See `architecture.md` ("Sandboxed extensibility") and `extensibility.md`.
 - **Auth** -- every route but `/login`/`/logout` requires a session; permissions are re-read from the account's current row on *every* request, never trusted from the session itself, so a permission change or account archive takes effect on the very next request. See `architecture.md` ("Auth") and `api.md`.
 - **Chat/agent** -- per-user DB-backed sessions, a small explicit tool registry, a pluggable LLM backend behind a neutral protocol (`agent-protocol.md`), and a hard human-approval gate before any tool call that changes data can run.
+- **Page rendering** -- daat's own trusted pages are built as a typed table of sections dispatched to a renderer (`page.lua`), the same pattern as `template.lua`'s Entry templates and the extension canvas -- but a deliberately separate module/vocabulary from the canvas, since that one is a narrow trust boundary for untrusted plugin markup and this one has no such boundary to protect. Vocabulary grows only against a real page's real need, never speculatively. See `templating.md`.
 - **Glossary discipline** -- `glossary.md` is treated as authoritative for terminology (Document, not page/Notebook; Entity, not record; View vs. Extension vs. Hook kept deliberately distinct). Check it before introducing new UI copy, doc prose, or tool descriptions -- this is a hard rule in this codebase, not a suggestion.
 
 ## Extending the platform
