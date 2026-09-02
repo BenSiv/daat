@@ -213,6 +213,32 @@ function validate_section(section, label)
                 end
             end
         end
+    elseif section.type == "actions" then
+        if type(section.buttons) != "table" or #section.buttons == 0 then
+            return label .. " (actions): must have a non-empty 'buttons' list"
+        end
+        for b, button in ipairs(section.buttons) do
+            button_label = string.format("%s (actions) button #%d", label, b)
+            if type(button.label) != "string" or button.label == "" then
+                return button_label .. ": missing 'label'"
+            end
+            if type(button.id) != "string" or button.id == "" then
+                return button_label .. ": missing 'id'"
+            end
+            if type(button.css_class) != "string" or button.css_class == "" then
+                return button_label .. ": missing 'css_class'"
+            end
+        end
+        if section.style != nil and (type(section.style) != "string" or section.style == "") then
+            return label .. " (actions): 'style' must be a non-empty string if given"
+        end
+    elseif section.type == "status_placeholder" then
+        if type(section.id) != "string" or section.id == "" then
+            return label .. " (status_placeholder): missing 'id'"
+        end
+        if type(section.css_class) != "string" or section.css_class == "" then
+            return label .. " (status_placeholder): missing 'css_class'"
+        end
     else
         return label .. ": invalid type '" .. tostring(section.type) .. "'"
     end
@@ -550,6 +576,31 @@ function render_page_table(section)
     )
 end
 
+-- A group of plain, non-submit buttons -- JS-driven (register's own
+-- Add Row/Submit Batch, edit's own Save changes), never inside a
+-- <form> (that's what the `form` type's own submit button is for, a
+-- different case entirely). `style` is a rare, deliberate exception to
+-- page.lua's usual class-only styling convention: edit's own action
+-- group needs a bit of extra top margin its neighbor (a fields list
+-- with no bottom margin of its own) doesn't provide, while register's
+-- neighbor (a table wrapper that already carries margin-bottom)
+-- doesn't -- a real, per-instance layout difference between the two
+-- real callers, not something worth inventing a new CSS class for one
+-- inline value.
+function render_page_actions(section)
+    buttons_html = {}
+    for _, button in ipairs(section.buttons) do
+        table.insert(buttons_html, render_lib.render(
+            "        <button type=\"button\"{{{ class_attr }}}{{{ id_attr }}}>{{ label }}</button>\n",
+            {class_attr = attr_fragment("class", button.css_class), id_attr = attr_fragment("id", button.id), label = button.label}
+        ))
+    end
+    return render_lib.render(
+        "    <div class=\"platform-actions\"{{{ style_attr }}}>\n{{{ buttons }}}    </div>\n",
+        {style_attr = attr_fragment("style", section.style), buttons = table.concat(buttons_html)}
+    )
+end
+
 -- Renders one section to HTML. Split out from page.render for the
 -- same reason validate_section is split from page.validate: a table
 -- cell's nested section renders through this exact function too, not
@@ -565,6 +616,13 @@ function render_page_section(section)
         return render_page_form(section)
     elseif section.type == "table" then
         return render_page_table(section)
+    elseif section.type == "actions" then
+        return render_page_actions(section)
+    elseif section.type == "status_placeholder" then
+        return render_lib.render(
+            "    <div{{{ id_attr }}}{{{ class_attr }}}></div>\n",
+            {id_attr = attr_fragment("id", section.id), class_attr = attr_fragment("class", section.css_class)}
+        )
     end
     return ""
 end

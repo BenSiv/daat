@@ -1395,6 +1395,30 @@ function html.render(entity_type, layout_json, nonce, locked_fields)
     register_header = render_page_header("Register " .. escaped_type,
         "<p>Fill out the sheet. Fields marked with <span class=\"req-dot\">*</span> are required.</p>",
         "<a class=\"btn btn-secondary\" href=\"browse?type=" .. escaped_type .. "\">Browse " .. escaped_type .. "</a>")
+
+    -- The action buttons and status placeholder are the only pieces of
+    -- this page's static shell that recur elsewhere verbatim (render_
+    -- entity_edit's own single-row edit page has the exact same two
+    -- shapes) -- everything else here (the always-JS-populated table
+    -- shell, the CSS block, the templated inline <script>) stays direct
+    -- string composition, same as before: see doc/templating.md's
+    -- scope-boundary note on why those don't fit page.lua's vocabulary.
+    page_lib = require("page")
+    sections = {
+        {
+            type = "actions",
+            buttons = {
+                {label = "+ Add Row", id = "btn-add-row", css_class = "btn btn-secondary"},
+                {label = "Submit Batch", id = "btn-submit-batch", css_class = "btn btn-primary"},
+            },
+        },
+        {type = "status_placeholder", id = "status-message", css_class = "status-msg"},
+    }
+    validate_err = page_lib.validate(sections)
+    if validate_err != nil then
+        error(validate_err)
+    end
+    actions_html = page_lib.render(sections)
     return string.format("""
 <div class="fossil-doc" data-title="Register %s">
     <style>
@@ -1472,12 +1496,7 @@ function html.render(entity_type, layout_json, nonce, locked_fields)
             </table>
         </div>
 
-        <div class="platform-actions">
-            <button type="button" class="btn btn-secondary" id="btn-add-row">+ Add Row</button>
-            <button type="button" class="btn btn-primary"   id="btn-submit-batch">Submit Batch</button>
-        </div>
-
-        <div id="status-message" class="status-msg"></div>
+        %s
     </div>
 
     <script nonce="%s">
@@ -1640,7 +1659,7 @@ function html.render(entity_type, layout_json, nonce, locked_fields)
         document.getElementById("btn-submit-batch").addEventListener("click", submitBatch);
     </script>
 </div>
-""", escaped_type, platform_container_css(), platform_page_header_css(), platform_table_wrapper_css(), platform_button_css() .. platform_cell_editor_css(), register_header, nonce, json_for_script(layout_json), js_string_literal(entity_type), json_for_script(locked_fields_json))
+""", escaped_type, platform_container_css(), platform_page_header_css(), platform_table_wrapper_css(), platform_button_css() .. platform_cell_editor_css(), register_header, actions_html, nonce, json_for_script(layout_json), js_string_literal(entity_type), json_for_script(locked_fields_json))
 end
 
 -- Single-row edit form for an existing entity -- the generic-entity

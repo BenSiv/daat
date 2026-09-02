@@ -58,6 +58,13 @@ function test_validate_rejects_missing_required_section_fields()
     check(page.validate({{type = "form", method = "POST", action = "/x", fields = {}}}) != nil, "form needs submit_label")
     check(page.validate({{type = "table", rows = {}}}) != nil, "table needs a non-empty columns list")
     check(page.validate({{type = "table", columns = {"A"}}}) != nil, "table needs rows")
+    check(page.validate({{type = "actions"}}) != nil, "actions needs a non-empty buttons list")
+    check(page.validate({{type = "actions", buttons = {}}}) != nil, "actions rejects an empty buttons list")
+    check(page.validate({{type = "actions", buttons = {{id = "x", css_class = "btn"}}}}) != nil, "actions button needs label")
+    check(page.validate({{type = "actions", buttons = {{label = "Go", css_class = "btn"}}}}) != nil, "actions button needs id")
+    check(page.validate({{type = "actions", buttons = {{label = "Go", id = "x"}}}}) != nil, "actions button needs css_class")
+    check(page.validate({{type = "status_placeholder", css_class = "x"}}) != nil, "status_placeholder needs id")
+    check(page.validate({{type = "status_placeholder", id = "x"}}) != nil, "status_placeholder needs css_class")
 end
 
 -- Regression lock for the consistency pass: form.heading/message/
@@ -267,6 +274,56 @@ function test_render_form_groups_produce_headed_sections()
     check(form_count == 1, "groups must stay inside exactly one real <form>, got " .. tostring(form_count))
 end
 
+function test_validate_rejects_empty_string_actions_style()
+    print("Testing validate rejects an empty-string (not nil) actions.style")
+    good_buttons = {{label = "Go", id = "btn-go", css_class = "btn btn-primary"}}
+    check(page.validate({{type = "actions", buttons = good_buttons, style = ""}}) != nil,
+        "empty-string actions.style should be rejected")
+    check(page.validate({{type = "actions", buttons = good_buttons}}) == nil,
+        "omitted actions.style should still validate cleanly")
+end
+
+-- Registration grid / entity-edit's own two real call sites: a
+-- JS-driven button group (never inside a <form> -- these are
+-- type="button", not a submit) and an empty, id/class-only placeholder
+-- a script fills in later. See doc/templating.md's registration-grid
+-- scope-boundary note for why only these two pieces of that page
+-- convert, not the rest of it.
+function test_render_actions_produces_button_group_in_order()
+    print("Testing render produces a plain (non-submit) button group in declared order")
+    sections = {{
+        type = "actions",
+        buttons = {
+            {label = "+ Add Row", id = "btn-add-row", css_class = "btn btn-secondary"},
+            {label = "Submit Batch", id = "btn-submit-batch", css_class = "btn btn-primary"},
+        },
+    }}
+    html = page.render(sections)
+    check(contains(html, "<div class=\"platform-actions\">"), "should wrap the buttons in a platform-actions div")
+    check(contains(html, "<button type=\"button\" class=\"btn btn-secondary\" id=\"btn-add-row\">+ Add Row</button>"),
+        "the first button should render with its own class/id/label")
+    add_pos = string.find(html, "btn-add-row", 1, true)
+    submit_pos = string.find(html, "btn-submit-batch", 1, true)
+    check(add_pos != nil and submit_pos != nil and add_pos < submit_pos, "buttons should render in declared order")
+    check(not contains(html, "type=\"submit\""), "an actions button must never be a real submit button")
+end
+
+function test_render_actions_style_attribute_is_optional()
+    print("Testing render only emits actions' style attribute when given")
+    with_style = page.render({{type = "actions", style = "margin-top: 20px;", buttons = {{label = "Save", id = "btn-save", css_class = "btn btn-primary"}}}})
+    check(contains(with_style, "style=\"margin-top: 20px;\""), "a given style should render verbatim")
+
+    without_style = page.render({{type = "actions", buttons = {{label = "Save", id = "btn-save", css_class = "btn btn-primary"}}}})
+    check(not contains(without_style, "style="), "an omitted style should render no style attribute at all")
+end
+
+function test_render_status_placeholder_is_an_empty_div()
+    print("Testing render produces an empty, id/class-only status placeholder div")
+    html = page.render({{type = "status_placeholder", id = "status-message", css_class = "status-msg"}})
+    check(contains(html, "<div id=\"status-message\" class=\"status-msg\"></div>"),
+        "should render exactly one empty div with the given id and class")
+end
+
 -- Run them
 test_validate_accepts_a_realistic_page()
 test_validate_rejects_unknown_section_type()
@@ -282,6 +339,10 @@ test_render_checkbox_label_after_input()
 test_render_textarea_value_is_inner_content_not_attribute()
 test_render_table_with_nested_form_cell()
 test_render_form_groups_produce_headed_sections()
+test_validate_rejects_empty_string_actions_style()
+test_render_actions_produces_button_group_in_order()
+test_render_actions_style_attribute_is_optional()
+test_render_status_placeholder_is_an_empty_div()
 
 if FAILURES > 0 then
     print(FAILURES .. " test(s) failed")
