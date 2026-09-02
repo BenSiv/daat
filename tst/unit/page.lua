@@ -128,8 +128,8 @@ function test_validate_rejects_bad_groups()
     )
 end
 
-function test_validate_table_cells_only_nest_form()
-    print("Testing validate restricts table cell items to a string or a 'form' section")
+function test_validate_table_cells_only_nest_form_or_html_fragment()
+    print("Testing validate restricts table cell items to a string, a 'form' section, or an 'html_fragment' item")
     good_table = {type = "table", columns = {"A"}, rows = {{{"plain text"}}}}
     check(page.validate({good_table}) == nil, "a plain string cell item should validate")
 
@@ -137,12 +137,38 @@ function test_validate_table_cells_only_nest_form()
     with_form_cell = {type = "table", columns = {"A"}, rows = {{{form_item}}}}
     check(page.validate({with_form_cell}) == nil, "a nested form cell item should validate")
 
+    fragment_item = {type = "html_fragment", html = "<a href=\"/x\">link</a>"}
+    with_fragment_cell = {type = "table", columns = {"A"}, rows = {{{fragment_item}}}}
+    check(page.validate({with_fragment_cell}) == nil, "a well-formed html_fragment cell item should validate")
+
+    with_bad_fragment_cell = {type = "table", columns = {"A"}, rows = {{{{type = "html_fragment"}}}}}
+    check(page.validate({with_bad_fragment_cell}) != nil, "an html_fragment item missing 'html' should be rejected")
+
     bad_item = {type = "message", css_class = "c", text = "t"}
     with_bad_cell = {type = "table", columns = {"A"}, rows = {{{bad_item}}}}
-    check(page.validate({with_bad_cell}) != nil, "a non-form section nested in a cell should be rejected")
+    check(page.validate({with_bad_cell}) != nil, "a non-form/non-html_fragment section nested in a cell should be rejected")
 
     with_number_cell = {type = "table", columns = {"A"}, rows = {{{42}}}}
     check(page.validate({with_number_cell}) != nil, "a cell item that's neither a string nor a table should be rejected")
+end
+
+-- Regression lock for the reason 'html_fragment' exists at all: a
+-- table cell holding a pre-rendered link (the SQL console's reference
+-- columns, render_reference_value) must appear as a real <a> tag, not
+-- get HTML-escaped into visible "&lt;a href..." markup the way a plain
+-- string item would.
+function test_render_html_fragment_cell_item_is_not_escaped()
+    print("Testing render inserts an html_fragment cell item's HTML verbatim, not escaped")
+    sections = {{
+        type = "table",
+        columns = {"Sample"},
+        rows = {{{{type = "html_fragment", html = "<a href=\"/detail?id=1\">#1</a>"}}}},
+    }}
+    err = page.validate(sections)
+    check(err == nil, "sanity: this section should validate: " .. tostring(err))
+    html = page.render(sections)
+    check(contains(html, "<a href=\"/detail?id=1\">#1</a>"), "the html_fragment item's real anchor tag should appear unescaped")
+    check(not contains(html, "&lt;a href"), "an html_fragment item must never be HTML-escaped")
 end
 
 function test_render_escapes_user_text()
@@ -248,7 +274,8 @@ test_validate_rejects_missing_required_section_fields()
 test_validate_rejects_empty_string_optional_form_and_table_fields()
 test_validate_rejects_bad_form_fields()
 test_validate_rejects_bad_groups()
-test_validate_table_cells_only_nest_form()
+test_validate_table_cells_only_nest_form_or_html_fragment()
+test_render_html_fragment_cell_item_is_not_escaped()
 test_render_escapes_user_text()
 test_render_distinguishes_nil_from_empty_string_value()
 test_render_checkbox_label_after_input()

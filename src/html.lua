@@ -4709,55 +4709,80 @@ function html.render_sql(db_path, sql_text, column_names, rows, err, ref_columns
     if sql_text_or_empty == nil then
         sql_text_or_empty = ""
     end
-    escaped_sql = html.html_escape(sql_text_or_empty)
 
-    result_html = ""
+    page_lib = require("page")
+    render_lib = require("render")
+    sections = {
+        {
+            type = "form",
+            method = "get",
+            action = "sql",
+            fields = {
+                {type = "textarea", name = "q", id = "platform-sql-query", value = sql_text_or_empty, placeholder = "SELECT * FROM sample LIMIT 20;", css_class = "platform-sql-input"},
+            },
+            submit_label = "Run",
+        },
+    }
+
+    -- Three `<p class="platform-empty">`-shaped one-off messages (no
+    -- rows, a genuinely empty submitted query, the real row count)
+    -- stay as direct render.lib composition rather than page.lua
+    -- sections -- that type only ever renders a <div>, and growing it
+    -- with a tag override would be for this one page's benefit alone.
+    -- The error state and the real results table both do fit the
+    -- existing vocabulary exactly (message, table+html_fragment), so
+    -- those go through page.lua like everything else.
+    extra_html = ""
     if err != nil then
-        result_html = "<div class=\"platform-sql-error\">Error: " .. html.html_escape(err) .. "</div>"
+        table.insert(sections, {type = "message", css_class = "platform-sql-error", text = "Error: " .. err})
     elseif rows != nil then
-        header_parts = {}
-        for _, name in ipairs(column_names) do
-            table.insert(header_parts, "<th>" .. html.html_escape(name) .. "</th>")
-        end
-        header_cells = table.concat(header_parts)
-        -- Repeated ".." string concatenation in this loop is O(n^2) in
-        -- Lua (each ".." copies the whole accumulated string so far) --
-        -- fine for a handful of rows, but a genuinely unbounded query
-        -- (/sql has no LIMIT/pagination at all, unlike /browse's own
-        -- BROWSE_PAGE_SIZE cap) against a real production table took 54
-        -- seconds for ~3800 rows of full document content. table.insert
-        -- + table.concat is O(n).
-        body_row_parts = {}
+        -- Every cell here is already-safe, pre-rendered HTML --
+        -- display_value/render_reference_value both call
+        -- html.html_escape (or build a real popover-linked <a>)
+        -- internally -- never a raw value a plain string table-cell
+        -- item's own auto-escaping should touch a second time.
+        page_rows = {}
         for _, row in ipairs(rows) do
-            cell_parts = {}
+            cells = {}
             for _, name in ipairs(column_names) do
                 ref_type = ref_columns[name]
+                cell_html = display_value(row[name])
                 if ref_type != nil then
-                    table.insert(cell_parts, "<td>" .. render_reference_value(db_path, ref_type, row[name]) .. "</td>")
-                else
-                    table.insert(cell_parts, "<td>" .. display_value(row[name]) .. "</td>")
+                    cell_html = render_reference_value(db_path, ref_type, row[name])
                 end
+                table.insert(cells, {{type = "html_fragment", html = cell_html}})
             end
-            table.insert(body_row_parts, "<tr>" .. table.concat(cell_parts) .. "</tr>")
+            table.insert(page_rows, cells)
         end
-        body_rows = table.concat(body_row_parts)
+
         if #rows == 0 then
-            result_html = "<p class=\"platform-empty\">No rows.</p>"
+            extra_html = render_lib.render("<p class=\"platform-empty\">No rows.</p>", {})
         else
+            table.insert(sections, {
+                type = "table",
+                id = "sql-table",
+                wrapper_class = "platform-table-wrapper",
+                columns = column_names,
+                rows = page_rows,
+            })
             count_message = tostring(#rows) .. " rows"
             if truncated == true then
                 count_message = "Showing first " .. tostring(#rows) .. " rows -- more may exist. Add your own LIMIT to see a different range."
             end
-            result_html = "<div class=\"platform-table-wrapper\"><table id=\"sql-table\"><thead><tr>" ..
-                header_cells .. "</tr></thead><tbody>" .. body_rows .. "</tbody></table></div>" ..
-                "<p class=\"platform-sql-count\">" .. count_message .. "</p>"
+            extra_html = render_lib.render("<p class=\"platform-sql-count\">{{ text }}</p>", {text = count_message})
         end
     elseif sql_text_or_empty == "" then
         -- Submitted with a genuinely empty box -- distinct from the
         -- pre-run, example-prefilled first-load case below, which
         -- needs no message at all (nothing has failed or been skipped).
-        result_html = "<p class=\"platform-empty\">Enter a SQL query above, then click Run.</p>"
+        extra_html = render_lib.render("<p class=\"platform-empty\">Enter a SQL query above, then click Run.</p>", {})
     end
+
+    validate_err = page_lib.validate(sections)
+    if validate_err != nil then
+        error(validate_err)
+    end
+    result_html = page_lib.render(sections) .. extra_html
 
     sql_header = render_page_header("Query", "<p>Read-only (SELECT only) queries against the entity store. Setup/Admin only.</p>", nil)
     return string.format("""
@@ -4808,15 +4833,10 @@ function html.render_sql(db_path, sql_text, column_names, rows, err, ref_columns
     </style>
     <div class="platform-container">
         %s
-        <form method="get" action="sql">
-            <textarea class="platform-sql-input" id="platform-sql-query" name="q" placeholder="SELECT * FROM sample LIMIT 20;">%s</textarea>
-            <button class="btn btn-primary" type="submit">Run</button>
-        </form>
-        %s
-    </div>
+%s    </div>
 </div>
 %s
-""", platform_container_css(), platform_page_header_css(), platform_button_css(), platform_table_wrapper_css(), html.popover_css() .. embed_css, sql_header, escaped_sql, result_html, html.popover_js(nonce))
+""", platform_container_css(), platform_page_header_css(), platform_button_css(), platform_table_wrapper_css(), html.popover_css() .. embed_css, sql_header, result_html, html.popover_js(nonce))
 end
 
 --------------------------------------------------------------------------

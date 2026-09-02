@@ -55,6 +55,12 @@ function validate_fields(fields, label)
         if field.wrapper_class != nil and (type(field.wrapper_class) != "string" or field.wrapper_class == "") then
             return string.format("%s field #%d: 'wrapper_class' must be a non-empty string if given", label, j)
         end
+        if field.css_class != nil and (type(field.css_class) != "string" or field.css_class == "") then
+            return string.format("%s field #%d: 'css_class' must be a non-empty string if given", label, j)
+        end
+        if field.id != nil and (type(field.id) != "string" or field.id == "") then
+            return string.format("%s field #%d: 'id' must be a non-empty string if given", label, j)
+        end
     end
     return nil
 end
@@ -159,6 +165,12 @@ function validate_section(section, label)
         if section.css_class != nil and (type(section.css_class) != "string" or section.css_class == "") then
             return label .. " (table): 'css_class' must be a non-empty string if given"
         end
+        if section.wrapper_class != nil and (type(section.wrapper_class) != "string" or section.wrapper_class == "") then
+            return label .. " (table): 'wrapper_class' must be a non-empty string if given"
+        end
+        if section.id != nil and (type(section.id) != "string" or section.id == "") then
+            return label .. " (table): 'id' must be a non-empty string if given"
+        end
         if type(section.columns) != "table" or #section.columns == 0 then
             return label .. " (table): must have a non-empty 'columns' list"
         end
@@ -176,22 +188,27 @@ function validate_section(section, label)
                 for k, item in ipairs(cell) do
                     item_label = string.format("%s (table) row #%d cell #%d item #%d", label, r, c, k)
                     if type(item) == "table" then
-                        -- Only 'form' -- not any section type generally --
-                        -- since render_page_table only knows how to render
-                        -- a nested form (see its own header comment on why
-                        -- that's not generic dispatch). Keep this in sync
-                        -- with render_page_table's own capability rather
-                        -- than accepting something validate allows but
-                        -- render would silently drop.
-                        if item.type != "form" then
-                            return item_label .. ": a table cell can only nest a 'form' section, not '" .. tostring(item.type) .. "'"
-                        end
-                        item_err = validate_section(item, item_label)
-                        if item_err != nil then
-                            return item_err
+                        -- Only 'form' or 'html_fragment' -- not any section type
+                        -- generally -- since render_page_table only knows
+                        -- how to render these two (see its own header
+                        -- comment on why that's not generic dispatch). Keep
+                        -- this in sync with render_page_table's own
+                        -- capability rather than accepting something
+                        -- validate allows but render would silently drop.
+                        if item.type == "html_fragment" then
+                            if type(item.html) != "string" then
+                                return item_label .. " (html_fragment): missing 'html'"
+                            end
+                        elseif item.type == "form" then
+                            item_err = validate_section(item, item_label)
+                            if item_err != nil then
+                                return item_err
+                            end
+                        else
+                            return item_label .. ": a table cell can only nest a 'form' or 'html_fragment' item, not '" .. tostring(item.type) .. "'"
                         end
                     elseif type(item) != "string" then
-                        return item_label .. ": must be a string or a 'form' section"
+                        return item_label .. ": must be a string, a 'form' section, or a 'html_fragment' item"
                     end
                 end
             end
@@ -278,17 +295,33 @@ end
 -- input rather than before (matching a native checkbox's usual reading
 -- order: the box, then what it means).
 function render_page_field_inner(field)
-    -- id only when there's a real label for it to target -- an
-    -- unmatched id is dead weight, not a neutral default.
+    -- id defaults to field.name, but only when there's a real label to
+    -- target it -- an unmatched id is dead weight, not a neutral
+    -- default. field.id overrides that default outright, for the one
+    -- other real reason a field needs a stable id with no label at
+    -- all: client-side JS addressing it directly (the SQL console's
+    -- own query box is found by a fixed id, not by name, to sync it
+    -- from elsewhere in the page).
     id_attr = ""
     label_line = ""
-    if field.label != nil then
+    if field.id != nil then
+        id_attr = attr_fragment("id", field.id)
+    elseif field.label != nil then
         id_attr = attr_fragment("id", field.name)
+    end
+    if field.label != nil then
         label_line = render_lib.render(
             "        <label for=\"{{ name }}\">{{ label }}</label>\n",
             {name = field.name, label = field.label}
         )
     end
+
+    -- A class on the input/textarea element itself -- distinct from
+    -- wrapper_class, which wraps the whole label+input pair in an
+    -- outer div. Some CSS targets the field element directly (the SQL
+    -- console's own .platform-sql-input styles the <textarea> itself,
+    -- no wrapper involved) rather than a container around it.
+    class_attr = attr_fragment("class", field.css_class)
 
     if field.type == "checkbox" then
         checked_attr = ""
@@ -296,8 +329,8 @@ function render_page_field_inner(field)
             checked_attr = " checked"
         end
         input_line = render_lib.render(
-            "        <input type=\"checkbox\"{{{ id_attr }}} name=\"{{ name }}\"{{{ value_attr }}}{{{ checked_attr }}}>\n",
-            {name = field.name, id_attr = id_attr, value_attr = attr_fragment("value", field.value), checked_attr = checked_attr}
+            "        <input type=\"checkbox\"{{{ id_attr }}}{{{ class_attr }}} name=\"{{ name }}\"{{{ value_attr }}}{{{ checked_attr }}}>\n",
+            {name = field.name, id_attr = id_attr, class_attr = class_attr, value_attr = attr_fragment("value", field.value), checked_attr = checked_attr}
         )
         return input_line .. label_line
     end
@@ -308,8 +341,8 @@ function render_page_field_inner(field)
             value = ""
         end
         input_line = render_lib.render(
-            "        <textarea{{{ id_attr }}} name=\"{{ name }}\"{{{ placeholder_attr }}}>{{ value }}</textarea>\n",
-            {name = field.name, id_attr = id_attr, placeholder_attr = attr_fragment("placeholder", field.placeholder), value = value}
+            "        <textarea{{{ id_attr }}}{{{ class_attr }}} name=\"{{ name }}\"{{{ placeholder_attr }}}>{{ value }}</textarea>\n",
+            {name = field.name, id_attr = id_attr, class_attr = class_attr, placeholder_attr = attr_fragment("placeholder", field.placeholder), value = value}
         )
         return label_line .. input_line
     end
@@ -319,7 +352,8 @@ function render_page_field_inner(field)
         required_attr = " required"
     end
 
-    extra_attrs = attr_fragment("value", field.value) ..
+    extra_attrs = class_attr ..
+        attr_fragment("value", field.value) ..
         attr_fragment("placeholder", field.placeholder) ..
         attr_fragment("size", field.size) ..
         attr_fragment("autocomplete", field.autocomplete) ..
@@ -445,21 +479,29 @@ function render_page_form(section)
     })
 end
 
--- A table whose cells can hold plain text or a nested `form` (in
--- practice, so far, the only section type a real page has ever needed
--- inside a cell -- an admin table's per-row action forms). Each item
--- dispatches to render_page_form directly rather than through the
--- generic render_page_section: that function is defined further down
--- this file and itself dispatches to render_page_table for `table`
--- sections, so calling it from here would be real mutual recursion
--- between two separately-named functions -- unlike validate_section's
--- own self-recursion (safe: a function can always call itself by name,
--- since the assignment finishes before the body ever runs), two
--- DIFFERENT functions each calling the other hits the same
--- forward-reference trap as doc/templating.md's ordering gotcha,
--- because whichever one is defined first still sees the other as an
--- unset global at the time its own body is compiled. Extend this if a
--- second nested type is ever genuinely needed in a cell -- not before.
+-- A table whose cells can hold plain text, a nested `form` (an admin
+-- table's per-row action forms), or an `html_fragment` item --
+-- {type="html_fragment", html = "..."}, a pre-rendered, already-safe
+-- HTML fragment the caller built itself (html.html_escape/render.lib
+-- directly), inserted as-is, never re-escaped. For the one real case
+-- that needs it so far: the SQL console's reference-column cells are
+-- real <a href="detail?...">popover-linked anchors
+-- (render_reference_value), not plain text -- a plain string item
+-- would have HTML-escaped the whole anchor tag into visible markup
+-- instead of a real link. `form`/`html_fragment` dispatch
+-- directly rather than through the generic render_page_section: that
+-- function is defined further down this file and itself dispatches to
+-- render_page_table for `table` sections, so calling it from here
+-- would be real mutual recursion between two separately-named
+-- functions -- unlike validate_section's own self-recursion (safe: a
+-- function can always call itself by name, since the assignment
+-- finishes before the body ever runs), two DIFFERENT functions each
+-- calling the other hits the same forward-reference trap as
+-- doc/templating.md's ordering gotcha, because whichever is defined
+-- first still sees the other as an unset global at the time its own
+-- body is compiled. Extend this (both here and validate_section's own
+-- matching check) if a third nested kind is ever genuinely needed in a
+-- cell -- not before.
 function render_page_table(section)
     header_cells = ""
     for _, col in ipairs(section.columns) do
@@ -472,7 +514,11 @@ function render_page_table(section)
             item_parts = {}
             for _, item in ipairs(cell) do
                 if type(item) == "table" then
-                    table.insert(item_parts, render_page_form(item))
+                    if item.type == "html_fragment" then
+                        table.insert(item_parts, item.html)
+                    else
+                        table.insert(item_parts, render_page_form(item))
+                    end
                 else
                     table.insert(item_parts, render_lib.render("{{ item }}", {item = item}))
                 end
@@ -482,9 +528,25 @@ function render_page_table(section)
         body_rows = body_rows .. "<tr>" .. cells .. "</tr>"
     end
     css_class_attr = attr_fragment("class", section.css_class)
+    id_attr = attr_fragment("id", section.id)
+    table_html = render_lib.render(
+        "<table{{{ id_attr }}}{{{ css_class_attr }}}><thead><tr>{{{ header_cells }}}</tr></thead><tbody>{{{ body_rows }}}</tbody></table>",
+        {id_attr = id_attr, css_class_attr = css_class_attr, header_cells = header_cells, body_rows = body_rows}
+    )
+    -- wrapper_class is a separate outer <div> around the whole table --
+    -- distinct from css_class, which is a class on the <table> element
+    -- itself (admin-users'/admin-api-keys' own tables need only that).
+    -- The SQL console's results table needs both: a wrapping
+    -- .platform-table-wrapper div (a shape shared/copy-pasted across
+    -- nine other render_* functions, per platform_table_wrapper_css's
+    -- own comment -- a genuinely recurring shape, not a one-off) around
+    -- a <table> that itself carries its own id, not a class.
+    if section.wrapper_class == nil then
+        return "    " .. table_html .. "\n"
+    end
     return render_lib.render(
-        "    <table{{{ css_class_attr }}}><thead><tr>{{{ header_cells }}}</tr></thead><tbody>{{{ body_rows }}}</tbody></table>\n",
-        {css_class_attr = css_class_attr, header_cells = header_cells, body_rows = body_rows}
+        "    <div class=\"{{{ wrapper_class }}}\">{{{ table_html }}}</div>\n",
+        {wrapper_class = section.wrapper_class, table_html = table_html}
     )
 end
 
