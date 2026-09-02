@@ -3410,23 +3410,40 @@ end
 -- and only time it can be shown; it's rendered in its own prominent,
 -- one-time banner rather than folded into `message`.
 function html.render_admin_api_keys(keys, csrf_token, message, is_error, new_raw_key)
-    escaped_csrf = html.html_escape(csrf_token)
+    page_lib = require("page")
 
-    message_html = render_admin_message(message, is_error)
-
-    new_key_html = ""
-    if new_raw_key != nil and new_raw_key != "" then
-        new_key_html = string.format("""
-        <div class="platform-admin-message platform-admin-new-key">
-            <strong>Save this key now -- it cannot be shown again:</strong>
-            <code>%s</code>
-        </div>
-""", html.html_escape(new_raw_key))
+    message_css_class = "platform-admin-message"
+    if is_error == true then
+        message_css_class = "platform-admin-message platform-admin-message-error"
     end
 
-    rows_html = ""
+    sections = {}
+    if message != nil and message != "" then
+        table.insert(sections, {type = "message", css_class = message_css_class, text = message})
+    end
+    if new_raw_key != nil and new_raw_key != "" then
+        table.insert(sections, {
+            type = "secret_reveal",
+            css_class = "platform-admin-message platform-admin-new-key",
+            instruction = "Save this key now -- it cannot be shown again:",
+            value = new_raw_key,
+        })
+    end
+    table.insert(sections, {
+        type = "form",
+        method = "POST",
+        action = "admin-api-keys-create",
+        css_class = "platform-admin-create-form",
+        fields = {
+            {type = "hidden", name = "csrf_token", value = csrf_token},
+            {type = "text", name = "label", placeholder = "label (e.g. nightly sync job)", required = true},
+            {type = "text", name = "cap", placeholder = "capabilities (e.g. i)", size = "10"},
+        },
+        submit_label = "Create key",
+    })
+
+    rows = {}
     for _, k in ipairs(keys) do
-        escaped_label = html.html_escape(k.label)
         status = "active"
         if k.archived_at != nil and k.archived_at != "" then
             status = "archived"
@@ -3440,28 +3457,42 @@ function html.render_admin_api_keys(keys, csrf_token, message, is_error, new_raw
             archive_button_class = "btn-secondary"
         end
 
-        rows_html = rows_html .. string.format("""
-        <tr>
-            <td>%s</td>
-            <td>
-                <form method="POST" action="admin-api-keys-capabilities" class="platform-admin-inline-form">
-                    <input type="hidden" name="csrf_token" value="%s">
-                    <input type="hidden" name="label" value="%s">
-                    <input type="text" name="cap" value="%s" size="6">
-                    <button type="submit" class="btn btn-secondary">Set</button>
-                </form>
-            </td>
-            <td>%s</td>
-            <td>
-                <form method="POST" action="admin-api-keys-%s" class="platform-admin-inline-form">
-                    <input type="hidden" name="csrf_token" value="%s">
-                    <input type="hidden" name="label" value="%s">
-                    <button type="submit" class="btn %s">%s</button>
-                </form>
-            </td>
-        </tr>
-""", escaped_label, escaped_csrf, escaped_label, html.html_escape(k.cap), status,
-     archive_action, escaped_csrf, escaped_label, archive_button_class, archive_label)
+        table.insert(rows, {
+            {k.label},
+            {
+                {
+                    type = "form", method = "POST", action = "admin-api-keys-capabilities", css_class = "platform-admin-inline-form",
+                    fields = {
+                        {type = "hidden", name = "csrf_token", value = csrf_token},
+                        {type = "hidden", name = "label", value = k.label},
+                        {type = "text", name = "cap", value = k.cap, size = "6"},
+                    },
+                    submit_class = "btn-secondary", submit_label = "Set",
+                },
+            },
+            {status},
+            {
+                {
+                    type = "form", method = "POST", action = "admin-api-keys-" .. archive_action, css_class = "platform-admin-inline-form",
+                    fields = {
+                        {type = "hidden", name = "csrf_token", value = csrf_token},
+                        {type = "hidden", name = "label", value = k.label},
+                    },
+                    submit_class = archive_button_class, submit_label = archive_label,
+                },
+            },
+        })
+    end
+    table.insert(sections, {
+        type = "table",
+        css_class = "platform-admin-users",
+        columns = {"Label", "Capabilities", "Status", "Actions"},
+        rows = rows,
+    })
+
+    validate_err = page_lib.validate(sections)
+    if validate_err != nil then
+        error(validate_err)
     end
 
     return string.format("""
@@ -3484,23 +3515,9 @@ function html.render_admin_api_keys(keys, csrf_token, message, is_error, new_raw
     </style>
     <div class="platform-container">
         %s
-        %s
-        %s
-        <form method="POST" action="admin-api-keys-create" class="platform-admin-create-form">
-            <input type="hidden" name="csrf_token" value="%s">
-            <input type="text" name="label" placeholder="label (e.g. nightly sync job)" required>
-            <input type="text" name="cap" placeholder="capabilities (e.g. i)" size="10">
-            <button type="submit" class="btn btn-primary">Create key</button>
-        </form>
-        <table class="platform-admin-users">
-            <thead><tr><th>Label</th><th>Capabilities</th><th>Status</th><th>Actions</th></tr></thead>
-            <tbody>
-%s
-            </tbody>
-        </table>
-    </div>
+%s    </div>
 </div>
-""", platform_container_css(), platform_button_css(), platform_page_header_css() .. platform_admin_message_css(), render_page_header("Manage API keys", nil, nil), message_html, new_key_html, escaped_csrf, rows_html)
+""", platform_container_css(), platform_button_css(), platform_page_header_css() .. platform_admin_message_css(), render_page_header("Manage API keys", nil, nil), page_lib.render(sections))
 end
 
 -- Settings: a real UI for theme.lua's own fields, instead

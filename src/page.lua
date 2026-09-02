@@ -49,6 +49,16 @@ function validate_section(section, label)
         if type(section.text) != "string" or section.text == "" then
             return label .. " (message): missing 'text'"
         end
+    elseif section.type == "secret_reveal" then
+        if type(section.css_class) != "string" or section.css_class == "" then
+            return label .. " (secret_reveal): missing 'css_class'"
+        end
+        if type(section.instruction) != "string" or section.instruction == "" then
+            return label .. " (secret_reveal): missing 'instruction'"
+        end
+        if type(section.value) != "string" or section.value == "" then
+            return label .. " (secret_reveal): missing 'value'"
+        end
     elseif section.type == "form" then
         if type(section.method) != "string" or section.method == "" then
             return label .. " (form): missing 'method'"
@@ -161,6 +171,18 @@ function render_page_message(css_class, text)
     return render_lib.render(
         "<div class=\"{{{ css_class }}}\">{{ text }}</div>",
         {css_class = css_class, text = text}
+    )
+end
+
+-- A one-time "here's a secret value, it will never be shown again"
+-- banner (an API key's raw value right after creation) -- a real,
+-- different shape from render_page_message's plain single string: bold
+-- instruction text plus the value itself in a distinct <code> run, not
+-- one escaped sentence.
+function render_page_secret_reveal(css_class, instruction, value)
+    return render_lib.render(
+        "<div class=\"{{{ css_class }}}\"><strong>{{ instruction }}</strong> <code>{{ value }}</code></div>",
+        {css_class = css_class, instruction = instruction, value = value}
     )
 end
 
@@ -319,6 +341,8 @@ function render_page_section(section)
         return render_lib.render("    <h3>{{ text }}</h3>\n", {text = section.text})
     elseif section.type == "message" then
         return "    " .. render_page_message(section.css_class, section.text) .. "\n"
+    elseif section.type == "secret_reveal" then
+        return "    " .. render_page_secret_reveal(section.css_class, section.instruction, section.value) .. "\n"
     elseif section.type == "form" then
         return render_page_form(section)
     elseif section.type == "table" then
