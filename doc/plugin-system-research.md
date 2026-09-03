@@ -40,6 +40,10 @@ Same shape as the UI surface, different catalog: a manifest declares `tools = {{
 
 Both surfaces (UI and tools) share one underlying idea -- a new, narrow capability type per surface, approved and sandboxed the same way `read.entity`/`write.entity` already are -- and neither depends on the other; they can land in either order.
 
+### A third surface: admin manual triggers
+
+*(Update: a third surface was added later, brex 925561615 -- read as historical alongside the UI/tools sections above, which describe the original two.)* Neither UI actions nor entity hooks fit "an admin wants to run one specific piece of an extension's own code on demand" (e.g. "refresh the analysis snapshot now"): a UI action requires the extension to also have a `capabilities.ui` canvas page just to host the button, and both UI actions and hooks are reachable by any logged-in user or by an ordinary write, with no admin-only gate. `capabilities.manual_triggers` closes this the same way `ui`/`tools` did -- a small declared list (`{name, label, description}`), approved the same way, dispatched through the same `entity.build_ctx` shape -- but adds the one thing neither prior surface needed: the *route* itself (`/admin-triggers`, `cgi.lua`) checks the account's own Admin capability before ever consulting the extension's approval, since an admin explicitly clicking "run this now" is a different trust question than "this extension is approved to react to writes." See doc/extensibility.md's own `manual_triggers` entry for the capability shape.
+
 ## What's still open
 
 - **Approval UX for something riskier than an entity hook.** A route serving a real page, or a tool the agent can call mid-conversation, is a bigger surface than "check a capability before touching one table." The existing approval/re-approval-on-capability-change flow is a reasonable starting point but may need a stronger review step once a plugin can put a canvas page or a tool in front of every user, not just mutate rows an admin already scoped by entity type.

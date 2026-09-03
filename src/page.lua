@@ -228,6 +228,9 @@ function validate_section(section, label)
             if type(button.css_class) != "string" or button.css_class == "" then
                 return button_label .. ": missing 'css_class'"
             end
+            if button.data != nil and type(button.data) != "table" then
+                return button_label .. ": 'data' must be a table if given"
+            end
         end
         if section.style != nil and (type(section.style) != "string" or section.style == "") then
             return label .. " (actions): 'style' must be a non-empty string if given"
@@ -587,12 +590,26 @@ end
 -- doesn't -- a real, per-instance layout difference between the two
 -- real callers, not something worth inventing a new CSS class for one
 -- inline value.
+--
+-- A button's optional `data` table (added for the admin manual-trigger
+-- page, brex 925561615) mirrors the canvas system's own data-action/
+-- data-args convention: auxiliary values a click handler needs, carried
+-- as escaped data-* attributes rather than interpolated into inline JS
+-- text, so an extension-declared string (a trigger's own name) can
+-- never break out of a <script> block the way string-formatting it
+-- directly into one could.
 function render_page_actions(section)
     buttons_html = {}
     for _, button in ipairs(section.buttons) do
+        data_attrs = ""
+        if button.data != nil then
+            for key, value in pairs(button.data) do
+                data_attrs = data_attrs .. attr_fragment("data-" .. key, value)
+            end
+        end
         table.insert(buttons_html, render_lib.render(
-            "        <button type=\"button\"{{{ class_attr }}}{{{ id_attr }}}>{{ label }}</button>\n",
-            {class_attr = attr_fragment("class", button.css_class), id_attr = attr_fragment("id", button.id), label = button.label}
+            "        <button type=\"button\"{{{ class_attr }}}{{{ id_attr }}}{{{ data_attrs }}}>{{ label }}</button>\n",
+            {class_attr = attr_fragment("class", button.css_class), id_attr = attr_fragment("id", button.id), data_attrs = data_attrs, label = button.label}
         ))
     end
     return render_lib.render(

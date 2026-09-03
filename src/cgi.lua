@@ -819,6 +819,22 @@ function cgi.handle_request()
             html.page_shell("System", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
     end
 
+    -- Admin-only listing of manual-trigger buttons contributed by
+    -- approved extensions (capabilities.manual_triggers, brex
+    -- 925561615) -- linked from /system's own sitemap. Gated on "a"
+    -- alone (not show_sql_nav's broader "s" or "a"), same as
+    -- /admin-users below: running an extension's own code on demand is
+    -- squarely an admin action, not a Setup one.
+    if path_info == "/admin-triggers" then
+        if cgi.has_capability(capabilities, "a") == false then
+            return print_response("403 Forbidden", "text/html", "<h3>Forbidden: requires Admin capability</h3>")
+        end
+        ext_dir = config.extensions_dir(root)
+        body = html.render_admin_triggers(extension.approved_with_manual_triggers(db_path, ext_dir), nonce)
+        return print_response("200 OK", "text/html",
+            html.page_shell("Manual Triggers", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
+    end
+
     if path_info == "/knowledge" then
         if show_sql_nav == false and show_admin_nav == false then
             return print_response("403 Forbidden", "text/html", "<h3>Forbidden: requires Setup or Admin capability</h3>")
@@ -2004,15 +2020,84 @@ function cgi.handle_request()
         return print_response("405 Method Not Allowed", "application/json", json.encode({error = "Method not allowed"}))
     end
 
+    -- Manual-trigger dispatch (capabilities.manual_triggers, brex
+    -- 925561615) -- runs one named entry point from an approved
+    -- extension's own code, on an admin's explicit request. Modeled
+    -- directly on POST /ext/<name>/action below (same CSRF/approval/ctx
+    -- shape) but deliberately its own route rather than folded into
+    -- /ext/: a manual trigger has no canvas page to (re-)render and no
+    -- capabilities.ui requirement -- an extension can offer a manual
+    -- trigger with no UI page at all -- and it's reached only from the
+    -- admin-only /admin-triggers listing above, gated on the "a"
+    -- capability itself (not merely on the extension's own approval),
+    -- unlike /ext/<name>/action which any logged-in user can reach.
+    --
+    -- Runs synchronously, like a UI action, not queued like an
+    -- after-hook's own extension_job -- a trigger whose real work is
+    -- slow is expected to kick that work off elsewhere (an outbound
+    -- net.capability call to a job runner, a queue write) and return
+    -- quickly, the same way this handler itself must, rather than the
+    -- platform growing a second async job queue before anything has
+    -- actually needed one.
+    if string.sub(path_info, 1, 16) == "/admin-triggers/" then
+        trigger_ext_name, trigger_name = string.match(path_info, "^/admin%-triggers/([^/]+)/([^/]+)$")
+        if trigger_ext_name == nil or method != "POST" then
+            return print_response("404 Not Found", "text/plain", "Not Found")
+        end
+        if cgi.has_capability(capabilities, "a") == false then
+            return print_response("403 Forbidden", "application/json", json.encode({error = "Admin capability required"}))
+        end
+        if not require_csrf(cookies) then
+            return print_response("403 Forbidden", "application/json", json.encode({error = "CSRF check failed"}))
+        end
+
+        ext_dir = config.extensions_dir(root)
+        manifest, manifest_err = extension.load_manifest(ext_dir, trigger_ext_name)
+        trigger_spec = nil
+        if manifest != nil and manifest.capabilities != nil and manifest.capabilities.manual_triggers != nil then
+            for _, candidate in ipairs(manifest.capabilities.manual_triggers) do
+                if candidate.name == trigger_name then
+                    trigger_spec = candidate
+                end
+            end
+        end
+        -- 404, not 403 -- an unapproved/unknown trigger's route
+        -- shouldn't reveal whether it exists, same reasoning as /ext/'s
+        -- own plugin_ok gate above it.
+        if trigger_spec == nil or extension.is_approved(db_path, manifest) == false then
+            return print_response("404 Not Found", "application/json", json.encode({error = "unknown trigger"}))
+        end
+
+        hooks, hooks_err = extension.load_hooks(ext_dir, trigger_ext_name, manifest)
+        trigger_fn = nil
+        if hooks != nil and type(hooks.manual_triggers) == "table" then
+            trigger_fn = hooks.manual_triggers[trigger_name]
+        end
+        if type(trigger_fn) != "function" then
+            return print_response("404 Not Found", "application/json", json.encode({error = "unknown trigger"}))
+        end
+
+        ctx = entity.build_ctx(db_path, manifest)
+        trigger_ok, trigger_result = pcall(trigger_fn, ctx, {triggered_by = author})
+        if trigger_ok == false then
+            return print_response("500 Internal Server Error", "application/json", json.encode({error = tostring(trigger_result)}))
+        end
+        message = "Triggered."
+        if type(trigger_result) == "table" and type(trigger_result.message) == "string" then
+            message = trigger_result.message
+        end
+        return print_response("200 OK", "application/json", json.encode({success = true, message = message}))
+    end
+
     -- Plugin UI surface (doc/plugin-system-research.md): GET /ext/<name>
     -- renders an approved, capabilities.ui-declaring extension's own
     -- page; POST /ext/<name>/action runs one of its named action
-    -- handlers and returns the re-rendered canvas. The first genuinely
-    -- dynamic route in this file (every route above is a literal
-    -- path_info == "/..." check) -- checked as a prefix rather than
-    -- one more hardcoded string, and deliberately placed last, right
-    -- before the final 404 fallback, so it can never shadow a real
-    -- built-in route.
+    -- handlers and returns the re-rendered canvas. One of only two
+    -- prefix-matched routes in this file (every other route above is a
+    -- literal path_info == "/..." check, including /admin-triggers/
+    -- just above) -- checked as a prefix rather than one more
+    -- hardcoded string, and deliberately placed last, right before the
+    -- final 404 fallback, so it can never shadow a real built-in route.
     if string.sub(path_info, 1, 5) == "/ext/" then
         ext_name = string.match(path_info, "^/ext/([^/]+)$")
         is_action_path = false

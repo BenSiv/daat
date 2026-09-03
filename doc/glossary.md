@@ -17,7 +17,7 @@ Terms this codebase, its UI, and its agent tools should use consistently. When a
 
   Promotion is driven by **content-processing maturity**, not retrieval frequency -- retrieval count and heat only decide whether a document is *due for review* (`knowledge.due_for_review`) at all, never which tier it lands in. See `document.promotion_target_tier`'s own comment for the exact mechanism, and `architecture.md`'s "Knowledge pool" section for the full writeup.
 
-- **Baseline / Setup / Admin** -- the three account capability levels (`cgi.lua`'s `REQUIRED_CAPABILITY`, `cgi.has_capability`). Baseline (`"i"`) is what every logged-in account needs to reach any gated route at all; Setup (`"s"`) additionally grants `/sql`, `/system`, and `/knowledge`; Admin (`"a"`) additionally grants user/API-key management, `/settings`, and any entity type whose schema opts into `admin_write_only`. Never "check-in" -- that word appeared in exactly one error string, nowhere else, and has been fixed to say "baseline" like everywhere else already did.
+- **Baseline / Setup / Admin** -- the three account capability levels (`cgi.lua`'s `REQUIRED_CAPABILITY`, `cgi.has_capability`). Baseline (`"i"`) is what every logged-in account needs to reach any gated route at all; Setup (`"s"`) additionally grants `/sql`, `/system`, and `/knowledge`; Admin (`"a"`) additionally grants user/API-key management, `/settings`, `/admin-triggers` (an approved extension's own `capabilities.manual_triggers` buttons), and any entity type whose schema opts into `admin_write_only`. Never "check-in" -- that word appeared in exactly one error string, nowhere else, and has been fixed to say "baseline" like everywhere else already did.
 
 ## Intentionally distinct -- don't conflate
 

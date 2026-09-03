@@ -103,7 +103,42 @@ return {
 }
 EOF
 
+    # Manual-trigger admin surface (brex 925561615): an approved
+    # extension declaring capabilities.manual_triggers contributes an
+    # admin-only "run this now" button, dispatched from GET/POST
+    # /admin-triggers (cgi.lua). meta.triggered_by carries the real
+    # clicking admin's own login (not the fixed "extension:<name>"
+    # identity ctx.create_entity itself still attributes writes to) --
+    # exercised below by folding it into the created widget's label.
+    mkdir -p extensions/trigger-demo
+    cat > extensions/trigger-demo/manifest.lua <<'EOF'
+return {
+    name = "trigger-demo",
+    events = {},
+    entity_types = {},
+    capabilities = {
+        read = {},
+        write = {"entity"},
+        net = "none",
+        manual_triggers = {
+            {name = "refresh", label = "Refresh now", description = "Creates a refreshed widget."},
+        },
+    },
+}
+EOF
+    cat > extensions/trigger-demo/main.lua <<'EOF'
+return {
+    manual_triggers = {
+        refresh = function(ctx, meta)
+            ctx.create_entity("widget", {label = "refreshed-by-" .. tostring(meta.triggered_by)})
+            return {message = "Refreshed!"}
+        end,
+    },
+}
+EOF
+
     read TEST_SESSION_COOKIE TEST_CSRF_TOKEN < <(login_test_user "plainuser" "i")
+    read ADMIN_SESSION_COOKIE ADMIN_CSRF_TOKEN < <(login_test_user "admintest" "ia")
 }
 
 start_chat() {
@@ -252,5 +287,99 @@ teardown() {
 
     "$BIN" extension approve tool-demo
     run "$BIN" extension show tool-demo
+    [[ "$output" =~ "status:       approved" ]]
+}
+
+# Manual-trigger admin surface (brex 925561615) -- see setup()'s
+# trigger-demo extension above.
+
+@test "GET /admin-triggers requires Admin capability, not just baseline" {
+    "$BIN" extension approve trigger-demo
+    GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/admin-triggers" QUERY_STRING="" \
+        HTTP_COOKIE="session=${TEST_SESSION_COOKIE}; csrf=${TEST_CSRF_TOKEN}" run "$BIN"
+    [[ "$output" =~ "403 Forbidden" ]]
+}
+
+@test "GET /admin-triggers lists an approved extension's manual trigger" {
+    "$BIN" extension approve trigger-demo
+    GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/admin-triggers" QUERY_STRING="" \
+        HTTP_COOKIE="session=${ADMIN_SESSION_COOKIE}; csrf=${ADMIN_CSRF_TOKEN}" run "$BIN"
+    [[ "$output" =~ "200 OK" ]]
+    [[ "$output" =~ "Refresh now" ]]
+    [[ "$output" =~ 'data-ext="trigger-demo"' ]]
+    [[ "$output" =~ 'data-trigger="refresh"' ]]
+}
+
+@test "GET /admin-triggers shows a placeholder message when nothing declaring a manual trigger is approved" {
+    GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/admin-triggers" QUERY_STRING="" \
+        HTTP_COOKIE="session=${ADMIN_SESSION_COOKIE}; csrf=${ADMIN_CSRF_TOKEN}" run "$BIN"
+    [[ "$output" =~ "200 OK" ]]
+    [[ "$output" =~ "No approved extension currently declares a manual trigger." ]]
+}
+
+@test "POST /admin-triggers/<ext>/<trigger> runs the handler, threads the real admin login through meta, and returns its message" {
+    "$BIN" extension approve trigger-demo
+    output=$(raw_post_json "/admin-triggers/trigger-demo/refresh" '{}' \
+        "session=${ADMIN_SESSION_COOKIE}; csrf=${ADMIN_CSRF_TOKEN}" "${ADMIN_CSRF_TOKEN}")
+    [[ "$output" =~ "200 OK" ]]
+    [[ "$output" =~ "Refreshed!" ]]
+
+    run "$BIN" entity show widget 1
+    [[ "$output" =~ "refreshed-by-admintest" ]]
+    [[ "$output" =~ "extension:trigger-demo" ]]
+}
+
+@test "POST /admin-triggers/<ext>/<trigger> requires Admin capability, even with a valid CSRF token" {
+    "$BIN" extension approve trigger-demo
+    output=$(raw_post_json "/admin-triggers/trigger-demo/refresh" '{}' \
+        "session=${TEST_SESSION_COOKIE}; csrf=${TEST_CSRF_TOKEN}" "${TEST_CSRF_TOKEN}")
+    [[ "$output" =~ "403 Forbidden" ]]
+
+    run "$BIN" entity list widget
+    [[ ! "$output" =~ "#1" ]]
+}
+
+@test "POST /admin-triggers/<ext>/<trigger> requires the matching CSRF token" {
+    "$BIN" extension approve trigger-demo
+    output=$(printf '%s' '{}' | \
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/admin-triggers/trigger-demo/refresh" QUERY_STRING="" \
+        HTTP_COOKIE="session=${ADMIN_SESSION_COOKIE}; csrf=${ADMIN_CSRF_TOKEN}" "$BIN")
+    [[ "$output" =~ "403 Forbidden" ]]
+
+    run "$BIN" entity list widget
+    [[ ! "$output" =~ "#1" ]]
+}
+
+@test "POST /admin-triggers/<ext>/<trigger> 404s for an unknown trigger name" {
+    "$BIN" extension approve trigger-demo
+    output=$(raw_post_json "/admin-triggers/trigger-demo/does-not-exist" '{}' \
+        "session=${ADMIN_SESSION_COOKIE}; csrf=${ADMIN_CSRF_TOKEN}" "${ADMIN_CSRF_TOKEN}")
+    [[ "$output" =~ "404 Not Found" ]]
+}
+
+@test "POST /admin-triggers/<ext>/<trigger> 404s for an unapproved extension" {
+    output=$(raw_post_json "/admin-triggers/trigger-demo/refresh" '{}' \
+        "session=${ADMIN_SESSION_COOKIE}; csrf=${ADMIN_CSRF_TOKEN}" "${ADMIN_CSRF_TOKEN}")
+    [[ "$output" =~ "404 Not Found" ]]
+
+    run "$BIN" entity list widget
+    [[ ! "$output" =~ "#1" ]]
+}
+
+@test "editing capabilities.manual_triggers invalidates approval, same as any other capability change" {
+    "$BIN" extension approve trigger-demo
+    run "$BIN" extension show trigger-demo
+    [[ "$output" =~ "status:       approved" ]]
+
+    sed -i 's/Refresh now/Refresh right now/' extensions/trigger-demo/manifest.lua
+    run "$BIN" extension show trigger-demo
+    [[ "$output" =~ "NOT APPROVED" ]]
+
+    output=$(raw_post_json "/admin-triggers/trigger-demo/refresh" '{}' \
+        "session=${ADMIN_SESSION_COOKIE}; csrf=${ADMIN_CSRF_TOKEN}" "${ADMIN_CSRF_TOKEN}")
+    [[ "$output" =~ "404 Not Found" ]]
+
+    "$BIN" extension approve trigger-demo
+    run "$BIN" extension show trigger-demo
     [[ "$output" =~ "status:       approved" ]]
 }

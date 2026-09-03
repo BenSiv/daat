@@ -3846,6 +3846,7 @@ function html.render_system(show_sql, show_admin)
         items = items .. render_sitemap_item("admin-users", "Users", "Manage accounts and capabilities.")
         items = items .. render_sitemap_item("admin-api-keys", "API keys", "Manage external-integration API keys.")
         items = items .. render_sitemap_item("settings", "Settings", "Site name, branding, colors, and chat prompt.")
+        items = items .. render_sitemap_item("admin-triggers", "Manual Triggers", "Run admin-triggered extension actions on demand.")
     end
     items = items .. render_sitemap_item("templates", "Templates", "Reusable entry templates for new documents.")
 
@@ -3864,6 +3865,113 @@ function html.render_system(show_sql, show_admin)
     </div>
 </div>
 """, platform_container_css(), platform_sitemap_css(), platform_page_header_css(), render_page_header("System", nil, nil), items)
+end
+
+-- Admin listing of every approved extension's capabilities.manual_triggers
+-- (brex 925561615's own blocker) -- one button per declared trigger,
+-- POSTing to /admin-triggers/<ext>/<trigger> (cgi.lua) and showing the
+-- result in a single shared status placeholder. Built from page.lua's
+-- existing actions/status_placeholder section types, the same pattern
+-- html.render/html.render_entity_edit already use for their own
+-- Save/Submit buttons -- not the canvas/plugin system, since a manual
+-- trigger has no canvas page of its own to (re-)render, just a
+-- success/failure message.
+--
+-- `triggers` is extension.approved_with_manual_triggers's own return
+-- shape: a list of {name = <extension dir name>, manifest = <table>}.
+function html.render_admin_triggers(triggers, nonce)
+    page_lib = require("page")
+
+    if #triggers == 0 then
+        sections = {
+            {type = "message", css_class = "status-msg", text = "No approved extension currently declares a manual trigger."},
+        }
+        validate_err = page_lib.validate(sections)
+        if validate_err != nil then
+            error(validate_err)
+        end
+        return string.format("""
+<div class="fossil-doc" data-title="Manual Triggers">
+    <style>
+%s
+%s
+    </style>
+    <div class="platform-container">
+        %s
+%s    </div>
+</div>
+""", platform_container_css(), platform_page_header_css(), render_page_header("Manual Triggers", nil, nil), page_lib.render(sections))
+    end
+
+    buttons = {}
+    for _, entry in ipairs(triggers) do
+        for _, trigger in ipairs(entry.manifest.capabilities.manual_triggers) do
+            table.insert(buttons, {
+                label = trigger.label,
+                id = "btn-trigger-" .. entry.name .. "-" .. trigger.name,
+                css_class = "btn btn-secondary",
+                data = {ext = entry.name, trigger = trigger.name},
+            })
+        end
+    end
+
+    sections = {
+        {type = "actions", buttons = buttons},
+        {type = "status_placeholder", id = "status-message", css_class = "status-msg"},
+    }
+    validate_err = page_lib.validate(sections)
+    if validate_err != nil then
+        error(validate_err)
+    end
+    actions_html = page_lib.render(sections)
+
+    return string.format("""
+<div class="fossil-doc" data-title="Manual Triggers">
+    <style>
+%s
+%s
+%s
+        .platform-actions { display: flex; flex-wrap: wrap; gap: 14px; }
+    </style>
+    <div class="platform-container">
+        %s
+%s    </div>
+
+    <script nonce="%s">
+(function(){
+    var container = document.querySelector('.platform-actions');
+    var status = document.getElementById('status-message');
+    if (!container || !status) { return; }
+    container.addEventListener('click', function(e){
+        var btn = e.target.closest('button[data-ext]');
+        if (!btn) { return; }
+        var ext = btn.getAttribute('data-ext');
+        var trigger = btn.getAttribute('data-trigger');
+        btn.disabled = true;
+        status.className = "status-msg";
+        status.innerText = "Running...";
+        PlatformJS.postJSON('/admin-triggers/' + encodeURIComponent(ext) + '/' + encodeURIComponent(trigger), {})
+            .then(function(result){
+                btn.disabled = false;
+                if (result && result.success) {
+                    status.className = "status-msg success";
+                    status.innerText = result.message || "Done.";
+                } else {
+                    status.className = "status-msg error";
+                    status.innerText = (result && result.error) || "Trigger failed.";
+                }
+            })
+            .catch(function(){
+                btn.disabled = false;
+                status.className = "status-msg error";
+                status.innerText = "An unexpected error occurred.";
+            });
+    });
+})();
+    </script>
+</div>
+""", platform_container_css(), platform_page_header_css(), platform_button_css(),
+     render_page_header("Manual Triggers", nil, nil), actions_html, nonce)
 end
 
 -- Content-maturity ladder (see document.promotion_target_tier's own

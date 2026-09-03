@@ -156,6 +156,34 @@ function extension.validate_manifest(manifest)
             end
         end
     end
+    -- capabilities.manual_triggers declares admin-only "run this now"
+    -- buttons (brex 925561615's own blocker), listed and dispatched from
+    -- a dedicated /admin-triggers route (cgi.lua) -- never the chat
+    -- agent, never an ordinary user's own request. Unlike
+    -- capabilities.tools there's no shared dispatch namespace to worry
+    -- about (no RESERVED_TOOL_NAMES-style check needed): the route path
+    -- is always /admin-triggers/<extension name>/<trigger name>, scoped
+    -- by construction, so two extensions' trigger names can never
+    -- collide with each other or with anything else.
+    if manifest.capabilities != nil and manifest.capabilities.manual_triggers != nil then
+        if type(manifest.capabilities.manual_triggers) != "table" then
+            return "manifest '" .. tostring(manifest.name) .. "': capabilities.manual_triggers must be a list"
+        end
+        for _, trigger in ipairs(manifest.capabilities.manual_triggers) do
+            if type(trigger) != "table" then
+                return "manifest '" .. tostring(manifest.name) .. "': capabilities.manual_triggers entries must be tables"
+            end
+            if type(trigger.name) != "string" or trigger.name == "" then
+                return "manifest '" .. tostring(manifest.name) .. "': capabilities.manual_triggers entry must have a non-empty string 'name'"
+            end
+            if type(trigger.label) != "string" or trigger.label == "" then
+                return "manifest '" .. tostring(manifest.name) .. "': capabilities.manual_triggers entry '" .. trigger.name .. "' must have a non-empty string 'label'"
+            end
+            if type(trigger.description) != "string" or trigger.description == "" then
+                return "manifest '" .. tostring(manifest.name) .. "': capabilities.manual_triggers entry '" .. trigger.name .. "' must have a non-empty string 'description'"
+            end
+        end
+    end
     return nil
 end
 
@@ -228,6 +256,23 @@ function extension.approved_with_tools(db_path, ext_dir)
            and entry.manifest.capabilities != nil
            and entry.manifest.capabilities.tools != nil
            and #entry.manifest.capabilities.tools > 0
+           and extension.is_approved(db_path, entry.manifest) then
+            table.insert(result, {name = entry.name, manifest = entry.manifest})
+        end
+    end
+    return result
+end
+
+-- Approved extensions that also declare capabilities.manual_triggers --
+-- the one list the /admin-triggers route (cgi.lua) needs, same
+-- exclusion spirit as approved_with_ui/approved_with_tools.
+function extension.approved_with_manual_triggers(db_path, ext_dir)
+    result = {}
+    for _, entry in ipairs(extension.all(ext_dir)) do
+        if entry.manifest != nil
+           and entry.manifest.capabilities != nil
+           and entry.manifest.capabilities.manual_triggers != nil
+           and #entry.manifest.capabilities.manual_triggers > 0
            and extension.is_approved(db_path, entry.manifest) then
             table.insert(result, {name = entry.name, manifest = entry.manifest})
         end
@@ -367,6 +412,29 @@ function tools_equal(a, b)
     return true
 end
 
+-- Same-shape comparison for capabilities.manual_triggers -- like
+-- capabilities.tools, its presence is a real grant (an admin-triggered
+-- entry point into the extension's own code), so editing a declared
+-- trigger's label/description -- not just adding/removing one -- has to
+-- invalidate approval too.
+function manual_trigger_spec_equal(a, b)
+    return a.name == b.name and a.label == b.label and a.description == b.description
+end
+
+function manual_triggers_equal(a, b)
+    if a == nil then a = {} end
+    if b == nil then b = {} end
+    if #a != #b then
+        return false
+    end
+    for i, trigger in ipairs(a) do
+        if manual_trigger_spec_equal(trigger, b[i]) == false then
+            return false
+        end
+    end
+    return true
+end
+
 function extension.capabilities_equal(a, b)
     if a == nil then a = {} end
     if b == nil then b = {} end
@@ -386,7 +454,10 @@ function extension.capabilities_equal(a, b)
     if ui_equal(a.ui, b.ui) == false then
         return false
     end
-    return tools_equal(a.tools, b.tools)
+    if tools_equal(a.tools, b.tools) == false then
+        return false
+    end
+    return manual_triggers_equal(a.manual_triggers, b.manual_triggers)
 end
 
 -- ---- Admin-approval registry ----

@@ -142,6 +142,81 @@ function test_extension_without_tools_can_still_use_a_reserved_name()
     check(err == nil, "expected no error: no capabilities.tools means no dispatch collision to guard against")
 end
 
+-- capabilities.manual_triggers validation (admin manual-trigger
+-- surface, brex 925561615) -- structurally the same shape as
+-- capabilities.tools' own tests above, minus the reserved-name check:
+-- a trigger dispatches under /admin-triggers/<extension name>/<trigger
+-- name>, a namespace scoped by construction, so there's nothing for a
+-- trigger name to collide with.
+function test_valid_manual_triggers_capability_passes_validation()
+    print("Testing a well-formed capabilities.manual_triggers entry passes validation")
+    manifest = base_manifest("snapshot-refresher")
+    manifest.capabilities = {manual_triggers = {
+        {name = "refresh", label = "Refresh now", description = "Refreshes the analysis snapshot."},
+    }}
+    err = extension.validate_manifest(manifest)
+    check(err == nil, "expected no error, got: " .. tostring(err))
+end
+
+function test_manual_trigger_entry_missing_label_is_rejected()
+    print("Testing a capabilities.manual_triggers entry without a label is rejected")
+    manifest = base_manifest("snapshot-refresher")
+    manifest.capabilities = {manual_triggers = {{name = "refresh", description = "x"}}}
+    err = extension.validate_manifest(manifest)
+    check(err != nil, "expected a validation error for a missing label")
+end
+
+function test_manual_trigger_entry_missing_description_is_rejected()
+    print("Testing a capabilities.manual_triggers entry without a description is rejected")
+    manifest = base_manifest("snapshot-refresher")
+    manifest.capabilities = {manual_triggers = {{name = "refresh", label = "Refresh now"}}}
+    err = extension.validate_manifest(manifest)
+    check(err != nil, "expected a validation error for a missing description")
+end
+
+function test_manual_trigger_entry_missing_name_is_rejected()
+    print("Testing a capabilities.manual_triggers entry without a name is rejected")
+    manifest = base_manifest("snapshot-refresher")
+    manifest.capabilities = {manual_triggers = {{label = "Refresh now", description = "x"}}}
+    err = extension.validate_manifest(manifest)
+    check(err != nil, "expected a validation error for a missing name")
+end
+
+-- capabilities_equal (approval invalidation, brex 925561615) -- like
+-- capabilities.ui/tools, a manual trigger's presence is a real grant
+-- (an admin-reachable entry point into the extension's own code), so
+-- adding one or editing an existing one's label/description has to
+-- invalidate a prior approval, not silently keep it.
+function test_capabilities_equal_ignores_missing_manual_triggers_on_both_sides()
+    print("Testing capabilities_equal treats two capability tables with no manual_triggers at all as equal")
+    check(extension.capabilities_equal({read = {"entity"}}, {read = {"entity"}}) == true,
+        "expected equal capability tables (neither declaring manual_triggers) to compare equal")
+end
+
+function test_capabilities_equal_detects_added_manual_trigger()
+    print("Testing capabilities_equal detects a manual trigger added since approval")
+    approved = {manual_triggers = {}}
+    current = {manual_triggers = {{name = "refresh", label = "Refresh now", description = "x"}}}
+    check(extension.capabilities_equal(approved, current) == false,
+        "expected a newly-added manual trigger to invalidate approval")
+end
+
+function test_capabilities_equal_detects_edited_manual_trigger_label()
+    print("Testing capabilities_equal detects a manual trigger's label changing since approval")
+    approved = {manual_triggers = {{name = "refresh", label = "Refresh now", description = "x"}}}
+    current = {manual_triggers = {{name = "refresh", label = "Refresh immediately", description = "x"}}}
+    check(extension.capabilities_equal(approved, current) == false,
+        "expected an edited manual trigger label to invalidate approval")
+end
+
+function test_capabilities_equal_accepts_identical_manual_triggers()
+    print("Testing capabilities_equal accepts an unchanged manual_triggers list")
+    approved = {manual_triggers = {{name = "refresh", label = "Refresh now", description = "x"}}}
+    current = {manual_triggers = {{name = "refresh", label = "Refresh now", description = "x"}}}
+    check(extension.capabilities_equal(approved, current) == true,
+        "expected an unchanged manual_triggers list to still compare equal")
+end
+
 -- Run them
 test_hook_returned_in_table_is_invoked()
 test_missing_hook_is_a_graceful_noop()
@@ -152,6 +227,14 @@ test_tools_entry_missing_description_is_rejected()
 test_tools_entry_missing_parameters_is_rejected()
 test_extension_name_colliding_with_builtin_tool_group_is_rejected()
 test_extension_without_tools_can_still_use_a_reserved_name()
+test_valid_manual_triggers_capability_passes_validation()
+test_manual_trigger_entry_missing_label_is_rejected()
+test_manual_trigger_entry_missing_description_is_rejected()
+test_manual_trigger_entry_missing_name_is_rejected()
+test_capabilities_equal_ignores_missing_manual_triggers_on_both_sides()
+test_capabilities_equal_detects_added_manual_trigger()
+test_capabilities_equal_detects_edited_manual_trigger_label()
+test_capabilities_equal_accepts_identical_manual_triggers()
 
 if FAILURES > 0 then
     print(FAILURES .. " test(s) failed")
