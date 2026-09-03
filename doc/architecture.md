@@ -222,6 +222,7 @@ A built-in assistant, not a bolted-on integration: real per-user conversation se
   | `extension_max_job_attempts` | 5 | Retries before an `extension_job` (after-hook write queue) is marked permanently `failed` |
   | `db_backend` | `"sqlite"` | `"sqlite"` or `"mariadb"` -- see doc/mariadb-migration.md |
   | `mariadb_host`/`mariadb_port`/`mariadb_user`/`mariadb_database` | `"127.0.0.1"`/`3306`/none/none | MariaDB connection descriptor -- the password is the one field here that stays a plain `PLATFORM_MARIADB_PASSWORD` env var, never written to a file this repo tracks |
+  | `nav_order`/`nav_hidden` | none/none | Reorder/hide the sidebar nav rail's built-in items and approved extensions (`html.lua`'s `apply_nav_order`/`apply_nav_hidden`) -- an overlay on top of capability/deployment-state gating, never a way to grant back an item a user's own capabilities already exclude |
 
 ## Agent control: rule-based by default
 

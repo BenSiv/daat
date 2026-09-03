@@ -1,9 +1,10 @@
 -- tst/unit/html.lua
--- Unit tests for src/html.lua's "daat canvas" (validate_canvas/
--- render_canvas): the typed-element-table -> trusted-HTML-renderer
--- pattern a UI plugin's page is built from, modeled on template.lua's
--- own section.type dispatch. No prior test coverage existed for
--- html.lua at all before this file.
+-- Unit tests for src/html.lua. Originally just the "daat canvas"
+-- (validate_canvas/render_canvas): the typed-element-table -> trusted-
+-- HTML-renderer pattern a UI plugin's page is built from, modeled on
+-- template.lua's own section.type dispatch. No prior test coverage
+-- existed for html.lua at all before this file. Later extended with
+-- apply_nav_hidden/apply_nav_order (brex 683042859).
 
 html = require("html")
 
@@ -101,6 +102,83 @@ function test_render_mixed_elements_in_order()
     check(heading_pos < table_pos and table_pos < button_pos, "elements should render in the order given: " .. rendered)
 end
 
+-- apply_nav_hidden/apply_nav_order (brex 683042859): the platform.lua
+-- nav_order/nav_hidden overlay applied on top of html.page_shell's own
+-- capability-gated nav_items list. No prior coverage existed since
+-- these are new -- exercised directly here rather than only through a
+-- full page_shell render, same reasoning tst/unit/page.lua gives for
+-- testing its own module directly.
+function nav_items_fixture()
+    return {
+        {key = "home", href = "/", label = "Home"},
+        {key = "documents", href = "documents", label = "Documents"},
+        {key = "data", href = "data", label = "Data"},
+        {key = "system", href = "system", label = "System"},
+    }
+end
+
+function keys_of(items)
+    keys = {}
+    for _, item in ipairs(items) do
+        table.insert(keys, item.key)
+    end
+    return keys
+end
+
+function test_apply_nav_hidden_removes_only_listed_keys()
+    print("Testing apply_nav_hidden removes exactly the listed keys, keeps the rest")
+    result = html.apply_nav_hidden(nav_items_fixture(), {"data"})
+    check(#result == 3, "expected 3 remaining items, got " .. tostring(#result))
+    keys = keys_of(result)
+    check(keys[1] == "home" and keys[2] == "documents" and keys[3] == "system",
+        "expected home/documents/system in original order, got " .. table.concat(keys, ","))
+end
+
+function test_apply_nav_hidden_nil_or_empty_is_a_no_op()
+    print("Testing apply_nav_hidden with nil or an empty list changes nothing")
+    original = nav_items_fixture()
+    check(#html.apply_nav_hidden(original, nil) == 4, "nil hidden list should keep all items")
+    check(#html.apply_nav_hidden(original, {}) == 4, "empty hidden list should keep all items")
+end
+
+function test_apply_nav_hidden_unrecognized_key_is_a_silent_no_op()
+    print("Testing apply_nav_hidden ignores a key that doesn't match any real item")
+    result = html.apply_nav_hidden(nav_items_fixture(), {"not_a_real_key"})
+    check(#result == 4, "an unrecognized hidden key should drop nothing, got " .. tostring(#result))
+end
+
+function test_apply_nav_order_moves_named_keys_to_the_front()
+    print("Testing apply_nav_order places listed keys first, in the given order")
+    result = html.apply_nav_order(nav_items_fixture(), {"data", "home"})
+    keys = keys_of(result)
+    check(keys[1] == "data" and keys[2] == "home", "expected data,home first, got " .. table.concat(keys, ","))
+    check(keys[3] == "documents" and keys[4] == "system",
+        "unlisted items should keep their original relative order, appended after -- got " .. table.concat(keys, ","))
+end
+
+function test_apply_nav_order_nil_or_empty_is_a_no_op()
+    print("Testing apply_nav_order with nil or an empty list changes nothing")
+    original = nav_items_fixture()
+    check(table.concat(keys_of(html.apply_nav_order(original, nil)), ",") == table.concat(keys_of(original), ","),
+        "nil order should leave the list unchanged")
+    check(table.concat(keys_of(html.apply_nav_order(original, {})), ",") == table.concat(keys_of(original), ","),
+        "empty order should leave the list unchanged")
+end
+
+function test_apply_nav_order_unrecognized_key_is_a_silent_no_op()
+    print("Testing apply_nav_order ignores a key that doesn't match any real item")
+    result = html.apply_nav_order(nav_items_fixture(), {"not_a_real_key", "data"})
+    keys = keys_of(result)
+    check(#result == 4, "an unrecognized order key should not add or drop items, got " .. tostring(#result))
+    check(keys[1] == "data", "the real key in the order list should still move to the front, got " .. table.concat(keys, ","))
+end
+
+function test_apply_nav_order_duplicate_key_is_only_placed_once()
+    print("Testing apply_nav_order doesn't duplicate an item whose key is repeated in order")
+    result = html.apply_nav_order(nav_items_fixture(), {"data", "data", "home"})
+    check(#result == 4, "a repeated order key should not duplicate the item, got " .. tostring(#result))
+end
+
 -- Run them
 test_validate_rejects_unknown_element_type()
 test_validate_rejects_non_list()
@@ -111,9 +189,16 @@ test_render_heading_and_text_escape_html()
 test_render_table_emits_columns_and_rows()
 test_render_button_carries_action_and_args_as_data_attributes()
 test_render_mixed_elements_in_order()
+test_apply_nav_hidden_removes_only_listed_keys()
+test_apply_nav_hidden_nil_or_empty_is_a_no_op()
+test_apply_nav_hidden_unrecognized_key_is_a_silent_no_op()
+test_apply_nav_order_moves_named_keys_to_the_front()
+test_apply_nav_order_nil_or_empty_is_a_no_op()
+test_apply_nav_order_unrecognized_key_is_a_silent_no_op()
+test_apply_nav_order_duplicate_key_is_only_placed_once()
 
 if FAILURES > 0 then
     print(FAILURES .. " test(s) failed")
     os.exit(1)
 end
-print("All html.lua canvas tests passed")
+print("All html.lua tests passed")

@@ -229,6 +229,23 @@ end
 -- config.mariadb_descriptor's own PLATFORM_MARIADB_PASSWORD env var
 -- read.
 --
+-- nav_order/nav_hidden's own shared validation: a plain list of
+-- non-empty strings, everything else dropped silently (matching this
+-- whole function's own "malformed input falls back, never errors"
+-- contract) -- an unrecognized key is html.lua's own concern to treat
+-- as a no-op, not this function's; there's no fixed key vocabulary to
+-- check against here since extension-contributed keys ("ext:<name>")
+-- are only known at render time, per deployment.
+function validate_nav_key_list(raw)
+    keys = {}
+    for _, value in ipairs(raw) do
+        if type(value) == "string" and value != "" then
+            table.insert(keys, value)
+        end
+    end
+    return keys
+end
+
 -- Same generic-hook contract as load_theme below: absent or malformed
 -- platform.lua, every field just falls back to its default rather
 -- than erroring -- a deployment that wants none of this can skip the
@@ -267,6 +284,18 @@ function config.platform_config()
         mariadb_port = 3306,
         mariadb_user = nil,
         mariadb_database = nil,
+        -- nil (both) means "today's hardcoded rail, unchanged" -- see
+        -- html.lua's own apply_nav_order/apply_nav_hidden (brex
+        -- 683042859). Deliberately a reorder/hide overlay on the
+        -- existing capability-gated built-in items, not a from-scratch
+        -- nav vocabulary: an unrecognized key in either list is a
+        -- silent no-op (never an error), and a key genuinely hidden by
+        -- capability/deployment state today (no Setup/Admin cap, no
+        -- prioritized_tasks view, an unapproved extension) stays hidden
+        -- regardless of what's listed here -- this can only reorder or
+        -- further hide what would already render, never grant it back.
+        nav_order = nil,
+        nav_hidden = nil,
     }
 
     path = config.platform_config_path()
@@ -343,6 +372,12 @@ function config.platform_config()
     end
     if type(parsed.mariadb_database) == "string" and parsed.mariadb_database != "" then
         conf.mariadb_database = parsed.mariadb_database
+    end
+    if type(parsed.nav_order) == "table" then
+        conf.nav_order = validate_nav_key_list(parsed.nav_order)
+    end
+    if type(parsed.nav_hidden) == "table" then
+        conf.nav_hidden = validate_nav_key_list(parsed.nav_hidden)
     end
 
     PLATFORM_CONFIG_CACHE = conf

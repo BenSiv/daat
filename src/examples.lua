@@ -203,6 +203,14 @@ return {
   -- mariadb_port = 3306,
   -- mariadb_user = "platform",
   -- mariadb_database = "platform",
+  -- Nav rail: reorder and/or hide built-in items (home/documents/data/
+  -- tasks/system) and approved extensions (ext:<name>) -- an item
+  -- unlisted in nav_order just keeps its default relative position;
+  -- an unrecognized key in either list is silently ignored. Can only
+  -- reorder/hide what a user's own capabilities would already show
+  -- them, never grant back something they can't otherwise see.
+  -- nav_order = {"data", "home", "documents"},
+  -- nav_hidden = {"tasks"},
 }
 """
 

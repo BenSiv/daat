@@ -1224,6 +1224,65 @@ end
 -- the model always knows who it's talking to and can default owner/
 -- assignee-style fields to the current user, the way a human filling
 -- out the same form naturally would.
+-- Deployment-level nav rail reorder/hide (brex 683042859,
+-- platform.lua's own nav_order/nav_hidden -- see config.lua's own
+-- validate_nav_key_list). Deliberately an overlay applied AFTER
+-- nav_items is already built from capability/deployment-state checks
+-- below, never a replacement for them: this can only reorder or
+-- further hide what would already render for this user, never grant
+-- back something their own capabilities/deployment state already
+-- excluded (no Setup/Admin cap, no prioritized_tasks view, an
+-- unapproved extension). An unrecognized key in either list (a typo,
+-- an extension that's since been removed) is a silent no-op, matching
+-- every other malformed-config-falls-back-quietly convention this
+-- config system already follows.
+function apply_nav_hidden(nav_items, hidden_keys)
+    if hidden_keys == nil or #hidden_keys == 0 then
+        return nav_items
+    end
+    hidden_set = {}
+    for _, key in ipairs(hidden_keys) do
+        hidden_set[key] = true
+    end
+    result = {}
+    for _, item in ipairs(nav_items) do
+        if hidden_set[item.key] == nil then
+            table.insert(result, item)
+        end
+    end
+    return result
+end
+
+-- order lists keys in the desired position; any real nav item whose
+-- key isn't mentioned keeps its original relative order, appended
+-- after every explicitly-ordered one -- so a deployment only needs to
+-- name the items it actually wants moved, not repeat the full list
+-- (and can never accidentally drop one it forgot to mention).
+function apply_nav_order(nav_items, order_keys)
+    if order_keys == nil or #order_keys == 0 then
+        return nav_items
+    end
+    by_key = {}
+    for _, item in ipairs(nav_items) do
+        by_key[item.key] = item
+    end
+    result = {}
+    placed = {}
+    for _, key in ipairs(order_keys) do
+        item = by_key[key]
+        if item != nil and placed[key] == nil then
+            table.insert(result, item)
+            placed[key] = true
+        end
+    end
+    for _, item in ipairs(nav_items) do
+        if placed[item.key] == nil then
+            table.insert(result, item)
+        end
+    end
+    return result
+end
+
 function html.page_shell(title, active, body, nonce, show_sql, show_admin, has_tasks_view, nav_extensions, theme, author, page_context)
     if theme == nil then
         theme = {site_name = "Platform", colors = {}}
@@ -1279,6 +1338,9 @@ function html.page_shell(title, active, body, nonce, show_sql, show_admin, has_t
                 })
             end
         end
+        nav_config = config.platform_config()
+        nav_items = apply_nav_hidden(nav_items, nav_config.nav_hidden)
+        nav_items = apply_nav_order(nav_items, nav_config.nav_order)
     end
 
     -- Only rendered when the deployment's own theme.lua sets
@@ -6162,5 +6224,10 @@ function html.render_chat_widget(nonce, attachments_enabled)
 </script>
 """, attach_html, ICON_CHAT_BUBBLE, nonce)
 end
+
+-- Exposed purely so tst/unit/html.lua can reach them across the
+-- require() boundary -- see the matching comment in agent_vertex.lua.
+html.apply_nav_hidden = apply_nav_hidden
+html.apply_nav_order = apply_nav_order
 
 return html

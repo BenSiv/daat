@@ -521,6 +521,47 @@ EOF
     [[ "$output" =~ 'class="platform-nav-link platform-nav-link-active" href="data"' ]]
 }
 
+@test "platform.lua's nav_hidden hides the listed rail item, keeps the rest (brex 683042859)" {
+    write_platform_config ', nav_hidden = {"data"}'
+
+    run_cgi "/"
+    [ "$status" -eq 0 ]
+    # The rail link specifically (exact class+href pairing html.lua's
+    # own render loop always emits together), not the Home page's own
+    # separate "Data" sitemap tile -- a different link to the same
+    # href, in the page body, unaffected by nav_hidden.
+    [[ ! "$output" =~ 'class="platform-nav-link" href="data"' ]]
+    [[ "$output" =~ 'class="platform-nav-link" href="documents"' ]]
+    [[ "$output" =~ 'class="platform-nav-link platform-nav-link-active" href="/"' ]]
+}
+
+@test "platform.lua's nav_order moves listed rail items first, keeps the rest in their original order (brex 683042859)" {
+    write_platform_config ', nav_order = {"data", "home"}'
+
+    run_cgi "/"
+    [ "$status" -eq 0 ]
+    data_pos=$(echo "$output" | grep -bo 'href="data"' | head -1 | cut -d: -f1)
+    home_pos=$(echo "$output" | grep -bo 'href="/"' | head -1 | cut -d: -f1)
+    documents_pos=$(echo "$output" | grep -bo 'href="documents"' | head -1 | cut -d: -f1)
+    [ -n "$data_pos" ]
+    [ -n "$home_pos" ]
+    [ -n "$documents_pos" ]
+    # data and home should both come before documents (unlisted, keeps
+    # its original later position), and data (listed first) before home.
+    [ "$data_pos" -lt "$home_pos" ]
+    [ "$home_pos" -lt "$documents_pos" ]
+}
+
+@test "platform.lua with no nav_order/nav_hidden renders today's default rail unchanged (upgrade safety)" {
+    write_platform_config ''
+
+    run_cgi "/"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ 'href="/"' ]]
+    [[ "$output" =~ 'href="documents"' ]]
+    [[ "$output" =~ 'href="data"' ]]
+}
+
 @test "/view refuses to run an unapproved view" {
     cat > views/unapproved.lua <<'EOF'
 return {
