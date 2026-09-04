@@ -2128,7 +2128,15 @@ function cgi.handle_request()
                 return print_response("404 Not Found", "text/plain", "Not Found")
             end
             ctx = entity.build_ctx(db_path, manifest)
-            render_ok, render_result = pcall(hooks.render, ctx)
+            -- The request's own query-string params, exactly as every
+            -- other route already reads them (`params` above) -- generic
+            -- on purpose: render() gets whatever the URL carries, the
+            -- same way hooks.actions[action] already gets a generic
+            -- `args` body (below), rather than this route inventing a
+            -- fixed set of "known" plugin parameters. (brex 462301011 --
+            -- the concrete need was an experiment_view extension reading
+            -- ?experiment_id=, but nothing here is specific to that.)
+            render_ok, render_result = pcall(hooks.render, ctx, params)
             elements = nil
             if render_ok == true and type(render_result) == "table" then
                 elements = render_result.elements
