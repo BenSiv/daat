@@ -1398,6 +1398,19 @@ function html.page_shell(title, active, body, nonce, show_sql, show_admin, has_t
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Every relative href/src in this app (nav links, theme-asset,
+     vendor, etc.) is written assuming it resolves against the site
+     root -- true by construction for every route that existed before
+     capabilities.ui extensions (all single-segment: /documents, /data,
+     /chat, ...), so it never needed stating explicitly. /ext/<name>
+     (and its .../action sibling) is the first real nested path
+     (confirmed live: the sidebar logo and every nav link 404'd on that
+     page, each silently resolving one level too deep, e.g.
+     /ext/theme-asset instead of /theme-asset) -- pin the base
+     explicitly rather than rewrite every existing relative reference,
+     since a root base changes nothing for the already-root-relative
+     pages and fixes any current or future nested one. -->
+<base href="/">
 <title>%s</title>
 <link rel="icon" type="image/png" href="theme-asset?name=favicon.png">
 <script nonce="%s">window.PLATFORM_PAGE_CONTEXT = %s;</script>
