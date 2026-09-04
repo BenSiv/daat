@@ -6138,6 +6138,58 @@ function html.render_chat_widget(nonce, attachments_enabled)
         });
     }
 
+    // /api/chat-widget-send runs the whole (possibly multi-tool-call)
+    // turn synchronously server-side before its HTTP response returns
+    // (cgi.lua's /api/chat-widget-send handler calls agent.run_turn
+    // directly), and a full-page navigation is a real, separate CGI
+    // process per request -- navigating away mid-turn aborts the
+    // browser's own fetch and tears down pollWhilePending's interval,
+    // but does *not* stop the already-running server process, which
+    // keeps persisting the turn's steps to agent_message regardless
+    // (confirmed live: reported as the widget "clearing" an in-progress
+    // or just-finished thinking/answer on page change -- the answer was
+    // never lost, the new page's one-shot rehydrate fetch below just
+    // ran before the turn finished writing it, and nothing was watching
+    // for it afterward). isTurnPending/resumePollIfPending close that
+    // gap: a session whose last message is the user's own (no reply,
+    // no pending approval) means a turn was in flight when this page
+    // loaded, so resume the same poll-and-render loop pollWhilePending
+    // uses instead of leaving it at that one stale fetch.
+    function isTurnPending(state) {
+        if (!state || !state.messages || state.messages.length === 0) { return false; }
+        if (state.pending) { return false; } // an approval prompt is a settled, actionable state, not "still running"
+        return state.messages[state.messages.length - 1].role === 'user';
+    }
+
+    // Capped, unlike pollWhilePending's own loop -- that one's stop
+    // condition is tied to the sendPromise it's awaiting, which a page
+    // load resuming someone else's already-in-flight turn doesn't have.
+    // Without a cap, a turn that crashed/was killed server-side before
+    // ever writing a reply would leave its session's last message stuck
+    // as role "user" forever, polling this session on every future page
+    // load indefinitely.
+    var RESUME_POLL_MAX_ATTEMPTS = 60; // HISTORY_POLL_MS(800) * 60 =~ 48s
+    function resumePollIfPending(sessionId, state) {
+        if (!isTurnPending(state)) { return; }
+        var attempts = 0;
+        var thinkingEl = showThinking(sessionId);
+        var timer = setInterval(function(){
+            attempts++;
+            fetch('api/chat-widget-history?session_id=' + encodeURIComponent(sessionId))
+                .then(function(res){ if (!res.ok) { throw new Error('poll failed'); } return res.json(); })
+                .then(function(freshState){
+                    render(freshState);
+                    if (!isTurnPending(freshState) || attempts >= RESUME_POLL_MAX_ATTEMPTS) {
+                        clearInterval(timer);
+                        thinkingEl.remove();
+                    } else {
+                        thinkingEl = showThinking(sessionId);
+                    }
+                })
+                .catch(function(){ /* transient -- the next tick tries again */ });
+        }, HISTORY_POLL_MS);
+    }
+
     // A rejected fetch (network drop, a request landing mid-server-
     // restart, CORS, whatever) would otherwise vanish completely -- the
     // thinking indicator removed and nothing else happening, so a real
@@ -6325,7 +6377,10 @@ function html.render_chat_widget(nonce, attachments_enabled)
     if (existingSessionId) {
         fetch('api/chat-widget-history?session_id=' + encodeURIComponent(existingSessionId))
             .then(function(res){ if (!res.ok) { throw new Error('no session'); } return res.json(); })
-            .then(render)
+            .then(function(state){
+                render(state);
+                resumePollIfPending(existingSessionId, state);
+            })
             .catch(function(){ localStorage.removeItem(STORAGE_KEY); });
     }
 })();
