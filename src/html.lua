@@ -545,6 +545,8 @@ function platform_canvas_css()
         .platform-canvas-table th { background: var(--platform-bg-2, #f1f5f9); font-weight: 600; font-size: 0.78rem; color: var(--platform-th-text, #475569); text-transform: uppercase; letter-spacing: 0.06em; }
         .platform-canvas-table td { background: #ffffff; }
         .platform-canvas-element { margin-bottom: 16px; }
+        .platform-canvas-input-label { display: block; margin-bottom: 4px; font-size: 0.88rem; color: var(--platform-muted, #64748b); }
+        .platform-canvas-input { width: 100%%; max-width: 360px; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-item, 10px); font-size: 0.95rem; }
 """
 end
 
@@ -574,6 +576,10 @@ function html.validate_canvas(elements)
             end
             if type(element.action) != "string" or element.action == "" then
                 return string.format("canvas element #%d (button): missing 'action'", i)
+            end
+        elseif element.type == "input" then
+            if type(element.name) != "string" or element.name == "" then
+                return string.format("canvas element #%d (input): missing 'name'", i)
             end
         else
             return string.format("canvas element #%d: invalid type '%s'", i, tostring(element.type))
@@ -615,6 +621,26 @@ function render_canvas_button(element)
     )
 end
 
+-- `name` rides in a data-input-name attribute rather than the input's
+-- own `name` (no <form> wraps this -- canvas.js reads it directly, no
+-- native form submission involved). `label`/`placeholder` both
+-- optional -- an omitted one just renders as an empty/absent string,
+-- same convention as button's own optional `args`.
+function render_canvas_input(element)
+    label_html = ""
+    if element.label != nil and element.label != "" then
+        label_html = "<label class=\"platform-canvas-input-label\">" .. html.html_escape(element.label) .. "</label>"
+    end
+    placeholder = ""
+    if element.placeholder != nil then
+        placeholder = element.placeholder
+    end
+    return string.format(
+        "<div class=\"platform-canvas-element platform-canvas-input-wrapper\">%s<input type=\"text\" class=\"platform-canvas-input\" data-input-name=\"%s\" placeholder=\"%s\"></div>",
+        label_html, html.html_escape(element.name), html.html_escape(placeholder)
+    )
+end
+
 -- Turns a validated element list into real HTML -- the only place that
 -- happens; a plugin never supplies markup itself, only these typed
 -- tables (see this function's own header comment above
@@ -632,6 +658,8 @@ function html.render_canvas(elements)
             table.insert(parts, render_canvas_table(element))
         elseif element.type == "button" then
             table.insert(parts, render_canvas_button(element))
+        elseif element.type == "input" then
+            table.insert(parts, render_canvas_input(element))
         end
     end
     return table.concat(parts)
@@ -644,18 +672,46 @@ end
 -- re-rendered canvas HTML straight in -- the plugin never gets a live
 -- event loop or client-side code of its own, only "this named,
 -- capability-checked action happened, here's the new canvas."
+--
+-- Live .platform-canvas-input values are collected at click time and
+-- merged into that same args object (input values win over a
+-- same-named static arg, since they're the current, user-supplied
+-- ones) -- one flat args table either way, so an action handler never
+-- needs to know whether a given key came from the button's own
+-- declared args or from a box the user just typed into. Enter inside
+-- an input clicks the container's first action button -- there's no
+-- explicit input-to-button association beyond that (this vocabulary
+-- grows when a real plugin needs more structure, not speculatively;
+-- today's only caller is one search box + one search button).
 function html.canvas_js(nonce)
     return string.format("""
 <script nonce="%s">
 (function(){
     var container = document.querySelector('.platform-canvas-container');
     if (!container) { return; }
-    container.addEventListener('click', function(e){
-        var btn = e.target.closest('.platform-canvas-action');
-        if (!btn) { return; }
-        var action = btn.getAttribute('data-action');
+
+    function collectInputArgs() {
         var args = {};
-        try { args = JSON.parse(btn.getAttribute('data-args') || '{}'); } catch (parseErr) {}
+        container.querySelectorAll('.platform-canvas-input').forEach(function(el){
+            var name = el.getAttribute('data-input-name');
+            if (name) { args[name] = el.value; }
+        });
+        return args;
+    }
+
+    function runAction(btn) {
+        var action = btn.getAttribute('data-action');
+        var staticArgs = {};
+        try { staticArgs = JSON.parse(btn.getAttribute('data-args') || '{}'); } catch (parseErr) {}
+        // Object.assign into a fresh {} (never the parsed value
+        // directly) -- an empty Lua table has no way to say "object,
+        // not array", so a button with no static args of its own
+        // renders as data-args="[]"; assigning string keys straight
+        // onto a real Array works in JS but JSON.stringify then
+        // silently drops them (only numeric indices survive), so the
+        // typed input's value would vanish on the wire. A plain object
+        // literal as the merge target sidesteps the ambiguity entirely.
+        var args = Object.assign({}, staticArgs, collectInputArgs());
         btn.disabled = true;
         PlatformJS.postJSON(window.location.pathname + '/action', {action: action, args: args})
             .then(function(result){
@@ -663,6 +719,17 @@ function html.canvas_js(nonce)
                 if (result && result.html != null) { container.innerHTML = result.html; }
             })
             .catch(function(){ btn.disabled = false; });
+    }
+
+    container.addEventListener('click', function(e){
+        var btn = e.target.closest('.platform-canvas-action');
+        if (!btn) { return; }
+        runAction(btn);
+    });
+    container.addEventListener('keydown', function(e){
+        if (e.key !== 'Enter' || !e.target.closest('.platform-canvas-input')) { return; }
+        var btn = container.querySelector('.platform-canvas-action');
+        if (btn) { e.preventDefault(); runAction(btn); }
     });
 })();
 </script>
