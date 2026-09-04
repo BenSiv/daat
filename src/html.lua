@@ -3751,7 +3751,7 @@ end
 -- config.load_theme(root)'s return value, purely for site_name; no
 -- other Celleste-specific content belongs here (see theme.lua's own
 -- split from daat).
-function html.render_home(theme, show_sql, show_admin, has_tasks_view)
+function html.render_home(theme, show_sql, show_admin, has_tasks_view, nav_extensions)
     site_name = "Platform"
     has_logo = false
     hide_home_heading = false
@@ -3796,6 +3796,28 @@ function html.render_home(theme, show_sql, show_admin, has_tasks_view)
         tasks_link = render_sitemap_item("view?view_name=prioritized_tasks", "Tasks", "Open tasks, ranked by priority.")
     end
 
+    -- One tile per approved capabilities.ui extension -- the same
+    -- nav_extensions data the sidebar rail already renders from
+    -- (extension.approved_with_ui), just a second, independent listing
+    -- of it. Deliberately not filtered by nav_hidden: a deployment
+    -- hiding an extension from the sidebar (platform.lua's own
+    -- nav_hidden) doesn't mean hiding it altogether -- "home page
+    -- link instead of a permanent nav entry" is exactly what a plain,
+    -- occasionally-used lookup page (e.g. experiment_view, brex
+    -- 462301011) wants, and nav_hidden already exists as its own
+    -- independent, generic toggle for the sidebar specifically.
+    extension_tiles = ""
+    if nav_extensions != nil then
+        for _, entry in ipairs(nav_extensions) do
+            ui = entry.manifest.capabilities.ui
+            description = ui.description
+            if description == nil or description == "" then
+                description = "Open the " .. ui.label .. " extension."
+            end
+            extension_tiles = extension_tiles .. render_sitemap_item("ext/" .. entry.name, ui.label, description)
+        end
+    end
+
     -- Not built via render_page_header's usual title slot: logo_html is
     -- a real <img>, a sibling block before the <h2>, not text belonging
     -- inside the heading itself (nesting it into <h2> would put an
@@ -3821,6 +3843,7 @@ function html.render_home(theme, show_sql, show_admin, has_tasks_view)
             %s
             %s
             %s
+            %s
         </ul>
     </div>
 </div>
@@ -3828,7 +3851,7 @@ function html.render_home(theme, show_sql, show_admin, has_tasks_view)
      render_sitemap_item("document-edit", "New Document", "Write a new document from scratch."),
      render_sitemap_item("documents", "Documents", "Browse all documents, organized as a tree."),
      render_sitemap_item("data", "Data", "Registered entity types, row counts, and relations."),
-     tasks_link, system_link)
+     tasks_link, system_link, extension_tiles)
 end
 
 -- Landing page for Setup/Admin-only tooling -- a single destination

@@ -778,7 +778,7 @@ function cgi.handle_request()
     -- from Benchling's own Home concept without copying its actual
     -- design; this is a real v1 (a start), not the end state.
     if path_info == "/" or path_info == "" then
-        body = html.render_home(theme, show_sql_nav, show_admin_nav, has_tasks_view)
+        body = html.render_home(theme, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions)
         return print_response("200 OK", "text/html",
             html.page_shell(theme.site_name, "home", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
     end
