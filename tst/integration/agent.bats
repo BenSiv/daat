@@ -104,6 +104,23 @@ EOF
     [[ "$output" =~ "always ask for the run ID before creating a sample" ]]
 }
 
+@test "the default system prompt tells the agent to verify identity/recency claims and flag self-derived answers (found live: celleste-lims eval)" {
+    resp=$(start_chat "$COOKIE" "$CSRF" "Prompt content test")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    capture_file="$TEST_DIR/captured_system_prompt2.txt"
+    printf '{"session_id":"%s","message":"hello"}' "$session_id" | \
+        AGENT_TEST_RESPONSES="$(done_response "Hi.")" \
+        AGENT_TEST_CAPTURE_SYSTEM_PROMPT="$capture_file" \
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/chat-widget-send" QUERY_STRING="" \
+        HTTP_COOKIE="$COOKIE" HTTP_X_CSRF_TOKEN="$CSRF" "$BIN" > /dev/null
+
+    [ -f "$capture_file" ]
+    run cat "$capture_file"
+    [[ "$output" =~ "make sure you actually ran a query that filters or" ]]
+    [[ "$output" =~ "present it as your own derivation, not as the documented procedure" ]]
+}
+
 @test "current-user/current-page annotations reach the model but are stripped from the human-facing transcript" {
     resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
     session_id=$(extract_query_param "$resp" "session_id")
