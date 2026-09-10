@@ -121,6 +121,22 @@ EOF
     [[ "$output" =~ "present it as your own derivation, not as the documented procedure" ]]
 }
 
+@test "the default system prompt tells the agent not to re-fetch entity.list_types/relationships already in context (found live: celleste-lims eval)" {
+    resp=$(start_chat "$COOKIE" "$CSRF" "Prompt content test")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    capture_file="$TEST_DIR/captured_system_prompt3.txt"
+    printf '{"session_id":"%s","message":"hello"}' "$session_id" | \
+        AGENT_TEST_RESPONSES="$(done_response "Hi.")" \
+        AGENT_TEST_CAPTURE_SYSTEM_PROMPT="$capture_file" \
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/chat-widget-send" QUERY_STRING="" \
+        HTTP_COOKIE="$COOKIE" HTTP_X_CSRF_TOKEN="$CSRF" "$BIN" > /dev/null
+
+    [ -f "$capture_file" ]
+    run cat "$capture_file"
+    [[ "$output" =~ "reuse that result instead of" ]]
+}
+
 @test "current-user/current-page annotations reach the model but are stripped from the human-facing transcript" {
     resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
     session_id=$(extract_query_param "$resp" "session_id")

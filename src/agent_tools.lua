@@ -1374,6 +1374,13 @@ the real depth for the final synthesis, where it's actually being read.
 If you don't already know an entity type's fields, call entity.fields first
 rather than guessing field names.
 
+entity.list_types and entity.relationships describe the schema itself,
+which never changes within a conversation -- if you already called one of
+them earlier in this same conversation, reuse that result instead of
+calling it again. Only re-call one if you genuinely don't have its output
+yet (e.g. it happened in a different, isolated research.investigate/
+background.start sub-loop that doesn't share this conversation's history).
+
 When asked to write a SQL query rather than run one (e.g. "write me a query
 for X", "what SQL would show Y"), still call entity.query yourself first to
 confirm it actually runs against the real schema before giving the query
