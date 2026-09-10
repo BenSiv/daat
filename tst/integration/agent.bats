@@ -848,6 +848,30 @@ EOF
     [[ "$output" =~ "status=open" ]]
 }
 
+@test "entity.get on a row with a polymorphic_reference field renders type:id, not a raw table address (found live: celleste-lims eval)" {
+    mkdir -p schemas
+    cat > schemas/plant.lua <<'EOF'
+return {name = "plant", fields = {{name = "label", type = "text", required = true, display = true}}}
+EOF
+    cat > schemas/sample.lua <<'EOF'
+return {name = "sample", fields = {
+  {name = "label", type = "text", required = true, display = true},
+  {name = "source", type = "polymorphic_reference", required = false, allowed_entity_types = {"plant", "sample"}},
+}}
+EOF
+    "$BIN" schema sync
+    "$BIN" entity create plant label="Cocoa" >/dev/null
+    "$BIN" entity create sample label="S1" source="plant:1" >/dev/null
+
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+    scripted="$(tool_call_response "entity.get" '{"entity_type":"sample","entity_id":2}')"$'\1'"$(done_response "Here it is.")"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"show sample 2\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "source=plant:1" ]]
+    [[ ! "$output" =~ "table: 0x" ]]
+}
+
 @test "entity.validate reports real issues for an invalid create, without writing or queuing anything" {
     write_task_schema
     resp=$(start_chat "$COOKIE" "$CSRF" "Chat")

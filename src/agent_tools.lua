@@ -517,13 +517,40 @@ function unknown_entity_type_message(db_path, entity_type)
     return message
 end
 
+-- A multi_reference field's raw value is a plain array of ids (schema.
+-- read_multi_field); a polymorphic_reference/multi_polymorphic_reference
+-- field's is an array of {type=, id=} tables (schema.
+-- read_polymorphic_field, entity.apply_computed_field_overrides). Either
+-- way it's a genuine Lua table, not a scalar -- tostring() on it prints
+-- only a raw address (e.g. "table: 0x555d8fed1df0"), which previously
+-- left the model unable to tell a source/lineage field even had a value,
+-- let alone follow it. Render each item as "type:id" (resolvable via a
+-- follow-up entity.get) or the bare id for a plain reference list.
+function format_field_value(v)
+    if type(v) != "table" then
+        return tostring(v)
+    end
+    if #v == 0 then
+        return "(none)"
+    end
+    parts = {}
+    for _, item in ipairs(v) do
+        if type(item) == "table" and item.type != nil and item.id != nil then
+            table.insert(parts, tostring(item.type) .. ":" .. tostring(item.id))
+        else
+            table.insert(parts, tostring(item))
+        end
+    end
+    return table.concat(parts, ",")
+end
+
 -- Compact "field=value; field=value" text for one entity.get/list row,
 -- for the model to read -- sorted so output is deterministic rather
 -- than depending on pairs()'s unspecified iteration order.
 function row_summary(row)
     parts = {}
     for k, v in pairs(row) do
-        table.insert(parts, tostring(k) .. "=" .. tostring(v))
+        table.insert(parts, tostring(k) .. "=" .. format_field_value(v))
     end
     table.sort(parts)
     return table.concat(parts, "; ")
