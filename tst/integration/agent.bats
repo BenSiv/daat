@@ -717,6 +717,29 @@ EOF
     [[ "$output" =~ "exceeded its turn budget" ]]
 }
 
+@test "research.investigate's turn-budget message surfaces the last real text finding, not a bare tool-call stub (found live: celleste-lims eval)" {
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    # First research turn writes a genuine partial finding as real text
+    # alongside a tool call; every turn after that is a bare tool call
+    # with no text at all -- the shape seen live, where the sub-loop's
+    # very last turn was mid-tool-call when its budget ran out.
+    text_and_call_turn='{"content":[{"type":"text","text":"Found experiment 396, still tracing its source."},{"type":"toolCall","id":"call_1","name":"entity.query","arguments":{"sql":"SELECT 1"}}],"stopReason":"toolUse"}'
+    scripted="$(tool_call_response "research.investigate" '{"question":"find the sample lineage"}')"
+    scripted="${scripted}"$'\1'"${text_and_call_turn}"
+    for i in 1 2 3 4 5; do
+        scripted="${scripted}"$'\1'"$(tool_call_response "entity.list_types" '{}')"
+    done
+    scripted="${scripted}"$'\1'"$(done_response "Here is what research found.")"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"trace this lineage\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "exceeded its turn budget" ]]
+    [[ "$output" =~ "Found experiment 396, still tracing its source." ]]
+    [[ ! "$output" =~ "-> entity.list_types(...)" ]]
+}
+
 @test "clarify.ask ends the turn with the real question visible, no self-check, and the conversation continues normally afterward" {
     write_task_schema
     "$BIN" entity create task title="Ship it" status=open >/dev/null

@@ -1209,12 +1209,22 @@ function agent.run_research_loop(db_path, author, session_id, model, question, m
     messages = {{role = "user", content = question}}
     tools = agent_tools.research_tool_declarations(db_path)
     last_text = nil
+    -- The model's last turn is very often a bare tool call with no text
+    -- at all -- display_blocks (via last_text below) would then render
+    -- only "-> entity.query(...)", a stub describing a call that never
+    -- even ran, not an actual finding. Track the last turn that
+    -- produced genuine text separately (text_only_blocks), so a
+    -- turn-budget/error exit surfaces the last real synthesis the model
+    -- wrote, not whichever turn happened to run last. Found live:
+    -- celleste-lims eval -- a research.investigate call that ran out of
+    -- turns mid-tool-call returned exactly this stub as its "finding".
+    last_real_text = nil
 
     for turn = 1, max_turns do
         response, err, usage = agent_provider.converse(model, RESEARCH_SYSTEM_PROMPT, messages, tools)
         if response == nil then
-            if last_text != nil then
-                return "(research stopped early: " .. tostring(err) .. ") " .. last_text
+            if last_real_text != nil then
+                return "(research stopped early: " .. tostring(err) .. ") " .. last_real_text
             end
             return nil, "research failed: " .. tostring(err)
         end
@@ -1223,8 +1233,8 @@ function agent.run_research_loop(db_path, author, session_id, model, question, m
             if error_message == nil then
                 error_message = "model call failed (stopReason: " .. tostring(response.stopReason) .. ")"
             end
-            if last_text != nil then
-                return "(research stopped early: " .. tostring(error_message) .. ") " .. last_text
+            if last_real_text != nil then
+                return "(research stopped early: " .. tostring(error_message) .. ") " .. last_real_text
             end
             return nil, "research failed: " .. tostring(error_message)
         end
@@ -1235,6 +1245,10 @@ function agent.run_research_loop(db_path, author, session_id, model, question, m
         end
         table.insert(messages, {role = "assistant", content = content_blocks})
         last_text = display_blocks(content_blocks)
+        real_text = text_only_blocks(content_blocks)
+        if real_text != "" then
+            last_real_text = real_text
+        end
 
         tool_calls = all_tool_calls(content_blocks)
         if #tool_calls == 0 then
@@ -1269,10 +1283,10 @@ function agent.run_research_loop(db_path, author, session_id, model, question, m
         end
     end
 
-    if last_text == nil then
+    if last_real_text == nil then
         return "(research exceeded its turn budget with no finding)"
     end
-    return "(research exceeded its turn budget -- last, possibly incomplete, finding) " .. last_text
+    return "(research exceeded its turn budget -- last, possibly incomplete, finding) " .. last_real_text
 end
 
 --------------------------------------------------------------------------
