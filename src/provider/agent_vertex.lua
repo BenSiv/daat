@@ -86,6 +86,19 @@ agent_vertex = {}
 -- it explicitly.
 DEFAULT_REGION = "global"
 
+-- Found live: vertex_post's curl call had no timeout at all, so a slow/
+-- hung Vertex response held the whole CGI request open until Apache's
+-- own cgid script-timeout eventually killed it (confirmed in
+-- /var/log/apache2/error.log, several unrelated "Script timed out
+-- before returning headers" entries the same day) -- several minutes of
+-- an apparently-frozen chat with no error, not a fast, clean failure.
+-- 120s is well past this app's real observed latency (a plain
+-- generate/converse call normally completes in low single-digit
+-- seconds) but well short of that cgid timeout, so a genuine hang now
+-- surfaces as vertex_post's own "no response from Vertex AI (curl/
+-- network failure)" error instead of a silent freeze.
+REQUEST_TIMEOUT_SECONDS = 120
+
 function vertex_config()
     conf = config.platform_config()
     project = conf.vertex_project
@@ -147,7 +160,7 @@ function vertex_post(model_and_method_path, payload_table)
     url = vertex_url(project, region, model_and_method_path)
 
     response_text, _ = external_tool.with_temp_file(json.encode(payload_table), "w", function(tmp_path)
-        cmd = "curl -s -X POST " .. external_tool.shell_quote(url) ..
+        cmd = "curl -s --max-time " .. tostring(REQUEST_TIMEOUT_SECONDS) .. " -X POST " .. external_tool.shell_quote(url) ..
             " -H " .. external_tool.shell_quote("Authorization: Bearer " .. token) ..
             " -H " .. external_tool.shell_quote("Content-Type: application/json") ..
             " -d @" .. external_tool.shell_quote(tmp_path)
