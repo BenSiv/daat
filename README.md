@@ -100,7 +100,7 @@ Every document that gets retrieved, plus anything the system or the agent produc
 
 **Every real model call is fully auditable.** The exact prompt actually sent, the model id, and real token counts are persisted for every chat turn and every distillation call -- not reconstructed after the fact from chat messages. A reply that leaks visible reasoning gets that reasoning saved as its own document, attributed to the real user, going through the exact same tiering/heat/review pipeline as everything else.
 
-Surfaced via `daat knowledge <stats|list|show|promote|distill>` on the CLI, and a `/knowledge` page (Setup/Admin capability) with stat tiles, tier breakdown, and recent retrievals. See `doc/architecture.md`'s own "Knowledge pool" section for the full mechanism and its derivation.
+Surfaced via `daat knowledge <stats|list|show|promote|distill>` on the CLI, and a `/knowledge` page (baseline capability -- read-only browsing, not admin-gated) with stat tiles, tier breakdown, and recent retrievals. See `doc/architecture.md`'s own "Knowledge pool" section for the full mechanism and its derivation.
 
 ## Docs
 

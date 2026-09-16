@@ -808,8 +808,10 @@ function cgi.handle_request()
 
     -- Landing page for admin/setup-only tooling (SQL console, user
     -- admin, templates) -- a single "System" destination rather than
-    -- three separate top-level tabs, matching the old platform
-    -- deployment's own "System" concept.
+    -- separate top-level tabs, matching the old platform deployment's
+    -- own "System" concept. Knowledge Pool used to live here too but
+    -- is baseline-accessible now (brex 492390825) with its own nav
+    -- entry, since nothing about it is actually an admin action.
     if path_info == "/system" then
         if show_sql_nav == false and show_admin_nav == false then
             return print_response("403 Forbidden", "text/html", "<h3>Forbidden: requires Setup or Admin capability</h3>")
@@ -836,13 +838,10 @@ function cgi.handle_request()
     end
 
     if path_info == "/knowledge" then
-        if show_sql_nav == false and show_admin_nav == false then
-            return print_response("403 Forbidden", "text/html", "<h3>Forbidden: requires Setup or Admin capability</h3>")
-        end
         stats = knowledge.stats(db_path)
         body = html.render_knowledge_pool(stats)
         return print_response("200 OK", "text/html",
-            html.page_shell("Knowledge Pool", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
+            html.page_shell("Knowledge Pool", "knowledge", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
     end
 
     -- Backing view for /knowledge's stat cards -- reuses
@@ -853,47 +852,35 @@ function cgi.handle_request()
     -- /browse's filter_field validation (must match a registered field)
     -- can never accept "tier" as a filter.
     if path_info == "/knowledge-documents" then
-        if show_sql_nav == false and show_admin_nav == false then
-            return print_response("403 Forbidden", "text/html", "<h3>Forbidden: requires Setup or Admin capability</h3>")
-        end
         tier = tonumber(params.tier)
         rows = knowledge.list_documents(db_path, tier)
         body = html.render_knowledge_documents(rows, tier)
         return print_response("200 OK", "text/html",
-            html.page_shell("Knowledge Pool", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
+            html.page_shell("Knowledge Pool", "knowledge", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
     end
 
     -- Backing view for /knowledge's "N reviewed notes" stat.
     if path_info == "/knowledge-reviewed" then
-        if show_sql_nav == false and show_admin_nav == false then
-            return print_response("403 Forbidden", "text/html", "<h3>Forbidden: requires Setup or Admin capability</h3>")
-        end
         rows = knowledge.reviewed_documents(db_path)
         body = html.render_knowledge_documents(rows, nil, "Reviewed notes")
         return print_response("200 OK", "text/html",
-            html.page_shell("Knowledge Pool", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
+            html.page_shell("Knowledge Pool", "knowledge", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
     end
 
     -- Obsidian-style graph view of the document_link graph (doc/
-    -- knowledge-graph-explorer.md, Phase 2) -- same gate as every other
-    -- /knowledge* route; the page shell here just carries the canvas +
-    -- rendering script, real data comes from /knowledge-graph-data.
+    -- knowledge-graph-explorer.md, Phase 2) -- the page shell here
+    -- just carries the canvas + rendering script, real data comes from
+    -- /knowledge-graph-data.
     if path_info == "/knowledge-graph" then
-        if show_sql_nav == false and show_admin_nav == false then
-            return print_response("403 Forbidden", "text/html", "<h3>Forbidden: requires Setup or Admin capability</h3>")
-        end
         body = html.render_knowledge_graph(nonce)
         return print_response("200 OK", "text/html",
-            html.page_shell("Knowledge Pool", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
+            html.page_shell("Knowledge Pool", "knowledge", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
     end
 
     -- JSON data for /knowledge-graph's own client-side render -- nodes
     -- (id/title/tier/heat) and edges (from/to/strength), the exact
     -- shape doc/knowledge-graph-explorer.md specs.
     if path_info == "/knowledge-graph-data" then
-        if show_sql_nav == false and show_admin_nav == false then
-            return print_response("403 Forbidden", "application/json", json.encode({error = "Forbidden: requires Setup or Admin capability"}))
-        end
         nodes = knowledge.graph_nodes(db_path)
         edges = document.graph_edges(db_path)
         return print_response("200 OK", "application/json", json.encode({nodes = nodes, edges = edges}))
@@ -905,13 +892,10 @@ function cgi.handle_request()
     -- one obvious place to drill into the number, not a second,
     -- truncated copy on the landing page itself.
     if path_info == "/knowledge-retrievals" then
-        if show_sql_nav == false and show_admin_nav == false then
-            return print_response("403 Forbidden", "text/html", "<h3>Forbidden: requires Setup or Admin capability</h3>")
-        end
         rows = knowledge.recent_retrievals(db_path, 500)
         body = html.render_knowledge_retrievals(rows)
         return print_response("200 OK", "text/html",
-            html.page_shell("Knowledge Pool", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
+            html.page_shell("Knowledge Pool", "knowledge", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
     end
 
     if path_info == "/detail" then

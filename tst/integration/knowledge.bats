@@ -386,9 +386,25 @@ search_for_bioreactor_extra() {
     [[ "$output" =~ "Tier 3: Atomic Record" ]]
 }
 
-@test "/knowledge is forbidden for a plain (non Setup/Admin) user" {
+@test "/knowledge renders for a plain baseline user (brex 492390825 -- read-only browsing, no Setup/Admin needed)" {
     run raw_get "/knowledge" "" "$COOKIE"
-    [[ "$output" =~ "403 Forbidden" ]]
+    [[ "$output" =~ "200 OK" ]]
+    [[ "$output" =~ "Knowledge Pool" ]]
+}
+
+@test "/knowledge-documents renders for a plain baseline user" {
+    run raw_get "/knowledge-documents" "" "$COOKIE"
+    [[ "$output" =~ "200 OK" ]]
+}
+
+@test "/knowledge-reviewed renders for a plain baseline user" {
+    run raw_get "/knowledge-reviewed" "" "$COOKIE"
+    [[ "$output" =~ "200 OK" ]]
+}
+
+@test "/knowledge-retrievals renders for a plain baseline user" {
+    run raw_get "/knowledge-retrievals" "" "$COOKIE"
+    [[ "$output" =~ "200 OK" ]]
 }
 
 @test "/knowledge-graph renders for a Setup/Admin user (doc/knowledge-graph-explorer.md, Phase 2)" {
@@ -403,9 +419,10 @@ search_for_bioreactor_extra() {
     [[ "$output" =~ "knowledge-graph-data" ]]
 }
 
-@test "/knowledge-graph is forbidden for a plain (non Setup/Admin) user" {
+@test "/knowledge-graph renders for a plain baseline user" {
     run raw_get "/knowledge-graph" "" "$COOKIE"
-    [[ "$output" =~ "403 Forbidden" ]]
+    [[ "$output" =~ "200 OK" ]]
+    [[ "$output" =~ "Knowledge Graph" ]]
 }
 
 @test "/knowledge-graph-data returns real nodes and edges as JSON" {
@@ -432,12 +449,12 @@ search_for_bioreactor_extra() {
     [[ "$strength" != "null" ]]
 }
 
-@test "/knowledge-graph-data is forbidden for a plain (non Setup/Admin) user" {
+@test "/knowledge-graph-data renders for a plain baseline user" {
     run raw_get "/knowledge-graph-data" "" "$COOKIE"
-    [[ "$output" =~ "403 Forbidden" ]]
+    [[ "$output" =~ "200 OK" ]]
 }
 
-@test "the icon rail no longer has a dedicated Chats entry; System links to Knowledge Pool instead" {
+@test "the icon rail no longer has a dedicated Chats entry" {
     "$BIN" user add carol carolpass123 isa
     raw_carol=$(printf 'login=carol&password=carolpass123' | \
         GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/login" QUERY_STRING="" "$BIN")
@@ -446,10 +463,30 @@ search_for_bioreactor_extra() {
 
     run bash -c "GATEWAY_INTERFACE=CGI/1.1 REQUEST_METHOD=GET PATH_INFO=/ QUERY_STRING= HTTP_COOKIE='session=${carol_session}; csrf=${carol_csrf}' '$BIN'"
     [[ ! "$output" =~ 'title="Chats"' ]]
+}
+
+@test "the Knowledge Pool has its own nav-rail icon, not gated on Setup/Admin (brex 492390825)" {
+    run raw_get "/" "" "$COOKIE"
+    [[ "$output" =~ 'class="platform-nav-link" href="knowledge"' ]]
+
+    run bash -c "GATEWAY_INTERFACE=CGI/1.1 REQUEST_METHOD=GET PATH_INFO=/system QUERY_STRING= HTTP_COOKIE='session=${SESSION}; csrf=${CSRF}' '$BIN'"
+    [[ "$output" =~ "403 Forbidden" ]]
+}
+
+@test "/system no longer lists Knowledge Pool as a card (it has its own top-level nav icon now)" {
+    "$BIN" user add carol carolpass123 isa
+    raw_carol=$(printf 'login=carol&password=carolpass123' | \
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/login" QUERY_STRING="" "$BIN")
+    carol_session=$(printf '%s' "$raw_carol" | grep -o 'Set-Cookie: session=[^;]*' | sed 's/Set-Cookie: session=//')
+    carol_csrf=$(printf '%s' "$raw_carol" | grep -o 'Set-Cookie: csrf=[^;]*' | sed 's/Set-Cookie: csrf=//')
 
     run bash -c "GATEWAY_INTERFACE=CGI/1.1 REQUEST_METHOD=GET PATH_INFO=/system QUERY_STRING= HTTP_COOKIE='session=${carol_session}; csrf=${carol_csrf}' '$BIN'"
-    [[ "$output" =~ 'href="knowledge"' ]]
-    [[ "$output" =~ "Knowledge Pool" ]]
+    # href="knowledge" still appears once, from the page shell's own
+    # nav-rail icon (present on every page now) -- the thing that must
+    # be gone is the *sitemap card*, identified by its description text.
+    [[ ! "$output" =~ "Tiered notes, retrieval activity, and chat sessions." ]]
+    [[ "$output" =~ 'href="sql"' ]]
+    [[ "$output" =~ 'href="admin-users"' ]]
 }
 
 @test "two documents repeatedly co-retrieved get an agent-evaluated explicit link once the agent says YES (task #109)" {

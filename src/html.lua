@@ -1249,6 +1249,7 @@ THEME_COLOR_KEYS = {
 ICON_HOME = "<svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M3 11l9-8 9 8\"/><path d=\"M5 10v10a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1V10\"/></svg>"
 ICON_NOTEBOOK = "<svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M4 5a2 2 0 0 1 2-2h5v18H6a2 2 0 0 1-2-2V5z\"/><path d=\"M20 5a2 2 0 0 0-2-2h-5v18h5a2 2 0 0 0 2-2V5z\"/></svg>"
 ICON_DATA = "<svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><ellipse cx=\"12\" cy=\"5\" rx=\"8\" ry=\"3\"/><path d=\"M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5\"/><path d=\"M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6\"/></svg>"
+ICON_KNOWLEDGE = "<svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z\"/><path d=\"M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z\"/></svg>"
 ICON_TASKS = "<svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M9 11l3 3L22 4\"/><path d=\"M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11\"/></svg>"
 ICON_SYSTEM = "<svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"3\"/><path d=\"M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z\"/></svg>"
 -- Chat bubble -- the floating widget's toggle button icon, not part of
@@ -1365,10 +1366,16 @@ function html.page_shell(title, active, body, nonce, show_sql, show_admin, has_t
 
     root_css = html.theme_root_css(theme)
 
-    -- Icon-rail order: Home, Documents, Data, Tasks, (System if Setup/
-    -- Admin). No separate New Document icon -- the document tree's own
-    -- "+ New document" button already covers that entry point. Chat has
-    -- no rail icon of its own either; it's the floating widget below.
+    -- Icon-rail order: Home, Documents, Data, Knowledge Pool, Tasks,
+    -- (System if Setup/Admin). No separate New Document icon -- the
+    -- document tree's own "+ New document" button already covers that
+    -- entry point. Chat has no rail icon of its own either; it's the
+    -- floating widget below.
+    --
+    -- Knowledge Pool is a plain baseline-capability rail item, not
+    -- gated on show_sql/show_admin -- it's read-only browsing (stats,
+    -- documents, graph, retrievals), nothing about it is an admin
+    -- action, so it no longer lives behind /system (brex 492390825).
     --
     -- No real nav items at all when nobody's authenticated (author ==
     -- nil, e.g. /login) -- every one of them just bounces back to
@@ -1380,6 +1387,7 @@ function html.page_shell(title, active, body, nonce, show_sql, show_admin, has_t
             {key = "home", href = "/", label = "Home", icon = ICON_HOME},
             {key = "documents", href = "documents", label = "Documents", icon = ICON_NOTEBOOK},
             {key = "data", href = "data", label = "Data", icon = ICON_DATA},
+            {key = "knowledge", href = "knowledge", label = "Knowledge Pool", icon = ICON_KNOWLEDGE},
         }
         -- Only a real rail icon when a deployment actually seeded a
         -- "prioritized_tasks" view -- see the matching comment in
@@ -3867,6 +3875,12 @@ function html.render_home(theme, show_sql, show_admin, has_tasks_view, nav_exten
         system_link = render_sitemap_item("system", "System", "Admin, SQL console, and templates.")
     end
 
+    -- Unconditional -- every logged-in user has baseline capability,
+    -- and the Knowledge Pool is read-only browsing, not an admin tool
+    -- (brex 492390825), so it no longer needs a show_sql/show_admin
+    -- guard the way system_link above does.
+    knowledge_link = render_sitemap_item("knowledge", "Knowledge Pool", "Tiered notes, retrieval activity, and chat sessions.")
+
     -- Only a real link when a deployment actually seeded a
     -- "prioritized_tasks" view -- a fresh/generic install has no
     -- views/ at all, and without this guard it would be a nav item
@@ -3924,6 +3938,7 @@ function html.render_home(theme, show_sql, show_admin, has_tasks_view, nav_exten
             %s
             %s
             %s
+            %s
         </ul>
     </div>
 </div>
@@ -3931,17 +3946,20 @@ function html.render_home(theme, show_sql, show_admin, has_tasks_view, nav_exten
      render_sitemap_item("document-edit", "New Document", "Write a new document from scratch."),
      render_sitemap_item("documents", "Documents", "Browse all documents, organized as a tree."),
      render_sitemap_item("data", "Data", "Registered entity types, row counts, and relations."),
-     tasks_link, system_link, extension_tiles)
+     knowledge_link, tasks_link, system_link, extension_tiles)
 end
 
 -- Landing page for Setup/Admin-only tooling -- a single destination
--- rather than SQL/Users/Templates each getting their own top-level nav
--- icon, matching this deployment's earlier "System" concept. Callers
+-- rather than SQL/Users each getting their own top-level nav icon,
+-- matching this deployment's earlier "System" concept. Callers
 -- (cgi.lua) already gate the route itself on show_sql/show_admin
 -- before rendering this; the links below still only show what the
 -- caller says is allowed via its own show_sql/show_admin parameters.
+-- Knowledge Pool used to be a card here too, but it's baseline-
+-- accessible now with its own top-level nav icon (brex 492390825), so
+-- it no longer belongs on an admin/setup landing page.
 function html.render_system(show_sql, show_admin)
-    items = render_sitemap_item("knowledge", "Knowledge Pool", "Tiered notes, retrieval activity, and chat sessions.")
+    items = ""
     if show_sql then
         items = items .. render_sitemap_item("sql", "SQL console", "Run ad hoc, read-only queries.")
     end
