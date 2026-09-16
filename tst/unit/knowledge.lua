@@ -70,6 +70,13 @@ function test_due_for_link_review_first_time_and_reevaluation_step()
     check(knowledge.due_for_link_review({decision = "declined", last_co_count = 3}, 9) == true, "co_count well past the re-evaluation step should be due")
 end
 
+function test_due_for_tier_judgment_first_time_and_content_change()
+    print("Testing due_for_tier_judgment's first-time/unchanged/changed-content logic")
+    check(knowledge.due_for_tier_judgment(nil, "abc") == true, "a never-judged document should be due")
+    check(knowledge.due_for_tier_judgment({judged_hash = "abc", judged_tier = 1}, "abc") == false, "unchanged content_hash since the last judgment should not be due")
+    check(knowledge.due_for_tier_judgment({judged_hash = "abc", judged_tier = 1}, "def") == true, "a changed content_hash since the last judgment should be due")
+end
+
 function test_hand_rolled_sql_columns_text_covers_every_event_log_table()
     print("Testing hand_rolled_sql_columns_text names the real columns for each knowledge event-log table")
     cases = {
@@ -94,6 +101,7 @@ test_reply_has_visible_reasoning_detects_markers()
 test_classify_reply_four_way_split()
 test_co_retrieval_eligible_threshold_and_hub_ratio()
 test_due_for_link_review_first_time_and_reevaluation_step()
+test_due_for_tier_judgment_first_time_and_content_change()
 test_hand_rolled_sql_columns_text_covers_every_event_log_table()
 
 if FAILURES > 0 then

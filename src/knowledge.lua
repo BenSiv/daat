@@ -133,6 +133,18 @@ CREATE TABLE IF NOT EXISTS knowledge_link_review (
     PRIMARY KEY (document_a_id, document_b_id)
 );
 
+-- One row per document that's had its tier judged by the agent at
+-- least once -- lets due_for_tier_judgment skip re-asking the model
+-- when nothing has changed since the last judgment, the same
+-- "don't re-run the same model call over and over" reasoning as
+-- knowledge_link_review's own last_co_count column.
+CREATE TABLE IF NOT EXISTS knowledge_tier_review (
+    document_id INTEGER PRIMARY KEY,
+    judged_hash TEXT NOT NULL,
+    judged_tier INTEGER NOT NULL,
+    evaluated_at TEXT DEFAULT (%s)
+);
+
 """
 
 function knowledge_schema_sql(db_path)
@@ -141,6 +153,7 @@ function knowledge_schema_sql(db_path)
         db.autoincrement_keyword(db_path), db.now_expr(db_path),
         db.autoincrement_keyword(db_path), db.now_expr(db_path),
         db.autoincrement_keyword(db_path), db.now_expr(db_path),
+        db.now_expr(db_path),
         db.now_expr(db_path)
     )
 end
@@ -490,10 +503,24 @@ function knowledge.review_retrieval(db_path, retrieval_id, author)
             target_tier = tonumber(doc.tier)
             -- doc.effective_heat already comes from knowledge.get_document
             -- (line 390 above) as the conserved-pool view -- no need to
-            -- recompute it here.
+            -- recompute it here. is_duplicate/was_revised stay hardcoded
+            -- eligibility gates (see doc/architecture.md's "Agent control:
+            -- rule-based by default") -- only the genuinely fuzzy
+            -- "how mature is this content" question is handed to the
+            -- model, via knowledge.judge_promotion_target, and only once
+            -- per distinct content_hash (knowledge.due_for_tier_judgment)
+            -- so a document that's merely retrieved again and again
+            -- without being edited doesn't re-trigger a model call every
+            -- time it comes due for review.
             if knowledge.due_for_review(tonumber(doc.retrieval_count), doc.effective_heat) then
                 maturity = document.processing_maturity(db_path, doc.id, body, doc.source_type)
-                target_tier = document.promotion_target_tier(tonumber(doc.tier), is_duplicate, maturity.revised, content_shape)
+                if is_duplicate then
+                    target_tier = tonumber(doc.tier)
+                elseif maturity.revised != true then
+                    target_tier = 0
+                elseif knowledge.due_for_tier_judgment(knowledge.get_tier_review(db_path, doc.id), doc.content_hash) then
+                    target_tier = knowledge.judge_promotion_target(db_path, doc, tonumber(doc.tier), content_shape)
+                end
             end
 
             db.exec(db_path, string.format(
@@ -968,6 +995,82 @@ function knowledge.evaluate_co_retrieval_pair(db_path, doc_a, doc_b, co_count)
     else
         knowledge.record_link_review(db_path, doc_a.id, doc_b.id, co_count, "declined")
     end
+end
+
+--------------------------------------------------------------------------
+-- Agent-gated tier promotion: same shape as co-retrieval linking just
+-- above -- rule-based gates (due_for_review, was_revised, is_duplicate,
+-- due_for_tier_judgment) decide *when* it's worth asking at all; a
+-- single scoped agent_provider.generate call decides *which* tier,
+-- rather than document.promotion_target_tier's fixed content_shape
+-- mapping. Non-destructive/no-approval for the same reason maybe_distill
+-- and maybe_link_co_retrieved already are: a rule-triggered side effect
+-- of review, not a model choosing to act, and fully reversible (tier is
+-- recomputed fresh, bidirectionally, on every judged review).
+
+TIER_JUDGMENT_MODEL = DISTILL_MODEL
+
+TIER_JUDGMENT_SYSTEM_PROMPT = """
+You are judging how far a document in a knowledge pool has matured through real editing, not how often it's been looked up. Tiers: 1 = Curated Draft (revised, but not yet a complete reference or a tight standalone definition), 2 = Developed Reference (a genuinely complete, multi-section, wiki-page-like article), 3 = Atomic Record (short, single-subject, definition-card-shaped -- one idea, tightly stated). Read the document below and decide which of these three tiers its CURRENT content genuinely earns -- judge the real editorial maturity of the writing, not just its length. Reply with exactly one character: 1, 2, or 3.
+"""
+
+function knowledge.get_tier_review(db_path, document_id)
+    rows = db.query(db_path, string.format(
+        "SELECT * FROM knowledge_tier_review WHERE document_id = %d;", tonumber(document_id)
+    ))
+    if rows == nil or rows[1] == nil then
+        return nil
+    end
+    return rows[1]
+end
+
+function knowledge.record_tier_review(db_path, document_id, content_hash, tier)
+    db.exec(db_path, string.format(
+        "%s knowledge_tier_review (document_id, judged_hash, judged_tier, evaluated_at) VALUES (%d, %s, %d, %s);",
+        db.replace_into(db_path), tonumber(document_id), db.quote(content_hash), tonumber(tier), db.now_expr(db_path)
+    ))
+end
+
+-- Whether this document is due a fresh tier judgment -- no prior
+-- judgment at all (first time it's eligible), or its content_hash has
+-- changed since the last one. Mirrors due_for_link_review's own shape
+-- (pure, kept separate from the DB fetch, so it's directly
+-- unit-testable) and its "don't re-ask about something that hasn't
+-- changed" reasoning, just keyed on content instead of a
+-- re-evaluation step count -- an unedited document doesn't get a fresh
+-- model call just for coming due for review again.
+function knowledge.due_for_tier_judgment(review, content_hash)
+    if review == nil then
+        return true
+    end
+    return review.judged_hash != content_hash
+end
+
+-- current_tier/content_shape are passed as context/fallback, never the
+-- decision itself. Falls back to document.promotion_target_tier's
+-- existing deterministic mapping on a model error or an unparseable
+-- reply, so a provider outage degrades to today's behavior instead of
+-- silently leaving the document's tier stuck.
+function knowledge.judge_promotion_target(db_path, doc, current_tier, content_shape)
+    agent_provider = require("agent_provider")
+    body = doc.content
+    if body == nil then
+        body = ""
+    end
+    prompt = string.format("Current tier: %d\n\n%s", tonumber(current_tier), body)
+    answer, err = agent_provider.generate(TIER_JUDGMENT_MODEL, TIER_JUDGMENT_SYSTEM_PROMPT, prompt)
+    tier = nil
+    if answer != nil then
+        trimmed = string.gsub(answer, "^%s*(.-)%s*$", "%1")
+        if trimmed == "1" or trimmed == "2" or trimmed == "3" then
+            tier = tonumber(trimmed)
+        end
+    end
+    if tier == nil then
+        tier = document.promotion_target_tier(tonumber(current_tier), false, true, content_shape)
+    end
+    knowledge.record_tier_review(db_path, doc.id, doc.content_hash, tier)
+    return tier
 end
 
 --------------------------------------------------------------------------

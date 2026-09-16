@@ -189,6 +189,56 @@ search_for_bioreactor_extra() {
     [[ ! "$output" =~ "Bioreactor Notes" ]]
 }
 
+@test "the agent's tier judgment can promote straight to tier 3 on a reply the content_shape formula alone wouldn't reach" {
+    "$BIN" entity create document title="Bioreactor Notes" content="cleaning steps for the bioreactor procedure"
+    # Same 130-word single-paragraph body as the content_shape test above
+    # ("simple" under the old formula -- too long for "atomic", not
+    # multi-section enough for "developed") -- here to prove tier 3 is
+    # reached via the agent's own judgment, not the word-count formula.
+    long_content=$(printf 'word %.0s' $(seq 1 130))
+    "$BIN" entity update document 1 content="$long_content"
+    search_for_bioreactor
+    search_for_bioreactor_extra "3"
+
+    run "$BIN" knowledge list 3
+    [[ "$output" =~ "Bioreactor Notes" ]]
+    run "$BIN" knowledge list 1
+    [[ ! "$output" =~ "Bioreactor Notes" ]]
+
+    content_hash=$(sqlite3 .store/store.db "SELECT content_hash FROM document WHERE id = 1;")
+    run sqlite3 .store/store.db "SELECT judged_tier, judged_hash FROM knowledge_tier_review WHERE document_id = 1;"
+    [[ "$output" =~ "3|${content_hash}" ]]
+}
+
+@test "a document's tier judgment isn't re-asked when its content hasn't changed, but is re-asked (and can move either direction) after a real edit" {
+    "$BIN" entity create document title="Bioreactor Notes" content="cleaning steps for the bioreactor procedure"
+    long_content=$(printf 'word %.0s' $(seq 1 130))
+    "$BIN" entity update document 1 content="$long_content"
+    search_for_bioreactor
+    search_for_bioreactor_extra "3"
+    run "$BIN" knowledge list 3
+    [[ "$output" =~ "Bioreactor Notes" ]]
+
+    # A further search with no content change: due_for_tier_judgment
+    # sees the same content_hash already on file and must not call the
+    # model again -- tier stays exactly as judged above.
+    search_for_bioreactor
+    run "$BIN" knowledge list 3
+    [[ "$output" =~ "Bioreactor Notes" ]]
+
+    # Now a real edit changes content_hash -- this must be due for a
+    # fresh judgment, and the new judgment (demoting to tier 1 here)
+    # takes effect, same "recomputed fresh every judged review, not
+    # ratcheted upward" bidirectionality the old content_shape mechanism
+    # already had.
+    "$BIN" entity update document 1 content="a short revised note"
+    search_for_bioreactor_extra "1"
+    run "$BIN" knowledge list 1
+    [[ "$output" =~ "Bioreactor Notes" ]]
+    run "$BIN" knowledge list 3
+    [[ ! "$output" =~ "Bioreactor Notes" ]]
+}
+
 @test "daat knowledge show prints a document's full pool detail" {
     "$BIN" entity create document title="Bioreactor Notes" content="cleaning steps for the bioreactor procedure"
     search_for_bioreactor
