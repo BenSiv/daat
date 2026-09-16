@@ -425,6 +425,17 @@ search_for_bioreactor_extra() {
     [[ "$output" =~ "Knowledge Graph" ]]
 }
 
+@test "/knowledge-graph renders the Forces physics-controls panel" {
+    run raw_get "/knowledge-graph" "" "$COOKIE"
+    [[ "$output" =~ "200 OK" ]]
+    [[ "$output" =~ 'id="platform-kg-forces-toggle"' ]]
+    [[ "$output" =~ 'id="platform-kg-repel"' ]]
+    [[ "$output" =~ 'id="platform-kg-link-force"' ]]
+    [[ "$output" =~ 'id="platform-kg-link-distance"' ]]
+    [[ "$output" =~ 'id="platform-kg-center"' ]]
+    [[ "$output" =~ 'id="platform-kg-forces-reset"' ]]
+}
+
 @test "/knowledge-graph-data returns real nodes and edges as JSON" {
     "$BIN" user add erin erinpass123 isa
     raw_erin=$(printf 'login=erin&password=erinpass123' | \

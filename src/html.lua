@@ -4235,6 +4235,15 @@ function html.render_knowledge_graph(nonce)
         .platform-kg-legend-reset { margin-left: auto; background: none; border: none; padding: 0; color: var(--platform-accent, #4f46e5); font-size: 0.85rem; cursor: pointer; text-decoration: underline; }
         .platform-kg-status { padding: 32px; text-align: center; color: var(--platform-muted, #64748b); }
         .platform-kg-tooltip { position: fixed; display: none; z-index: 1000; pointer-events: none; background: #1f2937; color: #f8fafc; font-size: 0.8rem; line-height: 1.4; padding: 6px 10px; border-radius: 6px; white-space: pre-line; box-shadow: 0 4px 12px rgba(0,0,0,0.25); max-width: 280px; }
+        .platform-kg-forces-toggle { background: none; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-sm, 8px); padding: 3px 12px; color: var(--platform-muted, #64748b); font-size: 0.85rem; cursor: pointer; }
+        .platform-kg-forces-toggle.platform-kg-forces-toggle-active { color: var(--platform-accent, #4f46e5); border-color: var(--platform-accent, #4f46e5); }
+        .platform-kg-forces { display: none; flex-direction: column; gap: 10px; margin-top: 10px; padding: 14px 16px; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); background: var(--platform-bg, #f8fafc); }
+        .platform-kg-forces.platform-kg-forces-open { display: flex; }
+        .platform-kg-force-row { display: flex; align-items: center; gap: 10px; font-size: 0.85rem; color: var(--platform-muted, #64748b); }
+        .platform-kg-force-row label { flex: 0 0 110px; }
+        .platform-kg-force-row input[type="range"] { flex: 1; }
+        .platform-kg-force-row span { flex: 0 0 56px; text-align: right; font-variant-numeric: tabular-nums; }
+        .platform-kg-forces-reset { align-self: flex-start; background: none; border: none; padding: 0; color: var(--platform-accent, #4f46e5); font-size: 0.85rem; cursor: pointer; text-decoration: underline; }
     </style>
     <div class="platform-container">
         %s
@@ -4242,7 +4251,14 @@ function html.render_knowledge_graph(nonce)
             <canvas id="platform-kg-canvas" height="600"></canvas>
             <p id="platform-kg-status" class="platform-kg-status">Loading graph...</p>
         </div>
-        <div class="platform-kg-legend">%s<button type="button" class="platform-kg-legend-reset" id="platform-kg-reset">Reset view</button></div>
+        <div class="platform-kg-legend">%s<button type="button" class="platform-kg-forces-toggle" id="platform-kg-forces-toggle">Forces</button><button type="button" class="platform-kg-legend-reset" id="platform-kg-reset">Reset view</button></div>
+        <div class="platform-kg-forces" id="platform-kg-forces">
+            <div class="platform-kg-force-row"><label for="platform-kg-repel">Repel force</label><input type="range" id="platform-kg-repel" min="1000" max="20000" step="500" value="6000"><span id="platform-kg-repel-val">6000</span></div>
+            <div class="platform-kg-force-row"><label for="platform-kg-link-force">Link force</label><input type="range" id="platform-kg-link-force" min="0" max="0.1" step="0.005" value="0.02"><span id="platform-kg-link-force-val">0.02</span></div>
+            <div class="platform-kg-force-row"><label for="platform-kg-link-distance">Link distance</label><input type="range" id="platform-kg-link-distance" min="30" max="200" step="5" value="70"><span id="platform-kg-link-distance-val">70</span></div>
+            <div class="platform-kg-force-row"><label for="platform-kg-center">Center force</label><input type="range" id="platform-kg-center" min="0" max="0.005" step="0.0001" value="0.001"><span id="platform-kg-center-val">0.001</span></div>
+            <button type="button" class="platform-kg-forces-reset" id="platform-kg-forces-reset">Reset to defaults</button>
+        </div>
         <div class="platform-kg-tooltip" id="platform-kg-tooltip"></div>
     </div>
     <script nonce="%s">
@@ -4252,6 +4268,13 @@ function html.render_knowledge_graph(nonce)
         var status = document.getElementById('platform-kg-status');
         var tooltip = document.getElementById('platform-kg-tooltip');
         var resetBtn = document.getElementById('platform-kg-reset');
+        var forcesToggle = document.getElementById('platform-kg-forces-toggle');
+        var forcesPanel = document.getElementById('platform-kg-forces');
+        var repelInput = document.getElementById('platform-kg-repel');
+        var linkForceInput = document.getElementById('platform-kg-link-force');
+        var linkDistanceInput = document.getElementById('platform-kg-link-distance');
+        var centerInput = document.getElementById('platform-kg-center');
+        var forcesResetBtn = document.getElementById('platform-kg-forces-reset');
         var nodes = [], links = [], byId = {};
 
         // Screen-space pan/zoom over a fixed "world" (the coordinates
@@ -4486,15 +4509,144 @@ function html.render_knowledge_graph(nonce)
         // moving one node in isolation. fixed=true (set while a node is
         // held) skips force integration for that node only -- everyone
         // else still reacts to it living wherever the mouse puts it.
+        // User-tunable via the Forces panel below (Repel/Link/Link
+        // distance/Center) -- kept as plain vars, reassigned directly by
+        // the slider handlers, same as any other live setting here.
         var REPULSION = 6000;
         var SPRING = 0.02;
         var SPRING_LENGTH = 70;
+        var CENTER_PULL = 0.001;
+        var FORCE_DEFAULTS = { repulsion: REPULSION, spring: SPRING, springLength: SPRING_LENGTH, centerPull: CENTER_PULL };
         var SPRING_STRENGTH_CAP = 3; // caps a heavily-reinforced edge's pull -- raw_strength grows unbounded over time (link-strength-redesign.md), layout shouldn't
         var DAMPING = 0.8; // was 0.85 -- kills more velocity per frame, so overshoot/oscillation dies out instead of visibly jittering
         var MAX_SPEED = 8; // per-axis px/frame clamp -- keeps any single step's force spike (e.g. two nodes landing very close) from reading as a jerk
-        var CENTER_PULL = 0.001;
         var SLEEP_ENERGY = 0.02;
         var simRunning = false;
+
+        // Not user-tunable -- a hard floor on top of REPULSION so two
+        // large (high-heat) nodes can never visually overlap regardless
+        // of what Repel force is set to, unlike the charge-based
+        // repulsion above which treats every node pair identically no
+        // matter their radius.
+        var COLLISION_PADDING = 4;
+        var COLLISION_STRENGTH = 0.6;
+
+        // Forces panel -- Obsidian-style live-adjustable Repel/Link/Link
+        // distance/Center sliders, wired straight to the vars above (read
+        // fresh by simStep every frame, no restart needed). Values and
+        // the panel's own open/closed state persist per-browser in
+        // localStorage, same try/catch-wrapped convention as the layout
+        // cache below and the chat widget's own OPEN_KEY.
+        var FORCES_OPEN_KEY = 'platform-kg-controls-open';
+        var FORCES_VALUES_KEY = 'platform-kg-physics-v1';
+
+        function loadForcesOpen() {
+            try {
+                return window.localStorage.getItem(FORCES_OPEN_KEY) === '1';
+            } catch (err) {
+                return false;
+            }
+        }
+
+        function saveForcesOpen(open) {
+            try {
+                window.localStorage.setItem(FORCES_OPEN_KEY, open ? '1' : '0');
+            } catch (err) {
+                // ignore -- purely a return-visit convenience
+            }
+        }
+
+        function loadForceValues() {
+            try {
+                var raw = window.localStorage.getItem(FORCES_VALUES_KEY);
+                return raw ? JSON.parse(raw) : null;
+            } catch (err) {
+                return null;
+            }
+        }
+
+        function saveForceValues() {
+            try {
+                window.localStorage.setItem(FORCES_VALUES_KEY, JSON.stringify({
+                    repulsion: REPULSION, spring: SPRING, springLength: SPRING_LENGTH, centerPull: CENTER_PULL
+                }));
+            } catch (err) {
+                // ignore -- next load just falls back to defaults
+            }
+        }
+
+        function updateForceLabels() {
+            document.getElementById('platform-kg-repel-val').textContent = REPULSION;
+            document.getElementById('platform-kg-link-force-val').textContent = SPRING;
+            document.getElementById('platform-kg-link-distance-val').textContent = SPRING_LENGTH;
+            document.getElementById('platform-kg-center-val').textContent = CENTER_PULL;
+        }
+
+        function applyForceValuesToInputs() {
+            repelInput.value = REPULSION;
+            linkForceInput.value = SPRING;
+            linkDistanceInput.value = SPRING_LENGTH;
+            centerInput.value = CENTER_PULL;
+            updateForceLabels();
+        }
+
+        var savedForces = loadForceValues();
+        if (savedForces) {
+            if (typeof savedForces.repulsion === 'number') { REPULSION = savedForces.repulsion; }
+            if (typeof savedForces.spring === 'number') { SPRING = savedForces.spring; }
+            if (typeof savedForces.springLength === 'number') { SPRING_LENGTH = savedForces.springLength; }
+            if (typeof savedForces.centerPull === 'number') { CENTER_PULL = savedForces.centerPull; }
+        }
+        applyForceValuesToInputs();
+
+        if (loadForcesOpen()) {
+            forcesPanel.classList.add('platform-kg-forces-open');
+            forcesToggle.classList.add('platform-kg-forces-toggle-active');
+        }
+
+        forcesToggle.addEventListener('click', function() {
+            var open = forcesPanel.classList.toggle('platform-kg-forces-open');
+            forcesToggle.classList.toggle('platform-kg-forces-toggle-active', open);
+            saveForcesOpen(open);
+        });
+
+        repelInput.addEventListener('input', function() {
+            REPULSION = parseFloat(repelInput.value);
+            updateForceLabels();
+            saveForceValues();
+            wakeSimulation();
+        });
+        linkForceInput.addEventListener('input', function() {
+            SPRING = parseFloat(linkForceInput.value);
+            updateForceLabels();
+            saveForceValues();
+            wakeSimulation();
+        });
+        linkDistanceInput.addEventListener('input', function() {
+            SPRING_LENGTH = parseFloat(linkDistanceInput.value);
+            updateForceLabels();
+            saveForceValues();
+            wakeSimulation();
+        });
+        centerInput.addEventListener('input', function() {
+            CENTER_PULL = parseFloat(centerInput.value);
+            updateForceLabels();
+            saveForceValues();
+            wakeSimulation();
+        });
+        forcesResetBtn.addEventListener('click', function() {
+            REPULSION = FORCE_DEFAULTS.repulsion;
+            SPRING = FORCE_DEFAULTS.spring;
+            SPRING_LENGTH = FORCE_DEFAULTS.springLength;
+            CENTER_PULL = FORCE_DEFAULTS.centerPull;
+            applyForceValuesToInputs();
+            try {
+                window.localStorage.removeItem(FORCES_VALUES_KEY);
+            } catch (err) {
+                // ignore
+            }
+            wakeSimulation();
+        });
 
         function simStep(w, h) {
             for (var i = 0; i < nodes.length; i++) {
@@ -4505,6 +4657,12 @@ function html.render_knowledge_graph(nonce)
                     var dist = Math.sqrt(distSq);
                     var force = REPULSION / distSq;
                     var fx = (dx / dist) * force, fy = (dy / dist) * force;
+                    var minDist = nodeRadius(a.heat) + nodeRadius(b.heat) + COLLISION_PADDING;
+                    if (dist < minDist) {
+                        var extra = (minDist - dist) * COLLISION_STRENGTH;
+                        fx += (dx / dist) * extra;
+                        fy += (dy / dist) * extra;
+                    }
                     if (!a.fixed) { a.vx += fx; a.vy += fy; }
                     if (!b.fixed) { b.vx -= fx; b.vy -= fy; }
                 }
