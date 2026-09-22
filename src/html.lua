@@ -2007,6 +2007,131 @@ function display_value(value)
     return html.html_escape(value)
 end
 
+-- Word-level diff between an old/new field value, for the ledger
+-- history view -- a document's `content` field can be thousands of
+-- words; showing the full old and new blobs side by side (display_value's
+-- old -> new above) for a one-word edit makes the real change all but
+-- impossible to spot. Classic LCS word diff: common words render
+-- plain, removed words struck through, added words highlighted -- the
+-- same red/green tokens .platform-chat-error/.platform-admin-message
+-- already use elsewhere in this file, not a new palette (see the CSS
+-- above).
+--
+-- Guarded by DIFF_MAX_WORDS: the LCS table below is O(#a * #b) in word
+-- count, and a full multi-thousand-word field (a real, common size in
+-- this deployment's own document pool -- whole journal-article bodies)
+-- would make that a genuinely expensive request. Past the cap,
+-- word_diff_html returns nil so the caller falls back to the old plain
+-- old -> new rendering rather than either hanging the request or
+-- silently truncating a real diff.
+DIFF_MAX_WORDS = 400
+
+function split_words(text)
+    words = {}
+    for w in string.gmatch(tostring(text), "%S+") do
+        table.insert(words, w)
+    end
+    return words
+end
+
+-- Standard dynamic-programming LCS length table over two word arrays --
+-- lengths[i][j] is the LCS length of a[1..i] and b[1..j].
+function word_lcs_lengths(a, b)
+    lengths = {}
+    for i = 0, #a do
+        lengths[i] = {}
+        for j = 0, #b do
+            lengths[i][j] = 0
+        end
+    end
+    for i = 1, #a do
+        for j = 1, #b do
+            if a[i] == b[j] then
+                lengths[i][j] = lengths[i - 1][j - 1] + 1
+            elseif lengths[i - 1][j] >= lengths[i][j - 1] then
+                lengths[i][j] = lengths[i - 1][j]
+            else
+                lengths[i][j] = lengths[i][j - 1]
+            end
+        end
+    end
+    return lengths
+end
+
+-- Backtracks the LCS table into a sequence of {kind, words} runs, in
+-- original order -- kind is one of "same"/"removed"/"added", with
+-- adjacent same-kind words already grouped into one run so a caller
+-- doesn't have to.
+function word_diff_runs(old_text, new_text)
+    a = split_words(old_text)
+    b = split_words(new_text)
+    lengths = word_lcs_lengths(a, b)
+
+    reversed = {}
+    i, j = #a, #b
+    while i > 0 and j > 0 do
+        if a[i] == b[j] then
+            table.insert(reversed, {kind = "same", word = a[i]})
+            i = i - 1
+            j = j - 1
+        elseif lengths[i - 1][j] >= lengths[i][j - 1] then
+            table.insert(reversed, {kind = "removed", word = a[i]})
+            i = i - 1
+        else
+            table.insert(reversed, {kind = "added", word = b[j]})
+            j = j - 1
+        end
+    end
+    while i > 0 do
+        table.insert(reversed, {kind = "removed", word = a[i]})
+        i = i - 1
+    end
+    while j > 0 do
+        table.insert(reversed, {kind = "added", word = b[j]})
+        j = j - 1
+    end
+
+    runs = {}
+    for k = #reversed, 1, -1 do
+        entry = reversed[k]
+        last = runs[#runs]
+        if last != nil and last.kind == entry.kind then
+            table.insert(last.words, entry.word)
+        else
+            table.insert(runs, {kind = entry.kind, words = {entry.word}})
+        end
+    end
+    return runs
+end
+
+-- Rendered HTML for a word diff, or nil when either side is too large
+-- to diff cheaply (see DIFF_MAX_WORDS above) -- the caller falls back
+-- to display_value's plain old -> new rendering in that case.
+function word_diff_html(old_value, new_value)
+    old_text = tostring(old_value)
+    new_text = tostring(new_value)
+    if old_text == new_text then
+        return html.html_escape(old_text)
+    end
+    a = split_words(old_text)
+    b = split_words(new_text)
+    if #a > DIFF_MAX_WORDS or #b > DIFF_MAX_WORDS then
+        return nil
+    end
+    parts = {}
+    for _, run in ipairs(word_diff_runs(old_text, new_text)) do
+        escaped = html.html_escape(table.concat(run.words, " "))
+        if run.kind == "removed" then
+            table.insert(parts, "<del class=\"diff-removed\">" .. escaped .. "</del>")
+        elseif run.kind == "added" then
+            table.insert(parts, "<ins class=\"diff-added\">" .. escaped .. "</ins>")
+        else
+            table.insert(parts, escaped)
+        end
+    end
+    return table.concat(parts, " ")
+end
+
 -- Reference-type field values are a raw entity id -- not every entity
 -- type has a human-readable label for it (see the two sources below),
 -- so this always renders the id as a real, styled link to the
@@ -2335,8 +2460,22 @@ function html.render_detail(db_path, entity_type, layout, row, history, nonce, h
                 html.html_escape(event.reason) .. "</em></div>"
         end
         for field_name, change in pairs(event.field_changes) do
-            changes = changes .. "<div class=\"change-item\"><strong>" .. html.html_escape(field_name) ..
-                "</strong>: " .. display_value(change.old) .. " &rarr; " .. display_value(change.new) .. "</div>"
+            -- A word-level diff only makes sense for two plain scalars
+            -- (see word_diff_html's own comment for why, and its size
+            -- cap) -- a multivalue field's old/new is a real Lua array
+            -- (display_value's own header comment), so that still falls
+            -- back to the plain old -> new rendering below.
+            diff_body = nil
+            if type(change.old) != "table" and type(change.new) != "table" then
+                diff_body = word_diff_html(change.old, change.new)
+            end
+            if diff_body != nil then
+                changes = changes .. "<div class=\"change-item\"><strong>" .. html.html_escape(field_name) ..
+                    "</strong>: <span class=\"diff-view\">" .. diff_body .. "</span></div>"
+            else
+                changes = changes .. "<div class=\"change-item\"><strong>" .. html.html_escape(field_name) ..
+                    "</strong>: " .. display_value(change.old) .. " &rarr; " .. display_value(change.new) .. "</div>"
+            end
         end
         history_rows = history_rows .. "<tr><td>#" .. tostring(event.event_id) .. "</td><td>" ..
             html.html_escape(event.event_type) .. "</td><td>" .. display_value(event.author) .. "</td><td>" ..
@@ -2385,6 +2524,13 @@ function html.render_detail(db_path, entity_type, layout, row, history, nonce, h
         #history-table td { background: #ffffff; }
         .change-item { margin-bottom: 4px; }
         .change-item:last-child { margin-bottom: 0; }
+        .diff-view { word-break: break-word; }
+        /* Same red/green tokens as .platform-chat-error and
+           .platform-admin-message elsewhere in this file -- not a new
+           palette, just this codebase's existing danger/success colors
+           applied to a diff. */
+        .diff-removed { color: #991b1b; background: #fef2f2; text-decoration: line-through; padding: 0 2px; border-radius: 3px; }
+        .diff-added { color: #166534; background: #f0fdf4; text-decoration: none; padding: 0 2px; border-radius: 3px; }
         .platform-print-label { display: inline-flex; align-items: center; gap: 8px; margin-left: 16px; }
         .platform-print-label select { padding: 6px 10px; border-radius: var(--platform-radius-sm, 8px); border: 1px solid var(--platform-border, #e2e8f0); }
         #platform-print-label-status { font-size: 0.85rem; color: var(--platform-muted, #64748b); }
@@ -5702,9 +5848,15 @@ function html.render_document(doc, rendered_html, breadcrumbs, children, backlin
     if can_edit == true then
         edit_link = "<a class=\"btn btn-secondary\" href=\"document-edit?entity_id=" .. tostring(doc.id) .. "\">Edit</a>"
     end
+    -- The generic /detail page (ledger history/diff, same as every
+    -- other entity type) has no other link into it from the document
+    -- view itself -- document is its own dedicated route (/document,
+    -- not /detail?type=document), found live: a real user on this page
+    -- had no way to reach it at all.
+    history_link = "<a class=\"btn btn-secondary\" href=\"detail?type=document&entity_id=" .. tostring(doc.id) .. "\">History</a>"
 
     escaped_doc_title = html.html_escape(doc.title)
-    doc_header = render_page_header(escaped_doc_title, nil, edit_link)
+    doc_header = render_page_header(escaped_doc_title, nil, "<div class=\"platform-header-actions\">" .. history_link .. edit_link .. "</div>")
     return string.format("""
 <div class="fossil-doc" data-title="%s">
     <style>
@@ -6745,5 +6897,7 @@ end
 -- require() boundary -- see the matching comment in agent_vertex.lua.
 html.apply_nav_hidden = apply_nav_hidden
 html.apply_nav_order = apply_nav_order
+html.word_diff_runs = word_diff_runs
+html.word_diff_html = word_diff_html
 
 return html

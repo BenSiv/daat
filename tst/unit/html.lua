@@ -179,6 +179,83 @@ function test_apply_nav_order_duplicate_key_is_only_placed_once()
     check(#result == 4, "a repeated order key should not duplicate the item, got " .. tostring(#result))
 end
 
+-- word_diff_html/word_diff_runs (found live: the ledger history view
+-- showed a field's full old/new text side by side even for a one-word
+-- edit, making a real change in a long field like a document's content
+-- unreadable). LCS word diff -- exercised directly, same reasoning as
+-- apply_nav_hidden/apply_nav_order above.
+function test_word_diff_runs_identical_text_is_all_same()
+    print("Testing word_diff_runs treats identical text as a single 'same' run")
+    runs = html.word_diff_runs("the quick fox", "the quick fox")
+    check(#runs == 1 and runs[1].kind == "same", "identical text should produce one 'same' run")
+end
+
+function test_word_diff_runs_detects_a_single_word_change()
+    print("Testing word_diff_runs isolates a single changed word, keeping the rest as 'same'")
+    runs = html.word_diff_runs("the quick fox jumps", "the slow fox jumps")
+    -- "the"/"fox jumps" must stay 'same'; "quick"/"slow" must show up as
+    -- one 'removed' and one 'added' run each -- the relative order
+    -- between those two middle runs is just an LCS tie-break artifact,
+    -- not a correctness property, so this checks presence/content, not
+    -- a specific sequence.
+    check(#runs == 4, "expected 4 runs (same, [added/removed]x2, same), got " .. tostring(#runs))
+    check(runs[1].kind == "same" and runs[1].words[1] == "the", "the leading 'the' should be a same run")
+    check(runs[4].kind == "same" and runs[4].words[1] == "fox" and runs[4].words[2] == "jumps",
+        "the trailing 'fox jumps' should be one same run")
+    removed_words, added_words = {}, {}
+    for k = 2, 3 do
+        if runs[k].kind == "removed" then
+            removed_words = runs[k].words
+        elseif runs[k].kind == "added" then
+            added_words = runs[k].words
+        end
+    end
+    check(removed_words[1] == "quick", "expected a removed run carrying 'quick', got " .. tostring(removed_words[1]))
+    check(added_words[1] == "slow", "expected an added run carrying 'slow', got " .. tostring(added_words[1]))
+end
+
+function test_word_diff_runs_pure_insertion_and_deletion()
+    print("Testing word_diff_runs handles a pure insertion and a pure deletion")
+    added_runs = html.word_diff_runs("a b", "a b c")
+    check(added_runs[#added_runs].kind == "added" and added_runs[#added_runs].words[1] == "c",
+        "appending a word should show up as a trailing 'added' run")
+    removed_runs = html.word_diff_runs("a b c", "a b")
+    check(removed_runs[#removed_runs].kind == "removed" and removed_runs[#removed_runs].words[1] == "c",
+        "dropping a trailing word should show up as a trailing 'removed' run")
+end
+
+function test_word_diff_html_highlights_only_the_changed_word()
+    print("Testing word_diff_html wraps only the changed words, leaving the rest plain")
+    rendered = html.word_diff_html("the quick fox jumps", "the slow fox jumps")
+    check(string.find(rendered, "<del", 1, true) != nil and string.find(rendered, "quick", 1, true) != nil,
+        "the removed word should be wrapped in <del>: " .. rendered)
+    check(string.find(rendered, "<ins", 1, true) != nil and string.find(rendered, "slow", 1, true) != nil,
+        "the added word should be wrapped in <ins>: " .. rendered)
+    check(string.find(rendered, "<del>the</del>", 1, true) == nil and string.find(rendered, "<ins>the</ins>", 1, true) == nil,
+        "an unchanged word must not be wrapped: " .. rendered)
+end
+
+function test_word_diff_html_escapes_html_in_diffed_text()
+    print("Testing word_diff_html HTML-escapes both old and new words")
+    rendered = html.word_diff_html("<script>old", "<script>new")
+    check(string.find(rendered, "<script>", 1, true) == nil,
+        "a raw <script> tag from either side must never reach the output unescaped: " .. rendered)
+    check(string.find(rendered, "&lt;script&gt;", 1, true) != nil, "the escaped form should be present instead: " .. rendered)
+end
+
+function test_word_diff_html_returns_nil_past_the_word_cap()
+    print("Testing word_diff_html falls back to nil (caller shows plain old -> new) past DIFF_MAX_WORDS")
+    huge_old = {}
+    huge_new = {}
+    for i = 1, 401 do
+        table.insert(huge_old, "word" .. tostring(i))
+        table.insert(huge_new, "word" .. tostring(i))
+    end
+    huge_new[1] = "different"
+    check(html.word_diff_html(table.concat(huge_old, " "), table.concat(huge_new, " ")) == nil,
+        "a diff over DIFF_MAX_WORDS words should return nil, not attempt the O(n*m) LCS")
+end
+
 -- Run them
 test_validate_rejects_unknown_element_type()
 test_validate_rejects_non_list()
@@ -196,6 +273,12 @@ test_apply_nav_order_moves_named_keys_to_the_front()
 test_apply_nav_order_nil_or_empty_is_a_no_op()
 test_apply_nav_order_unrecognized_key_is_a_silent_no_op()
 test_apply_nav_order_duplicate_key_is_only_placed_once()
+test_word_diff_runs_identical_text_is_all_same()
+test_word_diff_runs_detects_a_single_word_change()
+test_word_diff_runs_pure_insertion_and_deletion()
+test_word_diff_html_highlights_only_the_changed_word()
+test_word_diff_html_escapes_html_in_diffed_text()
+test_word_diff_html_returns_nil_past_the_word_cap()
 
 if FAILURES > 0 then
     print(FAILURES .. " test(s) failed")
