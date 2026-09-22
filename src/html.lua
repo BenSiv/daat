@@ -4523,13 +4523,27 @@ function html.render_knowledge_graph(nonce)
         var SLEEP_ENERGY = 0.02;
         var simRunning = false;
 
-        // Not user-tunable -- a hard floor on top of REPULSION so two
-        // large (high-heat) nodes can never visually overlap regardless
-        // of what Repel force is set to, unlike the charge-based
-        // repulsion above which treats every node pair identically no
-        // matter their radius.
+        // Not user-tunable -- a hard floor so two large (high-heat) nodes
+        // can never visually overlap regardless of what Repel/Link force
+        // is set to. Enforced as a direct position correction
+        // (resolveCollisions below), not another force competing with
+        // repulsion/spring for the same velocity budget -- an earlier
+        // version added this as extra repulsion inside the force loop,
+        // which fought the spring force every frame (each pulling a
+        // connected pair back into overlap that the "force" then had to
+        // push apart again) and kept average kinetic energy from ever
+        // dropping below SLEEP_ENERGY, so the sim visibly never settled.
         var COLLISION_PADDING = 4;
-        var COLLISION_STRENGTH = 0.6;
+
+        // Extra center-pull for well-connected nodes, on top of the flat
+        // CENTER_PULL every node gets -- so a densely-linked core visibly
+        // gravitates to the middle while sparsely-connected nodes drift
+        // toward the edges, without needing actual connected-component
+        // detection. log1p keeps one very high-degree hub from being
+        // pulled in disproportionately harder than everything else --
+        // connWeight is summed edge strength (set on data load below),
+        // so a single strong link already counts, not just raw degree.
+        var CENTER_CONNECTIVITY_GAIN = 0.6;
 
         // Forces panel -- Obsidian-style live-adjustable Repel/Link/Link
         // distance/Center sliders, wired straight to the vars above (read
@@ -4648,6 +4662,52 @@ function html.render_knowledge_graph(nonce)
             wakeSimulation();
         });
 
+        // Direct position correction for any pair whose circles overlap
+        // -- run after forces/positions are otherwise finalized for the
+        // frame, so it always wins regardless of how hard repulsion/
+        // spring/center are pulling two nodes together. Two passes: the
+        // first can reintroduce a small overlap with a third node while
+        // separating a pair, the second cleans most of that up -- cheap
+        // (same O(n^2) shape as repulsion above) and visually sufficient,
+        // not meant to be an exact iterative solver.
+        function resolveCollisions() {
+            for (var pass = 0; pass < 2; pass++) {
+                for (var i = 0; i < nodes.length; i++) {
+                    for (var j = i + 1; j < nodes.length; j++) {
+                        var a = nodes[i], b = nodes[j];
+                        if (a.fixed && b.fixed) { continue; }
+                        var dx = a.x - b.x, dy = a.y - b.y;
+                        var dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+                        var minDist = nodeRadius(a.heat) + nodeRadius(b.heat) + COLLISION_PADDING;
+                        if (dist >= minDist) { continue; }
+                        var overlap = minDist - dist;
+                        var nx = dx / dist, ny = dy / dist; // unit vector from b to a
+                        var aMove = a.fixed ? 0 : (b.fixed ? 1 : 0.5);
+                        var bMove = b.fixed ? 0 : (a.fixed ? 1 : 0.5);
+                        a.x += nx * overlap * aMove;
+                        a.y += ny * overlap * aMove;
+                        b.x -= nx * overlap * bMove;
+                        b.y -= ny * overlap * bMove;
+                        // Cancel whatever part of each node's velocity is
+                        // still driving them together -- otherwise a
+                        // spring/repulsion combo that wants this pair
+                        // closer than minDist keeps re-adding the same
+                        // "closing" velocity every frame even though the
+                        // position keeps getting corrected, so kinetic
+                        // energy never drops and the sim never sleeps.
+                        if (!a.fixed) {
+                            var avn = a.vx * nx + a.vy * ny;
+                            if (avn < 0) { a.vx -= avn * nx; a.vy -= avn * ny; }
+                        }
+                        if (!b.fixed) {
+                            var bvn = b.vx * nx + b.vy * ny;
+                            if (bvn > 0) { b.vx -= bvn * nx; b.vy -= bvn * ny; }
+                        }
+                    }
+                }
+            }
+        }
+
         function simStep(w, h) {
             for (var i = 0; i < nodes.length; i++) {
                 for (var j = i + 1; j < nodes.length; j++) {
@@ -4657,12 +4717,6 @@ function html.render_knowledge_graph(nonce)
                     var dist = Math.sqrt(distSq);
                     var force = REPULSION / distSq;
                     var fx = (dx / dist) * force, fy = (dy / dist) * force;
-                    var minDist = nodeRadius(a.heat) + nodeRadius(b.heat) + COLLISION_PADDING;
-                    if (dist < minDist) {
-                        var extra = (minDist - dist) * COLLISION_STRENGTH;
-                        fx += (dx / dist) * extra;
-                        fy += (dy / dist) * extra;
-                    }
                     if (!a.fixed) { a.vx += fx; a.vy += fy; }
                     if (!b.fixed) { b.vx -= fx; b.vy -= fy; }
                 }
@@ -4682,17 +4736,21 @@ function html.render_knowledge_graph(nonce)
                 if (!a.fixed) { a.vx += fx; a.vy += fy; }
                 if (!b.fixed) { b.vx -= fx; b.vy -= fy; }
             });
-            var energy = 0;
             nodes.forEach(function(n) {
                 if (n.fixed) { n.vx = 0; n.vy = 0; return; }
-                n.vx += (w / 2 - n.x) * CENTER_PULL;
-                n.vy += (h / 2 - n.y) * CENTER_PULL;
+                var centerBoost = 1 + CENTER_CONNECTIVITY_GAIN * Math.log(1 + (n.connWeight || 0));
+                n.vx += (w / 2 - n.x) * CENTER_PULL * centerBoost;
+                n.vy += (h / 2 - n.y) * CENTER_PULL * centerBoost;
                 n.vx *= DAMPING;
                 n.vy *= DAMPING;
                 n.vx = Math.max(-MAX_SPEED, Math.min(MAX_SPEED, n.vx));
                 n.vy = Math.max(-MAX_SPEED, Math.min(MAX_SPEED, n.vy));
                 n.x += n.vx;
                 n.y += n.vy;
+            });
+            resolveCollisions();
+            var energy = 0;
+            nodes.forEach(function(n) {
                 energy += n.vx * n.vx + n.vy * n.vy;
             });
             return energy;
@@ -4807,8 +4865,18 @@ function html.render_knowledge_graph(nonce)
         }).then(function(data) {
             nodes = data.nodes || [];
             byId = {};
-            nodes.forEach(function(n) { byId[n.id] = n; });
+            nodes.forEach(function(n) { byId[n.id] = n; n.connWeight = 0; });
             links = (data.edges || []).filter(function(e) { return byId[e.from] && byId[e.to]; });
+            // Summed incident edge strength, not just a raw edge count --
+            // a node with one heavily-reinforced link is "more connected"
+            // in the same sense the spring force already treats it, so
+            // the extra center-pull below (CENTER_CONNECTIVITY_GAIN) uses
+            // the same notion of connectedness the rest of the page does.
+            links.forEach(function(e) {
+                var strength = (typeof e.strength === 'number') ? e.strength : 1.0;
+                byId[e.from].connWeight += strength;
+                byId[e.to].connWeight += strength;
+            });
             if (nodes.length === 0) {
                 status.textContent = 'No documents in the pool yet.';
                 return;
