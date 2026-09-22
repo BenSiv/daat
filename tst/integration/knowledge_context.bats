@@ -132,6 +132,31 @@ EOF
     [[ "$output" =~ "error|error" ]]
 }
 
+@test "a provider failure appears in the chat widget's own message list as a visible error, not silently dropped" {
+    # Found live: run_turn already persisted a provider failure as a
+    # real agent_message row, but with role="tool_result" -- exactly
+    # the role chat_widget_state's own all_messages(..., false) call
+    # strips out as raw tool output never meant for the human-facing
+    # view. The error was real and audited, but structurally invisible
+    # to the widget -- a chat session would just stop with no response
+    # shown at all. role="error" is its own role precisely so this
+    # filter leaves it alone.
+    read session csrf < <(session_for admin secret123)
+    chat_session=$(start_chat "$session" "$csrf" "Test")
+    cat > "${TEST_DIR}/platform.lua" <<'EOF'
+return {agent_provider = "nonexistent-provider"}
+EOF
+    resp=$(printf '{"session_id":"%s","message":"hi"}' "$chat_session" | \
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/chat-widget-send" QUERY_STRING="" \
+        HTTP_COOKIE="session=${session}; csrf=${csrf}" HTTP_X_CSRF_TOKEN="${csrf}" "$BIN")
+
+    body=$(json_body "$resp")
+    error_role=$(printf '%s' "$body" | jq -r '.messages[] | select(.role == "error") | .role')
+    [[ "$error_role" == "error" ]]
+    error_content=$(printf '%s' "$body" | jq -r '.messages[] | select(.role == "error") | .content')
+    [[ "$error_content" =~ "ERROR" ]]
+}
+
 @test "knowledge.distill proposes a new distilled document, gated behind approval, then creates it under the Knowledge Pool folder once approved" {
     # Created via the real entity path (not a raw SQL insert) -- document
     # rows get their id from ledger.append_create's own auto-increment

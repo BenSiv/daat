@@ -6097,6 +6097,12 @@ function platform_chat_widget_css()
 .platform-chat-widget-stop:hover { background: #fef2f2; }
 .platform-chat-widget-stop:disabled { cursor: default; opacity: 0.6; }
 .platform-chat-widget-error { padding: 8px 10px; color: #991b1b; background: #fef2f2; border: 1px solid #fecaca; border-radius: var(--platform-radius-sm, 8px); font-size: 0.85rem; margin: 4px 0; }
+/* Same color tokens as .platform-chat-widget-error above -- a per-message
+   role="error" row (a failed turn, agent.lua's run_turn) reuses that
+   fetch-rejection banner's palette rather than inventing a second one,
+   so "something failed" reads consistently regardless of which layer
+   caught it. */
+.platform-chat-error { color: #991b1b; background: #fef2f2; border: 1px solid #fecaca; }
 .platform-chat-feedback { display: flex; gap: 4px; margin: 2px 0 8px 0; }
 .platform-chat-feedback button {
     background: none; border: 1px solid transparent; border-radius: var(--platform-radius-sm, 8px);
@@ -6165,7 +6171,7 @@ function html.render_chat_widget(nonce, attachments_enabled)
         return parts.join(' ');
     }
 
-    var ROLE_LABELS = {user: 'You', assistant: 'Assistant', tool_result: 'Tool result', compaction_summary: 'Compacted summary', self_check: 'Self-check'};
+    var ROLE_LABELS = {user: 'You', assistant: 'Assistant', tool_result: 'Tool result', compaction_summary: 'Compacted summary', self_check: 'Self-check', error: 'Error'};
     // Same roles as html.lua's own CHAT_MARKDOWN_ROLES -- the server
     // (chat_widget_state, cgi.lua) already rendered these through
     // cmark-gfm before this JSON ever reached the browser, so this JS

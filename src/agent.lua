@@ -1479,8 +1479,16 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
             -- turn would just vanish with no trace in the transcript
             -- for any call site (chat-message, chat-widget-send/
             -- approve/deny) that doesn't happen to inspect this
-            -- specific return value.
-            error_message_id = agent.add_message(db_path, session_id, "tool_result", "ERROR: " .. tostring(err), true)
+            -- specific return value. role = "error", not "tool_result"
+            -- -- found live: chat_widget_state (cgi.lua) always calls
+            -- all_messages(..., false), which strips every tool_result
+            -- row as raw tool output the widget was never meant to
+            -- show -- that filter was silently eating this error too,
+            -- so a real, already-logged failure never reached the
+            -- browser at all (spinner just disappears). "error" is its
+            -- own first-class role precisely so that filter leaves it
+            -- alone.
+            error_message_id = agent.add_message(db_path, session_id, "error", "ERROR: " .. tostring(err), true)
             -- Still recorded even on failure -- what was actually sent
             -- is exactly as much an audit fact as what came back, and
             -- usage/reasoning simply don't apply here.
@@ -1503,7 +1511,9 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
             if error_message == nil then
                 error_message = "model call failed (stopReason: " .. tostring(response.stopReason) .. ")"
             end
-            error_message_id = agent.add_message(db_path, session_id, "tool_result", "ERROR: " .. tostring(error_message), true)
+            -- role = "error" -- see the connectivity-failure branch
+            -- above for why this must not be "tool_result".
+            error_message_id = agent.add_message(db_path, session_id, "error", "ERROR: " .. tostring(error_message), true)
             context_id = knowledge.record_context(db_path, session_id, error_message_id, audit_prompt, model, nil, usage)
             knowledge.record_chat_eval(db_path, session_id, context_id, error_message_id, agent_provider.name(), model, true, nil)
             return {status = "error", message = tostring(error_message)}

@@ -99,6 +99,29 @@ function test_vertex_contents_round_trips_thought_signature_for_every_block_type
         "a block with no captured signature should not invent one on the way back out")
 end
 
+-- Found live: the per-call `gcloud auth application-default print-
+-- access-token` shell-out this replaced had no caching and no timeout,
+-- and could hang/serialize under concurrent chat traffic. This is the
+-- pure "is the cached token still good enough to skip a fresh
+-- metadata-server call" decision, kept separate from the actual file/
+-- network calls so it's directly unit-testable.
+function test_vertex_token_cache_expired_no_cache_is_expired()
+    print("Testing vertex_token_cache_expired treats a missing/malformed cache as expired")
+    check(agent_vertex.vertex_token_cache_expired(nil, 1000) == true, "nil cache should be expired")
+    check(agent_vertex.vertex_token_cache_expired({}, 1000) == true, "a cache with no access_token/expires_at should be expired")
+    check(agent_vertex.vertex_token_cache_expired({access_token = "tok"}, 1000) == true, "a cache with no expires_at should be expired")
+end
+
+function test_vertex_token_cache_expired_margin()
+    print("Testing vertex_token_cache_expired honors TOKEN_EXPIRY_MARGIN_SECONDS")
+    cache = {access_token = "tok", expires_at = 1000}
+    check(agent_vertex.vertex_token_cache_expired(cache, 800) == false, "well before expiry should not be expired")
+    check(agent_vertex.vertex_token_cache_expired(cache, 941) == true, "within the expiry margin should be treated as expired")
+    check(agent_vertex.vertex_token_cache_expired(cache, 1000) == true, "at/past the real expiry should be expired")
+end
+
+test_vertex_token_cache_expired_no_cache_is_expired()
+test_vertex_token_cache_expired_margin()
 test_vertex_url_regional_uses_region_subdomain()
 test_vertex_url_global_has_no_subdomain_prefix()
 test_vertex_blocks_captures_thought_signature_on_tool_call()

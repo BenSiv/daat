@@ -73,6 +73,7 @@
 json = require("dkjson")
 config = require("config")
 external_tool = require("external_tool")
+paths = require("paths")
 
 agent_vertex = {}
 
@@ -112,19 +113,92 @@ function vertex_config()
     return project, region
 end
 
--- A fresh bearer token per call, not cached -- ADC tokens are
--- short-lived (about an hour) and re-fetching costs one extra `gcloud`
--- invocation, negligible next to the LLM call itself.
+-- A same-host link-local request, not a real internet round trip like
+-- REQUEST_TIMEOUT_SECONDS above -- 10s is generous headroom, not a
+-- tuned budget.
+TOKEN_REQUEST_TIMEOUT_SECONDS = 10
+
+-- Refresh this many seconds before the cached token's recorded expiry,
+-- so a request that starts just under the wire never hands vertex_post
+-- an already-expired token.
+TOKEN_EXPIRY_MARGIN_SECONDS = 60
+
+function vertex_token_cache_path()
+    return paths.joinpath(config.store_dir(), "vertex-token-cache.json")
+end
+
+-- Pure decision, kept separate from the file/network calls below so
+-- it's directly unit-testable (same reasoning as knowledge.due_for_
+-- review keeping its own threshold check pure) -- true when there's no
+-- cached token yet, the cache is malformed, or it's within
+-- TOKEN_EXPIRY_MARGIN_SECONDS of its recorded expiry.
+function vertex_token_cache_expired(cache, now)
+    if cache == nil or cache.access_token == nil or cache.expires_at == nil then
+        return true
+    end
+    return tonumber(now) >= tonumber(cache.expires_at) - TOKEN_EXPIRY_MARGIN_SECONDS
+end
+
+function vertex_read_token_cache()
+    file = io.open(vertex_token_cache_path(), "r")
+    if file == nil then
+        return nil
+    end
+    raw = io.read(file, "*all")
+    io.close(file)
+    cache, _, _ = json.decode(raw)
+    return cache
+end
+
+function vertex_write_token_cache(access_token, expires_at)
+    file = io.open(vertex_token_cache_path(), "w")
+    if file == nil then
+        return
+    end
+    io.write(file, json.encode({access_token = access_token, expires_at = expires_at}))
+    io.close(file)
+end
+
+-- On a GCE VM this is what `gcloud auth application-default print-
+-- access-token`/ADC already do internally -- fetching straight from the
+-- instance metadata server avoids spawning a whole `gcloud` Python CLI
+-- process on every single generate/converse/embeddings call. Found
+-- live: that per-call gcloud shell-out had no timeout and could hang/
+-- serialize under concurrent chat traffic (contending on gcloud's own
+-- local credential-cache file), well upstream of the Vertex request
+-- itself -- see REQUEST_TIMEOUT_SECONDS's own comment for the incident
+-- this and that fix both trace back to.
+--
+-- Cached to a file (config.store_dir()), not in-process: this is a
+-- fresh CGI/CLI process per request (doc/architecture.md's "Overview"),
+-- so a module-global cache would never survive past the request that
+-- populated it. Two processes racing to refresh both fetch an equally
+-- valid token -- worst case is one harmless extra metadata-server call,
+-- never incorrect data -- so this needs no locking, unlike a real
+-- shared-counter race elsewhere in this codebase.
 function vertex_access_token()
-    token, err = external_tool.capture("gcloud auth application-default print-access-token 2>/dev/null")
-    if token == nil then
-        return nil, "cannot get gcloud access token: " .. tostring(err)
+    now = os.time()
+    cache = vertex_read_token_cache()
+    if vertex_token_cache_expired(cache, now) == false then
+        return cache.access_token
     end
-    token = string.gsub(token, "%s+$", "")
-    if token == "" then
-        return nil, "empty access token -- is 'gcloud auth application-default login' configured?"
+
+    response_text, _ = external_tool.capture(
+        "curl -s --max-time " .. tostring(TOKEN_REQUEST_TIMEOUT_SECONDS) ..
+        " -H " .. external_tool.shell_quote("Metadata-Flavor: Google") ..
+        " " .. external_tool.shell_quote("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token")
+    )
+    if response_text == nil then
+        return nil, "cannot get GCE metadata-server access token (curl/network failure)"
     end
-    return token
+    response, _, decode_err = json.decode(response_text)
+    if response == nil or response.access_token == nil then
+        return nil, "invalid metadata-server token response: " .. tostring(decode_err)
+    end
+
+    expires_at = now + tonumber(response.expires_in)
+    vertex_write_token_cache(response.access_token, expires_at)
+    return response.access_token
 end
 
 -- Every regional/multi-regional location uses a
@@ -496,5 +570,6 @@ end
 agent_vertex.vertex_url = vertex_url
 agent_vertex.vertex_blocks_from_parts = vertex_blocks_from_parts
 agent_vertex.vertex_contents_from_messages = vertex_contents_from_messages
+agent_vertex.vertex_token_cache_expired = vertex_token_cache_expired
 
 return agent_vertex
