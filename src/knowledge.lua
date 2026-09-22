@@ -1010,8 +1010,15 @@ end
 
 TIER_JUDGMENT_MODEL = DISTILL_MODEL
 
+-- Found live: a short calibration table and a short, mostly-links
+-- experiment note both got judged tier 3 -- both genuinely short and
+-- single-topic, so a shape/brevity-only bar was satisfied, but neither
+-- is actually a distilled idea; they're raw data and a reference list
+-- that just happen to be brief. The added sentences below are the
+-- specific, found-live failure mode this prompt now has to rule out,
+-- not a generic tightening.
 TIER_JUDGMENT_SYSTEM_PROMPT = """
-You are judging how far a document in a knowledge pool has matured through real editing, not how often it's been looked up. Tiers: 1 = Curated Draft (revised, but not yet a complete reference or a tight standalone definition), 2 = Developed Reference (a genuinely complete, multi-section, wiki-page-like article), 3 = Atomic Record (short, single-subject, definition-card-shaped -- one idea, tightly stated). Read the document below and decide which of these three tiers its CURRENT content genuinely earns -- judge the real editorial maturity of the writing, not just its length. Reply with exactly one character: 1, 2, or 3.
+You are judging how far a document in a knowledge pool has matured through real editing, not how often it's been looked up. Tiers: 1 = Curated Draft (revised, but not yet a complete reference or a tight standalone definition), 2 = Developed Reference (a genuinely complete, multi-section, wiki-page-like article), 3 = Atomic Record (a short, self-contained idea stated in prose, like a glossary or flashcard definition -- someone actually distilled a single conclusion or concept down into its own words). Tier 3 requires real synthesis, not just brevity: a short table of raw data (measurements, calibration values, a data grid), a bare list of links or references, or a terse note that's mostly structure rather than a written statement of one idea all stay Curated Draft even when they're short and single-topic -- there's no distilled idea being expressed there, just short or listed content. Read the document below and decide which of these three tiers its CURRENT content genuinely earns -- judge the real editorial maturity and nature of the writing, not just its length. Reply with exactly one character: 1, 2, or 3.
 """
 
 function knowledge.get_tier_review(db_path, document_id)
