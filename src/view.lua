@@ -535,20 +535,42 @@ end
 -- schema_sync_state, or any other internal table entity.list/get
 -- could never expose either).
 
--- Deliberately narrow, not "every hand-rolled table" (document_embedding,
--- agent_session/message/pending_action/background_task, the knowledge_*
--- event logs, ...) -- just the two document.lua's own KNOWLEDGE_POOL_SQL_NOTE
--- already names to the model as legitimate, non-sensitive companion tables
--- for heat/connectivity queries (see doc.knowledge_pool_sql_columns_text).
--- Widening this list is a real per-table security judgment call, not a
--- mechanical copy-paste -- the comment right above run_agent_query names
--- agent_message/agent_pending_action specifically as tables that must stay
--- opaque to the model, and auth_user/api_key hold real secrets; none of
--- those belong here just because they're also hand-rolled.
-KNOWLEDGE_POOL_COMPANION_TABLES = {
+-- The single source of truth for "this is a real, hand-rolled table the
+-- model is allowed to know exists and name" -- deliberately narrow, not
+-- "every hand-rolled table" (agent_message/agent_pending_action/
+-- agent_background_task, schema_sync_state, auth_user/api_key with real
+-- secrets, ...). Whether a table belongs here is a real per-table
+-- security judgment call, not a mechanical copy-paste -- the comment
+-- above run_agent_query names agent_message/agent_pending_action
+-- specifically as tables that must stay opaque to the model.
+--
+-- That judgment call is made exactly once, here -- agent_tools.lua's own
+-- HAND_ROLLED_ENTITY_FIELDS (the per-table entity.fields column-listing
+-- functions) validates its own keys against this table at load time
+-- (errors loudly, not silently, on a mismatch) rather than hand-
+-- maintaining a second, independently-drifting copy of the same
+-- decision. A table can be named here without also being in
+-- HAND_ROLLED_ENTITY_FIELDS (not every real table gets its own
+-- individual entity.fields listing -- document_link/knowledge_pool_state
+-- are only ever named in prose, via document.knowledge_pool_sql_columns_text)
+-- but never the other way around.
+HAND_ROLLED_DOCUMENTED_TABLES = {
     document_link = true,
     knowledge_pool_state = true,
+    agent_session = true,
+    document_embedding = true,
+    knowledge_retrieval = true,
+    knowledge_retrieval_document = true,
+    knowledge_review = true,
+    knowledge_context = true,
+    knowledge_chat_eval = true,
 }
+-- Attached to the module table too (not just left as the bare global
+-- run_agent_query itself uses below) -- a require()'d module's own
+-- top-level locals/globals aren't visible to the file that required it,
+-- only what it explicitly returns, and agent_tools.lua's own load-time
+-- consistency check needs real cross-file access to this table.
+view.HAND_ROLLED_DOCUMENTED_TABLES = HAND_ROLLED_DOCUMENTED_TABLES
 
 -- Collects every identifier immediately following `keyword` (word-
 -- boundary matched, same convention as FORBIDDEN_SQL_WORDS -- so a
@@ -641,7 +663,7 @@ function view.run_agent_query(db_path, sql_text)
     end
     for _, name in ipairs(referenced) do
         if allowed[name] == nil then
-            if KNOWLEDGE_POOL_COMPANION_TABLES[name] == true then
+            if HAND_ROLLED_DOCUMENTED_TABLES[name] == true then
                 -- A real table, not a typo -- just intentionally excluded
                 -- from this tool (system/derived event logs, never
                 -- schema.register()'d; see doc/architecture.md's own

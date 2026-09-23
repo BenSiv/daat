@@ -506,6 +506,25 @@ HAND_ROLLED_ENTITY_FIELDS = {
     knowledge_chat_eval = function() return knowledge.hand_rolled_sql_columns_text("knowledge_chat_eval") end,
 }
 
+-- The security judgment call of which tables the model may know exist
+-- is made exactly once, in view.lua's HAND_ROLLED_DOCUMENTED_TABLES --
+-- every key here must also be named there, or entity.fields would
+-- document a table entity.query's own refusal message doesn't yet know
+-- is real (silently drifted apart once already: this exact set of 7
+-- tables was added here without a matching view.lua update, so a model
+-- correctly naming e.g. agent_session via entity.fields then got a
+-- misleading "not a registered entity type -- did you mean X?" from
+-- entity.query instead of the considerate "real table, intentionally
+-- excluded" message document_link/knowledge_pool_state already got --
+-- see brex task 45608116). Fails loudly at load time instead of
+-- silently drifting again.
+for name, _ in pairs(HAND_ROLLED_ENTITY_FIELDS) do
+    if view.HAND_ROLLED_DOCUMENTED_TABLES[name] != true then
+        error("HAND_ROLLED_ENTITY_FIELDS['" .. name .. "'] has no matching entry in view.HAND_ROLLED_DOCUMENTED_TABLES -- " ..
+            "add it there too, or entity.query will misreport this real table as unregistered/a typo")
+    end
+end
+
 function unknown_entity_type_message(db_path, entity_type)
     message = "unknown entity type: " .. tostring(entity_type)
     suggestion = schema.suggest_type(db_path, entity_type)

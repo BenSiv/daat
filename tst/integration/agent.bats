@@ -548,6 +548,18 @@ SELECT * FROM task
     [[ ! "$output" =~ "did you mean" ]]
 }
 
+@test "entity.query gives the same real-but-excluded treatment to a table entity.fields documents (agent_session), not just document_link" {
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(tool_call_response "entity.query" '{"sql":"SELECT * FROM agent_session"}')"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"how many chat sessions are there\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "intentionally excluded from entity.query" ]]
+    [[ ! "$output" =~ "did you mean" ]]
+}
+
 write_reading_schema() {
     mkdir -p schemas
     cat > schemas/reading.lua <<'EOF'
