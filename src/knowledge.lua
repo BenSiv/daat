@@ -692,8 +692,17 @@ end
 -- review pass, let alone the search request that triggered it.
 DISTILL_MODEL = "gemini-3.5-flash-lite"
 
+-- Found live (task: bring back the "hypothesis/definition, not a
+-- subject title" lesson from a real curation chat): the model's first
+-- pass at candidate ideas came back as topic labels ("Cryopreservation
+-- vs. Genetic Fidelity Thresholds", "Bioreactor Parameters for
+-- Cacao") -- accurate summaries of what a cluster is ABOUT, but
+-- asserting nothing themselves. The human reviewer's own words were
+-- "I prefer the atomic record to be more like hypothesis or
+-- definition and not a subject title" -- encoded below the same way
+-- the reminder/action-item case already is.
 DISTILL_SYSTEM_PROMPT = """
-Extract the single core idea from the following document into a new, concise, self-contained note in your own words -- not a verbatim copy. Remove anything not essential to that one idea. The core idea is a fact, conclusion, or concept, not an instruction to do something -- if the most prominent content is a to-do, a reminder, or an assignment of who must do what, that is not itself a distillable idea; only extract if there's a genuine underlying fact or concept beneath it worth stating in its own right, otherwise treat it as nothing meaningful to extract. Reply with the distilled note text only: no title, no preamble, no commentary. If the document already covers exactly one focused idea and there is nothing meaningful to extract, reply with exactly: NONE
+Extract the single core idea from the following document into a new, concise, self-contained note in your own words -- not a verbatim copy. Remove anything not essential to that one idea. The core idea is a fact, conclusion, or concept, not an instruction to do something -- if the most prominent content is a to-do, a reminder, or an assignment of who must do what, that is not itself a distillable idea; only extract if there's a genuine underlying fact or concept beneath it worth stating in its own right, otherwise treat it as nothing meaningful to extract. Write it as a real claim -- a hypothesis, finding, or definition that asserts something -- never as a subject/topic label that just names an area (e.g. "media optimization considerations" or "cryopreservation vs. genetic fidelity" asserts nothing; state the actual finding instead). Reply with the distilled note text only: no title, no preamble, no commentary. If the document already covers exactly one focused idea and there is nothing meaningful to extract, reply with exactly: NONE
 """
 
 function knowledge.already_distilled_from(db_path, source_document_id)
@@ -1025,8 +1034,19 @@ TIER_JUDGMENT_MODEL = DISTILL_MODEL
 -- what), not a stated fact or concept -- a definition says what
 -- something IS, this says what someone should DO. Ruled out explicitly
 -- below, same as the table/links case.
+--
+-- Found live in a real curation chat (brought back from that
+-- session, not a synthetic case): the model's own candidate atomic
+-- records were bare subject/topic labels ("Cryopreservation vs.
+-- Genetic Fidelity Thresholds", "Bioreactor Parameters for Cacao") --
+-- accurate names for what a document cluster is about, but asserting
+-- nothing. The human reviewer's correction was direct: "I prefer the
+-- atomic record to be more like hypothesis or definition and not a
+-- subject title." Ruled out below as its own case, alongside
+-- reminders and raw data/links -- a title doesn't even claim to be an
+-- instruction or a fact, it just names an area.
 TIER_JUDGMENT_SYSTEM_PROMPT = """
-You are judging how far a document in a knowledge pool has matured through real editing, not how often it's been looked up. Tiers: 1 = Curated Draft (revised, but not yet a complete reference or a tight standalone definition), 2 = Developed Reference (a genuinely complete, multi-section, wiki-page-like article), 3 = Atomic Record (a short, self-contained idea stated in prose, like a glossary or flashcard definition -- someone actually distilled a single conclusion or concept down into its own words). Tier 3 requires real synthesis, not just brevity: a short table of raw data (measurements, calibration values, a data grid), a bare list of links or references, a reminder or action item (an instruction to do something, a to-do, an assignment of who must do what), or a terse note that's mostly structure rather than a written statement of one idea all stay Curated Draft even when they're short and single-topic -- there's no distilled idea being expressed there, just short or listed or directive content. A definition states what something IS; a reminder states what someone should DO -- only the former earns Tier 3. Read the document below and decide which of these three tiers its CURRENT content genuinely earns -- judge the real editorial maturity and nature of the writing, not just its length. Reply with exactly one character: 1, 2, or 3.
+You are judging how far a document in a knowledge pool has matured through real editing, not how often it's been looked up. Tiers: 1 = Curated Draft (revised, but not yet a complete reference or a tight standalone definition), 2 = Developed Reference (a genuinely complete, multi-section, wiki-page-like article), 3 = Atomic Record (a short, self-contained idea stated in prose, like a glossary or flashcard definition -- someone actually distilled a single conclusion or concept down into its own words). Tier 3 requires real synthesis, not just brevity: a short table of raw data (measurements, calibration values, a data grid), a bare list of links or references, a reminder or action item (an instruction to do something, a to-do, an assignment of who must do what), a bare subject/topic label or heading-like phrase that names an area without asserting anything about it (e.g. "Cryopreservation vs. Genetic Fidelity Thresholds", "Bioreactor Scale-Up Considerations"), or a terse note that's mostly structure rather than a written statement of one idea all stay Curated Draft even when they're short and single-topic -- there's no distilled idea being expressed there, just short, listed, directive, or labeled content. A definition or finding states what something IS or was found to be true; a reminder states what someone should DO; a title just NAMES a subject -- only the first earns Tier 3. Read the document below and decide which of these three tiers its CURRENT content genuinely earns -- judge the real editorial maturity and nature of the writing, not just its length. Reply with exactly one character: 1, 2, or 3.
 """
 
 function knowledge.get_tier_review(db_path, document_id)
