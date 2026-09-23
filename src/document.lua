@@ -34,7 +34,7 @@
 -- churn (every content edit potentially archiving/recreating several),
 -- not a real audit trail of anyone's actions.
 
-db = require("db")
+db = require("database")
 schema = require("schema")
 entity = require("entity")
 json = require("dkjson")

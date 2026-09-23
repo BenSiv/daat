@@ -16,7 +16,7 @@
 
 knowledge = require("knowledge")
 document = require("document")
-db = require("db")
+db = require("database")
 
 FAILURES = 0
 

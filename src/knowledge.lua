@@ -24,7 +24,7 @@
 -- tables here -- these are event logs (one row per retrieval/review
 -- event), not pool content, so they don't belong on `document` itself.
 
-db = require("db")
+db = require("database")
 document = require("document")
 entity = require("entity")
 

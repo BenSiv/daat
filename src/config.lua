@@ -85,11 +85,11 @@ function config.mariadb_descriptor()
     }
 end
 
--- Returns whatever db.lua's db_path parameter expects for the active
--- backend: a SQLite file path (a string) or a MariaDB connection
--- descriptor (a table) -- opaque to every caller either way, only
--- db.lua itself ever inspects the shape (see that file's own header
--- comment).
+-- Returns whatever database.lua's db_path parameter expects for the
+-- active backend: a SQLite file path (a string) or a MariaDB
+-- connection descriptor (a table) -- opaque to every caller either
+-- way, only database.lua itself ever inspects the shape (see that
+-- file's own header comment).
 function config.db_path(root)
     if config.db_backend() == "mariadb" then
         return config.mariadb_descriptor()
@@ -159,15 +159,15 @@ end
 -- for sqlite that's a file-exists check; for mariadb there's no file to
 -- check, so this looks for entity_event (ledger.lua's own core table,
 -- always created first during init) existing in the target database
--- instead. Requires "database" (the same luam module db.lua itself
--- wraps) directly rather than requiring db.lua -- db.lua already
--- requires config for nothing today and never should (see its own
--- header comment on why dispatch is by db_path's shape, not a config
--- lookup), so this file must not create that cycle from the other
--- direction either.
+-- instead. Requires "database_adapter" (the raw per-backend bindings
+-- one layer below "database") directly rather than requiring
+-- "database" -- "database" already requires config for nothing today
+-- and never should (see its own header comment on why dispatch is by
+-- db_path's shape, not a config lookup), so this file must not create
+-- that cycle from the other direction either.
 function config.is_initialized(root)
     if config.db_backend() == "mariadb" then
-        database = require("database")
+        database = require("database_adapter")
         descriptor = config.mariadb_descriptor()
         ok, rows = pcall(database.mariadb_query, descriptor,
             "SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'entity_event';")

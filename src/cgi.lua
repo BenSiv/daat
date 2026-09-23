@@ -1,4 +1,4 @@
-db = require("db")
+db = require("database")
 config = require("config")
 schema = require("schema")
 entity = require("entity")

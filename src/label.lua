@@ -12,7 +12,7 @@
 -- query runner (view.run_sql) -- a label_template row's `sql` field is
 -- genuinely just a single-parameter view, structurally.
 
-db = require("db")
+db = require("database")
 view = require("view")
 
 label = {}

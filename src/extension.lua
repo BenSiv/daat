@@ -7,7 +7,7 @@
 -- update_entity bindings). extension.invoke() takes an already-built ctx
 -- rather than building one itself.
 
-db = require("db")
+db = require("database")
 json = require("dkjson")
 paths = require("paths")
 lfs = require("lfs")

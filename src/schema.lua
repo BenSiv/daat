@@ -3,7 +3,7 @@
 -- one describes. This is the only place field-type -> SQL-type mapping
 -- happens.
 
-db = require("db")
+db = require("database")
 sandbox = require("sandbox")
 paths = require("paths")
 lfs = require("lfs")
@@ -1162,7 +1162,7 @@ end
 --
 -- Security finding, fixed 2026-07-17 (see platform's own TODO.md, M3):
 -- `entity_type` flows unescaped into raw SQL as a table name
--- (`entity.lua`/`db.lua`, `"SELECT * FROM " .. entity_type`) and into a
+-- (`entity.lua`/`database.lua`, `"SELECT * FROM " .. entity_type`) and into a
 -- file path for schema lookup (`schemas_dir .. "/" .. name .. ".lua"`)
 -- wherever it comes from a request parameter (`params.type`). Every
 -- call site happened to be safe only because it incidentally checked

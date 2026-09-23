@@ -8,7 +8,7 @@
 -- sequence needed, and it ties identity directly to the ledger rather
 -- than to whatever the projected table's storage happens to assign.
 
-db = require("db")
+db = require("database")
 json = require("dkjson")
 
 ledger = {}

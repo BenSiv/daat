@@ -8,7 +8,7 @@
 -- escalation-detection principle as extension.capabilities_equal, just
 -- keyed on the query text instead of a capabilities table).
 
-db = require("db")
+db = require("database")
 json = require("dkjson")
 paths = require("paths")
 lfs = require("lfs")
@@ -269,9 +269,9 @@ end
 -- exec/db.query's own %s substitution is fine for identifiers/
 -- literals platform itself builds, but a runtime-supplied value needs
 -- the real thing). sqlite3 isn't shared as a global across modules in
--- Luam (each require() gets its own reference; see src/db.lua for the
--- same require), so it's pulled in locally here rather than assumed
--- available.
+-- Luam (each require() gets its own reference; see luam/lib/database.lua
+-- for the same require), so it's pulled in locally here rather than
+-- assumed available.
 --
 -- MariaDB: no equivalent path exists -- luam's own mariadb binding
 -- (lib/mariadb/lmariadb.c) deliberately does NOT expose a

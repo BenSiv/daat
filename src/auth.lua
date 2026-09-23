@@ -14,7 +14,7 @@
 -- request field/header must match) -- doesn't need HMAC signing since
 -- it's only ever compared to itself, not decoded or trusted alone.
 
-db = require("db")
+db = require("database")
 paths = require("paths")
 bcrypt = require("bcrypt")
 hmac = require("hmac")

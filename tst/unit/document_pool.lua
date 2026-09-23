@@ -13,7 +13,7 @@
 -- of its own inputs.
 
 document = require("document")
-db = require("db")
+db = require("database")
 
 FAILURES = 0
 

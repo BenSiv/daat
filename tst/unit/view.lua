@@ -3,7 +3,7 @@
 -- resolution across joins (the fix behind commit c01f452).
 
 view = require("view")
-db = require("db")
+db = require("database")
 
 FAILURES = 0
 

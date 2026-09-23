@@ -70,7 +70,7 @@ cd dev && ./deploy.sh
 - `agent.lua` + `agent_provider*.lua` -- the chat/assistant subsystem and its pluggable LLM backends
 - `extension.lua` / `view.lua` -- the drop-in extensibility mechanisms (see below)
 - `html.lua` / `render.lua` / `template.lua` / `page.lua` -- rendering (`page.lua` is daat's own first-party page-section vocabulary, deliberately separate from `html.lua`'s extension canvas -- see `doc/templating.md`)
-- `config.lua` / `init.lua` / `multipart.lua` / `label.lua` -- deployment config, `daat init`, CGI form parsing, ZPL labels (the storage adapter itself, `db.lua`, is shared infrastructure in `../luam/lib/`, not daat's own `src/`)
+- `config.lua` / `init.lua` / `multipart.lua` / `label.lua` -- deployment config, `daat init`, CGI form parsing, ZPL labels (the storage adapter itself, `database.lua` -- with the raw per-backend bindings one layer down in `database_adapter.lua` -- is shared infrastructure in `../luam/lib/`, not daat's own `src/`)
 
 ## Architecture concepts to know before contributing
 

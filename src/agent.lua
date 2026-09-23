@@ -10,7 +10,7 @@
 -- full conversation stays in SQL, only the live prompt sent to the
 -- model shrinks.
 
-db = require("db")
+db = require("database")
 json = require("dkjson")
 agent_provider = require("agent_provider")
 document = require("document")

@@ -6,7 +6,7 @@
 -- scriptable before-hooks (extension-authored validation rules, see
 -- doc/extensibility.md) plug into the same contract, run after.
 
-db = require("db")
+db = require("database")
 ledger = require("ledger")
 schema = require("schema")
 config = require("config")
@@ -1073,8 +1073,8 @@ function entity.do_entity(cmd_args, db_path)
     end
 
     -- {external_id: id} for every row of `entity_type` that has one --
-    -- a real, backend-agnostic (SQLite or MariaDB, via db.lua's own
-    -- dispatch) read path an external importer can use to detect "does
+    -- a real, backend-agnostic (SQLite or MariaDB, via database.lua's
+    -- own dispatch) read path an external importer can use to detect "does
     -- a row for this source record already exist" and upsert instead of
     -- blindly re-creating it every run. Every row regardless of
     -- archived_at -- an archived row's external_id is still "already
