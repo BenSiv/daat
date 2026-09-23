@@ -541,7 +541,13 @@ EOF
     run_cgi "/"
     [ "$status" -eq 0 ]
     data_pos=$(echo "$output" | grep -bo 'href="data"' | head -1 | cut -d: -f1)
-    home_pos=$(echo "$output" | grep -bo 'href="/"' | head -1 | cut -d: -f1)
+    # The nav rail's own home link specifically, not a bare 'href="/"'
+    # -- <base href="/"> in <head> (added later, task: fix broken
+    # sidebar logo/nav links on nested routes) would otherwise match
+    # first and sit at a fixed, early byte offset regardless of
+    # nav_order, breaking this assertion. Home is the active page for
+    # this request, so its rail link always carries both classes.
+    home_pos=$(echo "$output" | grep -bo 'class="platform-nav-link platform-nav-link-active" href="/"' | head -1 | cut -d: -f1)
     documents_pos=$(echo "$output" | grep -bo 'href="documents"' | head -1 | cut -d: -f1)
     [ -n "$data_pos" ]
     [ -n "$home_pos" ]
