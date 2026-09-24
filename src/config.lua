@@ -296,6 +296,22 @@ function config.platform_config()
         -- further hide what would already render, never grant it back.
         nav_order = nil,
         nav_hidden = nil,
+        -- Outbound mail (mail_provider.lua) -- only used by the
+        -- forgot-password flow today. nil mail_provider means no mail
+        -- at all: /forgot-password 404s and /login shows no link to it
+        -- (see config.password_reset_enabled). public_url is the
+        -- deployment's own externally-reachable base URL, used to build
+        -- the emailed reset link -- deliberately config, never derived
+        -- from the request's Host header, which a caller controls and
+        -- could otherwise point a real user's reset link at their own
+        -- server. smtp_user's password is the one secret here and stays
+        -- an env var (PLATFORM_SMTP_PASSWORD), same split as
+        -- mariadb_user/PLATFORM_MARIADB_PASSWORD.
+        mail_provider = nil,
+        mail_from = nil,
+        public_url = nil,
+        smtp_url = nil,
+        smtp_user = nil,
     }
 
     path = config.platform_config_path()
@@ -379,9 +395,23 @@ function config.platform_config()
     if type(parsed.nav_hidden) == "table" then
         conf.nav_hidden = validate_nav_key_list(parsed.nav_hidden)
     end
+    for _, key in ipairs({"mail_provider", "mail_from", "public_url", "smtp_url", "smtp_user"}) do
+        if type(parsed[key]) == "string" and parsed[key] != "" then
+            conf[key] = parsed[key]
+        end
+    end
 
     PLATFORM_CONFIG_CACHE = conf
     return conf
+end
+
+-- The forgot-password flow needs all three: something to send with,
+-- an address to send from, and a real base URL to put in the link.
+-- Missing any one, the whole flow stays off rather than half-working
+-- (e.g. sending a link with no host in it).
+function config.password_reset_enabled()
+    conf = config.platform_config()
+    return conf.mail_provider != nil and conf.mail_from != nil and conf.public_url != nil
 end
 
 -- Deliberately generic here: platform itself ships no brand identity,

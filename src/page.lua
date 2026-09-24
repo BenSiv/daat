@@ -107,6 +107,9 @@ function validate_section(section, label)
         if section.message != nil and (type(section.message) != "string" or section.message == "") then
             return label .. " (form): 'message' must be a non-empty string if given"
         end
+        if section.message_css_class != nil and (type(section.message_css_class) != "string" or section.message_css_class == "") then
+            return label .. " (form): 'message_css_class' must be a non-empty string if given"
+        end
         if section.css_class != nil and (type(section.css_class) != "string" or section.css_class == "") then
             return label .. " (form): 'css_class' must be a non-empty string if given"
         end
@@ -454,6 +457,13 @@ function render_page_group(group)
     })
 end
 
+function default_message_css_class(css_class)
+    if css_class == nil then
+        return "platform-error-banner"
+    end
+    return css_class
+end
+
 function render_page_form(section)
     fields_html = {}
     for _, field in ipairs(section.fields) do
@@ -474,9 +484,11 @@ function render_page_form(section)
         heading_inner = render_lib.render("<h2>{{ heading }}</h2>", {heading = section.heading})
     end
 
+    -- message_css_class: for a form whose message isn't an error (e.g.
+    -- login's "password updated" notice); defaults to the error banner.
     message_inner = ""
     if section.message != nil and section.message != "" then
-        message_inner = render_page_message("platform-error-banner", section.message)
+        message_inner = render_page_message(default_message_css_class(section.message_css_class), section.message)
     end
 
     css_class_attr = attr_fragment("class", section.css_class)

@@ -3498,31 +3498,23 @@ end
 -- /browse?type=... URL by hand.
 -- Unauthenticated -- no popover/autocomplete JS needed, so unlike
 -- every other render_* page here, no nonce-gated <script> at all.
-function html.render_login(error_message, nonce)
+-- Shared by /login, /forgot-password and /reset-password -- the three
+-- pages an unauthenticated visitor can reach, all one centered card.
+-- `footer_html` is an already-safe fragment (a link back to /login or
+-- on to /forgot-password) rendered under the card's form.
+function render_login_card(title, sections, footer_html)
     page_lib = require("page")
-
-    sections = {
-        {
-            type = "form",
-            css_class = "platform-login-card",
-            method = "POST",
-            action = "/login",
-            heading = "Log in",
-            message = error_message,
-            fields = {
-                {type = "text", name = "login", label = "Login", autocomplete = "username", required = true},
-                {type = "password", name = "password", label = "Password", autocomplete = "current-password", required = true},
-            },
-            submit_label = "Log in",
-        },
-    }
     validate_err = page_lib.validate(sections)
     if validate_err != nil then
         error(validate_err)
     end
+    footer = ""
+    if footer_html != nil then
+        footer = "<p class=\"platform-login-footer\">" .. footer_html .. "</p>\n"
+    end
 
     return string.format("""
-<div class="fossil-doc" data-title="Log in">
+<div class="fossil-doc" data-title="%s">
     <style>
 %s
 %s
@@ -3534,9 +3526,114 @@ function html.render_login(error_message, nonce)
             border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-item, 10px); font-size: 0.95rem;
         }
         .platform-login-card .btn { width: 100%%; }
+        .platform-login-notice { color: #166534; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: var(--platform-radius-item, 10px); padding: 10px 12px; margin-bottom: 14px; font-size: 0.88rem; }
+        .platform-login-card form { margin: 0; }
+        .platform-login-footer { margin: 16px 0 0 0; text-align: center; font-size: 0.88rem; }
+        .platform-login-footer a { color: var(--platform-accent, #4f46e5); }
     </style>
-%s</div>
-""", platform_container_css(), platform_button_css() .. platform_error_banner_css(), page_lib.render(sections))
+    <div class="platform-login-card">
+%s%s    </div>
+</div>
+""", html.html_escape(title), platform_container_css(), platform_button_css() .. platform_error_banner_css(), page_lib.render(sections), footer)
+end
+
+-- `notice` is a non-error message (e.g. "password updated") shown in
+-- place of `error_message` when there's no error. `show_forgot_link`
+-- is config.password_reset_enabled() -- no link to a flow this
+-- deployment can't actually send mail for.
+function html.render_login(error_message, nonce, show_forgot_link, notice)
+    message = error_message
+    message_css_class = nil
+    if message == nil and notice != nil then
+        message = notice
+        message_css_class = "platform-login-notice"
+    end
+    footer_html = nil
+    if show_forgot_link == true then
+        footer_html = "<a href=\"/forgot-password\">Forgot password?</a>"
+    end
+    return render_login_card("Log in", {
+        {
+            type = "form",
+            method = "POST",
+            action = "/login",
+            heading = "Log in",
+            message = message,
+            message_css_class = message_css_class,
+            fields = {
+                {type = "text", name = "login", label = "Login", autocomplete = "username", required = true},
+                {type = "password", name = "password", label = "Password", autocomplete = "current-password", required = true},
+            },
+            submit_label = "Log in",
+        },
+    }, footer_html)
+end
+
+-- /forgot-password: one field, login or email. After a POST, `sent` is
+-- true and the form is replaced by the same neutral confirmation
+-- whether or not an account matched -- see auth.request_password_reset.
+function html.render_forgot_password(error_message, sent)
+    if sent == true then
+        return render_login_card("Forgot password", {
+            {
+                type = "form",
+                method = "GET",
+                action = "/login",
+                heading = "Check your email",
+                message = "If that matches an account with an email address on file, we've sent it a link to reset the password. The link expires in 1 hour.",
+                message_css_class = "platform-login-notice",
+                fields = {},
+                submit_label = "Back to log in",
+            },
+        }, nil)
+    end
+    return render_login_card("Forgot password", {
+        {
+            type = "form",
+            method = "POST",
+            action = "/forgot-password",
+            heading = "Forgot password",
+            message = error_message,
+            fields = {
+                {type = "text", name = "identifier", label = "Login or email", autocomplete = "username", required = true},
+            },
+            submit_label = "Send reset link",
+        },
+    }, "<a href=\"/login\">Back to log in</a>")
+end
+
+-- /reset-password?token=...: `token` nil means the link didn't check
+-- out (invalid, expired or already used) -- no form at all then, just a
+-- way to ask for a fresh one.
+function html.render_reset_password(token, error_message)
+    if token == nil then
+        return render_login_card("Reset password", {
+            {
+                type = "form",
+                method = "GET",
+                action = "/forgot-password",
+                heading = "Reset password",
+                message = "This reset link is invalid, has expired, or has already been used.",
+                fields = {},
+                submit_label = "Request a new link",
+            },
+        }, "<a href=\"/login\">Back to log in</a>")
+    end
+    return render_login_card("Reset password", {
+        {
+            type = "form",
+            method = "POST",
+            action = "/reset-password",
+            heading = "Choose a new password",
+            message = error_message,
+            fields = {
+                {type = "hidden", name = "token", value = token},
+                {type = "password", name = "new_password", label = "New password", autocomplete = "new-password", required = true},
+                {type = "password", name = "confirm_password", label = "Confirm new password", autocomplete = "new-password", required = true},
+            },
+            submit_label = "Set password",
+        },
+    }, nil)
 end
 
 -- Self-service password change -- every capability level (baseline "i"
@@ -3549,7 +3646,10 @@ end
 -- The single destination for the nav's username link -- hosts both
 -- self-service password change and log out, so no new sidebar links
 -- are ever needed for account-level actions.
-function html.render_account(username, csrf_token, message, is_error)
+-- `email` is the account's current address (nil if none) -- used by
+-- the forgot-password flow, so changing it needs the current password
+-- the same way changing the password itself does.
+function html.render_account(username, email, csrf_token, message, is_error)
     page_lib = require("page")
 
     message_css_class = "platform-account-message"
@@ -3572,6 +3672,18 @@ function html.render_account(username, csrf_token, message, is_error)
             {type = "password", name = "new_password", label = "New password", autocomplete = "new-password", required = true},
         },
         submit_label = "Change password",
+    })
+    table.insert(sections, {type = "subheading", text = "Email"})
+    table.insert(sections, {
+        type = "form",
+        method = "POST",
+        action = "account-email",
+        fields = {
+            {type = "hidden", name = "csrf_token", value = csrf_token},
+            {type = "text", name = "email", label = "Email (for password resets)", value = email, autocomplete = "email"},
+            {type = "password", name = "current_password", label = "Current password", autocomplete = "current-password", required = true},
+        },
+        submit_label = "Save email",
     })
     table.insert(sections, {type = "subheading", text = "Log out"})
     table.insert(sections, {
@@ -3599,7 +3711,7 @@ function html.render_account(username, csrf_token, message, is_error)
         .platform-account-card h3 { margin: 24px 0 12px 0; font-size: 1rem; font-weight: 700; color: var(--platform-heading, #0f172a); }
         .platform-account-username { margin: 0 0 18px 0; font-size: 0.88rem; color: var(--platform-muted, #64748b); }
         .platform-account-card label { display: block; margin-bottom: 4px; font-size: 0.88rem; color: var(--platform-muted, #64748b); }
-        .platform-account-card input[type=password] {
+        .platform-account-card input[type=password], .platform-account-card input[type=text] {
             width: 100%%; box-sizing: border-box; padding: 8px 10px; margin-bottom: 14px;
             border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-item, 10px); font-size: 0.95rem;
         }
@@ -3646,6 +3758,7 @@ function html.render_admin_users(users, csrf_token, message, is_error)
             {type = "hidden", name = "csrf_token", value = csrf_token},
             {type = "text", name = "login", placeholder = "login", required = true},
             {type = "password", name = "password", placeholder = "password", required = true},
+            {type = "text", name = "email", placeholder = "email (optional)", autocomplete = "off"},
             {type = "text", name = "cap", placeholder = "capabilities (e.g. i)", size = "10"},
         },
         submit_label = "Create user",
@@ -3668,6 +3781,17 @@ function html.render_admin_users(users, csrf_token, message, is_error)
 
         table.insert(rows, {
             {u.login},
+            {
+                {
+                    type = "form", method = "POST", action = "admin-users-email", css_class = "platform-admin-inline-form",
+                    fields = {
+                        {type = "hidden", name = "csrf_token", value = csrf_token},
+                        {type = "hidden", name = "login", value = u.login},
+                        {type = "text", name = "email", value = u.email, placeholder = "email", size = "22", autocomplete = "off"},
+                    },
+                    submit_class = "btn-secondary", submit_label = "Set",
+                },
+            },
             {
                 {
                     type = "form", method = "POST", action = "admin-users-capabilities", css_class = "platform-admin-inline-form",
@@ -3704,7 +3828,7 @@ function html.render_admin_users(users, csrf_token, message, is_error)
     table.insert(sections, {
         type = "table",
         css_class = "platform-admin-users",
-        columns = {"Login", "Capabilities", "Status", "Actions"},
+        columns = {"Login", "Email", "Capabilities", "Status", "Actions"},
         rows = rows,
     })
 

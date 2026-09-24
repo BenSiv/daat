@@ -54,6 +54,7 @@ Two real providers exist today, both following the exact same shape -- a thin fa
 
 - **`agent_provider.lua`** -> `src/provider/agent_claude.lua` / `agent_vertex.lua` / `agent_test.lua`, picked by `agent_provider` (default `"vertex"`).
 - **`search_provider.lua`** -> `src/provider/search_google_cse.lua` / `search_test.lua`, picked by `search_provider` (default `"google_cse"`).
+- **`mail_provider.lua`** -> `src/provider/mail_smtp.lua` / `mail_test.lua`, picked by `mail_provider` (no default -- unset means the deployment sends no mail, and the forgot-password flow is off).
 
 ```mermaid
 graph TB
@@ -178,7 +179,8 @@ Every request other than logging in or out requires proof of an active session, 
 - **Passwords** are never stored or compared directly -- only a one-way, deliberately slow hash (bcrypt) is kept, so a leaked database doesn't hand over usable credentials.
 - **Sessions** are a signed, tamper-evident token (an identity, an expiry, and a cryptographic signature over both) rather than a server-side record that has to be looked up and kept in sync -- verifying one is just checking the signature and the expiry, and a tampered or expired token is rejected outright.
 - **Cross-site request forgery** is guarded against on every action that changes data: a second, independent token has to be presented alongside the session and match what was issued with it, so a request forged from another site (which can ride along with cookies, but can't read or replay this second value) is rejected.
-- **Routes**: logging in and out are the only actions available without a session; everything else resolves who's asking and what they're allowed to do from the verified session before anything else runs.
+- **Password resets** go by email: a one-time link, valid for an hour, whose token is stored only as a keyed hash. Asking for one never reveals whether the account exists, and using one voids every other outstanding link for that account. The link's host comes from the deployment's configured `public_url`, never the request's own Host header, which a caller could otherwise point at their own server. Existing sessions aren't ended by a reset, the same as any other password change, since sessions are stateless (above).
+- **Routes**: logging in and out (and, when mail is configured, requesting and using a password-reset link) are the only actions available without a session; everything else resolves who's asking and what they're allowed to do from the verified session before anything else runs.
 - **Permissions** are short capability strings on the account (a baseline capability everyone needs, plus elevated ones for higher-privilege actions like ad hoc querying), checked per route.
 - **API keys** are a second, independent auth path for external/programmatic callers (scripts, other systems) -- their own account-like row, own capabilities, verified the same slow-hash way as a password, but with no session/cookie/CSRF machinery at all: a key is attached to each request directly, not carried ambiently the way a cookie is. See `doc/api.md`.
 

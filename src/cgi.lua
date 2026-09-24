@@ -15,6 +15,7 @@ agent = require("agent")
 multipart = require("multipart")
 label = require("label")
 extension = require("extension")
+mail_provider = require("mail_provider")
 
 cgi = {}
 
@@ -466,15 +467,16 @@ end
 -- always false here (nobody is authenticated yet, so no capabilities
 -- apply); has_tasks_view is still real, not hardcoded -- cheap to
 -- check directly, same as every other route.
-function handle_login(root, db_path, method, nonce, theme)
+function handle_login(root, db_path, method, nonce, theme, params)
     has_tasks_view = view.load(config.views_dir(root), "prioritized_tasks") != nil
+    show_forgot_link = config.password_reset_enabled()
 
     if method == "POST" then
         body = io.read("*all")
         form = parse_query(body)
         cap, login_err = auth.login(db_path, form.login, form.password)
         if cap == nil then
-            body_html = html.render_login("Invalid login or password.", nonce)
+            body_html = html.render_login("Invalid login or password.", nonce, show_forgot_link, nil)
             return print_response("401 Unauthorized", "text/html",
                 html.page_shell("Log in", "login", body_html, nonce, false, false, has_tasks_view, nav_extensions, theme, nil))
         end
@@ -495,9 +497,73 @@ function handle_login(root, db_path, method, nonce, theme)
         })
     end
 
-    body_html = html.render_login(nil, nonce)
+    notice = nil
+    if params.reset == "1" then
+        notice = "Password updated. Log in with your new password."
+    end
+    body_html = html.render_login(nil, nonce, show_forgot_link, notice)
     return print_response("200 OK", "text/html",
         html.page_shell("Log in", "login", body_html, nonce, false, false, has_tasks_view, nav_extensions, theme, nil))
+end
+
+-- `/forgot-password`: unauthenticated, like /login. 404 unless this
+-- deployment has mail configured (config.password_reset_enabled). The
+-- POST response is identical whether or not an account matched, and a
+-- send failure is only logged (stderr -> the web server's error log),
+-- never shown -- either would tell a stranger which logins/emails exist.
+function handle_forgot_password(root, db_path, method, nonce, theme)
+    if not config.password_reset_enabled() then
+        return print_response("404 Not Found", "text/plain", "")
+    end
+    has_tasks_view = view.load(config.views_dir(root), "prioritized_tasks") != nil
+
+    sent = false
+    if method == "POST" then
+        form = parse_query(io.read("*all"))
+        result, err = auth.request_password_reset(root, db_path, form.identifier, theme.site_name)
+        if result == nil then
+            io.write(io.stderr, "forgot-password: could not send reset email: " .. tostring(err) .. "\n")
+        end
+        sent = true
+    end
+    body_html = html.render_forgot_password(nil, sent)
+    return print_response("200 OK", "text/html",
+        html.page_shell("Forgot password", "login", body_html, nonce, false, false, has_tasks_view, nav_extensions, theme, nil))
+end
+
+-- `/reset-password?token=...` (the emailed link): GET checks the token
+-- and shows the new-password form; POST sets it and sends the user on
+-- to /login. Referrer-Policy: no-referrer so the token in this page's
+-- URL is never sent onward in a Referer header.
+function handle_reset_password(root, db_path, method, nonce, theme, params)
+    if not config.password_reset_enabled() then
+        return print_response("404 Not Found", "text/plain", "")
+    end
+    has_tasks_view = view.load(config.views_dir(root), "prioritized_tasks") != nil
+    headers = {"Referrer-Policy: no-referrer", "Cache-Control: no-store"}
+
+    token = params.token
+    error_message = nil
+    if method == "POST" then
+        form = parse_query(io.read("*all"))
+        token = form.token
+        if default_value(form.new_password, "") != default_value(form.confirm_password, "") then
+            error_message = "The two passwords don't match."
+        else
+            login, err = auth.complete_password_reset(root, db_path, token, form.new_password)
+            if login != nil then
+                return print_response("302 Found", "text/plain", "", {"Location: /login?reset=1", "Referrer-Policy: no-referrer"})
+            end
+            error_message = err
+        end
+    end
+
+    if auth.check_password_reset(root, db_path, token) == nil then
+        token = nil
+    end
+    body_html = html.render_reset_password(token, error_message)
+    return print_response("200 OK", "text/html",
+        html.page_shell("Reset password", "login", body_html, nonce, false, false, has_tasks_view, nav_extensions, theme, nil), headers)
 end
 
 function cgi.handle_request()
@@ -588,7 +654,13 @@ function cgi.handle_request()
     end
 
     if path_info == "/login" then
-        return handle_login(root, db_path, method, nonce, theme)
+        return handle_login(root, db_path, method, nonce, theme, params)
+    end
+    if path_info == "/forgot-password" then
+        return handle_forgot_password(root, db_path, method, nonce, theme)
+    end
+    if path_info == "/reset-password" then
+        return handle_reset_password(root, db_path, method, nonce, theme, params)
     end
 
     -- API-key auth for external/programmatic clients, as an
@@ -672,30 +744,67 @@ function cgi.handle_request()
     -- form does -- requires the current password to verify (auth.login's
     -- own bcrypt check) before setting a new one) and log out (a plain
     -- link to the existing /logout route, not handled here).
+    account_email = nil
+    if path_info == "/account" or path_info == "/account-email" then
+        account_user = auth.get_user(db_path, author)
+        if account_user != nil then
+            account_email = account_user.email
+        end
+    end
+
+    -- Sets the requester's own email (the forgot-password flow's
+    -- delivery address) -- current password required, same as a
+    -- password change: otherwise anyone who got hold of an open session
+    -- could point the account's reset emails at themselves and take it
+    -- over for good.
+    if path_info == "/account-email" and method == "POST" then
+        form = parse_query(io.read("*all"))
+        message = "Email saved."
+        is_error = false
+        if not require_csrf(cookies, form.csrf_token) then
+            message = "CSRF check failed."
+            is_error = true
+        elseif auth.login(db_path, author, default_value(form.current_password, "")) == nil then
+            message = "Current password is incorrect."
+            is_error = true
+        else
+            ok, err = auth.set_email(db_path, author, default_value(form.email, ""))
+            if ok == nil then
+                message = tostring(err)
+                is_error = true
+            else
+                account_email = auth.get_user(db_path, author).email
+            end
+        end
+        body = html.render_account(author, account_email, default_value(cookies.csrf, ""), message, is_error)
+        return print_response("200 OK", "text/html",
+            html.page_shell("Account", "", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
+    end
+
     if path_info == "/account" then
         if method == "POST" then
             form = parse_query(io.read("*all"))
             if not require_csrf(cookies, form.csrf_token) then
-                body = html.render_account(author, default_value(cookies.csrf, ""), "CSRF check failed.", true)
+                body = html.render_account(author, account_email, default_value(cookies.csrf, ""), "CSRF check failed.", true)
                 return print_response("403 Forbidden", "text/html",
                     html.page_shell("Account", "", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
             end
             if auth.login(db_path, author, default_value(form.current_password, "")) == nil then
-                body = html.render_account(author, default_value(cookies.csrf, ""), "Current password is incorrect.", true)
+                body = html.render_account(author, account_email, default_value(cookies.csrf, ""), "Current password is incorrect.", true)
                 return print_response("200 OK", "text/html",
                     html.page_shell("Account", "", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
             end
             ok, err = auth.set_password(db_path, author, form.new_password)
             if ok == nil then
-                body = html.render_account(author, default_value(cookies.csrf, ""), tostring(err), true)
+                body = html.render_account(author, account_email, default_value(cookies.csrf, ""), tostring(err), true)
                 return print_response("200 OK", "text/html",
                     html.page_shell("Account", "", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
             end
-            body = html.render_account(author, default_value(cookies.csrf, ""), "Password changed.", false)
+            body = html.render_account(author, account_email, default_value(cookies.csrf, ""), "Password changed.", false)
             return print_response("200 OK", "text/html",
                 html.page_shell("Account", "", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
         end
-        body = html.render_account(author, default_value(cookies.csrf, ""), nil, false)
+        body = html.render_account(author, account_email, default_value(cookies.csrf, ""), nil, false)
         return print_response("200 OK", "text/html",
             html.page_shell("Account", "", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
     end
@@ -1218,6 +1327,7 @@ function cgi.handle_request()
     is_admin_user_action = path_info == "/admin-users-create" or
         path_info == "/admin-users-capabilities" or
         path_info == "/admin-users-password" or
+        path_info == "/admin-users-email" or
         path_info == "/admin-users-archive" or
         path_info == "/admin-users-unarchive"
     if is_admin_user_action and method == "POST" then
@@ -1237,7 +1347,19 @@ function cgi.handle_request()
         err = nil
 
         if path_info == "/admin-users-create" then
-            ok, err = auth.create_user(db_path, form.login, form.password, form.cap)
+            email = default_value(form.email, "")
+            if email != "" and not mail_provider.valid_address(string.lower(email)) then
+                ok, err = nil, "invalid email address: " .. email
+            elseif email != "" and auth.get_user_by_email(db_path, email) != nil then
+                ok, err = nil, "email already used by another account"
+            else
+                ok, err = auth.create_user(db_path, form.login, form.password, form.cap)
+                if ok != nil and email != "" then
+                    ok, err = auth.set_email(db_path, form.login, email)
+                end
+            end
+        elseif path_info == "/admin-users-email" then
+            ok, err = auth.set_email(db_path, form.login, default_value(form.email, ""))
         elseif path_info == "/admin-users-capabilities" then
             ok, err = auth.set_capabilities(db_path, form.login, form.cap)
         elseif path_info == "/admin-users-password" then

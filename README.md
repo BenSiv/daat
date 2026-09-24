@@ -54,6 +54,7 @@ daat extension list|show|approve|revoke|run-pending <name>
 daat view list|show|approve|revoke <name>
 daat user add <login> <password> [cap]
 daat user passwd <login> <new_password>
+daat user email <login> <email>               # "" clears it; used for password-reset emails
 daat user capabilities <login> <cap_string>
 daat user list [--include-archived]
 daat user archive|unarchive <login>
@@ -66,7 +67,9 @@ Entity types need an explicit `schema add` to register (that's what generates/mi
 
 ## Auth
 
-`daat user add <login> <password> [cap]` creates a login. `/login` and `/logout` are the only routes reachable without an active session; every other route requires one. Permissions are re-checked from the account's current record on every request rather than trusted from anything the session itself carries, so changing or revoking someone's permissions (or archiving their account) takes effect on their very next request, not only once their existing session expires. See `doc/architecture.md`'s "Auth" section for the full session/CSRF design, and `src/auth.lua` itself.
+`daat user add <login> <password> [cap]` creates a login. `/login` and `/logout` are the only routes reachable without an active session (plus `/forgot-password` and `/reset-password`, when mail is configured -- see below); every other route requires one. Permissions are re-checked from the account's current record on every request rather than trusted from anything the session itself carries, so changing or revoking someone's permissions (or archiving their account) takes effect on their very next request, not only once their existing session expires. See `doc/architecture.md`'s "Auth" section for the full session/CSRF design, and `src/auth.lua` itself.
+
+**Forgot password.** When `platform.lua` sets `mail_provider`, `mail_from` and `public_url`, `/login` links to `/forgot-password`: a user enters their login or email, and if that matches an active account with an email on file, a one-time link to `/reset-password` is emailed to it (valid 1 hour, at most one new link per account every 5 minutes). The response is the same whether or not anything matched. Emails are set by an admin on `/admin-users`, by the user on `/account` (current password required), or with `daat user email`. The only real backend is `mail_provider = "smtp"`: `smtp_url` (e.g. `"smtp://smtp.gmail.com:587"`; TLS is always required), optional `smtp_user`, and the password in the `PLATFORM_SMTP_PASSWORD` environment variable. Without all three settings the flow is off and both routes 404.
 
 ## Traceability
 

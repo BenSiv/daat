@@ -18,6 +18,7 @@ db = require("database")
 paths = require("paths")
 bcrypt = require("bcrypt")
 hmac = require("hmac")
+mail_provider = require("mail_provider")
 
 auth = {}
 
@@ -41,6 +42,20 @@ CREATE TABLE IF NOT EXISTS user (
     archived_at TEXT
 );
 
+-- One row per emailed forgot-password link. Only a keyed hash of the
+-- token is stored (auth.reset_token_hash), so a leaked database row
+-- can't be replayed as a working link. issued_at/expires_at/used_at are
+-- unix seconds (INTEGER), not the TEXT now() timestamps used elsewhere,
+-- because they're compared against os.time() directly -- the same
+-- reason the session cookie's own expiry is a unix integer.
+CREATE TABLE IF NOT EXISTS password_reset (
+    token_hash VARCHAR(64) PRIMARY KEY,
+    login VARCHAR(255) NOT NULL,
+    issued_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    used_at INTEGER
+);
+
 -- External-integration auth, independent of any human user -- a key's
 -- capabilities are its own, not derived from whoever created it (see
 -- doc/architecture.md's "Auth" section). `label` (not a synthetic id)
@@ -55,8 +70,25 @@ CREATE TABLE IF NOT EXISTS api_key (
 );
 """
 
+-- Added after the user table already existed in real deployments, so a
+-- migration rather than a SCHEMA edit (CREATE TABLE IF NOT EXISTS never
+-- adds a column to an existing table) -- same pattern as
+-- document.lua's ensure_document_link_*_column. Nullable: an account
+-- with no email simply can't use the forgot-password flow.
+function ensure_user_email_column(db_path)
+    existing = db.get_columns(db_path, "user")
+    for _, name in ipairs(existing) do
+        if name == "email" then
+            return
+        end
+    end
+    db.exec(db_path, "ALTER TABLE user ADD COLUMN email VARCHAR(255) DEFAULT NULL;")
+end
+
 function auth.init_schema(db_path)
-    return db.exec(db_path, string.format(auth.SCHEMA, db.now_expr(db_path), db.now_expr(db_path)))
+    ok, err = db.exec(db_path, string.format(auth.SCHEMA, db.now_expr(db_path), db.now_expr(db_path)))
+    ensure_user_email_column(db_path)
+    return ok, err
 end
 
 -- A per-store HMAC secret, generated once from /dev/urandom and never
@@ -185,7 +217,7 @@ function auth.get_user(db_path, login)
 end
 
 function auth.list_users(db_path, include_archived)
-    q = "SELECT login, cap, created_at, archived_at FROM user"
+    q = "SELECT login, cap, email, created_at, archived_at FROM user"
     if include_archived != true then
         q = q .. " WHERE archived_at IS NULL"
     end
@@ -207,6 +239,43 @@ function auth.set_password(db_path, login, password)
         "UPDATE user SET password_hash = %s WHERE login = %s;", db.quote(hash), db.quote(login)
     ))
     return true
+end
+
+-- Stored lowercased, and unique across accounts (checked here, not
+-- via a DB constraint -- see ensure_user_email_column for why this is
+-- a migration), so the forgot-password form can accept an email and
+-- resolve it to exactly one account. "" clears it.
+function auth.set_email(db_path, login, email)
+    user = auth.get_user(db_path, login)
+    if user == nil then
+        return nil, "no such user: " .. tostring(login)
+    end
+    if email == nil or email == "" then
+        db.exec(db_path, string.format("UPDATE user SET email = NULL WHERE login = %s;", db.quote(login)))
+        return true
+    end
+    email = string.lower(email)
+    if not mail_provider.valid_address(email) then
+        return nil, "invalid email address: " .. email
+    end
+    other = auth.get_user_by_email(db_path, email)
+    if other != nil and other.login != login then
+        return nil, "email already used by another account"
+    end
+    db.exec(db_path, string.format(
+        "UPDATE user SET email = %s WHERE login = %s;", db.quote(email), db.quote(login)
+    ))
+    return true
+end
+
+function auth.get_user_by_email(db_path, email)
+    rows = db.query(db_path, string.format(
+        "SELECT * FROM user WHERE email = %s;", db.quote(string.lower(email))
+    ))
+    if rows == nil or rows[1] == nil then
+        return nil
+    end
+    return rows[1]
 end
 
 function auth.set_capabilities(db_path, login, cap)
@@ -453,7 +522,163 @@ function auth.verify_csrf(cookie_token, submitted_token)
 end
 
 --------------------------------------------------------------------------
--- CLI: `daat user <add|passwd|capabilities|list|archive|unarchive> ...`
+-- Forgot-password reset links
+--------------------------------------------------------------------------
+
+RESET_TTL_SECONDS = 60 * 60 -- 1 hour
+-- At most one new link per account per window, so the (unauthenticated)
+-- request form can't be used to flood someone's inbox.
+RESET_THROTTLE_SECONDS = 5 * 60
+
+-- Keyed with the store's session secret rather than a bare digest, and
+-- deterministic (unlike bcrypt), so a token can be looked up directly by
+-- its hash -- the token itself is 32 random bytes, so there's nothing
+-- for a slow hash to protect against brute-forcing.
+function reset_token_hash(secret, token)
+    return hmac.sha256(secret, "password-reset." .. token)
+end
+
+-- An identifier containing "@" is treated as an email, anything else as
+-- a login. Only an active account with an email on file qualifies.
+function find_reset_account(db_path, identifier)
+    if identifier == nil then
+        return nil
+    end
+    identifier = string.match(identifier, "^%s*(.-)%s*$")
+    if identifier == "" then
+        return nil
+    end
+    user = nil
+    if string.find(identifier, "@", 1, true) != nil then
+        user = auth.get_user_by_email(db_path, identifier)
+    else
+        user = auth.get_user(db_path, identifier)
+    end
+    if user == nil or (user.archived_at != nil and user.archived_at != "") then
+        return nil
+    end
+    if user.email == nil or user.email == "" then
+        return nil
+    end
+    return user
+end
+
+-- auth.request_password_reset(root, db_path, identifier, site_name)
+--   -> true (a link was emailed) | false (nothing to do: no matching
+--      account, no email on file, or throttled) | nil, err (send failed)
+-- The caller must show the same response for true and false alike, so
+-- the form never reveals whether an account exists.
+function auth.request_password_reset(root, db_path, identifier, site_name)
+    config = require("config")
+    user = find_reset_account(db_path, identifier)
+    if user == nil then
+        return false
+    end
+
+    now = os.time()
+    recent = db.query(db_path, string.format(
+        "SELECT COUNT(*) AS n FROM password_reset WHERE login = %s AND used_at IS NULL AND issued_at > %d;",
+        db.quote(user.login), now - RESET_THROTTLE_SECONDS
+    ))
+    if recent != nil and recent[1] != nil and tonumber(recent[1].n) > 0 then
+        return false
+    end
+
+    secret, err = auth.session_secret(root)
+    if secret == nil then
+        return nil, err
+    end
+    token, token_err = random_hex_token(32)
+    if token == nil then
+        return nil, token_err
+    end
+    token_hash = reset_token_hash(secret, token)
+    db.exec(db_path, string.format(
+        "INSERT INTO password_reset (token_hash, login, issued_at, expires_at) VALUES (%s, %s, %d, %d);",
+        db.quote(token_hash), db.quote(user.login), now, now + RESET_TTL_SECONDS
+    ))
+
+    base_url = string.gsub(config.platform_config().public_url, "/+$", "")
+    link = base_url .. "/reset-password?token=" .. token
+    body = table.concat({
+        "Someone (hopefully you) asked to reset the password for the " .. site_name .. " account \"" .. user.login .. "\".",
+        "",
+        "To choose a new password, open this link within the next hour:",
+        "",
+        link,
+        "",
+        "The link works once. If you didn't ask for this, ignore this email -- your password stays the same.",
+        "",
+    }, "\n")
+    sent, send_err = mail_provider.send({
+        to = user.email,
+        from_name = site_name,
+        subject = "Reset your " .. site_name .. " password",
+        body = body,
+    })
+    if sent == nil then
+        -- Void the unsent link rather than delete it (nothing is ever
+        -- deleted -- see doc/architecture.md), and so it doesn't count
+        -- against the throttle: the user can retry straight away.
+        db.exec(db_path, string.format(
+            "UPDATE password_reset SET used_at = %d WHERE token_hash = %s;", now, db.quote(token_hash)
+        ))
+        return nil, send_err
+    end
+    return true
+end
+
+-- auth.check_password_reset(root, db_path, token) -> login | nil
+-- Valid means: issued by this store, not yet used, not expired, and the
+-- account is still active.
+function auth.check_password_reset(root, db_path, token)
+    if token == nil or string.match(token, "^%x+$") == nil or string.len(token) != 64 then
+        return nil
+    end
+    secret, err = auth.session_secret(root)
+    if secret == nil then
+        return nil
+    end
+    rows = db.query(db_path, string.format(
+        "SELECT login FROM password_reset WHERE token_hash = %s AND used_at IS NULL AND expires_at > %d;",
+        db.quote(reset_token_hash(secret, token)), os.time()
+    ))
+    if rows == nil or rows[1] == nil then
+        return nil
+    end
+    user = auth.get_user(db_path, rows[1].login)
+    if user == nil or (user.archived_at != nil and user.archived_at != "") then
+        return nil
+    end
+    return user.login
+end
+
+-- auth.complete_password_reset(root, db_path, token, new_password)
+--   -> login | nil, err
+-- Using one link voids every other outstanding link for that account
+-- too, so an older email lying around can't be used afterwards.
+-- Existing sessions are NOT ended: session cookies are stateless (see
+-- this file's header), the same limitation an admin reset has today.
+function auth.complete_password_reset(root, db_path, token, new_password)
+    login = auth.check_password_reset(root, db_path, token)
+    if login == nil then
+        return nil, "This reset link is invalid or has expired."
+    end
+    if new_password == nil or new_password == "" then
+        return nil, "Password is required."
+    end
+    ok, err = auth.set_password(db_path, login, new_password)
+    if ok == nil then
+        return nil, err
+    end
+    db.exec(db_path, string.format(
+        "UPDATE password_reset SET used_at = %d WHERE login = %s AND used_at IS NULL;", os.time(), db.quote(login)
+    ))
+    return login
+end
+
+--------------------------------------------------------------------------
+-- CLI: `daat user <add|passwd|email|capabilities|list|archive|unarchive> ...`
 --------------------------------------------------------------------------
 
 function auth.do_user(cmd_args, db_path)
@@ -492,6 +717,22 @@ function auth.do_user(cmd_args, db_path)
         return
     end
 
+    if action == "email" then
+        login = cmd_args[2]
+        email = cmd_args[3]
+        if login == nil or email == nil then
+            print("Usage: daat user email <login> <email>   (\"\" clears it)")
+            return
+        end
+        ok, err = auth.set_email(db_path, login, email)
+        if ok == nil then
+            print("Error: " .. tostring(err))
+            return
+        end
+        print("Email updated for " .. login)
+        return
+    end
+
     if action == "capabilities" then
         login = cmd_args[2]
         cap = cmd_args[3]
@@ -521,7 +762,11 @@ function auth.do_user(cmd_args, db_path)
             if u.archived_at != nil and u.archived_at != "" then
                 status = "archived"
             end
-            print(string.format("%s  cap=%s  %s", u.login, u.cap, status))
+            email = u.email
+            if email == nil or email == "" then
+                email = "-"
+            end
+            print(string.format("%s  cap=%s  email=%s  %s", u.login, u.cap, email, status))
         end
         return
     end
@@ -556,7 +801,7 @@ function auth.do_user(cmd_args, db_path)
         return
     end
 
-    print("Usage: daat user <add|passwd|capabilities|list|archive|unarchive> ...")
+    print("Usage: daat user <add|passwd|email|capabilities|list|archive|unarchive> ...")
 end
 
 --------------------------------------------------------------------------
