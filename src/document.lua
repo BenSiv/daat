@@ -147,13 +147,14 @@ function ensure_document_link_note_columns(db_path)
 end
 
 -- A document's cached semantic-search embedding. Recomputed on every
--- create_page/update_page -- one embedding API call per save, not a
--- corpus reindex. Best-effort: document.reindex_embedding returns
--- nil/err rather than throwing on failure (an unconfigured provider, a
--- network hiccup, ...), and create_page/update_page ignore that return
--- value entirely -- a document save must never fail just because the
--- embedding call did. document.reindex_all_embeddings/the CLI's own
--- `reindex-embeddings` command exist for bulk backfill (a provider
+-- every create/update (document.on_entity_created/on_entity_updated)
+-- -- one embedding API call per save, not a corpus reindex.
+-- Best-effort: document.reindex_embedding returns nil/err rather than
+-- throwing on failure (an unconfigured provider, a network hiccup,
+-- ...), and the hooks ignore that return value entirely -- a document
+-- save must never fail just because the embedding call did.
+-- document.reindex_all_embeddings/`daat repair embeddings` exist for
+-- bulk backfill (a provider
 -- outage, or documents saved before this cache existed). Search itself
 -- only ever *reads* this cache; it never computes an embedding on the fly.
 DOCUMENT_EMBEDDING_SCHEMA = """
@@ -375,8 +376,8 @@ end
 -- Backfill for document_count drift -- the manual correction for
 -- whatever entity.create's own on_entity_created hook can't reach (a
 -- raw SQL insert, a restored backup, a bulk load run before this hook
--- existed), the same class of command as reindex-embeddings/
--- resync-links for document.create_page's other two side effects.
+-- existed) -- `daat repair pool-count`, the same class of command as
+-- `daat repair links`/`embeddings`.
 -- Recomputes document_count from a real COUNT(*) over active documents
 -- -- the same one-time scan ensure_pool_state's own initial seed uses
 -- -- and overwrites the stored value with it. Doesn't (can't) recover
@@ -963,34 +964,20 @@ function document.weighted_spreading_delta(base_delta, edge_strength, total_stre
     return (base_delta * SPREADING_ACTIVATION_FACTOR) * (tonumber(edge_strength) / total_strength)
 end
 
--- entity.create/update + document.sync_links together -- the full
--- "save a document" sequence, shared by the web save route and the agent's
--- document tool so the two can never drift apart on what "saving a
--- document" actually entails. Pool registration itself isn't called
--- here anymore -- entity.create's own on_entity_created hook does it
--- for every document creation, this path included (see
--- document.on_entity_created), so calling it again here would register
--- the same new row twice.
+-- Saving a document is just entity.create/update now: pool
+-- registration, link sync and embedding all run from entity's own
+-- document hooks (document.on_entity_created/on_entity_updated), so
+-- every write path -- this one, the generic API/CLI, the agent's entity
+-- tools -- gets them exactly once. Kept as the web save route's and the
+-- agent document tool's shared entry point.
 function document.create_page(db_path, author, title, parent_id, content, source)
     values = {title = title, content = content, parent_id = parent_id}
-    created_id, issues = entity.create(db_path, "document", values, author, source)
-    if created_id == nil then
-        return nil, issues
-    end
-    document.sync_links(db_path, created_id, content)
-    document.reindex_embedding(db_path, created_id)
-    return created_id, issues
+    return entity.create(db_path, "document", values, author, source)
 end
 
 function document.update_page(db_path, author, document_id, title, parent_id, content, source)
     values = {title = title, content = content, parent_id = parent_id}
-    updated_id, issues = entity.update(db_path, "document", document_id, values, author, source)
-    if updated_id == nil then
-        return nil, issues
-    end
-    document.sync_links(db_path, updated_id, content)
-    document.reindex_embedding(db_path, updated_id)
-    return updated_id, issues
+    return entity.update(db_path, "document", document_id, values, author, source)
 end
 
 -- Every active link touching `document_id`, both directions, with
@@ -1588,11 +1575,77 @@ end
 -- manifests, and document.create_page's own direct entity.create call)
 -- -- document.create_page no longer calls register_pool_document
 -- itself, since this hook now does it for that path too, exactly once.
+--
+-- Also where every new document's links and embedding get computed --
+-- not document.create_page, so the generic entity paths get them too
+-- instead of leaving the document invisible to backlinks/semantic search
+-- until a `daat repair`. Embedding stays best-effort: a failed provider
+-- call never fails the create.
+--
+-- A new document can also be the target a dangling [[link]] elsewhere
+-- has been waiting for (document.resolve_dangling_links).
 function document.on_entity_created(db_path, entity_type, entity_id)
     if entity_type != "document" then
         return
     end
     document.register_pool_document(db_path, entity_id)
+    doc = entity.get(db_path, "document", entity_id)
+    if doc != nil then
+        document.sync_links(db_path, entity_id, doc.content)
+    end
+    document.resolve_dangling_links(db_path)
+    document.reindex_embedding(db_path, entity_id)
+end
+
+-- Points every active dangling link (to_document_id NULL -- its target
+-- didn't exist when the link was written) at its target, if one now
+-- resolves. Run whenever a document appears or is renamed, so a link
+-- to a page created later heals on its own instead of waiting for the
+-- linking document's own next save or a `daat repair links` -- the case
+-- a bulk import hits every time a page links forward to one imported
+-- after it. Re-resolves through document.resolve_link rather than
+-- matching titles here, so "subject/title" disambiguation stays in one
+-- place. Dangling rows are rare (a handful per deployment), so scanning
+-- all of them per create is cheap.
+function document.resolve_dangling_links(db_path)
+    rows = db.query(db_path,
+        "SELECT from_document_id, link_text FROM document_link WHERE to_document_id IS NULL AND (archived_at IS NULL OR archived_at = '');")
+    if rows == nil then
+        return
+    end
+    for _, row in ipairs(rows) do
+        subject, title = document.parse_link_ref(row.link_text)
+        to_id = document.resolve_link(db_path, subject, title)
+        if to_id != nil then
+            db.exec(db_path, string.format(
+                "UPDATE document_link SET to_document_id = %d WHERE from_document_id = %d AND link_text = %s AND to_document_id IS NULL;",
+                tonumber(to_id), tonumber(row.from_document_id), db.quote(row.link_text)
+            ))
+        end
+    end
+end
+
+-- entity.update's counterpart: re-syncs links on a content change,
+-- re-embeds on a content or title change, and retries dangling links on
+-- a rename or move (a new title, or a new parent for "subject/title",
+-- can be what one was waiting for). `field_changes` is keyed by field
+-- name.
+function document.on_entity_updated(db_path, entity_type, entity_id, field_changes)
+    if entity_type != "document" then
+        return
+    end
+    if field_changes.content != nil then
+        doc = entity.get(db_path, "document", entity_id)
+        if doc != nil then
+            document.sync_links(db_path, entity_id, doc.content)
+        end
+    end
+    if field_changes.title != nil or field_changes.parent_id != nil then
+        document.resolve_dangling_links(db_path)
+    end
+    if field_changes.content != nil or field_changes.title != nil then
+        document.reindex_embedding(db_path, entity_id)
+    end
 end
 
 function document.on_entity_archived(db_path, entity_type, entity_id)
@@ -1607,6 +1660,7 @@ function document.on_entity_unarchived(db_path, entity_type, entity_id)
         return
     end
     document.register_pool_document(db_path, entity_id)
+    document.resolve_dangling_links(db_path)
 end
 
 -- Tier is decided by content-processing maturity, not retrieval
@@ -1774,8 +1828,8 @@ end
 -- actually show up.
 
 -- Computes and caches one document's embedding -- best-effort, called
--- from create_page/update_page on every save, as well as explicitly
--- via the CLI/document.reindex_all_embeddings for bulk backfill (see
+-- from entity.create/update's document hooks on every save, as well as
+-- explicitly via `daat repair embeddings` for bulk backfill (see
 -- DOCUMENT_EMBEDDING_SCHEMA's own comment).
 function document.reindex_embedding(db_path, document_id)
     agent_provider = require("agent_provider")
@@ -1803,11 +1857,10 @@ function document.reindex_embedding(db_path, document_id)
     return true
 end
 
--- The document.sync_links equivalent of reindex_embedding above -- for
--- the same reason: a document created/updated via the generic `entity
--- create-json`/`update-json` path (see this file's own do_document
--- comment) never runs document.sync_links at all, so any [[...]] links
--- authored in its content are never registered until this runs.
+-- The document.sync_links equivalent of reindex_embedding above --
+-- `daat repair links`, for documents whose content reached the table
+-- without going through entity.create/update (a raw SQL insert, a
+-- restored backup) and so never had their links registered.
 function document.resync_links(db_path, document_id)
     doc = entity.get(db_path, "document", document_id)
     if doc == nil then
@@ -2033,25 +2086,16 @@ function document.search(db_path, query_text, limit, use_semantic)
     return results
 end
 
--- CLI entry point: `daat document <create-json|reindex-embeddings
--- [entity_id]|resync-links [entity_id]>` -- `reindex-embeddings` and
--- `resync-links` are for bulk backfill (documents saved before these
--- caches existed, after a provider outage silently dropped some
--- best-effort saves, or -- see the generic-entity-path warning below --
--- created via a path that skips document.create_page's side effects
--- entirely).
+-- CLI entry point: `daat document create-json`. The link/embedding/
+-- pool-count backfills that used to live here are `daat repair` now
+-- (src/repair.lua).
 function document.do_document(cmd_args, db_path)
     action = cmd_args[1]
 
-    -- Bulk document import (e.g. meeting notes, a literature corpus) --
-    -- deliberately NOT the generic `entity create-json` action: that
-    -- goes through entity.create_batch -> entity.create directly, which
-    -- skips document.create_page's own side effects (document.sync_links
-    -- for backlinks, document.reindex_embedding for semantic search) --
-    -- a plain entity-create bulk import would leave every new document
-    -- unfindable by embedding similarity and invisible to backlinks
-    -- until a full document reindex-embeddings run, silently. Also
-    -- deliberately NOT all-or-nothing the way create_batch's own
+    -- Bulk document import (e.g. meeting notes, a literature corpus).
+    -- Links and embeddings come from entity.create's own document hook
+    -- either way, same as `entity create-json`; what differs is that
+    -- this is deliberately NOT all-or-nothing the way create_batch's own
     -- validate-everything-first gate is: a real, heterogeneous batch
     -- (hundreds of files of unpredictable quality) shouldn't have one
     -- bad row block every other row -- each is created independently,
@@ -2086,55 +2130,7 @@ function document.do_document(cmd_args, db_path)
         return
     end
 
-    if action == "reindex-embeddings" then
-        entity_id = tonumber(cmd_args[2])
-        if entity_id != nil then
-            ok, err = document.reindex_embedding(db_path, entity_id)
-            if ok == nil then
-                print("Error: " .. tostring(err))
-                return
-            end
-            print("Reindexed embedding for document #" .. tostring(entity_id))
-            return
-        end
-        reindexed, failed = document.reindex_all_embeddings(db_path)
-        print(string.format("Reindexed %d document(s), %d failed", reindexed, failed))
-        return
-    end
-
-    -- The document.sync_links half of the same backfill story
-    -- reindex-embeddings tells above -- a separate action (not folded
-    -- into reindex-embeddings) since either can fail/need a rerun
-    -- independently of the other.
-    if action == "resync-links" then
-        entity_id = tonumber(cmd_args[2])
-        if entity_id != nil then
-            ok, err = document.resync_links(db_path, entity_id)
-            if ok == nil then
-                print("Error: " .. tostring(err))
-                return
-            end
-            print("Resynced links for document #" .. tostring(entity_id))
-            return
-        end
-        resynced = document.resync_all_links(db_path)
-        print(string.format("Resynced links for %d document(s)", resynced))
-        return
-    end
-
-    -- Backfill for knowledge_pool_state.document_count drift (see
-    -- document.resync_pool_count) -- shouldn't be needed in normal
-    -- operation now that entity.create's own hook registers every
-    -- document creation, but recovers from it if something ever
-    -- bypasses entity.create entirely (a raw SQL import, a restored
-    -- backup predating that hook).
-    if action == "resync-pool" then
-        count = document.resync_pool_count(db_path)
-        print("document_count resynced to " .. tostring(count))
-        return
-    end
-
-    print("Usage: daat document <create-json|reindex-embeddings [entity_id]|resync-links [entity_id]|resync-pool>")
+    print("Usage: daat document create-json")
 end
 
 return document

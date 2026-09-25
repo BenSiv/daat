@@ -394,11 +394,7 @@ EOF
     [ "$output" = "0" ]
 }
 
-@test "document create-json bulk-creates pages with full document.create_page side effects (wikilinks, embeddings)" {
-    # Deliberately NOT the generic `entity create-json` action -- that
-    # skips document.create_page's own side effects entirely (a bulk
-    # import task surfaced this: pages existed but were unfindable by
-    # semantic search and had no backlinks, silently).
+@test "document create-json bulk-creates pages with links and embeddings" {
     payload='[{"title": "Source Page", "content": "hello"}, {"title": "Linking Page", "content": "See [[Source Page]] for details"}]'
     run bash -c "printf '%s' '$payload' | '$BIN' document create-json"
     [[ "$output" =~ '"created_ids":[1,2]' ]] || [[ "$output" =~ '"created_ids":[' ]]
@@ -434,10 +430,10 @@ EOF
     [ "$(echo "$output" | wc -l)" -eq 2 ]
 }
 
-@test "document reindex-embeddings CLI still exists, for bulk backfill after a save-time provider failure" {
+@test "repair embeddings backfills embeddings after a save-time provider failure" {
     # Pinned to vertex with no vertex_project configured (see the
     # previous test) so the save below never gets an embedding --
-    # reindex-embeddings is how a store backfills those after the
+    # `daat repair embeddings` is how a store backfills those after the
     # fact, or after a provider outage silently dropped some
     # best-effort saves.
     cat > "${TEST_DIR}/platform.lua" <<'EOF'
@@ -450,46 +446,70 @@ EOF
     # Back to the (working) test provider -- as if the deployment fixed
     # its Vertex configuration before running the backfill.
     write_platform_config
-    run "$BIN" document reindex-embeddings
+    run "$BIN" repair embeddings
     [[ "$output" =~ "Reindexed 1 document(s), 0 failed" ]]
 
     run bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db 'SELECT COUNT(*) FROM document_embedding;'"
     [ "$output" = "1" ]
 }
 
-@test "document resync-links CLI backfills [[...]] links for a document created via the generic entity path" {
-    # Uses `entity create-json document` (not `document create-json`)
-    # to reproduce the actual gap: entity.create_batch goes straight to
-    # entity.create, skipping document.create_page's own side effects
-    # (document.sync_links for backlinks, document.reindex_embedding for
-    # semantic search) entirely -- exactly what convert_entries_to_pages.py
-    # (software/benchling/migration/) does for every Benchling-synced
-    # document.
+@test "generic entity create/update of a document syncs links and embeddings, same as a page save" {
+    # entity create-json/update go straight to entity.create/update, not
+    # document.create_page -- the path convert_entries_to_pages.py
+    # (software/benchling/migration/) and the agent's generic entity
+    # tools use. They used to skip links and embeddings entirely.
     save_document "csrf_token=${CSRF}&title=Home&parent_id=&content=Welcome." >/dev/null
+    save_document "csrf_token=${CSRF}&title=Setup&parent_id=&content=Steps." >/dev/null
 
     payload='[{"title": "Guide", "content": "Back to [[Home]]."}]'
     run bash -c "printf '%s' '$payload' | '$BIN' entity create-json document"
-    [[ "$output" =~ '"created_ids":[2]' ]]
+    [[ "$output" =~ '"created_ids":[3]' ]]
+
+    run bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db 'SELECT from_document_id, to_document_id, note_source FROM document_link;'"
+    [ "$output" = "3|1|context" ]
+    run bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db 'SELECT COUNT(*) FROM document_embedding WHERE document_id = 3;'"
+    [ "$output" = "1" ]
+
+    # An update re-syncs: [[Home]] gone (archived), [[Setup]] added.
+    "$BIN" entity update document 3 content="Now see [[Setup]]." >/dev/null
+    run bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db \"SELECT to_document_id FROM document_link WHERE from_document_id = 3 AND (archived_at IS NULL OR archived_at = '');\""
+    [ "$output" = "2" ]
+}
+
+@test "a dangling [[link]] heals on its own once its target is created, through any path" {
+    save_document "csrf_token=${CSRF}&title=Guide&parent_id=&content=See+%5B%5BLater+Page%5D%5D." >/dev/null
+    run bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db 'SELECT COUNT(*) FROM document_link WHERE to_document_id IS NULL;'"
+    [ "$output" = "1" ]
+
+    payload='[{"title": "Later Page", "content": "created afterwards"}]'
+    printf '%s' "$payload" | "$BIN" entity create-json document >/dev/null
+    run bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db 'SELECT from_document_id, to_document_id FROM document_link;'"
+    [ "$output" = "1|2" ]
+}
+
+@test "repair links rebuilds links for content written outside entity entirely (raw SQL, a restored backup)" {
+    save_document "csrf_token=${CSRF}&title=Home&parent_id=&content=Welcome." >/dev/null
+    save_document "csrf_token=${CSRF}&title=Guide&parent_id=&content=nothing yet" >/dev/null
+    bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db \"UPDATE document SET content = 'Back to [[Home]].' WHERE id = 2;\""
 
     run bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db 'SELECT COUNT(*) FROM document_link;'"
     [ "$output" = "0" ]
 
-    run "$BIN" document resync-links 2
+    run "$BIN" repair links 2
     [[ "$output" =~ "Resynced links for document #2" ]]
-
     run bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db 'SELECT from_document_id, to_document_id FROM document_link;'"
     [ "$output" = "2|1" ]
+
+    run "$BIN" repair links
+    [[ "$output" =~ "Resynced links for 2 document(s)" ]]
 }
 
-@test "document resync-links CLI with no id backfills every active document" {
-    save_document "csrf_token=${CSRF}&title=Home&parent_id=&content=Welcome." >/dev/null
-
-    payload='[{"title": "Guide", "content": "Back to [[Home]]."}]'
-    printf '%s' "$payload" | "$BIN" entity create-json document >/dev/null
+@test "repair with no name lists every repair; the old document backfill actions are gone" {
+    run "$BIN" repair
+    [[ "$output" =~ "links [document_id]" ]]
+    [[ "$output" =~ "embeddings [document_id]" ]]
+    [[ "$output" =~ "pool-count" ]]
 
     run "$BIN" document resync-links
-    [[ "$output" =~ "Resynced links for 2 document(s)" ]]
-
-    run bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db 'SELECT COUNT(*) FROM document_link;'"
-    [ "$output" = "1" ]
+    [[ "$output" =~ "Usage: daat document create-json" ]]
 }

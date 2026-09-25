@@ -58,7 +58,8 @@ daat user email <login> <email>               # "" clears it; used for password-
 daat user capabilities <login> <cap_string>
 daat user list [--include-archived]
 daat user archive|unarchive <login>
-daat document reindex-embeddings [entity_id]
+daat document create-json                     # bulk import, per-row success/failure
+daat repair [links|embeddings|pool-count] [id] # rebuild derived state; no args lists repairs
 ```
 
 Running with no arguments uses this CLI dispatch; running under a real (or test-simulated) web request runs the request-handling path instead -- see `src/main.lua`.
@@ -85,7 +86,7 @@ A built-in assistant (`src/agent.lua`) at `/chat`: real per-user conversation se
 
 Every tool call is attributed to the real logged-in user, never a separate "agent" identity -- creating or updating a document through chat shows up in that document's own audit history exactly like a direct edit, just tagged with which chat session it came from. Read-only tool calls (search) run immediately; anything that changes data (create, update) pauses as a pending action and waits for an explicit Approve/Deny in the chat UI before running at all -- there's no way for the assistant to change data without a human confirming it first.
 
-Document search blends keyword matching with semantic similarity (an embedding comparison) when a document has been explicitly indexed via `daat document reindex-embeddings` -- indexing is never an automatic side effect of saving a document, since it costs a real API call per document.
+Document search blends keyword matching with semantic similarity (an embedding comparison) using an embedding computed on every save (one embedding API call per create/update, best-effort -- a failed call never fails the save; `daat repair embeddings` backfills any that were missed).
 
 The LLM backend is pluggable (`src/agent_provider*.lua`, selected by `platform.lua`'s `agent_provider` field) -- ships with a real Google Vertex AI backend and a deterministic backend used by this project's own test suite so routine test runs don't repeatedly hit a paid API.
 

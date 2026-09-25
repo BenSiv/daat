@@ -29,6 +29,8 @@ do_document = document.do_document
 
 knowledge = require("knowledge")
 do_knowledge = knowledge.do_knowledge
+repair = require("repair")
+do_repair = repair.do_repair
 
 -- Required explicitly here (not left to load transitively via cgi's
 -- own require) since knowledge.lua can't require agent.lua back itself
@@ -68,6 +70,7 @@ function main()
         ["api-key"] = do_api_key,
         ["document"] = do_document,
         ["knowledge"] = do_knowledge,
+        ["repair"] = do_repair,
     }
 
     arg[-1] = "lua"
@@ -80,7 +83,7 @@ function main()
     end
 
     if command == nil or command == "-h" or command == "--help" then
-        print("Usage: daat <init|schema|entity|ledger|extension|view|user|api-key|document|knowledge|agent> ...")
+        print("Usage: daat <init|schema|entity|ledger|extension|view|user|api-key|document|knowledge|agent|repair> ...")
         return
     end
 

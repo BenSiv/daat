@@ -38,6 +38,9 @@ end
 function new_test_db(document_count)
     db_path = os.tmpname()
     db.exec(db_path, "CREATE TABLE document (id INTEGER PRIMARY KEY, raw_heat REAL DEFAULT 1.0, scale_at_write REAL DEFAULT 1.0, archived_at TEXT, merged_into INTEGER);")
+    -- on_entity_unarchived also retries dangling links (document.
+    -- resolve_dangling_links) -- an empty table is all it needs here.
+    db.exec(db_path, "CREATE TABLE document_link (from_document_id INTEGER NOT NULL, to_document_id INTEGER, link_text VARCHAR(255) NOT NULL, archived_at TEXT DEFAULT NULL, PRIMARY KEY (from_document_id, link_text));")
     for i = 1, document_count do
         db.exec(db_path, string.format("INSERT INTO document (id, raw_heat, scale_at_write) VALUES (%d, 1.0, 1.0);", i))
     end

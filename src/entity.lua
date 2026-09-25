@@ -502,6 +502,15 @@ function entity.update(db_path, entity_type, entity_id, values, author, source, 
     extension.enqueue_after_hooks(db_path, config.extensions_dir(),
         "entity.after_update", entity_type, entity_id, merged, current)
 
+    -- Lazy require, same reasoning as entity.create's own
+    -- on_entity_created call above -- the one choke point every real
+    -- document edit passes through, so a generic API/agent/CLI write
+    -- keeps links and embeddings in step with content exactly like a
+    -- /document-save does. Only reached on a real change: the
+    -- no-op-update early return above skips it.
+    document_update_hook = require("document")
+    document_update_hook.on_entity_updated(db_path, entity_type, entity_id, field_changes)
+
     return entity_id, issues
 end
 
