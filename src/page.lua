@@ -401,8 +401,8 @@ end
 function render_page_field(field)
     if field.type == "hidden" then
         return render_lib.render(
-            "        <input type=\"hidden\" name=\"{{ name }}\" value=\"{{ value }}\">\n",
-            {name = field.name, value = field.value}
+            "        <input type=\"hidden\" name=\"{{ name }}\"{{{ id_attr }}} value=\"{{ value }}\">\n",
+            {name = field.name, id_attr = attr_fragment("id", field.id), value = field.value}
         )
     end
 

@@ -3602,11 +3602,22 @@ function html.render_forgot_password(error_message, sent)
     }, "<a href=\"/login\">Back to log in</a>")
 end
 
--- /reset-password?token=...: `token` nil means the link didn't check
--- out (invalid, expired or already used) -- no form at all then, just a
--- way to ask for a fresh one.
-function html.render_reset_password(token, error_message)
-    if token == nil then
+function default_value_text(value)
+    if value == nil then
+        return ""
+    end
+    return value
+end
+
+-- /reset-password#token=...: the emailed token rides in the URL
+-- fragment (see auth.request_password_reset), which the server never
+-- sees -- so the GET page can't check it, and this page's one script
+-- copies it into the form's hidden field (and strips it from the
+-- address bar) for the POST to check instead. `token` is only set when
+-- re-rendering after a POST (e.g. mismatched passwords); `invalid` is
+-- set when a POSTed token didn't check out.
+function html.render_reset_password(token, error_message, invalid, nonce)
+    if invalid == true then
         return render_login_card("Reset password", {
             {
                 type = "form",
@@ -3619,7 +3630,7 @@ function html.render_reset_password(token, error_message)
             },
         }, "<a href=\"/login\">Back to log in</a>")
     end
-    return render_login_card("Reset password", {
+    card = render_login_card("Reset password", {
         {
             type = "form",
             method = "POST",
@@ -3627,13 +3638,29 @@ function html.render_reset_password(token, error_message)
             heading = "Choose a new password",
             message = error_message,
             fields = {
-                {type = "hidden", name = "token", value = token},
+                {type = "hidden", name = "token", id = "reset-token", value = default_value_text(token)},
                 {type = "password", name = "new_password", label = "New password", autocomplete = "new-password", required = true},
                 {type = "password", name = "confirm_password", label = "Confirm new password", autocomplete = "new-password", required = true},
             },
             submit_label = "Set password",
         },
-    }, nil)
+    }, "<span id=\"reset-missing\" hidden>This link is incomplete. Open it straight from the email, or <a href=\"/forgot-password\">request a new one</a>.</span>")
+    return card .. string.format("""
+<script nonce="%s">
+(function() {
+    var field = document.getElementById('reset-token');
+    var match = /(?:^#|&)token=([0-9a-f]+)/.exec(window.location.hash);
+    if (match) {
+        field.value = match[1];
+        history.replaceState(null, '', window.location.pathname);
+    }
+    if (!field.value) {
+        field.form.hidden = true;
+        document.getElementById('reset-missing').hidden = false;
+    }
+})();
+</script>
+""", nonce)
 end
 
 -- Self-service password change -- every capability level (baseline "i"

@@ -43,7 +43,7 @@ outbox_count() {
 
 # The token from the most recently sent reset link.
 last_token() {
-    tail -1 "$MAIL_TEST_OUTBOX" | grep -o 'reset-password?token=[0-9a-f]*' | head -1 | sed 's/.*token=//'
+    tail -1 "$MAIL_TEST_OUTBOX" | grep -o 'reset-password#token=[0-9a-f]*' | head -1 | sed 's/.*token=//'
 }
 
 add_user_with_email() {
@@ -82,12 +82,13 @@ add_user_with_email() {
     [ "$(outbox_count)" = "1" ]
     run cat "$MAIL_TEST_OUTBOX"
     [[ "$output" =~ '"to":"hanne@example.com"' ]]
-    [[ "$output" =~ "https://lims.example.com/reset-password?token=" ]]
+    [[ "$output" =~ "https://lims.example.com/reset-password#token=" ]]
+    [[ ! "$output" =~ "reset-password?token=" ]]
     [[ ! "$output" =~ "example.com//reset-password" ]]
 
     token=$(last_token)
     [ "${#token}" = "64" ]
-    run raw_get "/reset-password" "token=${token}"
+    run raw_get "/reset-password"
     [[ "$output" =~ "Choose a new password" ]]
     [[ "$output" =~ "Referrer-Policy: no-referrer" ]]
 
@@ -129,6 +130,35 @@ add_user_with_email() {
     [ "$(outbox_count)" = "1" ]
 }
 
+@test "admin accounts can't be reset by email -- same response, no email" {
+    add_user_with_email boss boss@example.com
+    "$BIN" user capabilities boss ia >/dev/null
+    run raw_form_post "/forgot-password" "identifier=boss"
+    [[ "$output" =~ "Check your email" ]]
+    run raw_form_post "/forgot-password" "identifier=boss%40example.com"
+    [[ "$output" =~ "Check your email" ]]
+    [ "$(outbox_count)" = "0" ]
+}
+
+@test "an outstanding link stops working if the account is made an admin" {
+    add_user_with_email hanne hanne@example.com
+    raw_form_post "/forgot-password" "identifier=hanne" >/dev/null
+    token=$(last_token)
+    "$BIN" user capabilities hanne ia >/dev/null
+    run raw_form_post "/reset-password" "token=${token}&new_password=newpass456&confirm_password=newpass456"
+    [[ "$output" =~ "invalid" ]]
+    run raw_login hanne oldpass123
+    [[ "$output" =~ "302 Found" ]]
+}
+
+@test "the reset page reads the token from the URL fragment, never the query string" {
+    run raw_get "/reset-password"
+    [[ "$output" =~ 'id="reset-token"' ]]
+    [[ "$output" =~ "window.location.hash" ]]
+    [[ "$output" =~ "history.replaceState" ]]
+    [[ "$output" =~ '<script nonce="' ]]
+}
+
 @test "a second request within the throttle window sends no second email" {
     add_user_with_email hanne hanne@example.com
     raw_form_post "/forgot-password" "identifier=hanne" >/dev/null
@@ -143,11 +173,10 @@ add_user_with_email() {
     token=$(last_token)
     raw_form_post "/reset-password" "token=${token}&new_password=first111&confirm_password=first111" >/dev/null
 
-    run raw_get "/reset-password" "token=${token}"
-    [[ "$output" =~ "already been used" ]]
-    [[ ! "$output" =~ "new_password" ]]
     run raw_form_post "/reset-password" "token=${token}&new_password=second222&confirm_password=second222"
     [[ ! "$output" =~ "302 Found" ]]
+    [[ "$output" =~ "already been used" ]]
+    [[ ! "$output" =~ "new_password" ]]
     run raw_login hanne first111
     [[ "$output" =~ "302 Found" ]]
 }
@@ -163,7 +192,7 @@ add_user_with_email() {
     [ "$first" != "$second" ]
 
     raw_form_post "/reset-password" "token=${second}&new_password=newpass456&confirm_password=newpass456" >/dev/null
-    run raw_get "/reset-password" "token=${first}"
+    run raw_form_post "/reset-password" "token=${first}&new_password=other789&confirm_password=other789"
     [[ "$output" =~ "already been used" ]]
 }
 
@@ -172,20 +201,19 @@ add_user_with_email() {
     raw_form_post "/forgot-password" "identifier=hanne" >/dev/null
     token=$(last_token)
     sqlite3 "$TEST_DIR/.store/store.db" "UPDATE password_reset SET expires_at = issued_at - 1;"
-    run raw_get "/reset-password" "token=${token}"
-    [[ "$output" =~ "has expired" ]]
     run raw_form_post "/reset-password" "token=${token}&new_password=newpass456&confirm_password=newpass456"
     [[ ! "$output" =~ "302 Found" ]]
+    [[ "$output" =~ "has expired" ]]
     run raw_login hanne oldpass123
     [[ "$output" =~ "302 Found" ]]
 }
 
 @test "a made-up or malformed token is rejected" {
-    run raw_get "/reset-password" "token=$(printf 'a%.0s' {1..64})"
+    run raw_form_post "/reset-password" "token=$(printf 'a%.0s' {1..64})&new_password=x1234567&confirm_password=x1234567"
     [[ "$output" =~ "invalid" ]]
-    run raw_get "/reset-password" "token=../../etc"
+    run raw_form_post "/reset-password" "token=../../etc&new_password=x1234567&confirm_password=x1234567"
     [[ "$output" =~ "invalid" ]]
-    run raw_get "/reset-password"
+    run raw_form_post "/reset-password" "new_password=x1234567&confirm_password=x1234567"
     [[ "$output" =~ "invalid" ]]
 }
 
@@ -196,6 +224,7 @@ add_user_with_email() {
     run raw_form_post "/reset-password" "token=${token}&new_password=aaa11111&confirm_password=bbb22222"
     [[ "$output" =~ "don&#39;t match" || "$output" =~ "don't match" ]]
     [[ "$output" =~ "Choose a new password" ]]
+    [[ "$output" =~ "value=\"${token}\"" ]]
     run raw_form_post "/reset-password" "token=${token}&new_password=aaa11111&confirm_password=aaa11111"
     [[ "$output" =~ "302 Found" ]]
 }

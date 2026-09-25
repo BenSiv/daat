@@ -531,23 +531,28 @@ function handle_forgot_password(root, db_path, method, nonce, theme)
         html.page_shell("Forgot password", "login", body_html, nonce, false, false, has_tasks_view, nav_extensions, theme, nil))
 end
 
--- `/reset-password?token=...` (the emailed link): GET checks the token
--- and shows the new-password form; POST sets it and sends the user on
--- to /login. Referrer-Policy: no-referrer so the token in this page's
--- URL is never sent onward in a Referer header.
-function handle_reset_password(root, db_path, method, nonce, theme, params)
+-- `/reset-password` (the emailed link, token in its #fragment -- see
+-- auth.request_password_reset): GET only renders the form, since the
+-- server never sees the fragment; POST checks the token, sets the new
+-- password and sends the user on to /login. Referrer-Policy/no-store
+-- as belt and braces, so nothing about this page travels onward or
+-- gets cached.
+function handle_reset_password(root, db_path, method, nonce, theme)
     if not config.password_reset_enabled() then
         return print_response("404 Not Found", "text/plain", "")
     end
     has_tasks_view = view.load(config.views_dir(root), "prioritized_tasks") != nil
     headers = {"Referrer-Policy: no-referrer", "Cache-Control: no-store"}
 
-    token = params.token
+    token = nil
     error_message = nil
+    invalid = false
     if method == "POST" then
         form = parse_query(io.read("*all"))
         token = form.token
-        if default_value(form.new_password, "") != default_value(form.confirm_password, "") then
+        if auth.check_password_reset(root, db_path, token) == nil then
+            invalid = true
+        elseif default_value(form.new_password, "") != default_value(form.confirm_password, "") then
             error_message = "The two passwords don't match."
         else
             login, err = auth.complete_password_reset(root, db_path, token, form.new_password)
@@ -558,10 +563,7 @@ function handle_reset_password(root, db_path, method, nonce, theme, params)
         end
     end
 
-    if auth.check_password_reset(root, db_path, token) == nil then
-        token = nil
-    end
-    body_html = html.render_reset_password(token, error_message)
+    body_html = html.render_reset_password(token, error_message, invalid, nonce)
     return print_response("200 OK", "text/html",
         html.page_shell("Reset password", "login", body_html, nonce, false, false, has_tasks_view, nav_extensions, theme, nil), headers)
 end
@@ -660,7 +662,7 @@ function cgi.handle_request()
         return handle_forgot_password(root, db_path, method, nonce, theme)
     end
     if path_info == "/reset-password" then
-        return handle_reset_password(root, db_path, method, nonce, theme, params)
+        return handle_reset_password(root, db_path, method, nonce, theme)
     end
 
     -- API-key auth for external/programmatic clients, as an

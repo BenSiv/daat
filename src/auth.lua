@@ -539,7 +539,18 @@ function reset_token_hash(secret, token)
 end
 
 -- An identifier containing "@" is treated as an email, anything else as
--- a login. Only an active account with an email on file qualifies.
+-- a login. Only an active, non-Admin account with an email on file
+-- qualifies. Admin ("a") accounts are excluded on purpose: emailed
+-- recovery makes an account only as safe as its mailbox, and a
+-- compromised admin mailbox shouldn't hand over the whole platform --
+-- another admin resets them instead (/admin-users-password).
+function default_cap(cap)
+    if cap == nil then
+        return ""
+    end
+    return cap
+end
+
 function find_reset_account(db_path, identifier)
     if identifier == nil then
         return nil
@@ -558,6 +569,9 @@ function find_reset_account(db_path, identifier)
         return nil
     end
     if user.email == nil or user.email == "" then
+        return nil
+    end
+    if string.find(default_cap(user.cap), "a", 1, true) != nil then
         return nil
     end
     return user
@@ -599,7 +613,11 @@ function auth.request_password_reset(root, db_path, identifier, site_name)
     ))
 
     base_url = string.gsub(config.platform_config().public_url, "/+$", "")
-    link = base_url .. "/reset-password?token=" .. token
+    -- In the #fragment, not the query string: browsers never send a
+    -- fragment to the server, so the token can't land in the web
+    -- server's or a load balancer's access log. /reset-password's own
+    -- script moves it into the form, which POSTs it.
+    link = base_url .. "/reset-password#token=" .. token
     body = table.concat({
         "Someone (hopefully you) asked to reset the password for the " .. site_name .. " account \"" .. user.login .. "\".",
         "",
@@ -630,7 +648,7 @@ end
 
 -- auth.check_password_reset(root, db_path, token) -> login | nil
 -- Valid means: issued by this store, not yet used, not expired, and the
--- account is still active.
+-- account is still active and not an Admin.
 function auth.check_password_reset(root, db_path, token)
     if token == nil or string.match(token, "^%x+$") == nil or string.len(token) != 64 then
         return nil
@@ -648,6 +666,11 @@ function auth.check_password_reset(root, db_path, token)
     end
     user = auth.get_user(db_path, rows[1].login)
     if user == nil or (user.archived_at != nil and user.archived_at != "") then
+        return nil
+    end
+    -- Re-checked here, not only when the link was issued: an account
+    -- promoted to Admin after its link went out mustn't be able to use it.
+    if string.find(default_cap(user.cap), "a", 1, true) != nil then
         return nil
     end
     return user.login
