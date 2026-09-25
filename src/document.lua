@@ -60,10 +60,12 @@ DOCUMENT_LINK_SCHEMA = """
 CREATE TABLE IF NOT EXISTS document_link (
     from_document_id INTEGER NOT NULL,
     to_document_id INTEGER,
-    -- VARCHAR(255), not TEXT -- MariaDB/InnoDB refuses a bare TEXT
+    -- VARCHAR(700), not TEXT -- MariaDB/InnoDB refuses a bare TEXT
     -- column as part of a key without an explicit length; see
-    -- ledger.lua's own SCHEMA comment for the full reasoning.
-    link_text VARCHAR(255) NOT NULL,
+    -- ledger.lua's own SCHEMA comment for the full reasoning. 700, not
+    -- 255: a [[link]] to a paper's full title ran past 255 in a real
+    -- deployment -- see LINK_TEXT_MAX_LENGTH.
+    link_text VARCHAR(700) NOT NULL,
     PRIMARY KEY (from_document_id, link_text)
 );
 """
@@ -118,6 +120,30 @@ function ensure_document_link_archived_at_column(db_path)
     end
     if have["archived_at"] == nil then
         db.exec(db_path, "ALTER TABLE document_link ADD COLUMN archived_at TEXT DEFAULT NULL;")
+    end
+end
+
+-- The longest [[link]] text document_link can hold -- it's part of
+-- the primary key, so InnoDB caps it: (3072-byte key limit - 4 for
+-- from_document_id) / 4 bytes per utf8mb4 character, rounded down to
+-- 700 for margin. document.upsert_link skips anything longer rather
+-- than failing the save it's part of: no real title is that long, so a
+-- longer match is broken markup (an unclosed [[ swallowing the text
+-- after it), and it still renders in place, just never becomes an edge.
+LINK_TEXT_MAX_LENGTH = 700
+
+-- Widens a pre-existing VARCHAR(255) link_text (every deployment
+-- created before LINK_TEXT_MAX_LENGTH) -- found live: a real paper
+-- title in a [[link]] ran past 255 and crashed the save. MariaDB/MySQL
+-- only; SQLite never enforces a VARCHAR length.
+function ensure_document_link_text_length(db_path)
+    if db.is_mariadb(db_path) == false then
+        return
+    end
+    rows = db.query(db_path,
+        "SELECT character_maximum_length AS len FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'document_link' AND column_name = 'link_text';")
+    if rows != nil and rows[1] != nil and tonumber(rows[1].len) < LINK_TEXT_MAX_LENGTH then
+        db.exec(db_path, string.format("ALTER TABLE document_link MODIFY link_text VARCHAR(%d) NOT NULL;", LINK_TEXT_MAX_LENGTH))
     end
 end
 
@@ -435,6 +461,7 @@ function document.init_schema(db_path)
     ensure_document_link_strength_column(db_path)
     ensure_document_link_archived_at_column(db_path)
     ensure_document_link_note_columns(db_path)
+    ensure_document_link_text_length(db_path)
     document.ensure_pool_state(db_path)
 end
 
@@ -767,6 +794,11 @@ end
 -- on insert, and on an existing row only if document.note_replaces
 -- lets `note_source` overwrite whatever wrote the current note.
 function document.upsert_link(db_path, from_id, to_id, link_text, tag, note, note_source)
+    -- Bytes >= characters, so this is conservative for VARCHAR's
+    -- character count -- see LINK_TEXT_MAX_LENGTH.
+    if #link_text > LINK_TEXT_MAX_LENGTH then
+        return
+    end
     note = document.truncate_note(note)
     rows = db.query(db_path, string.format(
         "SELECT source, to_document_id, note_source FROM document_link WHERE from_document_id = %d AND link_text = %s;",

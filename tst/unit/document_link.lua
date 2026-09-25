@@ -199,6 +199,17 @@ function test_parse_link_judgment_is_lenient_about_format()
     check(v == nil, "a word merely starting with YES is not a verdict")
 end
 
+function test_an_overlong_link_is_skipped_not_fatal()
+    print("Testing a [[link]] longer than document_link can hold is skipped, and the rest of the save still syncs")
+    db_path = new_test_db()
+    db.exec(db_path, "INSERT INTO document (id, title) VALUES (2, 'Doc Two');")
+    broken = "[[" .. string.rep("x", 701) .. "]]"
+    document.sync_links(db_path, 1, "Unclosed markup: " .. broken .. " and a real one: [[Doc Two]].")
+    rows = db.query(db_path, "SELECT link_text FROM document_link;")
+    check(#rows == 1 and rows[1].link_text == "Doc Two", "only the real link should be stored, got " .. tostring(#rows) .. " row(s)")
+    os.remove(db_path)
+end
+
 function test_reinforce_adds_exactly_the_configured_delta()
     print("Testing reinforce_link_strength adds exactly 0.15")
     db_path = new_test_db()
@@ -344,17 +355,6 @@ function test_sync_links_leaves_a_co_retrieval_backed_row_active_when_authored_t
 end
 
 function test_sync_links_reintroduces_an_archived_link_at_its_old_strength()
-test_link_context_quotes_the_sentence_around_the_link()
-test_link_context_strips_list_markup_and_keeps_dotted_tokens_together()
-test_link_context_falls_back_to_the_nearest_heading_for_a_bare_link()
-test_link_context_is_nil_for_a_bare_link_with_no_heading()
-test_truncate_note_trims_blanks_and_never_splits_a_utf8_character()
-test_note_replaces_respects_priority()
-test_upsert_link_writes_note_and_created_at_on_insert()
-test_sync_links_keeps_a_human_note_across_saves()
-test_context_note_replaces_an_earlier_model_note()
-test_set_link_note_clears_and_rejects_unknown_links()
-test_parse_link_judgment_is_lenient_about_format()
     print("Testing sync_links unarchives and preserves raw_strength when the author retypes a deleted [[link]]")
     db_path = new_test_db()
     db.exec(db_path, "INSERT INTO document (id, title) VALUES (2, 'Doc Two');")
@@ -392,6 +392,7 @@ test_sync_links_keeps_a_human_note_across_saves()
 test_context_note_replaces_an_earlier_model_note()
 test_set_link_note_clears_and_rejects_unknown_links()
 test_parse_link_judgment_is_lenient_about_format()
+test_an_overlong_link_is_skipped_not_fatal()
 
 if FAILURES > 0 then
     print(FAILURES .. " test(s) failed")
