@@ -4765,7 +4765,9 @@ function html.render_knowledge_graph(nonce)
                 canvas.style.cursor = 'default';
                 var a = byId[e.from], b = byId[e.to];
                 var strength = (typeof e.strength === 'number') ? e.strength : 1.0;
-                showTooltip(ev.clientX, ev.clientY, a.title + ' ↔ ' + b.title + '\nstrength ' + strength.toFixed(2));
+                var edgeText = a.title + ' ↔ ' + b.title + '\nstrength ' + strength.toFixed(2);
+                if (e.note) { edgeText += '\n' + e.note; }
+                showTooltip(ev.clientX, ev.clientY, edgeText);
                 return;
             }
             canvas.style.cursor = 'grab';
@@ -5961,7 +5963,54 @@ end
 -- the *source* Markdown before this ever runs, so what comes back here
 -- is already safe to place directly in the page, not user input that
 -- still needs escaping.
-function html.render_document(doc, rendered_html, breadcrumbs, children, backlinks, can_edit)
+-- One row of the document view's "Connections" list: the other
+-- document, which way the link points, why they're connected (the
+-- link's note, or a muted placeholder), and -- when the viewer can
+-- edit -- a collapsed form to write/replace that note. The form posts
+-- the link row's own key (from_document_id + link_text), since two
+-- documents can share more than one link row.
+NOTE_SOURCE_LABELS = {human = "note", context = "from the text", model = "suggested by the agent"}
+
+function render_document_connection(link, doc_id, can_edit, csrf_token)
+    arrow = "&larr;"
+    arrow_title = "links here"
+    if link.direction == "out" then
+        arrow = "&rarr;"
+        arrow_title = "linked from this document"
+    end
+    note_html = "<span class=\"platform-connection-note platform-connection-note-empty\">No note on why these are connected.</span>"
+    if link.note != nil and link.note != "" then
+        source_label = NOTE_SOURCE_LABELS[link.note_source]
+        source_html = ""
+        if source_label != nil then
+            source_html = " <span class=\"platform-connection-source\">(" .. source_label .. ")</span>"
+        end
+        note_html = "<span class=\"platform-connection-note\">" .. html.html_escape(link.note) .. "</span>" .. source_html
+    end
+    edit_html = ""
+    if can_edit == true then
+        current_note = ""
+        if link.note_source == "human" and link.note != nil then
+            current_note = link.note
+        end
+        edit_html = string.format("""
+<details class="platform-connection-edit"><summary>Edit note</summary>
+<form method="POST" action="document-link-note">
+<input type="hidden" name="csrf_token" value="%s">
+<input type="hidden" name="from_document_id" value="%s">
+<input type="hidden" name="link_text" value="%s">
+<input type="hidden" name="return_to" value="%s">
+<textarea name="note" rows="2" maxlength="%d" placeholder="Why are these two documents connected? Leave empty to clear.">%s</textarea>
+<button type="submit" class="btn btn-secondary">Save note</button>
+</form></details>""", html.html_escape(csrf_token), tostring(link.from_document_id), html.html_escape(link.link_text),
+            tostring(doc_id), document.LINK_NOTE_MAX_LENGTH, html.html_escape(current_note))
+    end
+    return "<li><span class=\"platform-connection-arrow\" title=\"" .. arrow_title .. "\">" .. arrow .. "</span> " ..
+        "<a href=\"document?entity_id=" .. tostring(link.id) .. "\">" .. html.html_escape(link.title) .. "</a>" ..
+        "<div class=\"platform-connection-detail\">" .. note_html .. edit_html .. "</div></li>"
+end
+
+function html.render_document(doc, rendered_html, breadcrumbs, children, links, can_edit, csrf_token)
     breadcrumb_html = ""
     for i, crumb in ipairs(breadcrumbs) do
         if i > 1 then
@@ -5985,14 +6034,13 @@ function html.render_document(doc, rendered_html, breadcrumbs, children, backlin
         children_block = "<div class=\"platform-document-children\"><h4>Sub-documents</h4><ul>" .. children_html .. "</ul></div>"
     end
 
-    backlinks_html = ""
-    for _, link in ipairs(backlinks) do
-        backlinks_html = backlinks_html .. "<li><a class=\"btn btn-secondary\" href=\"document?entity_id=" .. tostring(link.id) .. "\">" ..
-            html.html_escape(link.title) .. "</a></li>"
+    connections_html = ""
+    for _, link in ipairs(links) do
+        connections_html = connections_html .. render_document_connection(link, doc.id, can_edit, csrf_token)
     end
-    backlinks_block = ""
-    if backlinks_html != "" then
-        backlinks_block = "<div class=\"platform-document-backlinks\"><h4>Linked from</h4><ul>" .. backlinks_html .. "</ul></div>"
+    connections_block = ""
+    if connections_html != "" then
+        connections_block = "<div class=\"platform-document-connections\"><h4>Connections</h4><ul>" .. connections_html .. "</ul></div>"
     end
 
     edit_link = ""
@@ -6022,8 +6070,19 @@ function html.render_document(doc, rendered_html, breadcrumbs, children, backlin
         .platform-document-content a { color: var(--platform-accent, #4f46e5); text-decoration: none; }
         .platform-document-content a:hover { text-decoration: underline; }
         %s
-        .platform-document-children, .platform-document-backlinks { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--platform-border, #e2e8f0); }
-        .platform-document-children h4, .platform-document-backlinks h4 { margin: 0 0 8px 0; font-size: 0.95rem; color: var(--platform-muted, #64748b); }
+        .platform-document-children, .platform-document-connections { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--platform-border, #e2e8f0); }
+        .platform-document-children h4, .platform-document-connections h4 { margin: 0 0 8px 0; font-size: 0.95rem; color: var(--platform-muted, #64748b); }
+        .platform-document-connections ul { list-style: none; padding: 0; margin: 0; }
+        .platform-document-connections li { padding: 8px 0; border-bottom: 1px solid var(--platform-border, #e2e8f0); }
+        .platform-document-connections li:last-child { border-bottom: none; }
+        .platform-document-connections a { color: var(--platform-accent, #4f46e5); text-decoration: none; font-weight: 500; }
+        .platform-document-connections a:hover { text-decoration: underline; }
+        .platform-connection-arrow { color: var(--platform-muted, #64748b); }
+        .platform-connection-detail { margin: 2px 0 0 1.4em; font-size: 0.9rem; }
+        .platform-connection-note-empty, .platform-connection-source { color: var(--platform-muted, #64748b); }
+        .platform-connection-note-empty { font-style: italic; }
+        .platform-connection-edit summary { cursor: pointer; color: var(--platform-muted, #64748b); font-size: 0.85rem; margin-top: 2px; }
+        .platform-connection-edit textarea { display: block; width: 100%%; max-width: 640px; margin: 6px 0; font: inherit; }
     </style>
     <div class="platform-container">
         <div class="platform-document-breadcrumbs">%s <a href="documents">(all documents)</a></div>
@@ -6036,7 +6095,7 @@ function html.render_document(doc, rendered_html, breadcrumbs, children, backlin
     </div>
 </div>
 """, escaped_doc_title, platform_container_css(), platform_button_css(),
-     platform_page_header_css(), html.plot_css(), breadcrumb_html, doc_header, rendered_html, children_block, backlinks_block)
+     platform_page_header_css(), html.plot_css(), breadcrumb_html, doc_header, rendered_html, children_block, connections_block)
 end
 
 -- `doc` is nil for "create a new document", or the current row for

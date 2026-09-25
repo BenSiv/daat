@@ -77,7 +77,7 @@ Nothing is ever deleted. Every entity carries a nullable "archived" timestamp; a
 
 ## Documents
 
-A built-in entity type (`src/document.lua`) -- a real parent-child tree (a document's identity is its id, not its title, so renaming or moving a document is a plain field edit, never a collision risk), Markdown content rendered via `cmark-gfm`, and `[[title]]` / `[[folder/title]]` inline links between documents that show up as backlinks on the document they point to. `/documents` lists the tree, `/document?entity_id=<id>` views one document, `/document-edit` creates or edits one (a plain textarea with a live preview). A link to a document that doesn't exist yet renders as a plain, clearly-marked placeholder rather than a broken link.
+A built-in entity type (`src/document.lua`) -- a real parent-child tree (a document's identity is its id, not its title, so renaming or moving a document is a plain field edit, never a collision risk), Markdown content rendered via `cmark-gfm`, and `[[title]]` / `[[folder/title]]` inline links between documents, listed under "Connections" on both ends -- each with a short note on why the two are connected (the author's own sentence around the link, a note someone wrote, or the agent's reading for links it created itself; see `doc/document-link-flow.md`). `/documents` lists the tree, `/document?entity_id=<id>` views one document, `/document-edit` creates or edits one (a plain textarea with a live preview). A link to a document that doesn't exist yet renders as a plain, clearly-marked placeholder rather than a broken link.
 
 ## Chat
 

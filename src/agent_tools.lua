@@ -82,6 +82,28 @@ agent_tools.AGENT_TOOLS = {
                 required = {"document_id"},
             },
         },
+        links = {
+            destructive = false,
+            description = "List every document linked to or from a document, with each link's note on why the two are connected (and who wrote the note: a person, the author's own sentence around the [[link]], or a model's reading). Use this to follow and explain connections between documents, not just find them.",
+            parameters = {
+                type = "object",
+                properties = {document_id = {type = "integer"}},
+                required = {"document_id"},
+            },
+        },
+        annotate_link = {
+            destructive = true,
+            description = "Write the note on an existing link explaining why the two documents are connected, replacing any current note. Identify the link by from_document_id and link_text exactly as document.links reports them. An empty note clears it.",
+            parameters = {
+                type = "object",
+                properties = {
+                    from_document_id = {type = "integer"},
+                    link_text = {type = "string"},
+                    note = {type = "string", description = "one or two sentences on the specific connection"},
+                },
+                required = {"from_document_id", "link_text", "note"},
+            },
+        },
     },
     -- Generic entity access -- any registered schema, not a curated
     -- subset (schema.lua/entity.lua's own validation is the safety
@@ -693,6 +715,44 @@ function agent_tools.execute_tool(db_path, author, session_id, tool_name, method
             table.insert(lines, "#" .. tostring(r.id) .. " " .. r.title)
         end
         return table.concat(lines, "\n")
+    end
+
+    if tool_name == "document" and method_name == "links" then
+        if args.document_id == nil then
+            return nil, "links requires document_id"
+        end
+        rows = document.links(db_path, tonumber(args.document_id))
+        if #rows == 0 then
+            return "No linked documents."
+        end
+        lines = {}
+        for _, r in ipairs(rows) do
+            arrow = "<-"
+            if r.direction == "out" then
+                arrow = "->"
+            end
+            note = "no note"
+            if r.note != nil and r.note != "" then
+                note = "note (" .. tostring(r.note_source) .. "): " .. r.note
+            end
+            table.insert(lines, string.format("%s #%s %s [from_document_id=%s, link_text=%q, source=%s] -- %s",
+                arrow, tostring(r.id), r.title, tostring(r.from_document_id), r.link_text, tostring(r.source), note))
+        end
+        return table.concat(lines, "\n")
+    end
+
+    if tool_name == "document" and method_name == "annotate_link" then
+        if agent_tools.check_write_capability(db_path, "document", author) == false then
+            return nil, "Forbidden: this requires your own Admin capability -- ask an admin to grant it to your account."
+        end
+        if args.from_document_id == nil or args.link_text == nil then
+            return nil, "annotate_link requires from_document_id and link_text"
+        end
+        ok, err = document.set_link_note(db_path, tonumber(args.from_document_id), args.link_text, args.note)
+        if ok == nil then
+            return nil, err
+        end
+        return "Note saved."
     end
 
     if tool_name == "document" and method_name == "breadcrumbs" then

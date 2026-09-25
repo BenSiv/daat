@@ -180,9 +180,25 @@ function ensure_knowledge_indexes(db_path)
     end
 end
 
+-- The model's one-sentence reason behind a link review's decision --
+-- for "linked" it's also written as the new link's own note
+-- (document_link.note); for "declined" this is the only place it's
+-- kept, so a NO can be audited later instead of being a bare verdict.
+function ensure_link_review_reason_column(db_path)
+    existing = db.get_columns(db_path, "knowledge_link_review")
+    have = {}
+    for _, name in ipairs(existing) do
+        have[name] = true
+    end
+    if have["reason"] == nil then
+        db.exec(db_path, "ALTER TABLE knowledge_link_review ADD COLUMN reason TEXT DEFAULT NULL;")
+    end
+end
+
 function knowledge.init_schema(db_path)
     db.exec(db_path, knowledge_schema_sql(db_path))
     ensure_knowledge_indexes(db_path)
+    ensure_link_review_reason_column(db_path)
 end
 
 -- Same treatment as document.lua's KNOWLEDGE_POOL_SQL_COLUMNS: these are
@@ -800,8 +816,9 @@ LINK_REINFORCEMENT_DELTA = 0.15
 LINK_EVALUATION_MODEL = DISTILL_MODEL
 
 LINK_EVALUATION_SYSTEM_PROMPT = """
-Two documents from the same knowledge pool have repeatedly been retrieved together in the same searches. Judge whether they describe a genuinely meaningful connection (the same topic, a real dependency, one explains or extends the other) as opposed to just coincidental overlap in unrelated searches. Reply with exactly one word: YES if they are genuinely related enough to link explicitly, or NO if not.
+Two documents from the same knowledge pool have repeatedly been retrieved together in the same searches. Judge whether they describe a genuinely meaningful connection (the same topic, a real dependency, one explains or extends the other) as opposed to just coincidental overlap in unrelated searches. Reply on a single line: YES or NO, a colon, then one sentence. For YES, the sentence states the specific connection in terms of the documents' content (what one says about, uses from, or adds to the other) -- not merely that they are related or were retrieved together. For NO, the sentence says why the overlap is coincidental. Example: "YES: Document B's media recipe is the one Document A's subculture protocol calls for."
 """
+
 
 -- Whether `co_count`/`retrieval_count_a`/`retrieval_count_b` clear both
 -- the absolute threshold and the hub-ratio guard -- pure math, kept
@@ -864,12 +881,55 @@ function knowledge.get_link_review(db_path, document_a_id, document_b_id)
     return rows[1]
 end
 
-function knowledge.record_link_review(db_path, document_a_id, document_b_id, co_count, decision)
+function knowledge.record_link_review(db_path, document_a_id, document_b_id, co_count, decision, reason)
     db.exec(db_path, string.format(
-        "%s knowledge_link_review (document_a_id, document_b_id, last_co_count, decision, evaluated_at) VALUES (%d, %d, %d, %s, %s);",
+        "%s knowledge_link_review (document_a_id, document_b_id, last_co_count, decision, reason, evaluated_at) VALUES (%d, %d, %d, %s, %s, %s);",
         db.replace_into(db_path), tonumber(document_a_id), tonumber(document_b_id),
-        tonumber(co_count), db.quote(decision), db.now_expr(db_path)
+        tonumber(co_count), db.quote(decision), db.literal(document.truncate_note(reason)), db.now_expr(db_path)
     ))
+end
+
+-- "YES: <sentence>" / "NO: <sentence>" -> "YES"/"NO", sentence. Lenient
+-- about what models actually send back -- **bold** or quoted verdicts,
+-- "-" instead of ":", no reason at all -- since a strict parse would
+-- turn a well-meant YES into a silent decline. Anything whose first
+-- word isn't YES/NO is nil, which the caller treats as a decline, the
+-- same as before reasons existed.
+function knowledge.parse_link_judgment(answer)
+    if answer == nil then
+        return nil, nil
+    end
+    text = string.gsub(answer, "^%s*(.-)%s*$", "%1")
+    text = string.gsub(text, "^[%*\"']+", "")
+    word, rest = string.match(text, "^(%a+)(.*)$")
+    if word == nil then
+        return nil, nil
+    end
+    word = string.upper(word)
+    if word != "YES" and word != "NO" then
+        return nil, nil
+    end
+    rest = string.gsub(rest, "^[%*\"']*%s*[:%-]?%s*", "")
+    rest = string.gsub(rest, "^%s*(.-)%s*$", "%1")
+    if rest == "" then
+        rest = nil
+    end
+    return word, rest
+end
+
+function knowledge.link_pair_prompt(doc_a, doc_b)
+    body_a = doc_a.content
+    if body_a == nil then
+        body_a = ""
+    end
+    body_b = doc_b.content
+    if body_b == nil then
+        body_b = ""
+    end
+    return string.format(
+        "Document A -- %s:\n%s\n\nDocument B -- %s:\n%s",
+        tostring(doc_a.title), body_a, tostring(doc_b.title), body_b
+    )
 end
 
 -- Deliberately unfiltered by archived_at -- an archived row still
@@ -980,29 +1040,16 @@ end
 
 function knowledge.evaluate_co_retrieval_pair(db_path, doc_a, doc_b, co_count)
     agent_provider = require("agent_provider")
-    body_a = doc_a.content
-    if body_a == nil then
-        body_a = ""
-    end
-    body_b = doc_b.content
-    if body_b == nil then
-        body_b = ""
-    end
-    prompt = string.format(
-        "Document A -- %s:\n%s\n\nDocument B -- %s:\n%s",
-        tostring(doc_a.title), body_a, tostring(doc_b.title), body_b
-    )
-    answer, err = agent_provider.generate(LINK_EVALUATION_MODEL, LINK_EVALUATION_SYSTEM_PROMPT, prompt)
+    answer, err = agent_provider.generate(LINK_EVALUATION_MODEL, LINK_EVALUATION_SYSTEM_PROMPT, knowledge.link_pair_prompt(doc_a, doc_b))
     if answer == nil then
         return
     end
-    answer = string.upper(string.gsub(answer, "^%s*(.-)%s*$", "%1"))
-
-    if answer == "YES" then
-        document.upsert_link(db_path, doc_a.id, doc_b.id, doc_b.title, "co-retrieval")
-        knowledge.record_link_review(db_path, doc_a.id, doc_b.id, co_count, "linked")
+    verdict, reason = knowledge.parse_link_judgment(answer)
+    if verdict == "YES" then
+        document.upsert_link(db_path, doc_a.id, doc_b.id, doc_b.title, "co-retrieval", reason, "model")
+        knowledge.record_link_review(db_path, doc_a.id, doc_b.id, co_count, "linked", reason)
     else
-        knowledge.record_link_review(db_path, doc_a.id, doc_b.id, co_count, "declined")
+        knowledge.record_link_review(db_path, doc_a.id, doc_b.id, co_count, "declined", reason)
     end
 end
 

@@ -53,7 +53,7 @@ end
 -- document_pool.lua's own new_test_db.
 function new_test_db()
     db_path = os.tmpname()
-    db.exec(db_path, "CREATE TABLE document_link (from_document_id INTEGER NOT NULL, to_document_id INTEGER, link_text VARCHAR(255) NOT NULL, source VARCHAR(32) NOT NULL DEFAULT 'authored', raw_strength REAL NOT NULL DEFAULT 1.0, archived_at TEXT DEFAULT NULL, PRIMARY KEY (from_document_id, link_text));")
+    db.exec(db_path, "CREATE TABLE document_link (from_document_id INTEGER NOT NULL, to_document_id INTEGER, link_text VARCHAR(255) NOT NULL, source VARCHAR(32) NOT NULL DEFAULT 'authored', raw_strength REAL NOT NULL DEFAULT 1.0, archived_at TEXT DEFAULT NULL, note TEXT DEFAULT NULL, note_source VARCHAR(32) DEFAULT NULL, created_at TEXT DEFAULT NULL, PRIMARY KEY (from_document_id, link_text));")
     -- Minimal document table -- only sync_links' own resolve_link
     -- reads this, to turn a [[title]] into a real to_document_id.
     db.exec(db_path, "CREATE TABLE document (id INTEGER PRIMARY KEY, title TEXT, parent_id INTEGER, archived_at TEXT DEFAULT NULL);")
@@ -76,6 +76,127 @@ function link_row(db_path, from_id, link_text)
         return nil
     end
     return rows[1]
+end
+
+function link_note(db_path, from_id, link_text)
+    rows = db.query(db_path, string.format(
+        "SELECT note, note_source, created_at FROM document_link WHERE from_document_id = %d AND link_text = %s;",
+        from_id, db.quote(link_text)
+    ))
+    return rows[1]
+end
+
+function test_link_context_quotes_the_sentence_around_the_link()
+    print("Testing link_context returns just the sentence containing the link, links flattened")
+    content = "# Protocol\n\nThaw the vial first. Subculture onto [[MS Medium]] every 14 days, per [[SOP 12]]. Record the date.\n"
+    note = document.link_context(content, "MS Medium")
+    check(note == "Subculture onto MS Medium every 14 days, per SOP 12.", "got " .. tostring(note))
+end
+
+function test_link_context_strips_list_markup_and_keeps_dotted_tokens_together()
+    print("Testing link_context strips a bullet and doesn't split on 'v1.2'")
+    note = document.link_context("- Uses [[Buffer v1.2]] from the v1.2 batch, not v1.1\n", "Buffer v1.2")
+    check(note == "Uses Buffer v1.2 from the v1.2 batch, not v1.1", "got " .. tostring(note))
+end
+
+function test_link_context_falls_back_to_the_nearest_heading_for_a_bare_link()
+    print("Testing link_context falls back to the heading above a bare list entry")
+    content = "# Notes\n\n## Related meetings\n\n- [[Weekly Kickoff 2025-02-23]]\n- [[R&D Meeting 2025-05-08]]\n"
+    note = document.link_context(content, "R&D Meeting 2025-05-08")
+    check(note == "Listed under \"Related meetings\"", "got " .. tostring(note))
+end
+
+function test_link_context_is_nil_for_a_bare_link_with_no_heading()
+    print("Testing link_context returns nil when neither a sentence nor a heading says anything")
+    check(document.link_context("[[Only A Link]]", "Only A Link") == nil, "expected nil")
+    check(document.link_context("no link here", "Missing") == nil, "expected nil for a link not in content")
+end
+
+function test_truncate_note_trims_blanks_and_never_splits_a_utf8_character()
+    print("Testing truncate_note: blank -> nil, long -> capped at a UTF-8 boundary")
+    check(document.truncate_note("   ") == nil, "blank should be nil")
+    check(document.truncate_note("  hi  ") == "hi", "should trim")
+    long = string.rep("a", document.LINK_NOTE_MAX_LENGTH - 1) .. "\xC3\xA9\xC3\xA9"
+    cut = document.truncate_note(long)
+    check(string.sub(cut, -3) == "...", "should end with ...")
+    body = string.sub(cut, 1, #cut - 3)
+    check(#body == document.LINK_NOTE_MAX_LENGTH - 1, "should back off before the split two-byte char, got length " .. tostring(#body))
+end
+
+function test_note_replaces_respects_priority()
+    print("Testing note_replaces: human > context > model, equal rank replaces")
+    check(document.note_replaces(nil, "model") == true, "empty accepts anything")
+    check(document.note_replaces("model", "context") == true, "context replaces model")
+    check(document.note_replaces("context", "context") == true, "equal rank refreshes")
+    check(document.note_replaces("context", "model") == false, "model must not replace context")
+    check(document.note_replaces("human", "context") == false, "nothing automatic replaces human")
+end
+
+function test_upsert_link_writes_note_and_created_at_on_insert()
+    print("Testing upsert_link records note, note_source and created_at for a new link")
+    db_path = new_test_db()
+    document.upsert_link(db_path, 1, 2, "Doc Two", "co-retrieval", "B's medium is what A's protocol uses.", "model")
+    row = link_note(db_path, 1, "Doc Two")
+    check(row.note == "B's medium is what A's protocol uses.", "note: " .. tostring(row.note))
+    check(row.note_source == "model", "note_source: " .. tostring(row.note_source))
+    check(is_sql_null(row.created_at) == false, "created_at should be set")
+    document.upsert_link(db_path, 1, 3, "Doc Three", "authored")
+    row = link_note(db_path, 1, "Doc Three")
+    check(is_sql_null(row.note) and is_sql_null(row.note_source), "no note given -> note and note_source stay NULL")
+    os.remove(db_path)
+end
+
+function test_sync_links_keeps_a_human_note_across_saves()
+    print("Testing a human note survives later saves, and a context note refreshes when the sentence changes")
+    db_path = new_test_db()
+    db.exec(db_path, "INSERT INTO document (id, title) VALUES (2, 'Doc Two'), (3, 'Doc Three');")
+    document.sync_links(db_path, 1, "First we use [[Doc Two]]. Then [[Doc Three]].")
+    check(link_note(db_path, 1, "Doc Two").note == "First we use Doc Two.", "initial context note")
+    check(link_note(db_path, 1, "Doc Two").note_source == "context", "context note_source")
+    ok = document.set_link_note(db_path, 1, "Doc Two", "Doc Two is the upstream protocol.")
+    check(ok == true, "set_link_note should succeed")
+    document.sync_links(db_path, 1, "Now we rely on [[Doc Two]] heavily. Then [[Doc Three]] afterwards.")
+    check(link_note(db_path, 1, "Doc Two").note == "Doc Two is the upstream protocol.", "human note must survive a save")
+    check(link_note(db_path, 1, "Doc Three").note == "Then Doc Three afterwards.", "context note should refresh: " .. tostring(link_note(db_path, 1, "Doc Three").note))
+    os.remove(db_path)
+end
+
+function test_context_note_replaces_an_earlier_model_note()
+    print("Testing an author's context note replaces a model note on the same link row")
+    db_path = new_test_db()
+    db.exec(db_path, "INSERT INTO document (id, title) VALUES (2, 'Doc Two');")
+    document.upsert_link(db_path, 1, 2, "Doc Two", "co-retrieval", "Model guess.", "model")
+    document.sync_links(db_path, 1, "Calibrated against [[Doc Two]].")
+    row = link_note(db_path, 1, "Doc Two")
+    check(row.note == "Calibrated against Doc Two.", "note: " .. tostring(row.note))
+    check(row.note_source == "context", "note_source: " .. tostring(row.note_source))
+    os.remove(db_path)
+end
+
+function test_set_link_note_clears_and_rejects_unknown_links()
+    print("Testing set_link_note: blank clears to NULL, unknown link is an error")
+    db_path = new_test_db()
+    document.upsert_link(db_path, 1, 2, "Doc Two", "authored", "ctx", "context")
+    document.set_link_note(db_path, 1, "Doc Two", "   ")
+    row = link_note(db_path, 1, "Doc Two")
+    check(is_sql_null(row.note) and is_sql_null(row.note_source), "blank should clear note and note_source")
+    ok, err = document.set_link_note(db_path, 1, "Nope", "x")
+    check(ok == nil and err == "no such link", "unknown link should error, got " .. tostring(err))
+    os.remove(db_path)
+end
+
+function test_parse_link_judgment_is_lenient_about_format()
+    print("Testing parse_link_judgment across the formats models actually return")
+    v, r = knowledge.parse_link_judgment("YES: B's recipe is A's medium.")
+    check(v == "YES" and r == "B's recipe is A's medium.", "plain: " .. tostring(v) .. " / " .. tostring(r))
+    v, r = knowledge.parse_link_judgment("  **YES** - both calibrate probe 3\n")
+    check(v == "YES" and r == "both calibrate probe 3", "bold+dash: " .. tostring(v) .. " / " .. tostring(r))
+    v, r = knowledge.parse_link_judgment("no")
+    check(v == "NO" and r == nil, "bare lowercase no: " .. tostring(v) .. " / " .. tostring(r))
+    v, r = knowledge.parse_link_judgment("Maybe, hard to say")
+    check(v == nil, "non-verdict should be nil")
+    v, r = knowledge.parse_link_judgment("YESTERDAY's run")
+    check(v == nil, "a word merely starting with YES is not a verdict")
 end
 
 function test_reinforce_adds_exactly_the_configured_delta()
@@ -223,6 +344,17 @@ function test_sync_links_leaves_a_co_retrieval_backed_row_active_when_authored_t
 end
 
 function test_sync_links_reintroduces_an_archived_link_at_its_old_strength()
+test_link_context_quotes_the_sentence_around_the_link()
+test_link_context_strips_list_markup_and_keeps_dotted_tokens_together()
+test_link_context_falls_back_to_the_nearest_heading_for_a_bare_link()
+test_link_context_is_nil_for_a_bare_link_with_no_heading()
+test_truncate_note_trims_blanks_and_never_splits_a_utf8_character()
+test_note_replaces_respects_priority()
+test_upsert_link_writes_note_and_created_at_on_insert()
+test_sync_links_keeps_a_human_note_across_saves()
+test_context_note_replaces_an_earlier_model_note()
+test_set_link_note_clears_and_rejects_unknown_links()
+test_parse_link_judgment_is_lenient_about_format()
     print("Testing sync_links unarchives and preserves raw_strength when the author retypes a deleted [[link]]")
     db_path = new_test_db()
     db.exec(db_path, "INSERT INTO document (id, title) VALUES (2, 'Doc Two');")
@@ -249,6 +381,17 @@ test_upsert_link_heals_a_dangling_row()
 test_sync_links_archives_instead_of_deleting_when_removed_from_text()
 test_sync_links_leaves_a_co_retrieval_backed_row_active_when_authored_text_is_removed()
 test_sync_links_reintroduces_an_archived_link_at_its_old_strength()
+test_link_context_quotes_the_sentence_around_the_link()
+test_link_context_strips_list_markup_and_keeps_dotted_tokens_together()
+test_link_context_falls_back_to_the_nearest_heading_for_a_bare_link()
+test_link_context_is_nil_for_a_bare_link_with_no_heading()
+test_truncate_note_trims_blanks_and_never_splits_a_utf8_character()
+test_note_replaces_respects_priority()
+test_upsert_link_writes_note_and_created_at_on_insert()
+test_sync_links_keeps_a_human_note_across_saves()
+test_context_note_replaces_an_earlier_model_note()
+test_set_link_note_clears_and_rejects_unknown_links()
+test_parse_link_judgment_is_lenient_about_format()
 
 if FAILURES > 0 then
     print(FAILURES .. " test(s) failed")

@@ -154,8 +154,58 @@ raw_document_preview() {
     save_document "csrf_token=${CSRF}&title=Guides&parent_id=&content=Back+to+%5B%5BHome%5D%5D." >/dev/null
 
     run get_route "/document" "entity_id=1"
-    [[ "$output" =~ "Linked from" ]]
+    [[ "$output" =~ "Connections" ]]
     [[ "$output" =~ 'href="document?entity_id=2">Guides' ]]
+}
+
+link_note_post() {
+    local body="$1"
+    printf '%s' "$body" | \
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/document-link-note" QUERY_STRING="" \
+        HTTP_COOKIE="$COOKIE" "$BIN"
+}
+
+@test "a link's note comes from the author's sentence and shows on both documents' Connections" {
+    save_document "csrf_token=${CSRF}&title=MS+Medium&parent_id=&content=" >/dev/null
+    save_document "csrf_token=${CSRF}&title=Subculture&parent_id=&content=Thaw+first.+Plate+onto+%5B%5BMS+Medium%5D%5D+every+14+days.+Done." >/dev/null
+
+    run get_route "/document" "entity_id=1"
+    [[ "$output" =~ "Plate onto MS Medium every 14 days." ]]
+    [[ "$output" =~ "(from the text)" ]]
+    [[ ! "$output" =~ "Thaw first" ]]
+
+    run get_route "/document" "entity_id=2"
+    [[ "$output" =~ 'href="document?entity_id=1">MS Medium' ]]
+    [[ "$output" =~ "Plate onto MS Medium every 14 days." ]]
+}
+
+@test "document-link-note saves a person's note that later saves don't overwrite, and a blank note clears it" {
+    save_document "csrf_token=${CSRF}&title=MS+Medium&parent_id=&content=" >/dev/null
+    save_document "csrf_token=${CSRF}&title=Subculture&parent_id=&content=Plate+onto+%5B%5BMS+Medium%5D%5D." >/dev/null
+
+    run link_note_post "csrf_token=${CSRF}&from_document_id=2&link_text=MS+Medium&return_to=1&note=The+medium+this+protocol+plates+onto."
+    [[ "$output" =~ "302 Found" ]]
+    [[ "$output" =~ "Location: document?entity_id=1" ]]
+
+    save_document "csrf_token=${CSRF}&entity_id=2&title=Subculture&parent_id=&content=Now+plate+onto+%5B%5BMS+Medium%5D%5D+weekly." >/dev/null
+    run get_route "/document" "entity_id=1"
+    [[ "$output" =~ "The medium this protocol plates onto." ]]
+    [[ "$output" =~ "(note)" ]]
+
+    link_note_post "csrf_token=${CSRF}&from_document_id=2&link_text=MS+Medium&return_to=1&note=" >/dev/null
+    run get_route "/document" "entity_id=1"
+    [[ ! "$output" =~ "The medium this protocol plates onto." ]]
+}
+
+@test "document-link-note rejects a bad CSRF token and an unknown link" {
+    save_document "csrf_token=${CSRF}&title=MS+Medium&parent_id=&content=" >/dev/null
+    save_document "csrf_token=${CSRF}&title=Subculture&parent_id=&content=Plate+onto+%5B%5BMS+Medium%5D%5D." >/dev/null
+
+    run link_note_post "csrf_token=wrong&from_document_id=2&link_text=MS+Medium&note=x"
+    [[ "$output" =~ "403 Forbidden" ]]
+
+    run link_note_post "csrf_token=${CSRF}&from_document_id=2&link_text=Nope&note=x"
+    [[ "$output" =~ "404 Not Found" ]]
 }
 
 setup_lookup_view_fixture() {
