@@ -94,17 +94,29 @@ function create_document_link_table(db_path, table_name)
 end
 
 -- Guarded execs, not CREATE INDEX IF NOT EXISTS -- real MySQL has no
--- such syntax (see knowledge.lua's ensure_knowledge_indexes).
-function ensure_document_link_indexes(db_path)
+-- such syntax (see knowledge.lua's ensure_knowledge_indexes). Every
+-- request runs this, so concurrent first requests can all see an index
+-- missing and race to create it -- found rehearsing the layout
+-- migration against real MySQL: the losers failed with "Duplicate key
+-- name". A failed CREATE is only an error if the index still doesn't
+-- exist afterwards. The migration also creates them itself, under its
+-- lock, before the table is ever visible under its real name.
+function ensure_document_link_indexes(db_path, table_name)
+    if table_name == nil then
+        table_name = "document_link"
+    end
     indexes = {
         {name = "document_link_from_hash_idx",
-         sql = "CREATE UNIQUE INDEX document_link_from_hash_idx ON document_link(from_document_id, link_hash);"},
+         sql = "CREATE UNIQUE INDEX document_link_from_hash_idx ON %s(from_document_id, link_hash);"},
         {name = "document_link_to_idx",
-         sql = "CREATE INDEX document_link_to_idx ON document_link(to_document_id);"},
+         sql = "CREATE INDEX document_link_to_idx ON %s(to_document_id);"},
     }
     for _, idx in ipairs(indexes) do
-        if db.index_exists(db_path, "document_link", idx.name) == false then
-            db.exec(db_path, idx.sql)
+        if db.index_exists(db_path, table_name, idx.name) == false then
+            ok, err = pcall(db.exec, db_path, string.format(idx.sql, table_name))
+            if ok == false and db.index_exists(db_path, table_name, idx.name) == false then
+                error(err)
+            end
         end
     end
 end
@@ -224,6 +236,11 @@ function copy_document_links_to_new_layout(db_path)
             values = {}
         end
     end
+    -- Indexes before the swap, so the table is complete the moment it's
+    -- visible as document_link. Index names carry over a rename; the
+    -- legacy table never had these names, so SQLite's database-wide
+    -- index namespace doesn't collide either.
+    ensure_document_link_indexes(db_path, "document_link_new")
     db.exec(db_path, "ALTER TABLE document_link RENAME TO document_link_legacy;")
     db.exec(db_path, "ALTER TABLE document_link_new RENAME TO document_link;")
 end
