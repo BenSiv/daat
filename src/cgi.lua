@@ -1165,7 +1165,7 @@ function cgi.handle_request()
         breadcrumbs = document.breadcrumbs(db_path, entity_id)
         children = document.children(db_path, entity_id)
         links = document.links(db_path, entity_id)
-        body = html.render_document(doc, rendered_html, breadcrumbs, children, links, true, default_value(cookies.csrf, ""))
+        body = html.render_document(doc, rendered_html, breadcrumbs, children, links, true)
         page_context = {page_type = "document", entity_type = "document", entity_id = doc.id, title = doc.title}
         return print_response("200 OK", "text/html",
             html.page_shell(doc.title, "documents", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author, page_context))
@@ -1201,40 +1201,25 @@ function cgi.handle_request()
             end
             prefill = {title = default_path, content = template.render(template_def)}
         end
+        -- "Explain connection" on a document's Connections list: a new
+        -- document linking both, in the same shape the agent writes one
+        -- (document.connection_draft) -- one way to explain a connection,
+        -- whoever does it.
+        if doc == nil and tonumber(params.connect_a) != nil and tonumber(params.connect_b) != nil then
+            prefill = document.connection_draft(db_path, tonumber(params.connect_a), tonumber(params.connect_b), nil)
+        end
 
         parent_id = nil
         if doc != nil then
             parent_id = doc.parent_id
+        elseif prefill != nil and prefill.parent_id != nil then
+            parent_id = prefill.parent_id
         end
         parent_options_html = html.document_parent_options(document.all_active(db_path), parent_id, entity_id)
         body = html.render_document_edit(doc, parent_options_html, default_value(cookies.csrf, ""), nil, nonce, prefill)
         page_context = {page_type = "document_edit", entity_type = "document", entity_id = entity_id, title = "Edit document"}
         return print_response("200 OK", "text/html",
             html.page_shell("Edit document", "documents", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author, page_context))
-    end
-
-    -- A person's note on why two documents are connected (document.
-    -- set_link_note) -- posted from the document view's "Connections"
-    -- list. Same auth as /document-save: anyone who can edit a
-    -- document can annotate its links.
-    if path_info == "/document-link-note" and method == "POST" then
-        form = parse_query(io.read("*all"))
-        if not require_csrf(cookies, form.csrf_token) then
-            return print_response("403 Forbidden", "text/html", "<h3>Forbidden: CSRF check failed</h3>")
-        end
-        from_document_id = tonumber(form.from_document_id)
-        return_to = tonumber(form.return_to)
-        if from_document_id == nil or form.link_text == nil or form.link_text == "" then
-            return print_response("400 Bad Request", "text/html", "<h3>Error: Missing 'from_document_id' or 'link_text'</h3>")
-        end
-        ok, err = document.set_link_note(db_path, from_document_id, form.link_text, form.note)
-        if ok == nil then
-            return print_response("404 Not Found", "text/html", "<h3>Error: " .. html.html_escape(tostring(err)) .. "</h3>")
-        end
-        if return_to == nil then
-            return_to = from_document_id
-        end
-        return print_response("302 Found", "text/plain", "", {"Location: document?entity_id=" .. tostring(return_to)})
     end
 
     if path_info == "/document-save" and method == "POST" then

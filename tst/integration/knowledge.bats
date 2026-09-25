@@ -25,6 +25,11 @@ start_chat() {
     printf 'session_id=%s' "$sid"
 }
 
+get_route() {
+    GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="$1" QUERY_STRING="$2" \
+        HTTP_COOKIE="$COOKIE" "$BIN"
+}
+
 search_for_bioreactor() {
     resp=$(start_chat)
     session_id=$(extract_query_param "$resp" "session_id")
@@ -500,7 +505,7 @@ search_for_bioreactor_extra() {
     [[ "$output" =~ 'href="admin-users"' ]]
 }
 
-@test "two documents repeatedly co-retrieved get an agent-evaluated explicit link once the agent says YES (task #109)" {
+@test "two documents repeatedly co-retrieved get a connection document once the agent says YES -- ordinary content linking both (task #109)" {
     "$BIN" entity create document title="Bioreactor Cleaning" content="cleaning steps for the bioreactor procedure"
     "$BIN" entity create document title="Bioreactor Startup" content="startup steps for the bioreactor procedure"
 
@@ -510,12 +515,28 @@ search_for_bioreactor_extra() {
     search_for_bioreactor_extra ""
     # The 3rd shared retrieval crosses the threshold -- one extra
     # generate() call fires for the evaluation itself.
-    search_for_bioreactor_extra "YES"
+    search_for_bioreactor_extra "YES: both are steps of the same bioreactor procedure."
 
-    run sqlite3 .store/store.db "SELECT source FROM document_link WHERE from_document_id = 1 AND to_document_id = 2;"
-    [[ "$output" == "co-retrieval" ]]
-    run sqlite3 .store/store.db "SELECT decision, last_co_count FROM knowledge_link_review WHERE document_a_id = 1 AND document_b_id = 2;"
-    [[ "$output" == "linked|3" ]]
+    # No direct row between the pair -- the connection is a document.
+    run sqlite3 .store/store.db "SELECT COUNT(*) FROM document_link WHERE (from_document_id = 1 AND to_document_id = 2) OR (from_document_id = 2 AND to_document_id = 1);"
+    [ "$output" -eq 0 ]
+
+    run sqlite3 .store/store.db "SELECT d.id FROM document d JOIN document pool ON pool.id = d.parent_id WHERE pool.title = 'Knowledge Pool' AND d.title = 'Bioreactor Cleaning ↔ Bioreactor Startup';"
+    connection_id="$output"
+    [ -n "$connection_id" ]
+    run sqlite3 .store/store.db "SELECT content, created_by FROM document WHERE id = ${connection_id};"
+    [[ "$output" == "[[Bioreactor Cleaning]] and [[Bioreactor Startup]]: both are steps of the same bioreactor procedure.|alice" ]]
+
+    # Its links come from its content, like any document's.
+    run sqlite3 .store/store.db "SELECT to_document_id FROM document_link WHERE from_document_id = ${connection_id} ORDER BY to_document_id;"
+    [ "$output" = $'1\n2' ]
+
+    run sqlite3 .store/store.db "SELECT decision, last_co_count, reason FROM knowledge_link_review WHERE document_a_id = 1 AND document_b_id = 2;"
+    [[ "$output" == "linked|3|both are steps of the same bioreactor procedure." ]]
+
+    # Each side's Connections list shows the connection document's reason.
+    run get_route "/document" "entity_id=1"
+    [[ "$output" =~ "Bioreactor Cleaning and Bioreactor Startup: both are steps of the same bioreactor procedure." ]]
 }
 
 @test "a co-retrieved pair the agent declines is remembered, not re-asked on the very next shared retrieval (task #109)" {
@@ -543,19 +564,22 @@ search_for_bioreactor_extra() {
     [ "$output" -eq 3 ]
 }
 
-@test "an auto-created co-retrieval link survives re-saving either document's content (task #109)" {
+@test "a pair connected through a connection document isn't re-judged, and re-saving either document leaves the connection intact (task #109)" {
     "$BIN" entity create document title="Bioreactor Cleaning" content="cleaning steps for the bioreactor procedure"
     "$BIN" entity create document title="Bioreactor Startup" content="startup steps for the bioreactor procedure"
 
     search_for_bioreactor_extra ""
     search_for_bioreactor_extra ""
-    search_for_bioreactor_extra "YES"
-
-    run sqlite3 .store/store.db "SELECT COUNT(*) FROM document_link WHERE from_document_id = 1 AND to_document_id = 2 AND source = 'co-retrieval';"
-    [ "$output" -eq 1 ]
+    search_for_bioreactor_extra "YES: both are steps of the same bioreactor procedure."
 
     "$BIN" entity update document 1 content="updated cleaning steps for the bioreactor procedure"
 
-    run sqlite3 .store/store.db "SELECT COUNT(*) FROM document_link WHERE from_document_id = 1 AND to_document_id = 2 AND source = 'co-retrieval';"
+    run sqlite3 .store/store.db "SELECT COUNT(*) FROM document_link WHERE to_document_id IN (1, 2) AND (archived_at IS NULL OR archived_at = '');"
+    [ "$output" -eq 2 ]
+
+    # A 4th shared retrieval: already connected, so no evaluation call --
+    # no extra scripted response, and still exactly one connection document.
+    search_for_bioreactor_extra ""
+    run sqlite3 .store/store.db "SELECT COUNT(*) FROM document WHERE title = 'Bioreactor Cleaning ↔ Bioreactor Startup';"
     [ "$output" -eq 1 ]
 }

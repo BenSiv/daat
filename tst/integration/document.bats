@@ -158,54 +158,72 @@ raw_document_preview() {
     [[ "$output" =~ 'href="document?entity_id=2">Guides' ]]
 }
 
-link_note_post() {
-    local body="$1"
-    printf '%s' "$body" | \
-        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/document-link-note" QUERY_STRING="" \
-        HTTP_COOKIE="$COOKIE" "$BIN"
-}
-
-@test "a link's note comes from the author's sentence and shows on both documents' Connections" {
+@test "a link's context is the author's own sentence, shown on both documents' Connections" {
     save_document "csrf_token=${CSRF}&title=MS+Medium&parent_id=&content=" >/dev/null
     save_document "csrf_token=${CSRF}&title=Subculture&parent_id=&content=Thaw+first.+Plate+onto+%5B%5BMS+Medium%5D%5D+every+14+days.+Done." >/dev/null
 
     run get_route "/document" "entity_id=1"
     [[ "$output" =~ "Plate onto MS Medium every 14 days." ]]
-    [[ "$output" =~ "(from the text)" ]]
     [[ ! "$output" =~ "Thaw first" ]]
 
     run get_route "/document" "entity_id=2"
     [[ "$output" =~ 'href="document?entity_id=1">MS Medium' ]]
     [[ "$output" =~ "Plate onto MS Medium every 14 days." ]]
+
+    # Nothing about why is stored on the link itself -- it's read from content.
+    run bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db 'PRAGMA table_info(document_link);'"
+    [[ ! "$output" =~ "note" ]]
 }
 
-@test "document-link-note saves a person's note that later saves don't overwrite, and a blank note clears it" {
+@test "Explain connection opens a new document linking both, in the same shape the agent writes" {
     save_document "csrf_token=${CSRF}&title=MS+Medium&parent_id=&content=" >/dev/null
     save_document "csrf_token=${CSRF}&title=Subculture&parent_id=&content=Plate+onto+%5B%5BMS+Medium%5D%5D." >/dev/null
 
-    run link_note_post "csrf_token=${CSRF}&from_document_id=2&link_text=MS+Medium&return_to=1&note=The+medium+this+protocol+plates+onto."
-    [[ "$output" =~ "302 Found" ]]
-    [[ "$output" =~ "Location: document?entity_id=1" ]]
-
-    save_document "csrf_token=${CSRF}&entity_id=2&title=Subculture&parent_id=&content=Now+plate+onto+%5B%5BMS+Medium%5D%5D+weekly." >/dev/null
     run get_route "/document" "entity_id=1"
-    [[ "$output" =~ "The medium this protocol plates onto." ]]
-    [[ "$output" =~ "(note)" ]]
+    [[ "$output" =~ 'href="document-edit?connect_a=1&amp;connect_b=2">Explain connection' ]]
 
-    link_note_post "csrf_token=${CSRF}&from_document_id=2&link_text=MS+Medium&return_to=1&note=" >/dev/null
-    run get_route "/document" "entity_id=1"
-    [[ ! "$output" =~ "The medium this protocol plates onto." ]]
+    run get_route "/document-edit" "connect_a=1&connect_b=2"
+    [[ "$output" =~ "MS Medium ↔ Subculture" ]]
+    [[ "$output" =~ "[[MS Medium]] and [[Subculture]]: " ]]
+    # Filed under the Knowledge Pool folder, like the agent's.
+    run bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db \"SELECT COUNT(*) FROM document WHERE title = 'Knowledge Pool' AND parent_id IS NULL;\""
+    [ "$output" = "1" ]
 }
 
-@test "document-link-note rejects a bad CSRF token and an unknown link" {
-    save_document "csrf_token=${CSRF}&title=MS+Medium&parent_id=&content=" >/dev/null
-    save_document "csrf_token=${CSRF}&title=Subculture&parent_id=&content=Plate+onto+%5B%5BMS+Medium%5D%5D." >/dev/null
+@test "the layout migration copies in batches: every one of 450 legacy rows arrives" {
+    save_document "csrf_token=${CSRF}&title=Home&parent_id=&content=" >/dev/null
+    bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db \"DROP TABLE document_link; CREATE TABLE document_link (from_document_id INTEGER NOT NULL, to_document_id INTEGER, link_text VARCHAR(255) NOT NULL, source VARCHAR(32) NOT NULL DEFAULT 'authored', raw_strength REAL NOT NULL DEFAULT 1.0, archived_at TEXT DEFAULT NULL, PRIMARY KEY (from_document_id, link_text)); WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 450) INSERT INTO document_link (from_document_id, to_document_id, link_text) SELECT 1, NULL, 'Page ' || i FROM n;\""
 
-    run link_note_post "csrf_token=wrong&from_document_id=2&link_text=MS+Medium&note=x"
-    [[ "$output" =~ "403 Forbidden" ]]
+    run get_route "/document" "entity_id=1"
+    [[ "$output" =~ "200 OK" ]]
+    run bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db 'SELECT COUNT(*), COUNT(DISTINCT link_hash) FROM document_link;'"
+    [ "$output" = "450|450" ]
+}
 
-    run link_note_post "csrf_token=${CSRF}&from_document_id=2&link_text=Nope&note=x"
-    [[ "$output" =~ "404 Not Found" ]]
+@test "an interrupted layout swap (first rename done, second not) is finished, not replaced with an empty table" {
+    save_document "csrf_token=${CSRF}&title=Home&parent_id=&content=" >/dev/null
+    save_document "csrf_token=${CSRF}&title=Guide&parent_id=&content=Back+to+%5B%5BHome%5D%5D." >/dev/null
+    bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db 'ALTER TABLE document_link RENAME TO document_link_new;'"
+
+    run get_route "/document" "entity_id=1"
+    [[ "$output" =~ "200 OK" ]]
+    run bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db 'SELECT from_document_id, to_document_id FROM document_link;'"
+    [ "$output" = "2|1" ]
+}
+
+@test "a store with the old document_link layout is migrated on the next request: content links kept, co-retrieval-only rows set aside" {
+    save_document "csrf_token=${CSRF}&title=Home&parent_id=&content=" >/dev/null
+    save_document "csrf_token=${CSRF}&title=Guide&parent_id=&content=Back+to+%5B%5BHome%5D%5D." >/dev/null
+    # Rebuild document_link the way every store before this layout had it.
+    bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db \"DROP TABLE document_link; CREATE TABLE document_link (from_document_id INTEGER NOT NULL, to_document_id INTEGER, link_text VARCHAR(255) NOT NULL, source VARCHAR(32) NOT NULL DEFAULT 'authored', raw_strength REAL NOT NULL DEFAULT 1.0, archived_at TEXT DEFAULT NULL, note TEXT, note_source VARCHAR(32), created_at TEXT, PRIMARY KEY (from_document_id, link_text)); INSERT INTO document_link (from_document_id, to_document_id, link_text, source, raw_strength) VALUES (2, 1, 'Home', 'authored,co-retrieval', 1.3), (1, 2, 'Guide', 'co-retrieval', 2.0);\""
+
+    run get_route "/document" "entity_id=1"
+    [[ "$output" =~ "200 OK" ]]
+
+    run bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db 'SELECT from_document_id, to_document_id, link_text, raw_strength FROM document_link;'"
+    [ "$output" = "2|1|Home|1.3" ]
+    run bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db 'SELECT from_document_id, to_document_id, source FROM document_link_legacy WHERE source = \"co-retrieval\";'"
+    [ "$output" = "1|2|co-retrieval" ]
 }
 
 setup_lookup_view_fixture() {
@@ -465,8 +483,8 @@ EOF
     run bash -c "printf '%s' '$payload' | '$BIN' entity create-json document"
     [[ "$output" =~ '"created_ids":[3]' ]]
 
-    run bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db 'SELECT from_document_id, to_document_id, note_source FROM document_link;'"
-    [ "$output" = "3|1|context" ]
+    run bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db 'SELECT from_document_id, to_document_id FROM document_link;'"
+    [ "$output" = "3|1" ]
     run bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db 'SELECT COUNT(*) FROM document_embedding WHERE document_id = 3;'"
     [ "$output" = "1" ]
 

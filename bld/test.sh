@@ -28,7 +28,7 @@ LUAM_DIR="$LUAM_DIR" ./bld/build.sh
 echo
 echo "Running Luam unit tests (tst/unit/)"
 export LUA_PATH="./src/?.lua;${LUAM_DIR}/lib/?.lua;${LUAM_DIR}/lib/?/init.lua;;"
-export LUA_CPATH="${LUAM_DIR}/bin/?.so;${LUAM_DIR}/lib/lfs/?.so;;"
+export LUA_CPATH="${LUAM_DIR}/bin/?.so;${LUAM_DIR}/lib/lfs/?.so;${LUAM_DIR}/lib/hmac/?.so;;"
 for f in tst/unit/*.lua; do
     echo "--- $f ---"
     "$LUAM_DIR/bin/luam" "$f"

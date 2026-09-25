@@ -84,24 +84,11 @@ agent_tools.AGENT_TOOLS = {
         },
         links = {
             destructive = false,
-            description = "List every document linked to or from a document, with each link's note on why the two are connected (and who wrote the note: a person, the author's own sentence around the [[link]], or a model's reading). Use this to follow and explain connections between documents, not just find them.",
+            description = "List every document linked to or from a document, each with the sentence around the [[link]] saying why they're connected (from whichever document's text holds the link). A connection is explained in content: to explain one, write the reason next to the link, or create a document that links both and says why.",
             parameters = {
                 type = "object",
                 properties = {document_id = {type = "integer"}},
                 required = {"document_id"},
-            },
-        },
-        annotate_link = {
-            destructive = true,
-            description = "Write the note on an existing link explaining why the two documents are connected, replacing any current note. Identify the link by from_document_id and link_text exactly as document.links reports them. An empty note clears it.",
-            parameters = {
-                type = "object",
-                properties = {
-                    from_document_id = {type = "integer"},
-                    link_text = {type = "string"},
-                    note = {type = "string", description = "one or two sentences on the specific connection"},
-                },
-                required = {"from_document_id", "link_text", "note"},
             },
         },
     },
@@ -731,28 +718,13 @@ function agent_tools.execute_tool(db_path, author, session_id, tool_name, method
             if r.direction == "out" then
                 arrow = "->"
             end
-            note = "no note"
-            if r.note != nil and r.note != "" then
-                note = "note (" .. tostring(r.note_source) .. "): " .. r.note
+            why = "(nothing in the text says why)"
+            if r.context != nil and r.context != "" then
+                why = r.context
             end
-            table.insert(lines, string.format("%s #%s %s [from_document_id=%s, link_text=%q, source=%s] -- %s",
-                arrow, tostring(r.id), r.title, tostring(r.from_document_id), r.link_text, tostring(r.source), note))
+            table.insert(lines, string.format("%s #%s %s -- %s", arrow, tostring(r.id), r.title, why))
         end
         return table.concat(lines, "\n")
-    end
-
-    if tool_name == "document" and method_name == "annotate_link" then
-        if agent_tools.check_write_capability(db_path, "document", author) == false then
-            return nil, "Forbidden: this requires your own Admin capability -- ask an admin to grant it to your account."
-        end
-        if args.from_document_id == nil or args.link_text == nil then
-            return nil, "annotate_link requires from_document_id and link_text"
-        end
-        ok, err = document.set_link_note(db_path, tonumber(args.from_document_id), args.link_text, args.note)
-        if ok == nil then
-            return nil, err
-        end
-        return "Note saved."
     end
 
     if tool_name == "document" and method_name == "breadcrumbs" then

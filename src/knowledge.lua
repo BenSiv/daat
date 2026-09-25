@@ -816,7 +816,7 @@ LINK_REINFORCEMENT_DELTA = 0.15
 LINK_EVALUATION_MODEL = DISTILL_MODEL
 
 LINK_EVALUATION_SYSTEM_PROMPT = """
-Two documents from the same knowledge pool have repeatedly been retrieved together in the same searches. Judge whether they describe a genuinely meaningful connection (the same topic, a real dependency, one explains or extends the other) as opposed to just coincidental overlap in unrelated searches. Reply on a single line: YES or NO, a colon, then one sentence. For YES, the sentence states the specific connection in terms of the documents' content (what one says about, uses from, or adds to the other) -- not merely that they are related or were retrieved together. For NO, the sentence says why the overlap is coincidental. Example: "YES: Document B's media recipe is the one Document A's subculture protocol calls for."
+Two documents from the same knowledge pool have repeatedly been retrieved together in the same searches. Judge whether they describe a genuinely meaningful connection (the same topic, a real dependency, one explains or extends the other) as opposed to just coincidental overlap in unrelated searches. Reply on a single line: YES or NO, a colon, then one sentence. For YES, the sentence states the specific connection in terms of the documents' content (what one says about, uses from, or adds to the other) -- not merely that they are related or were retrieved together. For NO, the sentence says why the overlap is coincidental. A YES sentence is written into a note that links both documents right before it, so refer to them by what they are, never as "Document A" or "Document B". Example: "YES: the subculture protocol calls for exactly this medium recipe."
 """
 
 
@@ -885,7 +885,7 @@ function knowledge.record_link_review(db_path, document_a_id, document_b_id, co_
     db.exec(db_path, string.format(
         "%s knowledge_link_review (document_a_id, document_b_id, last_co_count, decision, reason, evaluated_at) VALUES (%d, %d, %d, %s, %s, %s);",
         db.replace_into(db_path), tonumber(document_a_id), tonumber(document_b_id),
-        tonumber(co_count), db.quote(decision), db.literal(document.truncate_note(reason)), db.now_expr(db_path)
+        tonumber(co_count), db.quote(decision), db.literal(document.clip_text(reason)), db.now_expr(db_path)
     ))
 end
 
@@ -932,52 +932,52 @@ function knowledge.link_pair_prompt(doc_a, doc_b)
     )
 end
 
--- Deliberately unfiltered by archived_at -- an archived row still
--- counts as "exists" here so maybe_link_co_retrieved below takes the
--- reinforce branch (which unarchives, see reinforce_link_strength) on
--- a repeat co-retrieval, instead of re-running the LLM judgment on a
--- pair it already evaluated once.
-function knowledge.document_link_exists(db_path, document_a_id, document_b_id)
+-- Whether two documents are already connected, through content: one
+-- links the other (either way), or some third document links both --
+-- the shape a connection document has, whoever wrote it. Either way the
+-- co-retrieval judgment has nothing to add. Active rows between active
+-- documents only; the holder of a two-sided connection must be active
+-- too.
+function knowledge.documents_connected(db_path, document_a_id, document_b_id)
+    a = tonumber(document_a_id)
+    b = tonumber(document_b_id)
     rows = db.query(db_path, string.format("""
         SELECT 1 FROM document_link
-        WHERE (from_document_id = %d AND to_document_id = %d) OR (from_document_id = %d AND to_document_id = %d)
+        WHERE ((from_document_id = %d AND to_document_id = %d) OR (from_document_id = %d AND to_document_id = %d))
+          AND (archived_at IS NULL OR archived_at = '')
         LIMIT 1;
-    """, tonumber(document_a_id), tonumber(document_b_id), tonumber(document_b_id), tonumber(document_a_id)))
-    return rows != nil and rows[1] != nil
+    """, a, b, b, a))
+    if rows != nil and rows[1] != nil then
+        return "direct"
+    end
+    rows = db.query(db_path, string.format("""
+        SELECT 1 FROM document_link la
+        JOIN document_link lb ON lb.from_document_id = la.from_document_id
+        JOIN document holder ON holder.id = la.from_document_id
+        WHERE la.to_document_id = %d AND lb.to_document_id = %d
+          AND (la.archived_at IS NULL OR la.archived_at = '') AND (lb.archived_at IS NULL OR lb.archived_at = '')
+          AND (holder.archived_at IS NULL OR holder.archived_at = '')
+        LIMIT 1;
+    """, a, b))
+    if rows != nil and rows[1] != nil then
+        return "through_document"
+    end
+    return nil
 end
 
--- Reinforces an already-linked pair's edge on repeated co-retrieval
--- (doc/link-strength-redesign.md), and treats that reinforcement as a
--- reintroduction: retrieval re-establishing a connection unarchives it
--- and folds "co-retrieval" into its source set
--- (document.source_set_add), same as an authored re-add going through
--- document.upsert_link (doc/document-link-flow.md's "Archiving and
--- reintroduction"). Matches both directions, same as
--- document_link_exists above -- an authored `[[title]]` link's
--- from/to reflects who wrote it, not co_retrieval_pairs' doc_a < doc_b
--- ordering, so only one direction would ever match otherwise and a
--- real, already-linked pair would silently never get reinforced.
--- Selects the matching row(s) first (there can be more than one -- the
--- parallel-edges case, doc/document-link-flow.md) rather than a single
--- blind UPDATE, since folding a tag into `source` needs each row's own
--- current value; each row is then updated by its own primary key
--- (from_document_id, link_text), still one atomic UPDATE per row with
--- no shared read-modify-write across rows to race over.
+-- Strengthens a directly linked pair's edge(s) on repeated co-retrieval
+-- (doc/link-strength-redesign.md). Both directions -- a link's from/to
+-- is whichever document's content holds it, not co_retrieval_pairs'
+-- doc_a < doc_b ordering -- and every matching active row (a link each
+-- way, or two spellings of the same target). One atomic UPDATE, no
+-- read-modify-write to race over. Never unarchives: an archived link's
+-- markup is gone from content, and retrieval doesn't write content.
 function knowledge.reinforce_link_strength(db_path, document_a_id, document_b_id)
-    rows = db.query(db_path, string.format("""
-        SELECT from_document_id, link_text, source FROM document_link
-        WHERE (from_document_id = %d AND to_document_id = %d) OR (from_document_id = %d AND to_document_id = %d);
-    """, tonumber(document_a_id), tonumber(document_b_id), tonumber(document_b_id), tonumber(document_a_id)))
-    if rows == nil then
-        return
-    end
-    for _, row in ipairs(rows) do
-        db.exec(db_path, string.format(
-            "UPDATE document_link SET raw_strength = raw_strength + %.17g, archived_at = NULL, source = %s WHERE from_document_id = %d AND link_text = %s;",
-            LINK_REINFORCEMENT_DELTA, db.quote(document.source_set_add(row.source, "co-retrieval")),
-            tonumber(row.from_document_id), db.quote(row.link_text)
-        ))
-    end
+    db.exec(db_path, string.format("""
+        UPDATE document_link SET raw_strength = raw_strength + %.17g
+        WHERE ((from_document_id = %d AND to_document_id = %d) OR (from_document_id = %d AND to_document_id = %d))
+          AND (archived_at IS NULL OR archived_at = '');
+    """, LINK_REINFORCEMENT_DELTA, tonumber(document_a_id), tonumber(document_b_id), tonumber(document_b_id), tonumber(document_a_id)))
 end
 
 -- Whether a document has been retrieved/reinforced enough to be worth
@@ -1005,7 +1005,11 @@ function knowledge.due_for_link_review(review, co_count)
     if review == nil then
         return true
     end
-    if review.decision == "linked" then
+    -- "linked": its connection document exists (or existed -- someone
+    -- archiving it is an answer too). "unlinkable": a title can't be
+    -- written as a link (document.link_ref), which more co-retrieval
+    -- won't change.
+    if review.decision == "linked" or review.decision == "unlinkable" then
         return false
     end
     return co_count >= (tonumber(review.last_co_count) + CO_RETRIEVAL_REEVALUATION_STEP)
@@ -1021,36 +1025,52 @@ function knowledge.maybe_link_co_retrieved(db_path, author, document_ids)
         doc_b_id = tonumber(pair.doc_b)
         co_count = tonumber(pair.co_count)
 
-        if knowledge.document_link_exists(db_path, doc_a_id, doc_b_id) == false then
+        -- Connected through a third document: nothing to do here --
+        -- retrieving either end already heats that document by spreading
+        -- activation, which is where the pair's shared relevance belongs.
+        connected = knowledge.documents_connected(db_path, doc_a_id, doc_b_id)
+        if connected == "direct" then
+            knowledge.reinforce_link_strength(db_path, doc_a_id, doc_b_id)
+        elseif connected == nil then
             review = knowledge.get_link_review(db_path, doc_a_id, doc_b_id)
             if knowledge.due_for_link_review(review, co_count) then
                 doc_a = knowledge.get_document(db_path, doc_a_id)
                 doc_b = knowledge.get_document(db_path, doc_b_id)
                 if doc_a != nil and doc_b != nil then
                     if knowledge.co_retrieval_eligible(co_count, tonumber(doc_a.retrieval_count), tonumber(doc_b.retrieval_count)) then
-                        knowledge.evaluate_co_retrieval_pair(db_path, doc_a, doc_b, co_count)
+                        knowledge.evaluate_co_retrieval_pair(db_path, author, doc_a, doc_b, co_count)
                     end
                 end
             end
-        else
-            knowledge.reinforce_link_strength(db_path, doc_a_id, doc_b_id)
         end
     end
 end
 
-function knowledge.evaluate_co_retrieval_pair(db_path, doc_a, doc_b, co_count)
+-- On YES, writes the connection down the way a person would: an
+-- ordinary document linking both and saying why (document.
+-- connection_draft), created through the same document.create_page any
+-- save uses and attributed to the user whose retrieval surfaced it, the
+-- same as every other note the pool creates (see
+-- knowledge.create_document_note). The links come from its content like
+-- any document's; nothing marks it as the agent's.
+function knowledge.evaluate_co_retrieval_pair(db_path, author, doc_a, doc_b, co_count)
     agent_provider = require("agent_provider")
     answer, err = agent_provider.generate(LINK_EVALUATION_MODEL, LINK_EVALUATION_SYSTEM_PROMPT, knowledge.link_pair_prompt(doc_a, doc_b))
     if answer == nil then
         return
     end
     verdict, reason = knowledge.parse_link_judgment(answer)
-    if verdict == "YES" then
-        document.upsert_link(db_path, doc_a.id, doc_b.id, doc_b.title, "co-retrieval", reason, "model")
-        knowledge.record_link_review(db_path, doc_a.id, doc_b.id, co_count, "linked", reason)
-    else
+    if verdict != "YES" then
         knowledge.record_link_review(db_path, doc_a.id, doc_b.id, co_count, "declined", reason)
+        return
     end
+    draft = document.connection_draft(db_path, doc_a.id, doc_b.id, reason)
+    if draft == nil then
+        knowledge.record_link_review(db_path, doc_a.id, doc_b.id, co_count, "unlinkable", reason)
+        return
+    end
+    document.create_page(db_path, author, draft.title, draft.parent_id, draft.content, nil)
+    knowledge.record_link_review(db_path, doc_a.id, doc_b.id, co_count, "linked", reason)
 end
 
 --------------------------------------------------------------------------

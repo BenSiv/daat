@@ -1,92 +1,82 @@
 # document_link: how links get created and read
 
-Two writers feed the `document_link` table, and every reader queries it directly -- nothing re-parses a document's body to answer a retrieval or render the graph explorer. A link is never deleted once it exists: losing its markup or its usage signal archives it, and either an author retyping it or retrieval re-discovering it brings it back at its old strength, not a fresh one. The one place the sync guarantee still breaks is a generic write path with no document-specific hook.
+Content is the only place knowledge lives. `document_link` is a purely derived index of the `[[links]]` in document content: dropping it and running `daat repair links` loses nothing but usage metadata (strength, archive and creation times). Every reader queries the index; only one writer fills it, from content, and it runs on every write path. *Why* two documents are connected is never stored on a link -- it's the sentence around the link in content, or a document that links both and says why, written the same way by a person or the agent.
 
 ```mermaid
 flowchart LR
-    subgraph SRC["sources of change"]
+    subgraph SRC["sources of change -- all write content"]
         A1["UI save<br/>/document-save"]
-        A2["Agent / CLI<br/>create &middot; update"]
+        A2["Agent / CLI<br/>document create &middot; update"]
         A3["Generic entity API<br/>/api/submit, /api/update, /api/v1<br/>agent entity.create / entity.update"]
-        A4["Retrieval batch<br/>co-occurring documents"]
+        A4["Co-retrieval YES<br/>creates a connection document"]
     end
 
-    subgraph PROC["link processing"]
-        P1["sync_links()<br/>reparse [[title]] in content<br/>drop/keep source tags,<br/>archive only if none remain"]
-        P2["evaluate_co_retrieval_pair()<br/>+ reinforce_link_strength()<br/>upsert, source += co-retrieval"]
-    end
+    H["entity.create / entity.update<br/>document hooks"]
+    P1["sync_links()<br/>parse [[...]] in content,<br/>archive what's gone"]
 
-    T[("document_link<br/>from_document_id, to_document_id, link_text,<br/>source (set), raw_strength, archived_at,<br/>note, note_source, created_at")]
+    T[("document_link (derived)<br/>id, from_document_id, to_document_id,<br/>link_text, link_hash,<br/>raw_strength, archived_at, created_at")]
 
     subgraph READ["readers -- query only, active rows"]
         R1["spread_activation()"]
         R2["/knowledge-graph-data"]
-        R3["links()<br/>document page Connections,<br/>agent document.links"]
+        R3["links()<br/>Connections list, agent document.links<br/>+ context read from content"]
     end
 
-    A1 --> P1
-    A2 --> P1
-    A4 --> P2
-    P1 -->|upsert_link: source += authored,<br/>unarchive, heal to_document_id| T
-    P2 -->|upsert_link: source += co-retrieval,<br/>unarchive| T
-    A3 --> P1
+    A1 --> H
+    A2 --> H
+    A3 --> H
+    A4 --> H
+    H --> P1
+    P1 -->|upsert_link: insert, or unarchive<br/>+ heal to_document_id| T
 
     T -->|SELECT, archived_at IS NULL| R1
     T -->|SELECT, archived_at IS NULL| R2
     T -->|SELECT, archived_at IS NULL| R3
 ```
 
-## Write path: two writers, one table, one upsert
+## One grammar
 
-**Authored links** come from parsing the saved document body, not from a separately edited field. `document.create_page`/`update_page` (`src/document.lua:665-685`) call `document.sync_links` unconditionally after every save, which re-parses the fresh content for `[[title]]` markup (`string.gmatch`, `:534-541`) and resolves each via `parse_link_ref`/`resolve_link` (`:402-434`). Every real write surface routes through these two functions: the UI's `/document-save`, the agent's create/update tools, the knowledge-pool session/note writers, and CLI bulk import.
+A link is `[[target]]` or `[[folder/target]]` on a single line, with no brackets inside (`LINK_PATTERN`, `src/document.lua`). Indexing (`sync_links`) and rendering (`inline_links_to_markdown`) share that one pattern, so they can never disagree about what's a link. An unclosed `[[` therefore matches nothing -- it's plain text on the page and never an index row -- instead of swallowing everything up to the next `]]`. There's no length limit: a link is as long as the title it names.
 
-**Co-retrieval links** are behavioral, not textual -- no `[[...]]` markup involved. When a retrieval batch finishes, `knowledge.review_retrieval` calls `maybe_link_co_retrieved` -> `evaluate_co_retrieval_pair` (`src/knowledge.lua:871-895`), which asks an LLM to judge the pair and, on `"YES"`, writes the link. Neither path writes `document_link` directly any more -- both funnel through one helper.
+## One writer: content, on every write path
 
-## Archiving and reintroduction
+`document.sync_links` runs from entity's own document hooks -- `document.on_entity_created` (called by `entity.create`) and `document.on_entity_updated` (called by `entity.update` on a real change to `content`) -- so every write path keeps the index in step with content: the UI's `/document-save`, the agent's document tools, the generic entity paths (`/api/submit`, `/api/update`, `/api/v1`, the agent's `entity.create`/`entity.update`, `entity create-json`/`update-json`), and the knowledge pool's own notes. The same hooks compute the document's embedding.
 
-`document.upsert_link` (`src/document.lua:484-505`) is the only place a link's introduction -- first or repeat -- gets written. `source` is no longer a single mutable enum; it's a small sorted, comma-joined set of every way a link has ever been introduced (`document.source_set_add`/`source_set_remove`, `:442-482`) -- `"authored"`, `"co-retrieval"`, or `"authored,co-retrieval"` when both apply. A fresh pair inserts; an existing pair (active or archived) gets the new tag folded into its set, is unarchived, and has its `to_document_id` healed if it was previously dangling (`NULL`) and this call resolved to a real target. Reintroduction never resets `raw_strength`.
+`sync_links` makes a document's rows match its content: every `[[link]]` in it goes through `document.upsert_link`, and every active row whose link text no longer appears is archived, not deleted, so `raw_strength` survives the link being retyped later -- retyping a deleted link reintroduces the same row at its old strength rather than starting over at `BASE_LINK_STRENGTH`. `upsert_link` also heals a dangling row (`to_document_id` NULL) once its target resolves, and never replaces a target it already has.
 
-`sync_links` (`:520-561`) no longer deletes. For each of a document's existing `authored`-tagged rows whose markup is gone from the fresh content, it removes just the `"authored"` tag (`source_set_remove`); if nothing else backs the row (no `"co-retrieval"` tag left), it's archived (`archived_at` set) -- otherwise it stays active, since usage still vouches for it even though the author's text no longer does. Every link still present in content goes through `upsert_link`, so retyping a deleted `[[link]]` reintroduces the same row at its old strength rather than starting over at `BASE_LINK_STRENGTH`.
+A dangling link heals on its own too: creating, renaming, moving or unarchiving a document runs `document.resolve_dangling_links`, which re-resolves every active dangling row, so a bulk import's forward links complete as their targets arrive. `daat repair links` is left for content that reached the table without going through `entity` at all -- a raw SQL insert, a restored backup.
 
-The co-retrieval side reintroduces the same way, through a different door: `document_link_exists` (`src/knowledge.lua:770-782`) is deliberately unfiltered by `archived_at`, so a repeat co-retrieval hit on an existing pair -- archived or not -- takes the *reinforce* branch in `maybe_link_co_retrieved` rather than re-asking the LLM to re-judge a pair it already judged once. `reinforce_link_strength` (`:796-822`) folds `"co-retrieval"` into the row's source set and clears `archived_at` alongside its usual `raw_strength` bump -- a reinforcement event *is* a reintroduction event. It selects the matching row(s) by hand rather than a single blind `UPDATE`, since more than one row can span the same pair (see "Known limitations" below).
+Rows are keyed by their own `id`, with uniqueness per (document, link text) enforced on `link_hash` (SHA-256 of the link text): link text is whatever a title is, and no key length can promise to hold that -- a real paper title overflowed the old `VARCHAR(255)` key.
 
-Existing rows default to `archived_at = NULL` (active) -- the migration needs no backfill.
+## Why two documents are connected: in content, written the same way by anyone
 
-## Link notes: why two documents are connected
+There are exactly two ways to say why two documents are connected, and a person and the agent use the same ones:
 
-Each row also carries a short free-text `note` saying *why* the two documents are connected, with `note_source` recording who wrote it, plus a `created_at` (NULL for every row predating the column, since its real creation time was never recorded). The note lives on the edge rather than in a separate note-document: it's a property of the link, and a note-document would add its own edges to both ends, skewing `spread_activation` and the graph.
+- **Write it next to the link.** The sentence around `[[B]]` in A's content is A's explanation of the connection. `document.link_context` quotes it whenever the connection is shown (list/heading/quote/table markup stripped, links flattened); a bare link in a list of links falls back to the nearest heading above it (`Listed under "Related meetings"`).
+- **Write a document that links both and says why** -- a connection document. It's an ordinary document: title `A ↔ B`, content one sentence linking both (`[[A]] and [[B]]: <why>`), filed under the Knowledge Pool folder. Its links come from its content like any other document's, it's searchable, embedded and versioned, and it takes part in heat and tiering like any other note. Editing it edits the explanation; archiving it removes the connection. `document.connection_draft` is the shared starting shape.
 
-Three writers, ranked by `LINK_NOTE_PRIORITY` (`src/document.lua`) -- a note is only replaced by one from an equal-or-higher source, so equal rank refreshes (an edited sentence updates its own note on the next save) but nothing automatic ever overwrites a person's note:
+A person creates one with **Explain connection** on a document's Connections list, which opens `/document-edit?connect_a=<id>&connect_b=<id>` prefilled with the draft. The agent creates one when two documents keep being retrieved together: `knowledge.maybe_link_co_retrieved` asks the model to judge the pair (`YES: <sentence>` / `NO: <sentence>`, `knowledge.parse_link_judgment`), and on YES `evaluate_co_retrieval_pair` creates the connection document through the same `document.create_page` any save uses, attributed to the user whose retrieval surfaced it (the same convention every Knowledge Pool note follows). The verdict and its sentence are kept in `knowledge_link_review`, so a decline can be audited, and a pair that's already connected -- directly, or through any document linking both, whoever wrote it (`knowledge.documents_connected`) -- is never re-judged.
 
-| `note_source` | Rank | Written by |
-|---|---|---|
-| `human` | 3 | `document.set_link_note` -- the document page's "Connections" edit form (`POST /document-link-note`) or the agent's `document.annotate_link` (destructive, approval-gated). A blank note clears it back to NULL so automatic sources can fill it again. |
-| `context` | 2 | `sync_links`, on every save -- `document.link_context` quotes the sentence around the link's first `[[...]]` (Markdown line markup stripped, links flattened). A bare link with no sentence around it (a list of links) falls back to the nearest heading above it (`Listed under "Related meetings"`). |
-| `model` | 1 | `evaluate_co_retrieval_pair` -- the LLM now answers `YES: <sentence>` / `NO: <sentence>` (`knowledge.parse_link_judgment`); a YES's sentence becomes the new link's note, and both verdicts' sentences are kept in `knowledge_link_review.reason`, so a decline can be audited. |
+A pair connected through a connection document doesn't need its own direct edge: retrieving either end heats the connection document by spreading activation, so repeated co-retrieval accumulates heat exactly where the pair's shared relevance is written down -- which in turn makes that document due for review and distillation, the natural place for a summary of why the two keep coming up together. Direct links (A's content links B) are still strengthened on repeated co-retrieval (`knowledge.reinforce_link_strength`, active rows only -- retrieval never un-archives a link whose markup is gone).
 
-The author's own sentence outranks the model because it's the connection as the author stated it; the model's is an after-the-fact reading of why two documents keep being retrieved together.
+A title containing `/`, a bracket or a newline can't be written as a link at all (the grammar has no escaping), and a title shared with another document needs its parent folder's title in front (`[[folder/title]]`); `document.link_ref` picks the right form or returns nil, and a pair either of whose documents can't be linked is recorded as `unlinkable` rather than re-asked.
 
-**Backfill** for links that predate notes: `daat repair links` fills `context` notes for every authored link from its existing content (no model calls). Anything beyond that -- e.g. asking a model to explain existing co-retrieval links -- is a one-off data operation for a specific deployment, kept out of core; it only needs to write `note`/`note_source = 'model'` on rows whose note is still empty, which leaves every priority rule above intact.
+## Migration from the old layout
 
-## Every write path syncs links
-
-`sync_links` runs from entity's own document hooks -- `document.on_entity_created` (called by `entity.create`) and `document.on_entity_updated` (called by `entity.update` on a real change to `content`) -- not from `document.create_page`/`update_page`. So the generic entity paths (`/api/submit`, `/api/update`, `/api/v1`, the agent's `entity.create`/`entity.update` tools, `entity create-json`/`update-json`) keep `document_link` in step with content exactly like a `/document-save` does; they used to skip it entirely, leaving the graph silently stale until someone ran a backfill. The same hooks compute the document's embedding (content or title change). A dangling link (target not created yet) also heals on its own: creating, renaming, moving or unarchiving a document runs `document.resolve_dangling_links`, which re-resolves every active dangling row, so a bulk import's forward links complete as their targets arrive instead of waiting for the linking document's next save. `daat repair links` is left for content that reached the table without going through `entity` at all -- a raw SQL insert, a restored backup.
+Every store before this layout keyed `document_link` by `(from_document_id, link_text)` and held links no content backed: rows the co-retrieval judgment created directly (`source = 'co-retrieval'`), plus per-link notes. On the first request after the upgrade, `migrate_document_link_layout` (`src/document.lua`) rebuilds the table once: content-backed rows, and archived rows (for their strength), are copied into the new layout; co-retrieval-only rows are not -- no document holds them, so a content-derived index can't -- and stay behind in `document_link_legacy` for the deployment to turn into connection documents and then drop. Notes are not carried over; the sentence around a link is read from content. On MySQL the rebuild runs under a named lock (`GET_LOCK`), since every request runs schema init and DDL isn't transactional, and it copies into `document_link_new` before swapping names, so a failure part-way leaves the old table untouched.
 
 ## Read path: query, active rows only, never re-parse
 
-Every consumer of the graph is a plain SQL read against `document_link`, not a text scan: `document.linked_neighbors` (`src/document.lua:584-597`), used by `knowledge.spread_activation` to spread retrieval activation to a document's neighbors; `document.graph_edges` (`:609-627`), backing `/knowledge-graph-data` and, through it, the knowledge-graph explorer's canvas; and `document.links` (both directions, with each link's note -- the document page's "Connections" list and the agent's `document.links` tool; replaced the incoming-only `document.backlinks`) (`:689-699`), shown on a document's own page. All three now filter `archived_at IS NULL OR archived_at = ''`, matching the same idiom `document.archived_at` itself already uses everywhere -- an archived link is invisible to every reader until something reintroduces it. This is the efficient half of the design -- reads stay cheap, and since every `entity` write path syncs links, they're only stale for content that bypassed `entity` entirely (see above).
+Every consumer of the graph is a plain SQL read against `document_link`, not a text scan: `document.linked_neighbors`, used by `knowledge.spread_activation` to spread retrieval activation to a document's neighbors; `document.graph_edges`, backing `/knowledge-graph-data` and the knowledge-graph explorer's canvas; and `document.links`, both directions, behind a document page's Connections list and the agent's `document.links` tool. All three filter `archived_at IS NULL OR archived_at = ''`. `document.links` adds each link's context by reading the holding document's content -- the one read that looks at text, since that's where the explanation lives.
 
-## Rendering is a separate, independent parser
+## Rendering
 
-Turning `[[title]]` into a clickable link *on the page* is a different code path from indexing it into the graph. `document.render_html` (`:776-781`) calls `document.inline_links_to_markdown` (`:710-719`), which runs its own fresh `[[...]]` regex match and its own `resolve_link` call -- it never reads `document_link`, and is unaffected by archiving (archived or not, the row it might correspond to plays no part in rendering). That makes rendering independent of `document_link`: a reader always sees links that match the text they're looking at right now, even for content inserted outside `entity` whose `document_link` rows haven't been rebuilt yet (`daat repair links`).
+`document.render_html` calls `document.inline_links_to_markdown`, which runs the same `LINK_PATTERN` and its own `resolve_link` call -- it never reads `document_link`, so a reader always sees links that match the text in front of them, even for content inserted outside `entity` whose rows haven't been rebuilt yet (`daat repair links`).
 
-## Known limitations (not fixed by archiving)
+## Known limitations
 
-Found while researching the design above; real, but out of scope for the archive/reintroduce work:
-
-- **Parallel edges.** The primary key is `(from_document_id, link_text)`, not `(from_document_id, to_document_id)` -- two authored spellings of the same target (`[[Home]]` vs `[[Root/Home]]`), or an authored link whose `link_text` happens to differ from a co-retrieval row's (which always uses the target's exact title), produce two separate rows for the same pair. `linked_neighbors` sums their strengths (intentionally); `graph_edges` and `backlinks` do not dedupe and show/list each row separately; `spread_activation` therefore double-weights the pair.
-- **Target rename decay.** A link's `to_document_id` is resolved once and stored -- renaming the target doesn't break it immediately (reads still use the stored id). But `sync_links` re-parses and re-resolves the *source* document's raw text on every one of its own future saves, even unrelated ones -- so the next time the source document is saved, resolution is retried against the old literal text, fails, and the link silently downgrades to dangling (`to_document_id = NULL`), losing the target association it previously had.
-- **Archived/merged targets still drain pool heat.** `linked_neighbors` has no `archived_at`/`merged_into` filter on the *neighbor* side (unlike `graph_edges` and `links`), so `spread_activation` can keep reinforcing a document that was already archived (and had its heat returned to the pool), continuously re-inflating a departed document's heat at the active pool's expense.
+- **Parallel edges.** Two spellings of the same target (`[[Home]]` vs `[[Root/Home]]`) are two rows for the same pair. `linked_neighbors` sums their strengths (intentionally); `graph_edges` and `links` list each row separately; `spread_activation` therefore double-weights the pair.
+- **Archived/merged targets still drain pool heat.** `linked_neighbors` has no `archived_at`/`merged_into` filter on the *neighbor* side (unlike `graph_edges` and `links`), so `spread_activation` can keep reinforcing a document that was already archived, re-inflating a departed document's heat at the active pool's expense.
 - **No self-link guard.** Nothing prevents `from_document_id == to_document_id`; a document linking to its own title produces a self-loop that inflates its own neighbor-strength denominator in `spread_activation`.
-- **Ambiguous title resolution.** Multiple non-archived documents sharing a title resolve to the lowest id (`ORDER BY id ASC`), not most-recent or best-match. Subject-qualified links (`[[subject/title]]`) require an exact, untrimmed parent-title match and fall through to no match (not back to the plain-title case) if the subject doesn't match.
-- **No transactions.** `sync_links`'s read-decide-write sequence runs as multiple independent autocommitted statements (this codebase's DB layer opens a fresh connection per statement). A reader can observe a document's links mid-resync, and two concurrent saves of the same document can interleave into a state matching neither save's content.
+- **Ambiguous title resolution.** Multiple non-archived documents sharing a title resolve to the lowest id (`ORDER BY id ASC`), not most-recent or best-match. Subject-qualified links (`[[subject/title]]`) require an exact parent-title match and fall through to no match (not back to the plain-title case) if the subject doesn't match. `document.link_ref` accounts for this when it writes a link itself.
+- **No transactions.** `sync_links`'s read-decide-write sequence runs as multiple independent autocommitted statements. A reader can observe a document's links mid-resync, and two concurrent saves of the same document can interleave into a state matching neither save's content.

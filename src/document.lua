@@ -25,14 +25,15 @@
 -- realistic case (two same-titled documents in different folders) without
 -- it.
 --
--- Links are a derived index over document content, not user-authored
--- data in their own right -- recomputed wholesale (delete + reinsert)
--- on every save, the same resync pattern the source convention uses,
--- rather than a schema-driven entity type with its own ledger history.
--- The content that generates them already has full audit history via
--- the document entity itself; a link row's own history would just be
--- churn (every content edit potentially archiving/recreating several),
--- not a real audit trail of anyone's actions.
+-- Links are a derived index over document content, not data in their
+-- own right -- rebuildable from content alone at any time (`daat repair
+-- links`), rather than a schema-driven entity type with its own ledger
+-- history. Content is the only place knowledge lives: *why* two
+-- documents are connected is the sentence around the link, or a
+-- document that links both and says why -- written the same way by a
+-- person or the agent (see doc/document-link-flow.md). The content that
+-- generates links already has full audit history via the document
+-- entity itself; a link row's own history would just be churn.
 
 db = require("database")
 schema = require("schema")
@@ -40,6 +41,7 @@ entity = require("entity")
 json = require("dkjson")
 external_tool = require("external_tool")
 gnuplot = require("gnuplot")
+hmac = require("hmac")
 
 document = {}
 
@@ -56,121 +58,184 @@ DOCUMENT_SCHEMA = {
     },
 }
 
-DOCUMENT_LINK_SCHEMA = """
-CREATE TABLE IF NOT EXISTS document_link (
+-- One row per distinct [[link]] text in a document's content. Keyed by
+-- its own id rather than by link_text: link text is whatever a title
+-- is, and no key length can promise to hold that (a real paper title
+-- overflowed the old VARCHAR(255) key). Uniqueness per (document, link
+-- text) goes through link_hash instead. raw_strength/archived_at/
+-- created_at are usage metadata about the edge, the way heat is about a
+-- document -- not knowledge, which lives only in content.
+DOCUMENT_LINK_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS %s (
+    id INTEGER PRIMARY KEY %s,
     from_document_id INTEGER NOT NULL,
     to_document_id INTEGER,
-    -- VARCHAR(700), not TEXT -- MariaDB/InnoDB refuses a bare TEXT
-    -- column as part of a key without an explicit length; see
-    -- ledger.lua's own SCHEMA comment for the full reasoning. 700, not
-    -- 255: a [[link]] to a paper's full title ran past 255 in a real
-    -- deployment -- see LINK_TEXT_MAX_LENGTH.
-    link_text VARCHAR(700) NOT NULL,
-    PRIMARY KEY (from_document_id, link_text)
+    link_text TEXT NOT NULL,
+    link_hash CHAR(64) NOT NULL,
+    raw_strength REAL NOT NULL DEFAULT 1.0,
+    archived_at TEXT DEFAULT NULL,
+    created_at TEXT DEFAULT NULL
 );
 """
 
--- Distinguishes a real `[[title]]` link a user actually wrote from one
--- this codebase created itself (co-retrieval -> explicit link) -- see
--- document.sync_links' own DELETE below: without this column, saving
--- either document's content would wipe an auto-created link the next
--- time sync_links reruns.
-function ensure_document_link_source_column(db_path)
-    existing = db.get_columns(db_path, "document_link")
-    have = {}
-    for _, name in ipairs(existing) do
-        have[name] = true
-    end
-    if have["source"] == nil then
-        db.exec(db_path, "ALTER TABLE document_link ADD COLUMN source VARCHAR(32) NOT NULL DEFAULT 'authored';")
-    end
-end
-
 -- Usage-driven edge strength (see doc/link-strength-redesign.md) --
--- reinforced on repeated co-retrieval of an already-linked pair
--- (knowledge.maybe_link_co_retrieved), read as a share of a retrieved
--- document's total outgoing strength by spread_activation once Phase 3
--- of that doc lands. DEFAULT 1.0 (BASE_LINK_STRENGTH) backfills every
--- existing row to parity, reproducing today's flat per-neighbor split
--- exactly until real usage differentiates one edge from its siblings.
+-- reinforced when a directly linked pair keeps being retrieved
+-- together (knowledge.maybe_link_co_retrieved), read as a share of a
+-- retrieved document's total outgoing strength by spread_activation.
+-- Every new row starts here.
 BASE_LINK_STRENGTH = 1.0
 
-function ensure_document_link_strength_column(db_path)
-    existing = db.get_columns(db_path, "document_link")
-    have = {}
-    for _, name in ipairs(existing) do
-        have[name] = true
-    end
-    if have["raw_strength"] == nil then
-        db.exec(db_path, "ALTER TABLE document_link ADD COLUMN raw_strength REAL NOT NULL DEFAULT 1.0;")
+function document.link_hash(link_text)
+    return hmac.sha256("document_link", link_text)
+end
+
+function create_document_link_table(db_path, table_name)
+    db.exec(db_path, string.format(DOCUMENT_LINK_TABLE_SQL, table_name, db.autoincrement_keyword(db_path)))
+end
+
+-- Guarded execs, not CREATE INDEX IF NOT EXISTS -- real MySQL has no
+-- such syntax (see knowledge.lua's ensure_knowledge_indexes).
+function ensure_document_link_indexes(db_path)
+    indexes = {
+        {name = "document_link_from_hash_idx",
+         sql = "CREATE UNIQUE INDEX document_link_from_hash_idx ON document_link(from_document_id, link_hash);"},
+        {name = "document_link_to_idx",
+         sql = "CREATE INDEX document_link_to_idx ON document_link(to_document_id);"},
+    }
+    for _, idx in ipairs(indexes) do
+        if db.index_exists(db_path, "document_link", idx.name) == false then
+            db.exec(db_path, idx.sql)
+        end
     end
 end
 
--- Archived, not deleted, the same convention `document.archived_at`
--- already follows (see doc/document-link-flow.md's "Archiving and
--- reintroduction" section) -- a link that loses its last source tag
--- (document.upsert_link/sync_links) is archived here rather than
--- dropped, so its raw_strength survives a later reintroduction instead
--- of resetting to BASE_LINK_STRENGTH.
-function ensure_document_link_archived_at_column(db_path)
-    existing = db.get_columns(db_path, "document_link")
+function column_set(db_path, table_name)
     have = {}
-    for _, name in ipairs(existing) do
+    for _, name in ipairs(db.get_columns(db_path, table_name)) do
         have[name] = true
     end
-    if have["archived_at"] == nil then
-        db.exec(db_path, "ALTER TABLE document_link ADD COLUMN archived_at TEXT DEFAULT NULL;")
-    end
+    return have
 end
 
--- The longest [[link]] text document_link can hold -- it's part of
--- the primary key, so InnoDB caps it: (3072-byte key limit - 4 for
--- from_document_id) / 4 bytes per utf8mb4 character, rounded down to
--- 700 for margin. document.upsert_link skips anything longer rather
--- than failing the save it's part of: no real title is that long, so a
--- longer match is broken markup (an unclosed [[ swallowing the text
--- after it), and it still renders in place, just never becomes an edge.
-LINK_TEXT_MAX_LENGTH = 700
+-- Defined below migrate_document_link_layout, called from it -- see
+-- ../../luam/doc/forward_references.md.
+copy_document_links_to_new_layout, sql_null_to_nil = nil, nil
 
--- Widens a pre-existing VARCHAR(255) link_text (every deployment
--- created before LINK_TEXT_MAX_LENGTH) -- found live: a real paper
--- title in a [[link]] ran past 255 and crashed the save. MariaDB/MySQL
--- only; SQLite never enforces a VARCHAR length.
-function ensure_document_link_text_length(db_path)
-    if db.is_mariadb(db_path) == false then
+LINK_MIGRATION_BATCH = 200
+
+-- Every store before this layout keyed document_link by
+-- (from_document_id, link_text) -- and also held links no content
+-- backed: rows the co-retrieval judgment created directly (source =
+-- 'co-retrieval'), plus per-link notes. Rebuilt once into the layout
+-- above. Rows content backs, and archived ones (whose raw_strength a
+-- retyped link gets back), are copied; co-retrieval-only rows aren't --
+-- no document holds them, so a content-derived index can't -- and stay
+-- behind in document_link_legacy for the deployment to turn into real
+-- content (a connection document per pair) and then drop. Notes aren't
+-- copied either: the sentence around a link is read from content now.
+--
+-- Runs from every request's schema init (cgi.handle_request), so on
+-- MySQL it takes a named lock and re-checks under it: the first
+-- requests after a deploy would otherwise run it concurrently, and DDL
+-- isn't transactional. Copies into document_link_new before swapping
+-- names, so a failure part-way leaves the old table untouched and the
+-- next request starts over (document_link_needs_migration also covers
+-- a failure between the two renames).
+-- Either half-done state this migration can be in: the old layout
+-- still in place, or the one window copy_document_links_to_new_layout
+-- can't make atomic -- the first rename done, the second not
+-- (document_link missing, a fully copied document_link_new present).
+function document_link_needs_migration(db_path)
+    if db.table_exists(db_path, "document_link") == false then
+        return db.table_exists(db_path, "document_link_new")
+    end
+    return column_set(db_path, "document_link")["link_hash"] != true
+end
+
+function migrate_document_link_layout(db_path)
+    if document_link_needs_migration(db_path) == false then
         return
     end
-    rows = db.query(db_path,
-        "SELECT character_maximum_length AS len FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'document_link' AND column_name = 'link_text';")
-    if rows != nil and rows[1] != nil and tonumber(rows[1].len) < LINK_TEXT_MAX_LENGTH then
-        db.exec(db_path, string.format("ALTER TABLE document_link MODIFY link_text VARCHAR(%d) NOT NULL;", LINK_TEXT_MAX_LENGTH))
+    locked = db.is_mariadb(db_path)
+    if locked then
+        db.query(db_path, "SELECT GET_LOCK('daat_document_link_layout', 120) AS got;")
+    end
+    ok, err = pcall(function()
+        if document_link_needs_migration(db_path) == false then
+            return
+        end
+        if db.table_exists(db_path, "document_link") == false then
+            db.exec(db_path, "ALTER TABLE document_link_new RENAME TO document_link;")
+            return
+        end
+        copy_document_links_to_new_layout(db_path)
+    end)
+    if locked then
+        db.query(db_path, "SELECT RELEASE_LOCK('daat_document_link_layout') AS released;")
+    end
+    if ok == false then
+        error(err)
     end
 end
 
--- Why two documents are connected, not just that they are -- a short
--- free-text note on the edge itself (not a separate document: the
--- explanation is a property of the link, and a note-document would
--- add its own edges to both ends, skewing spread_activation and the
--- graph). note_source records who wrote it -- see LINK_NOTE_PRIORITY.
--- created_at is NULL for every row predating this column: its real
--- creation time was never recorded, and leaving it unknown is more
--- honest than backfilling a guess.
-function ensure_document_link_note_columns(db_path)
-    existing = db.get_columns(db_path, "document_link")
-    have = {}
-    for _, name in ipairs(existing) do
-        have[name] = true
+function copy_document_links_to_new_layout(db_path)
+    db.exec(db_path, "DROP TABLE IF EXISTS document_link_new;")
+    create_document_link_table(db_path, "document_link_new")
+    have = column_set(db_path, "document_link")
+    strength_expr = "1.0"
+    if have["raw_strength"] == true then
+        strength_expr = "raw_strength"
     end
-    if have["note"] == nil then
-        db.exec(db_path, "ALTER TABLE document_link ADD COLUMN note TEXT DEFAULT NULL;")
+    archived_expr = "NULL"
+    if have["archived_at"] == true then
+        archived_expr = "archived_at"
     end
-    if have["note_source"] == nil then
-        db.exec(db_path, "ALTER TABLE document_link ADD COLUMN note_source VARCHAR(32) DEFAULT NULL;")
+    created_expr = "NULL"
+    if have["created_at"] == true then
+        created_expr = "created_at"
     end
-    if have["created_at"] == nil then
-        db.exec(db_path, "ALTER TABLE document_link ADD COLUMN created_at TEXT DEFAULT NULL;")
+    where = ""
+    if have["source"] == true then
+        where = " WHERE source != 'co-retrieval'"
     end
+    rows = db.query(db_path, string.format(
+        "SELECT from_document_id, to_document_id, link_text, %s AS raw_strength, %s AS archived_at, %s AS created_at FROM document_link%s;",
+        strength_expr, archived_expr, created_expr, where
+    ))
+    if rows == nil then
+        rows = {}
+    end
+    -- Multi-row INSERTs, LINK_MIGRATION_BATCH rows at a time -- every
+    -- request waits on this, and one statement per row is thousands of
+    -- round trips against a remote MySQL.
+    values = {}
+    for i, row in ipairs(rows) do
+        strength = tonumber(row.raw_strength)
+        if strength == nil then
+            strength = BASE_LINK_STRENGTH
+        end
+        table.insert(values, string.format("(%d, %s, %s, %s, %.17g, %s, %s)",
+            tonumber(row.from_document_id), db.literal(sql_null_to_nil(row.to_document_id)), db.quote(row.link_text),
+            db.quote(document.link_hash(row.link_text)), strength,
+            db.literal(sql_null_to_nil(row.archived_at)), db.literal(sql_null_to_nil(row.created_at))))
+        if #values == LINK_MIGRATION_BATCH or i == #rows then
+            db.exec(db_path, "INSERT INTO document_link_new (from_document_id, to_document_id, link_text, link_hash, raw_strength, archived_at, created_at) VALUES " ..
+                table.concat(values, ", ") .. ";")
+            values = {}
+        end
+    end
+    db.exec(db_path, "ALTER TABLE document_link RENAME TO document_link_legacy;")
+    db.exec(db_path, "ALTER TABLE document_link_new RENAME TO document_link;")
 end
+
+-- db.query renders a SQL NULL as "", never Lua nil.
+function sql_null_to_nil(value)
+    if value == nil or value == "" then
+        return nil
+    end
+    return value
+end
+
 
 -- A document's cached semantic-search embedding. Recomputed on every
 -- every create/update (document.on_entity_created/on_entity_updated)
@@ -274,7 +339,7 @@ KNOWLEDGE_POOL_SQL_COLUMNS = {
     {name = "raw_heat", note = "conserved-pool raw heat -- do not average this column alone, see scale_at_write"},
     {name = "scale_at_write", note = "combine as raw_heat * (EXP(knowledge_pool_state.log_pool_scale) / scale_at_write) for the real effective_heat; the separate 'heat' column is legacy and never updated -- ignore it"},
 }
-KNOWLEDGE_POOL_SQL_NOTE = "Related tables, hand-rolled rather than schema.register()'d so entity.list_types/fields never mentions them either: knowledge_pool_state (one row, id=1: pool_scale/log_pool_scale/document_count) and document_link (from_document_id, to_document_id, link_text, source [comma-joined set of 'authored'/'co-retrieval'], raw_strength, archived_at, note [why the two documents are connected], note_source ['human'|'context'|'model'], created_at [NULL for links predating it])."
+KNOWLEDGE_POOL_SQL_NOTE = "Related tables, hand-rolled rather than schema.register()'d so entity.list_types/fields never mentions them either: knowledge_pool_state (one row, id=1: pool_scale/log_pool_scale/document_count) and document_link (id, from_document_id, to_document_id, link_text [the text inside [[...]] in from_document_id's content], link_hash, raw_strength, archived_at, created_at [NULL for links predating it]) -- a derived index of [[links]] in document content; why two documents are connected is in content, not here."
 
 function document.knowledge_pool_sql_columns_text()
     lines = {}
@@ -453,15 +518,12 @@ end
 
 function document.init_schema(db_path)
     schema.register(db_path, DOCUMENT_SCHEMA)
-    db.exec(db_path, DOCUMENT_LINK_SCHEMA)
+    migrate_document_link_layout(db_path)
+    create_document_link_table(db_path, "document_link")
+    ensure_document_link_indexes(db_path)
     db.exec(db_path, string.format(DOCUMENT_EMBEDDING_SCHEMA, db.now_expr(db_path)))
     ensure_document_knowledge_columns(db_path)
     ensure_document_knowledge_indexes(db_path)
-    ensure_document_link_source_column(db_path)
-    ensure_document_link_strength_column(db_path)
-    ensure_document_link_archived_at_column(db_path)
-    ensure_document_link_note_columns(db_path)
-    ensure_document_link_text_length(db_path)
     document.ensure_pool_state(db_path)
 end
 
@@ -606,97 +668,74 @@ function document.resolve_link(db_path, subject, title)
     return nil
 end
 
--- `source` on a document_link row is a small sorted, comma-joined set
--- of every way this link has ever been (re)introduced -- "authored",
--- "co-retrieval", or both -- not a single mutable enum recording
--- whichever wrote it last (doc/document-link-flow.md's "Archiving and
--- reintroduction"). Sorted so the stored string is deterministic.
--- Adding an already-present tag is a no-op.
-function document.source_set_add(existing, tag)
-    members = {}
-    have = {}
-    if existing != nil and existing != "" then
-        for part in string.gmatch(existing, "[^,]+") do
-            if have[part] == nil then
-                have[part] = true
-                table.insert(members, part)
-            end
-        end
+-- The one link grammar, shared by indexing (sync_links) and rendering
+-- (inline_links_to_markdown) so the two can never disagree: [[...]] on
+-- a single line, with no brackets inside. An unclosed [[ therefore
+-- matches nothing -- plain text on the page, never an index row --
+-- instead of swallowing everything up to the next ]].
+LINK_PATTERN = "%[%[([^%[%]\n]+)%]%]"
+
+-- How a document is written as a link, or nil if it can't be: the
+-- grammar has no escaping, so a title containing "/" (read as
+-- "subject/title"), a bracket, or a newline can't be linked at all. A
+-- title shared with another document gets its parent folder's title in
+-- front ("[[folder/title]]", resolve_link's one-level disambiguator),
+-- and nil if even that doesn't pick this document out. Used wherever
+-- something writes a link to a known document on someone's behalf --
+-- the "Explain connection" prefill, the agent's connection documents.
+function document.link_ref(db_path, document_id)
+    doc = entity.get(db_path, "document", tonumber(document_id))
+    if doc == nil or doc.title == nil or string.find(doc.title, "[/%[%]\n]") != nil then
+        return nil
     end
-    if have[tag] == nil then
-        table.insert(members, tag)
+    if tonumber(document.resolve_link(db_path, nil, doc.title)) == tonumber(document_id) then
+        return "[[" .. doc.title .. "]]"
     end
-    table.sort(members)
-    return table.concat(members, ",")
+    if doc.parent_id == nil or doc.parent_id == "" then
+        return nil
+    end
+    parent = entity.get(db_path, "document", tonumber(doc.parent_id))
+    if parent == nil or string.find(parent.title, "[/%[%]\n]") != nil then
+        return nil
+    end
+    if tonumber(document.resolve_link(db_path, parent.title, doc.title)) == tonumber(document_id) then
+        return "[[" .. parent.title .. "/" .. doc.title .. "]]"
+    end
+    return nil
 end
 
--- Removes one tag from the set (document.source_set_add); may return
--- "" if that was the only tag left -- callers treat an empty set as
--- "no provenance left, archive this row" rather than deleting it.
-function document.source_set_remove(existing, tag)
-    members = {}
-    if existing != nil and existing != "" then
-        for part in string.gmatch(existing, "[^,]+") do
-            if part != tag then
-                table.insert(members, part)
-            end
-        end
-    end
-    table.sort(members)
-    return table.concat(members, ",")
-end
-
--- Who wrote a link's note, highest first. A note is only ever replaced
--- by one from an equal-or-higher source: a human's note survives every
--- later save and co-retrieval, and the author's own sentence around a
--- [[link]] outranks a model's after-the-fact reading of why two
--- documents keep being retrieved together. Equal rank replaces, so an
--- edited sentence refreshes its own context note on the next save.
-LINK_NOTE_PRIORITY = {human = 3, context = 2, model = 1}
-
--- Bytes, not characters -- document.truncate_note backs off to a UTF-8
+-- Bytes, not characters -- document.clip_text backs off to a UTF-8
 -- boundary rather than splitting a multi-byte character.
-LINK_NOTE_MAX_LENGTH = 500
--- Exposed for html.lua's note textarea (a bare name is file-scoped).
-document.LINK_NOTE_MAX_LENGTH = LINK_NOTE_MAX_LENGTH
+CONTEXT_MAX_LENGTH = 500
 
-function document.note_replaces(existing_source, new_source)
-    if existing_source == nil or existing_source == "" then
-        return true
-    end
-    existing_rank = LINK_NOTE_PRIORITY[existing_source]
-    if existing_rank == nil then
-        existing_rank = 0
-    end
-    return LINK_NOTE_PRIORITY[new_source] >= existing_rank
-end
-
--- Trims, and caps at LINK_NOTE_MAX_LENGTH; nil for a blank note.
-function document.truncate_note(note)
-    if note == nil then
+-- Trims, and caps at CONTEXT_MAX_LENGTH; nil for blank text.
+function document.clip_text(text)
+    if text == nil then
         return nil
     end
-    note = string.gsub(note, "^%s*(.-)%s*$", "%1")
-    if note == "" then
+    text = string.gsub(text, "^%s*(.-)%s*$", "%1")
+    if text == "" then
         return nil
     end
-    if #note <= LINK_NOTE_MAX_LENGTH then
-        return note
+    if #text <= CONTEXT_MAX_LENGTH then
+        return text
     end
-    cut = LINK_NOTE_MAX_LENGTH
+    cut = CONTEXT_MAX_LENGTH
     -- 0x80-0xBF is a UTF-8 continuation byte -- never cut right before one.
-    while cut > 1 and string.byte(note, cut + 1) != nil and string.byte(note, cut + 1) >= 0x80 and string.byte(note, cut + 1) < 0xC0 do
+    while cut > 1 and string.byte(text, cut + 1) != nil and string.byte(text, cut + 1) >= 0x80 and string.byte(text, cut + 1) < 0xC0 do
         cut = cut - 1
     end
-    return string.sub(note, 1, cut) .. "..."
+    return string.sub(text, 1, cut) .. "..."
 end
 
--- The author's own words around a [[link]] -- the sentence containing
--- its first occurrence, with list/heading/quote/table markup stripped
--- and every [[x]] flattened to x. A link standing alone (a bare bullet
--- in a list of links) has no sentence worth quoting, so it falls back
--- to the nearest heading above it, which is usually what groups the
--- list ("## Related meetings"). nil when neither says anything.
+-- The author's own words around a [[link]] -- why the two documents are
+-- connected, read straight from content whenever it's shown (never
+-- stored). The sentence containing the link's first occurrence, with
+-- list/heading/quote/table markup stripped and every [[x]] flattened to
+-- x. A link standing alone (a bare bullet in a list of links) has no
+-- sentence worth quoting, so it falls back to the nearest heading above
+-- it, which is usually what groups the list ("## Related meetings").
+-- nil when neither says anything.
 function document.link_context(content, raw_link)
     if content == nil then
         return nil
@@ -744,10 +783,10 @@ function document.link_context(content, raw_link)
     -- a non-Latin sentence as empty.
     residue = ""
     if sentence != nil then
-        residue = string.gsub(string.gsub(sentence, "%[%[.-%]%]", ""), "[%s%p]", "")
+        residue = string.gsub(string.gsub(sentence, LINK_PATTERN, ""), "[%s%p]", "")
     end
     if #residue >= 3 then
-        return document.truncate_note(string.gsub(sentence, "%[%[(.-)%]%]", "%1"))
+        return document.clip_text((string.gsub(sentence, LINK_PATTERN, "%1")))
     end
 
     heading = nil
@@ -760,7 +799,7 @@ function document.link_context(content, raw_link)
     if heading == nil then
         return nil
     end
-    return document.truncate_note("Listed under \"" .. string.gsub(heading, "%[%[(.-)%]%]", "%1") .. "\"")
+    return document.clip_text("Listed under \"" .. string.gsub(heading, LINK_PATTERN, "%1") .. "\"")
 end
 
 -- Strips the line-level Markdown a sentence pulled from mid-document
@@ -781,120 +820,69 @@ function document.clean_link_context(text)
     return text
 end
 
--- The one place a link's introduction -- first or repeat -- gets
--- written, whether authored (document.sync_links, below) or
--- behavioral (knowledge.evaluate_co_retrieval_pair). A fresh pair
--- inserts; an existing pair (active or archived) gets `tag` folded
--- into its source set, is unarchived, and has its to_document_id
--- healed if it was previously dangling (NULL) and this call resolved
--- to a real target. Reintroduction always heals -- it never resets
--- raw_strength, which is left untouched either way.
---
--- `note`/`note_source` are optional: when given, the note is written
--- on insert, and on an existing row only if document.note_replaces
--- lets `note_source` overwrite whatever wrote the current note.
-function document.upsert_link(db_path, from_id, to_id, link_text, tag, note, note_source)
-    -- Bytes >= characters, so this is conservative for VARCHAR's
-    -- character count -- see LINK_TEXT_MAX_LENGTH.
-    if #link_text > LINK_TEXT_MAX_LENGTH then
-        return
-    end
-    note = document.truncate_note(note)
+-- Records that `from_id`'s content holds [[link_text]]. A new link text
+-- inserts at BASE_LINK_STRENGTH; one this document already had (active
+-- or archived) is unarchived and has its to_document_id healed if it
+-- was dangling and now resolves -- a retyped link comes back at its old
+-- strength, never reset.
+function document.upsert_link(db_path, from_id, to_id, link_text)
+    link_hash = document.link_hash(link_text)
     rows = db.query(db_path, string.format(
-        "SELECT source, to_document_id, note_source FROM document_link WHERE from_document_id = %d AND link_text = %s;",
-        tonumber(from_id), db.quote(link_text)
+        "SELECT id, to_document_id FROM document_link WHERE from_document_id = %d AND link_hash = %s;",
+        tonumber(from_id), db.quote(link_hash)
     ))
     if rows == nil or #rows == 0 then
-        inserted_note_source = nil
-        if note != nil then
-            inserted_note_source = note_source
-        end
         db.exec(db_path, string.format(
-            "INSERT INTO document_link (from_document_id, to_document_id, link_text, source, note, note_source, created_at) VALUES (%d, %s, %s, %s, %s, %s, %s);",
-            tonumber(from_id), db.literal(to_id), db.quote(link_text), db.quote(tag),
-            db.literal(note), db.literal(inserted_note_source), db.now_expr(db_path)
+            "INSERT INTO document_link (from_document_id, to_document_id, link_text, link_hash, created_at) VALUES (%d, %s, %s, %s, %s);",
+            tonumber(from_id), db.literal(to_id), db.quote(link_text), db.quote(link_hash), db.now_expr(db_path)
         ))
         return
     end
-    if note != nil and document.note_replaces(rows[1].note_source, note_source) then
-        db.exec(db_path, string.format(
-            "UPDATE document_link SET note = %s, note_source = %s WHERE from_document_id = %d AND link_text = %s;",
-            db.quote(note), db.quote(note_source), tonumber(from_id), db.quote(link_text)
-        ))
-    end
-    row = rows[1]
-    -- db.query renders a SQL NULL as "" here, never Lua nil (same
-    -- reason every SQL read of archived_at elsewhere in this file
-    -- checks "IS NULL OR = ''") -- checking only `== nil` would never
-    -- fire, and a dangling row would never heal.
-    healed_to_id = row.to_document_id
-    if healed_to_id == nil or healed_to_id == "" then
+    healed_to_id = sql_null_to_nil(rows[1].to_document_id)
+    if healed_to_id == nil then
         healed_to_id = to_id
     end
     db.exec(db_path, string.format(
-        "UPDATE document_link SET source = %s, archived_at = NULL, to_document_id = %s WHERE from_document_id = %d AND link_text = %s;",
-        db.quote(document.source_set_add(row.source, tag)), db.literal(healed_to_id), tonumber(from_id), db.quote(link_text)
+        "UPDATE document_link SET archived_at = NULL, to_document_id = %s WHERE id = %d;",
+        db.literal(healed_to_id), tonumber(rows[1].id)
     ))
 end
 
--- Recomputes every outgoing authored link for `document_id` from
--- `content`, re-parsing and re-resolving on every save regardless of
--- whether content actually changed (idempotent). Archives rather than
--- deletes: an authored link whose markup disappeared from this save's
--- content loses its "authored" source tag (document.source_set_remove)
--- -- if nothing else backs it (no "co-retrieval" tag remaining), the
--- row is archived (archived_at set), not dropped, so raw_strength
--- survives a later reintroduction. A "co-retrieval" tag left standing
--- keeps the row active on its own. Every link still present in content
--- goes through document.upsert_link, which unarchives and re-tags
--- "authored" on a row that already existed (including one archived
--- last save) -- retyping a deleted [[link]] reintroduces it at its old
--- strength, not a fresh 1.0.
+-- Makes `document_id`'s rows match its content: every [[link]] in it
+-- goes through document.upsert_link; every active row whose link text
+-- no longer appears is archived, not deleted, so raw_strength survives
+-- the link being retyped later.
 function document.sync_links(db_path, document_id, content)
+    if content == nil then
+        content = ""
+    end
+    seen = {}
+    ordered = {}
+    for raw_link in string.gmatch(content, LINK_PATTERN) do
+        if seen[raw_link] == nil then
+            seen[raw_link] = true
+            table.insert(ordered, raw_link)
+        end
+    end
+
     existing = db.query(db_path, string.format(
-        "SELECT link_text, source FROM document_link WHERE from_document_id = %d AND source LIKE '%%authored%%';",
+        "SELECT id, link_text FROM document_link WHERE from_document_id = %d AND (archived_at IS NULL OR archived_at = '');",
         tonumber(document_id)
     ))
     if existing == nil then
         existing = {}
     end
-
-    seen = {}
-    if content != nil then
-        for raw_link in string.gmatch(content, "%[%[(.-)%]%]") do
-            seen[raw_link] = true
-        end
-    end
-
     for _, row in ipairs(existing) do
         if seen[row.link_text] == nil then
-            reduced = document.source_set_remove(row.source, "authored")
-            if reduced == "" then
-                db.exec(db_path, string.format(
-                    "UPDATE document_link SET source = '', archived_at = %s WHERE from_document_id = %d AND link_text = %s;",
-                    db.now_expr(db_path), tonumber(document_id), db.quote(row.link_text)
-                ))
-            else
-                db.exec(db_path, string.format(
-                    "UPDATE document_link SET source = %s WHERE from_document_id = %d AND link_text = %s;",
-                    db.quote(reduced), tonumber(document_id), db.quote(row.link_text)
-                ))
-            end
+            db.exec(db_path, string.format(
+                "UPDATE document_link SET archived_at = %s WHERE id = %d;", db.now_expr(db_path), tonumber(row.id)
+            ))
         end
     end
 
-    if content == nil then
-        return
-    end
-    done = {}
-    for raw_link in string.gmatch(content, "%[%[(.-)%]%]") do
-        if done[raw_link] == nil then
-            done[raw_link] = true
-            subject, title = document.parse_link_ref(raw_link)
-            to_id = document.resolve_link(db_path, subject, title)
-            document.upsert_link(db_path, document_id, to_id, raw_link, "authored",
-                document.link_context(content, raw_link), "context")
-        end
+    for _, raw_link in ipairs(ordered) do
+        subject, title = document.parse_link_ref(raw_link)
+        document.upsert_link(db_path, document_id, document.resolve_link(db_path, subject, title), raw_link)
     end
 end
 
@@ -908,7 +896,7 @@ end
 -- GROUP BY id, SUM(raw_strength) rather than a bare UNION (dedup on
 -- the whole row) -- with only an id column, UNION's row-level dedup
 -- already collapsed a neighbor connected by two distinct document_link
--- rows (e.g. one authored, one co-retrieval) down to one; adding
+-- rows (e.g. a link each way) down to one; adding
 -- raw_strength as a second column would silently break that once two
 -- such rows carry different strengths, since UNION would then see them
 -- as two different rows instead of duplicates. Aggregating explicitly
@@ -936,13 +924,13 @@ end
 -- to draw directly -- unlike linked_neighbors, this isn't scoped to
 -- one document's own local neighbor set, so there's no SUM-by-id
 -- aggregation here; a pair connected by two distinct document_link
--- rows (an authored link plus a separately-created co-retrieval link)
--- comes back as two edges, drawn as two lines, rather than merged into
+-- rows (a link each way, or two spellings of the same target) comes
+-- back as two edges, drawn as two lines, rather than merged into
 -- one -- a Phase 4 open question (doc/knowledge-graph-explorer.md), not
 -- resolved here.
 function document.graph_edges(db_path)
     rows = db.query(db_path, """
-        SELECT dl.from_document_id AS from_id, dl.to_document_id AS to_id, dl.raw_strength AS strength, dl.note AS note, dl.source AS source
+        SELECT dl.from_document_id AS from_id, dl.to_document_id AS to_id, dl.raw_strength AS strength
         FROM document_link dl
         JOIN document d1 ON d1.id = dl.from_document_id
         JOIN document d2 ON d2.id = dl.to_document_id
@@ -956,11 +944,7 @@ function document.graph_edges(db_path)
     end
     edges = {}
     for _, row in ipairs(rows) do
-        edge = {from = tonumber(row.from_id), to = tonumber(row.to_id), strength = tonumber(row.strength), source = row.source}
-        if row.note != nil and row.note != "" then
-            edge.note = row.note
-        end
-        table.insert(edges, edge)
+        table.insert(edges, {from = tonumber(row.from_id), to = tonumber(row.to_id), strength = tonumber(row.strength)})
     end
     return edges
 end
@@ -1012,25 +996,27 @@ function document.update_page(db_path, author, document_id, title, parent_id, co
     return entity.update(db_path, "document", document_id, values, author, source)
 end
 
--- Every active link touching `document_id`, both directions, with
--- the other document's id/title and why they're connected -- the
--- detail view's "Connections" list and the agent's document.links.
--- `direction` is "out" (this document links to it -- an authored
--- [[link]] in this document's own content, or the doc_a side of a
--- co-retrieval link) or "in". Each row keeps its own
--- from_document_id/link_text, the primary key document.set_link_note
--- needs. Outgoing dangling links (no target yet) are left out -- the
--- content already renders them as "not created yet".
+-- Every active link touching `document_id`, both directions, with the
+-- other document's id/title and why they're connected -- the detail
+-- view's "Connections" list and the agent's document.links. `direction`
+-- is "out" (this document's content links to it) or "in" (its content
+-- links here). `context` is the sentence around the link in whichever
+-- document holds it (document.link_context), read from content now --
+-- so a document written to explain a connection shows its explanation
+-- here with nothing special about it. Outgoing dangling links (no
+-- target yet) are left out -- the content already renders them as "not
+-- created yet".
 function document.links(db_path, document_id)
     rows = db.query(db_path, string.format("""
-        SELECT 'out' AS direction, d.id AS id, d.title AS title, dl.from_document_id AS from_document_id, dl.link_text AS link_text,
-               dl.source AS source, dl.raw_strength AS raw_strength, dl.note AS note, dl.note_source AS note_source, dl.created_at AS created_at
+        SELECT 'out' AS direction, d.id AS id, d.title AS title, dl.link_text AS link_text,
+               dl.raw_strength AS raw_strength, dl.created_at AS created_at, src.content AS holder_content
         FROM document_link dl
         JOIN document d ON d.id = dl.to_document_id
+        JOIN document src ON src.id = dl.from_document_id
         WHERE dl.from_document_id = %d AND (dl.archived_at IS NULL OR dl.archived_at = '') AND (d.archived_at IS NULL OR d.archived_at = '')
         UNION ALL
-        SELECT 'in' AS direction, d.id AS id, d.title AS title, dl.from_document_id AS from_document_id, dl.link_text AS link_text,
-               dl.source AS source, dl.raw_strength AS raw_strength, dl.note AS note, dl.note_source AS note_source, dl.created_at AS created_at
+        SELECT 'in' AS direction, d.id AS id, d.title AS title, dl.link_text AS link_text,
+               dl.raw_strength AS raw_strength, dl.created_at AS created_at, d.content AS holder_content
         FROM document_link dl
         JOIN document d ON d.id = dl.from_document_id
         WHERE dl.to_document_id = %d AND (dl.archived_at IS NULL OR dl.archived_at = '') AND (d.archived_at IS NULL OR d.archived_at = '')
@@ -1039,34 +1025,42 @@ function document.links(db_path, document_id)
     if rows == nil then
         return {}
     end
+    for _, row in ipairs(rows) do
+        row.context = document.link_context(row.holder_content, row.link_text)
+        row.holder_content = nil
+    end
     return rows
 end
 
--- A person's own explanation of a link -- note_source "human", which
--- nothing automatic ever overwrites (LINK_NOTE_PRIORITY). A blank note
--- clears it back to NULL, so the next save/co-retrieval can fill it in
--- again. Keyed by the row's own primary key (from_document_id,
--- link_text), not a document pair: two documents can share more than
--- one link row (an authored link each way, or authored + co-retrieval).
-function document.set_link_note(db_path, from_document_id, link_text, note)
-    rows = db.query(db_path, string.format(
-        "SELECT 1 FROM document_link WHERE from_document_id = %d AND link_text = %s;",
-        tonumber(from_document_id), db.quote(link_text)
-    ))
-    if rows == nil or #rows == 0 then
-        return nil, "no such link"
+-- A document explaining why two others are connected is an ordinary
+-- document, whoever writes it -- a person via the Connections list's
+-- "Explain connection" action, or the agent when two documents keep
+-- being retrieved together (knowledge.evaluate_co_retrieval_pair). This
+-- is the shared starting shape both use: title "A <-> B", content one
+-- sentence linking both, so document.link_context shows the reason on
+-- each side's Connections list. Filed under the Knowledge Pool folder,
+-- where other notes about the pool live. nil if either document can't
+-- be written as a link (document.link_ref).
+CONNECTION_TITLE_SEPARATOR = " ↔ "
+
+function document.connection_draft(db_path, document_a_id, document_b_id, reason)
+    ref_a = document.link_ref(db_path, document_a_id)
+    ref_b = document.link_ref(db_path, document_b_id)
+    if ref_a == nil or ref_b == nil then
+        return nil
     end
-    note = document.truncate_note(note)
-    note_source = nil
-    if note != nil then
-        note_source = "human"
+    doc_a = entity.get(db_path, "document", tonumber(document_a_id))
+    doc_b = entity.get(db_path, "document", tonumber(document_b_id))
+    if reason == nil then
+        reason = ""
     end
-    db.exec(db_path, string.format(
-        "UPDATE document_link SET note = %s, note_source = %s WHERE from_document_id = %d AND link_text = %s;",
-        db.literal(note), db.literal(note_source), tonumber(from_document_id), db.quote(link_text)
-    ))
-    return true
+    return {
+        title = doc_a.title .. CONNECTION_TITLE_SEPARATOR .. doc_b.title,
+        content = ref_a .. " and " .. ref_b .. ": " .. reason,
+        parent_id = document.ensure_knowledge_pool_folder(db_path),
+    }
 end
+
 
 --------------------------------------------------------------------------
 -- Rendering: Markdown -> HTML via cmark, "[[...]]" -> inline links
@@ -1077,7 +1071,7 @@ end
 -- ordinary Markdown either way, so cmark itself needs no special
 -- handling for this project's own link syntax.
 function document.inline_links_to_markdown(db_path, content)
-    return (string.gsub(content, "%[%[(.-)%]%]", function(raw_link)
+    return (string.gsub(content, LINK_PATTERN, function(raw_link)
         subject, title = document.parse_link_ref(raw_link)
         target_id = document.resolve_link(db_path, subject, title)
         if target_id != nil then
@@ -1641,7 +1635,7 @@ end
 -- all of them per create is cheap.
 function document.resolve_dangling_links(db_path)
     rows = db.query(db_path,
-        "SELECT from_document_id, link_text FROM document_link WHERE to_document_id IS NULL AND (archived_at IS NULL OR archived_at = '');")
+        "SELECT id, link_text FROM document_link WHERE to_document_id IS NULL AND (archived_at IS NULL OR archived_at = '');")
     if rows == nil then
         return
     end
@@ -1650,8 +1644,8 @@ function document.resolve_dangling_links(db_path)
         to_id = document.resolve_link(db_path, subject, title)
         if to_id != nil then
             db.exec(db_path, string.format(
-                "UPDATE document_link SET to_document_id = %d WHERE from_document_id = %d AND link_text = %s AND to_document_id IS NULL;",
-                tonumber(to_id), tonumber(row.from_document_id), db.quote(row.link_text)
+                "UPDATE document_link SET to_document_id = %d WHERE id = %d AND to_document_id IS NULL;",
+                tonumber(to_id), tonumber(row.id)
             ))
         end
     end

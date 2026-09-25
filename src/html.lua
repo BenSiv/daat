@@ -4766,7 +4766,6 @@ function html.render_knowledge_graph(nonce)
                 var a = byId[e.from], b = byId[e.to];
                 var strength = (typeof e.strength === 'number') ? e.strength : 1.0;
                 var edgeText = a.title + ' ↔ ' + b.title + '\nstrength ' + strength.toFixed(2);
-                if (e.note) { edgeText += '\n' + e.note; }
                 showTooltip(ev.clientX, ev.clientY, edgeText);
                 return;
             }
@@ -5964,53 +5963,34 @@ end
 -- is already safe to place directly in the page, not user input that
 -- still needs escaping.
 -- One row of the document view's "Connections" list: the other
--- document, which way the link points, why they're connected (the
--- link's note, or a muted placeholder), and -- when the viewer can
--- edit -- a collapsed form to write/replace that note. The form posts
--- the link row's own key (from_document_id + link_text), since two
--- documents can share more than one link row.
-NOTE_SOURCE_LABELS = {human = "note", context = "from the text", model = "suggested by the agent"}
-
-function render_document_connection(link, doc_id, can_edit, csrf_token)
+-- document, which way the link points, and why they're connected -- the
+-- sentence around the link in whichever document's content holds it
+-- (document.links' `context`), or a muted placeholder when there's none.
+-- "Explain connection" opens a new document linking both
+-- (document.connection_draft) -- the same thing the agent writes, so a
+-- connection is explained one way, by anyone, in content.
+function render_document_connection(link, doc_id, can_edit)
     arrow = "&larr;"
     arrow_title = "links here"
     if link.direction == "out" then
         arrow = "&rarr;"
-        arrow_title = "linked from this document"
+        arrow_title = "this document links to it"
     end
-    note_html = "<span class=\"platform-connection-note platform-connection-note-empty\">No note on why these are connected.</span>"
-    if link.note != nil and link.note != "" then
-        source_label = NOTE_SOURCE_LABELS[link.note_source]
-        source_html = ""
-        if source_label != nil then
-            source_html = " <span class=\"platform-connection-source\">(" .. source_label .. ")</span>"
-        end
-        note_html = "<span class=\"platform-connection-note\">" .. html.html_escape(link.note) .. "</span>" .. source_html
+    context_html = "<span class=\"platform-connection-context platform-connection-context-empty\">Nothing in the text says why yet.</span>"
+    if link.context != nil and link.context != "" then
+        context_html = "<span class=\"platform-connection-context\">" .. html.html_escape(link.context) .. "</span>"
     end
-    edit_html = ""
+    explain_html = ""
     if can_edit == true then
-        current_note = ""
-        if link.note_source == "human" and link.note != nil then
-            current_note = link.note
-        end
-        edit_html = string.format("""
-<details class="platform-connection-edit"><summary>Edit note</summary>
-<form method="POST" action="document-link-note">
-<input type="hidden" name="csrf_token" value="%s">
-<input type="hidden" name="from_document_id" value="%s">
-<input type="hidden" name="link_text" value="%s">
-<input type="hidden" name="return_to" value="%s">
-<textarea name="note" rows="2" maxlength="%d" placeholder="Why are these two documents connected? Leave empty to clear.">%s</textarea>
-<button type="submit" class="btn btn-secondary">Save note</button>
-</form></details>""", html.html_escape(csrf_token), tostring(link.from_document_id), html.html_escape(link.link_text),
-            tostring(doc_id), document.LINK_NOTE_MAX_LENGTH, html.html_escape(current_note))
+        explain_html = " <a class=\"platform-connection-explain\" href=\"document-edit?connect_a=" .. tostring(doc_id) ..
+            "&amp;connect_b=" .. tostring(link.id) .. "\">Explain connection</a>"
     end
     return "<li><span class=\"platform-connection-arrow\" title=\"" .. arrow_title .. "\">" .. arrow .. "</span> " ..
         "<a href=\"document?entity_id=" .. tostring(link.id) .. "\">" .. html.html_escape(link.title) .. "</a>" ..
-        "<div class=\"platform-connection-detail\">" .. note_html .. edit_html .. "</div></li>"
+        "<div class=\"platform-connection-detail\">" .. context_html .. explain_html .. "</div></li>"
 end
 
-function html.render_document(doc, rendered_html, breadcrumbs, children, links, can_edit, csrf_token)
+function html.render_document(doc, rendered_html, breadcrumbs, children, links, can_edit)
     breadcrumb_html = ""
     for i, crumb in ipairs(breadcrumbs) do
         if i > 1 then
@@ -6036,7 +6016,7 @@ function html.render_document(doc, rendered_html, breadcrumbs, children, links, 
 
     connections_html = ""
     for _, link in ipairs(links) do
-        connections_html = connections_html .. render_document_connection(link, doc.id, can_edit, csrf_token)
+        connections_html = connections_html .. render_document_connection(link, doc.id, can_edit)
     end
     connections_block = ""
     if connections_html != "" then
@@ -6079,10 +6059,8 @@ function html.render_document(doc, rendered_html, breadcrumbs, children, links, 
         .platform-document-connections a:hover { text-decoration: underline; }
         .platform-connection-arrow { color: var(--platform-muted, #64748b); }
         .platform-connection-detail { margin: 2px 0 0 1.4em; font-size: 0.9rem; }
-        .platform-connection-note-empty, .platform-connection-source { color: var(--platform-muted, #64748b); }
-        .platform-connection-note-empty { font-style: italic; }
-        .platform-connection-edit summary { cursor: pointer; color: var(--platform-muted, #64748b); font-size: 0.85rem; margin-top: 2px; }
-        .platform-connection-edit textarea { display: block; width: 100%%; max-width: 640px; margin: 6px 0; font: inherit; }
+        .platform-connection-context-empty { color: var(--platform-muted, #64748b); font-style: italic; }
+        .platform-document-connections a.platform-connection-explain { font-weight: 400; font-size: 0.85rem; margin-left: 6px; white-space: nowrap; }
     </style>
     <div class="platform-container">
         <div class="platform-document-breadcrumbs">%s <a href="documents">(all documents)</a></div>
