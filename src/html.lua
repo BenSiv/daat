@@ -4545,7 +4545,7 @@ function html.render_knowledge_graph(nonce)
     <div class="platform-container">
         %s
         <div class="platform-kg-canvas-wrap">
-            <canvas id="platform-kg-canvas" height="600"></canvas>
+            <canvas id="platform-kg-canvas" height="400"></canvas>
             <p id="platform-kg-status" class="platform-kg-status">Loading graph...</p>
         </div>
         <div class="platform-kg-legend">%s<button type="button" class="platform-kg-forces-toggle" id="platform-kg-forces-toggle">Forces</button><button type="button" class="platform-kg-legend-reset" id="platform-kg-reset">Reset view</button></div>
@@ -4580,8 +4580,16 @@ function html.render_knowledge_graph(nonce)
         // canvas (draw()'s ctx.setTransform below).
         var camera = { x: 0, y: 0, scale: 1 };
 
+        // Full height by default: fill the viewport from the canvas's own
+        // top edge down, leaving room for the legend row. The Forces panel
+        // is deliberately not counted -- opening it adds height below and
+        // the page scrolls, instead of shrinking the canvas to make room.
         function resize() {
             canvas.width = canvas.parentElement.clientWidth - 16;
+            var top = canvas.getBoundingClientRect().top + window.scrollY;
+            var legend = document.querySelector('.platform-kg-legend');
+            var below = (legend ? legend.offsetHeight + 12 : 0) + 32;
+            canvas.height = Math.max(400, window.innerHeight - top - below);
         }
         resize();
         window.addEventListener('resize', function() { resize(); draw(); });
