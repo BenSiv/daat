@@ -46,9 +46,14 @@ last_token() {
     tail -1 "$MAIL_TEST_OUTBOX" | grep -o 'reset-password#token=[0-9a-f]*' | head -1 | sed 's/.*token=//'
 }
 
+# An account whose email is verified the only way there is: by using the
+# setup link `user email` sends. The outbox is cleared afterwards, so a
+# test's own outbox_count starts from zero.
 add_user_with_email() {
     "$BIN" user add "$1" oldpass123 i >/dev/null
     "$BIN" user email "$1" "$2" >/dev/null
+    raw_form_post "/reset-password" "token=$(last_token)&new_password=oldpass123&confirm_password=oldpass123" >/dev/null
+    rm -f "$MAIL_TEST_OUTBOX"
 }
 
 @test "with no mail configured, /login has no forgot link and both reset routes 404" {
@@ -279,53 +284,135 @@ add_user_with_email() {
     [[ "$output" =~ "Email updated" ]]
 }
 
-@test "admins can set a user's email, and give one at creation" {
+admin_cookie() {
     "$BIN" user add admin adminpass i >/dev/null
     "$BIN" user capabilities admin ia >/dev/null
     raw=$(raw_login admin adminpass)
     session=$(printf '%s' "$raw" | grep -o 'Set-Cookie: session=[^;]*' | sed 's/Set-Cookie: session=//')
     csrf=$(printf '%s' "$raw" | grep -o 'Set-Cookie: csrf=[^;]*' | sed 's/Set-Cookie: csrf=//')
-    cookie="session=${session}; csrf=${csrf}"
+    echo "$csrf" "session=${session}; csrf=${csrf}"
+}
 
-    run raw_form_post "/admin-users-create" "csrf_token=${csrf}&login=hanne&password=pw123456&email=hanne%40example.com&cap=i" "$cookie"
+@test "an admin creates an account with an email, no password -- the setup link sets it and verifies the email" {
+    read csrf cookie < <(admin_cookie)
+
+    run raw_get "/admin-users" "" "$cookie"
+    [[ "$output" =~ "Create and email setup link" ]]
+    [[ ! "$output" =~ 'placeholder="password" required' ]]
+
+    run raw_form_post "/admin-users-create" "csrf_token=${csrf}&login=hanne&email=Hanne%40Example.com&cap=i" "$cookie"
     [[ "$output" =~ "302 Found" ]]
     run "$BIN" user list
-    [[ "$output" =~ "hanne  cap=i  email=hanne@example.com" ]]
+    [[ "$output" =~ "hanne  cap=i  email=hanne@example.com (unverified)" ]]
+    [ "$(outbox_count)" = "1" ]
+    run cat "$MAIL_TEST_OUTBOX"
+    [[ "$output" =~ '"to":"hanne@example.com"' ]]
+    [[ "$output" =~ "Set up your" ]]
 
-    run raw_form_post "/admin-users-create" "csrf_token=${csrf}&login=dup&password=pw123456&email=hanne%40example.com&cap=i" "$cookie"
-    [[ "$output" =~ "already used" ]]
+    # Unverified: forgot-password sends nothing yet.
+    run raw_form_post "/forgot-password" "identifier=hanne"
+    [[ "$output" =~ "Check your email" ]]
+    [ "$(outbox_count)" = "1" ]
+
+    token=$(last_token)
+    run raw_form_post "/reset-password" "token=${token}&new_password=chosen123&confirm_password=chosen123"
+    [[ "$output" =~ "Location: /login?reset=1" ]]
+    run raw_login hanne chosen123
+    [[ "$output" =~ "302 Found" ]]
     run "$BIN" user list
-    [[ ! "$output" =~ "dup" ]]
+    [[ "$output" =~ "email=hanne@example.com  active" ]]
+
+    run raw_form_post "/forgot-password" "identifier=hanne"
+    [ "$(outbox_count)" = "2" ]
+}
+
+@test "admin create needs a valid, unused email, and creates nothing otherwise" {
+    read csrf cookie < <(admin_cookie)
+    add_user_with_email taken taken@example.com
+    for email in "" "not-an-email" "taken%40example.com"; do
+        run raw_form_post "/admin-users-create" "csrf_token=${csrf}&login=newbie&email=${email}&cap=i" "$cookie"
+        [[ "$output" =~ "email is required" || "$output" =~ "invalid email" || "$output" =~ "already used" ]]
+    done
+    run "$BIN" user list
+    [[ ! "$output" =~ "newbie" ]]
+    [ "$(outbox_count)" = "0" ]
+}
+
+@test "changing an email unverifies it and mails a setup link; resaving resends; an old link verifies nothing new" {
+    read csrf cookie < <(admin_cookie)
+    add_user_with_email hanne hanne@example.com
 
     run raw_form_post "/admin-users-email" "csrf_token=${csrf}&login=hanne&email=h.volpin%40example.com" "$cookie"
     [[ "$output" =~ "302 Found" ]]
     run "$BIN" user list
-    [[ "$output" =~ "email=h.volpin@example.com" ]]
+    [[ "$output" =~ "email=h.volpin@example.com (unverified)" ]]
+    [ "$(outbox_count)" = "1" ]
+    first=$(last_token)
 
-    run raw_get "/admin-users" "" "$cookie"
-    [[ "$output" =~ 'value="h.volpin@example.com"' ]]
+    run raw_form_post "/admin-users-email" "csrf_token=${csrf}&login=hanne&email=h.volpin%40example.com" "$cookie"
+    [ "$(outbox_count)" = "2" ]
+
+    # A link mailed to the previous address doesn't verify the new one.
+    run raw_form_post "/admin-users-email" "csrf_token=${csrf}&login=hanne&email=hv%40example.com" "$cookie"
+    run raw_form_post "/reset-password" "token=${first}&new_password=pw999999&confirm_password=pw999999"
+    run "$BIN" user list
+    [[ "$output" =~ "email=hv@example.com (unverified)" ]]
 
     run raw_form_post "/admin-users-email" "csrf_token=wrong&login=hanne&email=x%40example.com" "$cookie"
     [[ "$output" =~ "403 Forbidden" ]]
 }
 
-@test "/account-email sets the user's own email, but only with the current password" {
+@test "an admin's email is verified by its setup link, but admins still never get reset emails" {
+    "$BIN" user add boss bosspass i >/dev/null
+    "$BIN" user capabilities boss ia >/dev/null
+    run "$BIN" user email boss boss@example.com
+    [[ "$output" =~ "Setup link sent to boss@example.com" ]]
+    token=$(last_token)
+    run raw_form_post "/reset-password" "token=${token}&new_password=bossnew1&confirm_password=bossnew1"
+    [[ "$output" =~ "Location: /login?reset=1" ]]
+    run "$BIN" user list
+    [[ "$output" =~ "boss  cap=ia  email=boss@example.com  active" ]]
+    rm -f "$MAIL_TEST_OUTBOX"
+    run raw_form_post "/forgot-password" "identifier=boss"
+    [ "$(outbox_count)" = "0" ]
+}
+
+@test "user invite: CLI creates the account and mails the setup link" {
+    run "$BIN" user invite radi Radi@Example.com i
+    [[ "$output" =~ "Invited radi -- setup link sent to radi@example.com" ]]
+    [ "$(outbox_count)" = "1" ]
+    run raw_login radi ""
+    [[ "$output" =~ "401 Unauthorized" ]]
+    run raw_form_post "/reset-password" "token=$(last_token)&new_password=radipass1&confirm_password=radipass1"
+    run raw_login radi radipass1
+    [[ "$output" =~ "302 Found" ]]
+}
+
+@test "without mail configured, admins create accounts with a password, as before" {
+    write_platform_config ""
+    read csrf cookie < <(admin_cookie)
+    run raw_get "/admin-users" "" "$cookie"
+    [[ "$output" =~ 'placeholder="password"' ]]
+    run raw_form_post "/admin-users-create" "csrf_token=${csrf}&login=hanne&password=pw123456&email=&cap=i" "$cookie"
+    [[ "$output" =~ "302 Found" ]]
+    run raw_login hanne pw123456
+    [[ "$output" =~ "302 Found" ]]
+    run "$BIN" user invite radi radi@example.com
+    [[ "$output" =~ "mail isn't configured" ]]
+}
+
+@test "/account shows the email read-only; there is no self-service email form" {
     read session csrf < <(login_test_user "alice" "i")
     cookie="session=${session}; csrf=${csrf}"
+    run raw_get "/account" "" "$cookie"
+    [[ "$output" =~ "No email on file" ]]
+    [[ ! "$output" =~ 'action="account-email"' ]]
 
-    run raw_form_post "/account-email" "csrf_token=${csrf}&email=alice%40example.com&current_password=wrong" "$cookie"
-    [[ "$output" =~ "Current password is incorrect." ]]
-    run "$BIN" user list
-    [[ "$output" =~ "email=-" ]]
+    "$BIN" user email alice alice@example.com >/dev/null
+    run raw_get "/account" "" "$cookie"
+    [[ "$output" =~ "alice@example.com (not verified yet" ]]
 
-    run raw_form_post "/account-email" "csrf_token=${csrf}&email=alice%40example.com&current_password=testpass123" "$cookie"
-    [[ "$output" =~ "Email saved." ]]
-    [[ "$output" =~ 'value="alice@example.com"' ]]
-    run "$BIN" user list
-    [[ "$output" =~ "email=alice@example.com" ]]
-
-    run raw_form_post "/account-email" "csrf_token=wrong&email=evil%40example.com&current_password=testpass123" "$cookie"
-    [[ "$output" =~ "CSRF check failed." ]]
+    run raw_form_post "/account-email" "csrf_token=${csrf}&email=evil%40example.com&current_password=testpass123" "$cookie"
     run "$BIN" user list
     [[ "$output" =~ "email=alice@example.com" ]]
 }

@@ -746,67 +746,39 @@ function cgi.handle_request()
     -- form does -- requires the current password to verify (auth.login's
     -- own bcrypt check) before setting a new one) and log out (a plain
     -- link to the existing /logout route, not handled here).
-    account_email = nil
-    if path_info == "/account" or path_info == "/account-email" then
+    -- The account's email is shown here but set only by an admin
+    -- (/admin-users-email), and it only receives reset links once a link
+    -- mailed to it has been used: a self-service form would let anyone
+    -- holding an open session point the account's recovery at themselves.
+    account_user = nil
+    if path_info == "/account" then
         account_user = auth.get_user(db_path, author)
-        if account_user != nil then
-            account_email = account_user.email
-        end
-    end
-
-    -- Sets the requester's own email (the forgot-password flow's
-    -- delivery address) -- current password required, same as a
-    -- password change: otherwise anyone who got hold of an open session
-    -- could point the account's reset emails at themselves and take it
-    -- over for good.
-    if path_info == "/account-email" and method == "POST" then
-        form = parse_query(io.read("*all"))
-        message = "Email saved."
-        is_error = false
-        if not require_csrf(cookies, form.csrf_token) then
-            message = "CSRF check failed."
-            is_error = true
-        elseif auth.login(db_path, author, default_value(form.current_password, "")) == nil then
-            message = "Current password is incorrect."
-            is_error = true
-        else
-            ok, err = auth.set_email(db_path, author, default_value(form.email, ""))
-            if ok == nil then
-                message = tostring(err)
-                is_error = true
-            else
-                account_email = auth.get_user(db_path, author).email
-            end
-        end
-        body = html.render_account(author, account_email, default_value(cookies.csrf, ""), message, is_error)
-        return print_response("200 OK", "text/html",
-            html.page_shell("Account", "", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
     end
 
     if path_info == "/account" then
         if method == "POST" then
             form = parse_query(io.read("*all"))
             if not require_csrf(cookies, form.csrf_token) then
-                body = html.render_account(author, account_email, default_value(cookies.csrf, ""), "CSRF check failed.", true)
+                body = html.render_account(author, account_user, default_value(cookies.csrf, ""), "CSRF check failed.", true)
                 return print_response("403 Forbidden", "text/html",
                     html.page_shell("Account", "", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
             end
             if auth.login(db_path, author, default_value(form.current_password, "")) == nil then
-                body = html.render_account(author, account_email, default_value(cookies.csrf, ""), "Current password is incorrect.", true)
+                body = html.render_account(author, account_user, default_value(cookies.csrf, ""), "Current password is incorrect.", true)
                 return print_response("200 OK", "text/html",
                     html.page_shell("Account", "", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
             end
             ok, err = auth.set_password(db_path, author, form.new_password)
             if ok == nil then
-                body = html.render_account(author, account_email, default_value(cookies.csrf, ""), tostring(err), true)
+                body = html.render_account(author, account_user, default_value(cookies.csrf, ""), tostring(err), true)
                 return print_response("200 OK", "text/html",
                     html.page_shell("Account", "", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
             end
-            body = html.render_account(author, account_email, default_value(cookies.csrf, ""), "Password changed.", false)
+            body = html.render_account(author, account_user, default_value(cookies.csrf, ""), "Password changed.", false)
             return print_response("200 OK", "text/html",
                 html.page_shell("Account", "", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
         end
-        body = html.render_account(author, account_email, default_value(cookies.csrf, ""), nil, false)
+        body = html.render_account(author, account_user, default_value(cookies.csrf, ""), nil, false)
         return print_response("200 OK", "text/html",
             html.page_shell("Account", "", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
     end
@@ -1321,7 +1293,7 @@ function cgi.handle_request()
             return print_response("403 Forbidden", "text/html", "<h3>Forbidden: requires Admin capability</h3>")
         end
         users = auth.list_users(db_path, true)
-        body = html.render_admin_users(users, default_value(cookies.csrf, ""), nil, false)
+        body = html.render_admin_users(users, config.password_reset_enabled(), default_value(cookies.csrf, ""), nil, false)
         return print_response("200 OK", "text/html",
             html.page_shell("Users", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
     end
@@ -1349,7 +1321,7 @@ function cgi.handle_request()
         form = parse_query(io.read("*all"))
         if not require_csrf(cookies, form.csrf_token) then
             users = auth.list_users(db_path, true)
-            body = html.render_admin_users(users, default_value(cookies.csrf, ""), "CSRF check failed.", true)
+            body = html.render_admin_users(users, config.password_reset_enabled(), default_value(cookies.csrf, ""), "CSRF check failed.", true)
             return print_response("403 Forbidden", "text/html",
                 html.page_shell("Users", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
         end
@@ -1357,7 +1329,13 @@ function cgi.handle_request()
         ok = nil
         err = nil
 
-        if path_info == "/admin-users-create" then
+        if path_info == "/admin-users-create" and config.password_reset_enabled() then
+            -- No password field: the account gets a setup link instead,
+            -- and choosing a password through it verifies the email.
+            ok, err = auth.invite_user(root, db_path, form.login, default_value(form.email, ""), form.cap, theme.site_name)
+        elseif path_info == "/admin-users-create" then
+            -- No mail on this deployment, so nothing could be sent or
+            -- verified: the admin sets the first password, as before.
             email = default_value(form.email, "")
             if email != "" and not mail_provider.valid_address(string.lower(email)) then
                 ok, err = nil, "invalid email address: " .. email
@@ -1371,6 +1349,16 @@ function cgi.handle_request()
             end
         elseif path_info == "/admin-users-email" then
             ok, err = auth.set_email(db_path, form.login, default_value(form.email, ""))
+            -- A new (or still unverified) address gets a setup link;
+            -- saving it again unchanged is how an admin resends one.
+            email_user = auth.get_user(db_path, form.login)
+            if ok != nil and config.password_reset_enabled() and email_user != nil
+                    and email_user.email != nil and email_user.email != "" and not auth.email_verified(email_user) then
+                ok, err = auth.send_setup_link(root, db_path, form.login, theme.site_name)
+                if ok == nil then
+                    err = "email saved, but the setup link could not be sent: " .. tostring(err)
+                end
+            end
         elseif path_info == "/admin-users-capabilities" then
             ok, err = auth.set_capabilities(db_path, form.login, form.cap)
         elseif path_info == "/admin-users-password" then
@@ -1383,7 +1371,7 @@ function cgi.handle_request()
 
         if ok == nil then
             users = auth.list_users(db_path, true)
-            body = html.render_admin_users(users, default_value(cookies.csrf, ""), tostring(err), true)
+            body = html.render_admin_users(users, config.password_reset_enabled(), default_value(cookies.csrf, ""), tostring(err), true)
             return print_response("200 OK", "text/html",
                 html.page_shell("Users", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
         end

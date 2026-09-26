@@ -70,24 +70,60 @@ CREATE TABLE IF NOT EXISTS api_key (
 );
 """
 
--- Added after the user table already existed in real deployments, so a
--- migration rather than a SCHEMA edit (CREATE TABLE IF NOT EXISTS never
--- adds a column to an existing table) -- same pattern as
--- document.lua's ensure_document_link_*_column. Nullable: an account
--- with no email simply can't use the forgot-password flow.
-function ensure_user_email_column(db_path)
-    existing = db.get_columns(db_path, "user")
-    for _, name in ipairs(existing) do
-        if name == "email" then
-            return
+function has_column(db_path, table_name, column_name)
+    for _, name in ipairs(db.get_columns(db_path, table_name)) do
+        if name == column_name then
+            return true
         end
     end
-    db.exec(db_path, "ALTER TABLE user ADD COLUMN email VARCHAR(255) DEFAULT NULL;")
+    return false
+end
+
+-- Every request runs init_schema, so concurrent first requests after an
+-- upgrade can all see a column missing and race to add it -- found
+-- rehearsing against real MySQL 8, where the losers' ALTER raises
+-- "Duplicate column name" (the same race document.lua's
+-- ensure_document_link_indexes tolerates for indexes). A failed ALTER is
+-- only an error if the column still doesn't exist afterwards.
+function add_column_if_missing(db_path, table_name, column_name, column_sql)
+    if has_column(db_path, table_name, column_name) then
+        return
+    end
+    ok, err = pcall(db.exec, db_path, "ALTER TABLE " .. table_name .. " ADD COLUMN " .. column_name .. " " .. column_sql .. ";")
+    if ok == false and not has_column(db_path, table_name, column_name) then
+        error(err)
+    end
+end
+
+-- Columns added after these tables already existed in real deployments,
+-- so migrations rather than SCHEMA edits (CREATE TABLE IF NOT EXISTS
+-- never adds a column to an existing table).
+--
+-- user.email: nullable -- an account with no email simply can't use the
+-- forgot-password flow.
+--
+-- user.email_verified_at: when the account's current email was last
+-- proven reachable -- set by completing a link emailed to that exact
+-- address, cleared whenever the address changes. Unix seconds, like
+-- password_reset's own times. Forgot-password only mails a verified
+-- address (find_reset_account), so a mistyped address never receives
+-- reset links.
+--
+-- password_reset.purpose: "reset" (forgot-password) or "setup" (sent
+-- when an account is created or its email is set -- choosing a password
+-- through it is how the address gets verified). password_reset.email:
+-- the address the link went to, so completing it verifies only that
+-- address, not one set since.
+function ensure_auth_columns(db_path)
+    add_column_if_missing(db_path, "user", "email", "VARCHAR(255) DEFAULT NULL")
+    add_column_if_missing(db_path, "user", "email_verified_at", "INTEGER DEFAULT NULL")
+    add_column_if_missing(db_path, "password_reset", "purpose", "VARCHAR(16) NOT NULL DEFAULT 'reset'")
+    add_column_if_missing(db_path, "password_reset", "email", "VARCHAR(255) DEFAULT NULL")
 end
 
 function auth.init_schema(db_path)
     ok, err = db.exec(db_path, string.format(auth.SCHEMA, db.now_expr(db_path), db.now_expr(db_path)))
-    ensure_user_email_column(db_path)
+    ensure_auth_columns(db_path)
     return ok, err
 end
 
@@ -217,7 +253,7 @@ function auth.get_user(db_path, login)
 end
 
 function auth.list_users(db_path, include_archived)
-    q = "SELECT login, cap, email, created_at, archived_at FROM user"
+    q = "SELECT login, cap, email, email_verified_at, created_at, archived_at FROM user"
     if include_archived != true then
         q = q .. " WHERE archived_at IS NULL"
     end
@@ -242,16 +278,18 @@ function auth.set_password(db_path, login, password)
 end
 
 -- Stored lowercased, and unique across accounts (checked here, not
--- via a DB constraint -- see ensure_user_email_column for why this is
+-- via a DB constraint -- see ensure_auth_columns for why this is
 -- a migration), so the forgot-password form can accept an email and
--- resolve it to exactly one account. "" clears it.
+-- resolve it to exactly one account. "" clears it. A changed address
+-- starts unverified (email_verified_at NULL); setting the same address
+-- again leaves its verification alone.
 function auth.set_email(db_path, login, email)
     user = auth.get_user(db_path, login)
     if user == nil then
         return nil, "no such user: " .. tostring(login)
     end
     if email == nil or email == "" then
-        db.exec(db_path, string.format("UPDATE user SET email = NULL WHERE login = %s;", db.quote(login)))
+        db.exec(db_path, string.format("UPDATE user SET email = NULL, email_verified_at = NULL WHERE login = %s;", db.quote(login)))
         return true
     end
     email = string.lower(email)
@@ -262,10 +300,18 @@ function auth.set_email(db_path, login, email)
     if other != nil and other.login != login then
         return nil, "email already used by another account"
     end
+    if user.email == email then
+        return true
+    end
     db.exec(db_path, string.format(
-        "UPDATE user SET email = %s WHERE login = %s;", db.quote(email), db.quote(login)
+        "UPDATE user SET email = %s, email_verified_at = NULL WHERE login = %s;", db.quote(email), db.quote(login)
     ))
     return true
+end
+
+function auth.email_verified(user)
+    return user != nil and user.email != nil and user.email != ""
+        and user.email_verified_at != nil and user.email_verified_at != ""
 end
 
 function auth.get_user_by_email(db_path, email)
@@ -568,13 +614,140 @@ function find_reset_account(db_path, identifier)
     if user == nil or (user.archived_at != nil and user.archived_at != "") then
         return nil
     end
-    if user.email == nil or user.email == "" then
+    if not auth.email_verified(user) then
         return nil
     end
     if string.find(default_cap(user.cap), "a", 1, true) != nil then
         return nil
     end
     return user
+end
+
+-- A setup link has longer to live than a reset one: it's the first
+-- email a new account gets, often read days after the admin sent it.
+SETUP_TTL_SECONDS = 7 * 24 * 60 * 60
+
+-- Issues one emailed link (purpose "reset" or "setup") to user.email and
+-- sends it. -> true | nil, err. The link is the same /reset-password
+-- page either way; only its lifetime and the email's wording differ.
+function send_account_link(root, db_path, user, purpose, site_name)
+    config = require("config")
+    secret, err = auth.session_secret(root)
+    if secret == nil then
+        return nil, err
+    end
+    token, token_err = random_hex_token(32)
+    if token == nil then
+        return nil, token_err
+    end
+    now = os.time()
+    ttl = RESET_TTL_SECONDS
+    if purpose == "setup" then
+        ttl = SETUP_TTL_SECONDS
+    end
+    token_hash = reset_token_hash(secret, token)
+    db.exec(db_path, string.format(
+        "INSERT INTO password_reset (token_hash, login, issued_at, expires_at, purpose, email) VALUES (%s, %s, %d, %d, %s, %s);",
+        db.quote(token_hash), db.quote(user.login), now, now + ttl, db.quote(purpose), db.quote(user.email)
+    ))
+
+    base_url = string.gsub(config.platform_config().public_url, "/+$", "")
+    -- In the #fragment, not the query string: browsers never send a
+    -- fragment to the server, so the token can't land in the web
+    -- server's or a load balancer's access log. /reset-password's own
+    -- script moves it into the form, which POSTs it.
+    link = base_url .. "/reset-password#token=" .. token
+    subject = "Reset your " .. site_name .. " password"
+    lines = {
+        "Someone (hopefully you) asked to reset the password for the " .. site_name .. " account \"" .. user.login .. "\".",
+        "",
+        "To choose a new password, open this link within the next hour:",
+        "",
+        link,
+        "",
+        "The link works once. If you didn't ask for this, ignore this email -- your password stays the same.",
+        "",
+    }
+    if purpose == "setup" then
+        subject = "Set up your " .. site_name .. " account"
+        lines = {
+            "An administrator set this address as the email for the " .. site_name .. " account \"" .. user.login .. "\".",
+            "",
+            "To confirm it and choose your password, open this link within the next 7 days:",
+            "",
+            link,
+            "",
+            "The link works once. Password reset emails will only be sent here once you've used it.",
+            "If you weren't expecting this, ignore it.",
+            "",
+        }
+    end
+    sent, send_err = mail_provider.send({
+        to = user.email,
+        from_name = site_name,
+        subject = subject,
+        body = table.concat(lines, "\n"),
+    })
+    if sent == nil then
+        -- Void the unsent link rather than delete it (nothing is ever
+        -- deleted -- see doc/architecture.md), and so it doesn't count
+        -- against the throttle: the user can retry straight away.
+        db.exec(db_path, string.format(
+            "UPDATE password_reset SET used_at = %d WHERE token_hash = %s;", now, db.quote(token_hash)
+        ))
+        return nil, send_err
+    end
+    return true
+end
+
+-- auth.send_setup_link(root, db_path, login, site_name) -> true | nil, err
+-- Admin-triggered (account creation, setting an email), so no throttle.
+-- Works for Admin accounts too: it's how any account's address is
+-- verified -- Admins just never get the forgot-password kind.
+function auth.send_setup_link(root, db_path, login, site_name)
+    user = auth.get_user(db_path, login)
+    if user == nil or (user.archived_at != nil and user.archived_at != "") then
+        return nil, "no such active user: " .. tostring(login)
+    end
+    if user.email == nil or user.email == "" then
+        return nil, login .. " has no email on file"
+    end
+    return send_account_link(root, db_path, user, "setup", site_name)
+end
+
+-- auth.invite_user(root, db_path, login, email, cap, site_name)
+--   -> true | nil, err
+-- Creates an account that has no usable password yet and emails it a
+-- setup link: choosing a password through the link is also what
+-- verifies the address, and the admin never knows the password. The
+-- email is required and checked before anything is created. If only
+-- the send fails, the account exists and the error says so --
+-- setting the email again resends the link.
+function auth.invite_user(root, db_path, login, email, cap, site_name)
+    if email == nil or email == "" then
+        return nil, "email is required"
+    end
+    email = string.lower(email)
+    if not mail_provider.valid_address(email) then
+        return nil, "invalid email address: " .. email
+    end
+    if auth.get_user_by_email(db_path, email) != nil then
+        return nil, "email already used by another account"
+    end
+    placeholder, err = random_hex_token(32)
+    if placeholder == nil then
+        return nil, err
+    end
+    ok, err = auth.create_user(db_path, login, placeholder, cap)
+    if ok == nil then
+        return nil, err
+    end
+    auth.set_email(db_path, login, email)
+    sent, send_err = auth.send_setup_link(root, db_path, login, site_name)
+    if sent == nil then
+        return nil, "created " .. login .. ", but the setup email could not be sent (" .. tostring(send_err) .. ") -- set their email again to resend it"
+    end
+    return true
 end
 
 -- auth.request_password_reset(root, db_path, identifier, site_name)
@@ -591,64 +764,24 @@ function auth.request_password_reset(root, db_path, identifier, site_name)
 
     now = os.time()
     recent = db.query(db_path, string.format(
-        "SELECT COUNT(*) AS n FROM password_reset WHERE login = %s AND used_at IS NULL AND issued_at > %d;",
+        "SELECT COUNT(*) AS n FROM password_reset WHERE login = %s AND purpose = 'reset' AND used_at IS NULL AND issued_at > %d;",
         db.quote(user.login), now - RESET_THROTTLE_SECONDS
     ))
     if recent != nil and recent[1] != nil and tonumber(recent[1].n) > 0 then
         return false
     end
 
-    secret, err = auth.session_secret(root)
-    if secret == nil then
-        return nil, err
-    end
-    token, token_err = random_hex_token(32)
-    if token == nil then
-        return nil, token_err
-    end
-    token_hash = reset_token_hash(secret, token)
-    db.exec(db_path, string.format(
-        "INSERT INTO password_reset (token_hash, login, issued_at, expires_at) VALUES (%s, %s, %d, %d);",
-        db.quote(token_hash), db.quote(user.login), now, now + RESET_TTL_SECONDS
-    ))
-
-    base_url = string.gsub(config.platform_config().public_url, "/+$", "")
-    -- In the #fragment, not the query string: browsers never send a
-    -- fragment to the server, so the token can't land in the web
-    -- server's or a load balancer's access log. /reset-password's own
-    -- script moves it into the form, which POSTs it.
-    link = base_url .. "/reset-password#token=" .. token
-    body = table.concat({
-        "Someone (hopefully you) asked to reset the password for the " .. site_name .. " account \"" .. user.login .. "\".",
-        "",
-        "To choose a new password, open this link within the next hour:",
-        "",
-        link,
-        "",
-        "The link works once. If you didn't ask for this, ignore this email -- your password stays the same.",
-        "",
-    }, "\n")
-    sent, send_err = mail_provider.send({
-        to = user.email,
-        from_name = site_name,
-        subject = "Reset your " .. site_name .. " password",
-        body = body,
-    })
+    sent, send_err = send_account_link(root, db_path, user, "reset", site_name)
     if sent == nil then
-        -- Void the unsent link rather than delete it (nothing is ever
-        -- deleted -- see doc/architecture.md), and so it doesn't count
-        -- against the throttle: the user can retry straight away.
-        db.exec(db_path, string.format(
-            "UPDATE password_reset SET used_at = %d WHERE token_hash = %s;", now, db.quote(token_hash)
-        ))
         return nil, send_err
     end
     return true
 end
 
--- auth.check_password_reset(root, db_path, token) -> login | nil
+-- auth.check_password_reset(root, db_path, token) -> login, link | nil
 -- Valid means: issued by this store, not yet used, not expired, and the
--- account is still active and not an Admin.
+-- account is still active -- and, for a forgot-password link, not an
+-- Admin. link is the password_reset row (purpose, email).
 function auth.check_password_reset(root, db_path, token)
     if token == nil or string.match(token, "^%x+$") == nil or string.len(token) != 64 then
         return nil
@@ -658,7 +791,7 @@ function auth.check_password_reset(root, db_path, token)
         return nil
     end
     rows = db.query(db_path, string.format(
-        "SELECT login FROM password_reset WHERE token_hash = %s AND used_at IS NULL AND expires_at > %d;",
+        "SELECT login, purpose, email FROM password_reset WHERE token_hash = %s AND used_at IS NULL AND expires_at > %d;",
         db.quote(reset_token_hash(secret, token)), os.time()
     ))
     if rows == nil or rows[1] == nil then
@@ -670,10 +803,10 @@ function auth.check_password_reset(root, db_path, token)
     end
     -- Re-checked here, not only when the link was issued: an account
     -- promoted to Admin after its link went out mustn't be able to use it.
-    if string.find(default_cap(user.cap), "a", 1, true) != nil then
+    if rows[1].purpose != "setup" and string.find(default_cap(user.cap), "a", 1, true) != nil then
         return nil
     end
-    return user.login
+    return user.login, rows[1]
 end
 
 -- auth.complete_password_reset(root, db_path, token, new_password)
@@ -683,7 +816,7 @@ end
 -- Existing sessions are NOT ended: session cookies are stateless (see
 -- this file's header), the same limitation an admin reset has today.
 function auth.complete_password_reset(root, db_path, token, new_password)
-    login = auth.check_password_reset(root, db_path, token)
+    login, link = auth.check_password_reset(root, db_path, token)
     if login == nil then
         return nil, "This reset link is invalid or has expired."
     end
@@ -697,11 +830,20 @@ function auth.complete_password_reset(root, db_path, token, new_password)
     db.exec(db_path, string.format(
         "UPDATE password_reset SET used_at = %d WHERE login = %s AND used_at IS NULL;", os.time(), db.quote(login)
     ))
+    -- Opening a link that was mailed to the address still on file proves
+    -- the address works. A link sent before the email was changed proves
+    -- nothing about the new one.
+    if link.email != nil and link.email != "" then
+        db.exec(db_path, string.format(
+            "UPDATE user SET email_verified_at = %d WHERE login = %s AND email = %s;",
+            os.time(), db.quote(login), db.quote(link.email)
+        ))
+    end
     return login
 end
 
 --------------------------------------------------------------------------
--- CLI: `daat user <add|passwd|email|capabilities|list|archive|unarchive> ...`
+-- CLI: `daat user <add|invite|passwd|email|capabilities|list|archive|unarchive> ...`
 --------------------------------------------------------------------------
 
 function auth.do_user(cmd_args, db_path)
@@ -721,6 +863,29 @@ function auth.do_user(cmd_args, db_path)
             return
         end
         print("Created user " .. login)
+        return
+    end
+
+    -- Run from the store root, like every other CLI command ("." below).
+    if action == "invite" then
+        config = require("config")
+        login = cmd_args[2]
+        email = cmd_args[3]
+        cap = cmd_args[4]
+        if login == nil or email == nil then
+            print("Usage: daat user invite <login> <email> [cap]")
+            return
+        end
+        if not config.password_reset_enabled() then
+            print("Error: mail isn't configured (mail_provider, mail_from, public_url) -- use 'daat user add' instead")
+            return
+        end
+        ok, err = auth.invite_user(".", db_path, login, email, cap, config.load_theme(".").site_name)
+        if ok == nil then
+            print("Error: " .. tostring(err))
+            return
+        end
+        print("Invited " .. login .. " -- setup link sent to " .. string.lower(email))
         return
     end
 
@@ -753,6 +918,16 @@ function auth.do_user(cmd_args, db_path)
             return
         end
         print("Email updated for " .. login)
+        config = require("config")
+        user = auth.get_user(db_path, login)
+        if config.password_reset_enabled() and user.email != nil and not auth.email_verified(user) then
+            sent, send_err = auth.send_setup_link(".", db_path, login, config.load_theme(".").site_name)
+            if sent == nil then
+                print("Error: setup link not sent: " .. tostring(send_err))
+                return
+            end
+            print("Setup link sent to " .. user.email .. " -- the address is verified once it's used")
+        end
         return
     end
 
@@ -788,6 +963,8 @@ function auth.do_user(cmd_args, db_path)
             email = u.email
             if email == nil or email == "" then
                 email = "-"
+            elseif not auth.email_verified(u) then
+                email = email .. " (unverified)"
             end
             print(string.format("%s  cap=%s  email=%s  %s", u.login, u.cap, email, status))
         end

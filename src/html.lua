@@ -3676,7 +3676,7 @@ end
 -- `email` is the account's current address (nil if none) -- used by
 -- the forgot-password flow, so changing it needs the current password
 -- the same way changing the password itself does.
-function html.render_account(username, email, csrf_token, message, is_error)
+function html.render_account(username, user, csrf_token, message, is_error)
     page_lib = require("page")
 
     message_css_class = "platform-account-message"
@@ -3700,18 +3700,18 @@ function html.render_account(username, email, csrf_token, message, is_error)
         },
         submit_label = "Change password",
     })
+    -- Read-only: an admin sets the email (see cgi.lua's /account).
+    email_text = "No email on file -- ask an admin to add one if you want to be able to reset your password."
+    if user != nil and user.email != nil and user.email != "" then
+        auth_lib = require("auth")
+        if auth_lib.email_verified(user) then
+            email_text = user.email .. " (verified) -- ask an admin to change it."
+        else
+            email_text = user.email .. " (not verified yet: use the setup link emailed to it) -- ask an admin to change it."
+        end
+    end
     table.insert(sections, {type = "subheading", text = "Email"})
-    table.insert(sections, {
-        type = "form",
-        method = "POST",
-        action = "account-email",
-        fields = {
-            {type = "hidden", name = "csrf_token", value = csrf_token},
-            {type = "text", name = "email", label = "Email (for password resets)", value = email, autocomplete = "email"},
-            {type = "password", name = "current_password", label = "Current password", autocomplete = "current-password", required = true},
-        },
-        submit_label = "Save email",
-    })
+    table.insert(sections, {type = "message", css_class = "platform-account-email", text = email_text})
     table.insert(sections, {type = "subheading", text = "Log out"})
     table.insert(sections, {
         type = "form",
@@ -3764,12 +3764,32 @@ end
 -- JS fetch() calls elsewhere in this app) has no way to attach a
 -- custom request header, so the double-submit token has to travel as
 -- form data instead (see cgi.lua's require_csrf).
-function html.render_admin_users(users, csrf_token, message, is_error)
+-- invite_mode: mail is configured, so accounts are created with an
+-- email and get a setup link (auth.invite_user), not a typed password.
+function html.render_admin_users(users, invite_mode, csrf_token, message, is_error)
     page_lib = require("page")
 
     message_css_class = "platform-admin-message"
     if is_error == true then
         message_css_class = "platform-admin-message platform-admin-message-error"
+    end
+
+    create_fields = {
+        {type = "hidden", name = "csrf_token", value = csrf_token},
+        {type = "text", name = "login", placeholder = "login", required = true},
+        {type = "password", name = "password", placeholder = "password", required = true},
+        {type = "text", name = "email", placeholder = "email (optional)", autocomplete = "off"},
+        {type = "text", name = "cap", placeholder = "capabilities (e.g. i)", size = "10"},
+    }
+    create_label = "Create user"
+    if invite_mode == true then
+        create_fields = {
+            {type = "hidden", name = "csrf_token", value = csrf_token},
+            {type = "text", name = "login", placeholder = "login", required = true},
+            {type = "text", name = "email", placeholder = "email", required = true, autocomplete = "off"},
+            {type = "text", name = "cap", placeholder = "capabilities (e.g. i)", size = "10"},
+        }
+        create_label = "Create and email setup link"
     end
 
     sections = {}
@@ -3781,14 +3801,8 @@ function html.render_admin_users(users, csrf_token, message, is_error)
         method = "POST",
         action = "admin-users-create",
         css_class = "platform-admin-create-form",
-        fields = {
-            {type = "hidden", name = "csrf_token", value = csrf_token},
-            {type = "text", name = "login", placeholder = "login", required = true},
-            {type = "password", name = "password", placeholder = "password", required = true},
-            {type = "text", name = "email", placeholder = "email (optional)", autocomplete = "off"},
-            {type = "text", name = "cap", placeholder = "capabilities (e.g. i)", size = "10"},
-        },
-        submit_label = "Create user",
+        fields = create_fields,
+        submit_label = create_label,
     })
 
     rows = {}
@@ -3796,6 +3810,10 @@ function html.render_admin_users(users, csrf_token, message, is_error)
         status = "active"
         if u.archived_at != nil and u.archived_at != "" then
             status = "archived"
+        end
+        auth_lib = require("auth")
+        if u.email != nil and u.email != "" and not auth_lib.email_verified(u) then
+            status = status .. ", email unverified"
         end
         archive_action = "archive"
         archive_label = "Archive"
