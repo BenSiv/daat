@@ -59,7 +59,7 @@ A person creates one with **Explain connection** on a document's Connections lis
 
 A pair connected through a connection document doesn't need its own direct edge: retrieving either end heats the connection document by spreading activation, so repeated co-retrieval accumulates heat exactly where the pair's shared relevance is written down -- which in turn makes that document due for review and distillation, the natural place for a summary of why the two keep coming up together. Direct links (A's content links B) are still strengthened on repeated co-retrieval (`knowledge.reinforce_link_strength`, active rows only -- retrieval never un-archives a link whose markup is gone).
 
-A title containing `/`, a bracket or a newline can't be written as a link at all (the grammar has no escaping), and a title shared with another document needs its parent folder's title in front (`[[folder/title]]`); `document.link_ref` picks the right form or returns nil, and a pair either of whose documents can't be linked is recorded as `unlinkable` rather than re-asked.
+A title containing a bracket or a newline can't be written as a link at all (the grammar has no escaping). A `/` is fine: `document.resolve_link_text` tries the whole text as a title first and only reads it as `subject/title` (split on the first `/`) when no document has that exact title, so `[[CRISPR/Cas9 in fungi]]` links as written and an exact title always wins. A title shared with another document needs its parent folder's title in front (`[[folder/title]]`); `document.link_ref` picks the right form or returns nil, and a pair either of whose documents can't be linked is recorded as `unlinkable` rather than re-asked.
 
 ## Migration from the old layout
 
@@ -71,12 +71,12 @@ Every consumer of the graph is a plain SQL read against `document_link`, not a t
 
 ## Rendering
 
-`document.render_html` calls `document.inline_links_to_markdown`, which runs the same `LINK_PATTERN` and its own `resolve_link` call -- it never reads `document_link`, so a reader always sees links that match the text in front of them, even for content inserted outside `entity` whose rows haven't been rebuilt yet (`daat repair links`).
+`document.render_html` calls `document.inline_links_to_markdown`, which runs the same `LINK_PATTERN` and its own `resolve_link_text` call -- it never reads `document_link`, so a reader always sees links that match the text in front of them, even for content inserted outside `entity` whose rows haven't been rebuilt yet (`daat repair links`).
 
 ## Known limitations
 
 - **Parallel edges.** Two spellings of the same target (`[[Home]]` vs `[[Root/Home]]`) are two rows for the same pair. `linked_neighbors` sums their strengths (intentionally); `graph_edges` and `links` list each row separately; `spread_activation` therefore double-weights the pair.
 - **Archived/merged targets still drain pool heat.** `linked_neighbors` has no `archived_at`/`merged_into` filter on the *neighbor* side (unlike `graph_edges` and `links`), so `spread_activation` can keep reinforcing a document that was already archived, re-inflating a departed document's heat at the active pool's expense.
 - **No self-link guard.** Nothing prevents `from_document_id == to_document_id`; a document linking to its own title produces a self-loop that inflates its own neighbor-strength denominator in `spread_activation`.
-- **Ambiguous title resolution.** Multiple non-archived documents sharing a title resolve to the lowest id (`ORDER BY id ASC`), not most-recent or best-match. Subject-qualified links (`[[subject/title]]`) require an exact parent-title match and fall through to no match (not back to the plain-title case) if the subject doesn't match. `document.link_ref` accounts for this when it writes a link itself.
+- **Ambiguous title resolution.** Multiple non-archived documents sharing a title resolve to the lowest id (`ORDER BY id ASC`), not most-recent or best-match. Subject-qualified links (`[[subject/title]]`, read that way only when no document is titled exactly `subject/title`) require an exact parent-title match and fall through to no match (not back to the plain-title case) if the subject doesn't match. `document.link_ref` accounts for this when it writes a link itself.
 - **No transactions.** `sync_links`'s read-decide-write sequence runs as multiple independent autocommitted statements. A reader can observe a document's links mid-resync, and two concurrent saves of the same document can interleave into a state matching neither save's content.

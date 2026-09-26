@@ -190,6 +190,20 @@ raw_document_preview() {
     [ "$output" = "1" ]
 }
 
+@test "a title containing a slash links as written, indexed and rendered" {
+    save_document "csrf_token=${CSRF}&title=CRISPR%2FCas9+in+fungi&parent_id=&content=" >/dev/null
+    save_document "csrf_token=${CSRF}&title=Protocol&parent_id=&content=Follows+%5B%5BCRISPR%2FCas9+in+fungi%5D%5D." >/dev/null
+
+    run bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db 'SELECT to_document_id FROM document_link WHERE from_document_id = 2;'"
+    [ "$output" = "1" ]
+    run get_route "/document" "entity_id=2"
+    [[ "$output" =~ 'href="document?entity_id=1"' ]]
+    [[ ! "$output" =~ "not created yet" ]]
+
+    run get_route "/document-edit" "connect_a=1&connect_b=2"
+    [[ "$output" =~ "[[CRISPR/Cas9 in fungi]] and [[Protocol]]: " ]]
+}
+
 @test "the layout migration copies in batches: every one of 450 legacy rows arrives" {
     save_document "csrf_token=${CSRF}&title=Home&parent_id=&content=" >/dev/null
     bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db \"DROP TABLE document_link; CREATE TABLE document_link (from_document_id INTEGER NOT NULL, to_document_id INTEGER, link_text VARCHAR(255) NOT NULL, source VARCHAR(32) NOT NULL DEFAULT 'authored', raw_strength REAL NOT NULL DEFAULT 1.0, archived_at TEXT DEFAULT NULL, PRIMARY KEY (from_document_id, link_text)); WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 450) INSERT INTO document_link (from_document_id, to_document_id, link_text) SELECT 1, NULL, 'Page ' || i FROM n;\""

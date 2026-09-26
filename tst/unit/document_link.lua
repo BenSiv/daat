@@ -111,6 +111,18 @@ end
 
 -- upsert_link / sync_links -----------------------------------------------
 
+function test_a_title_containing_a_slash_links_as_written()
+    print("Testing resolve_link_text: an exact title wins, subject/title is only the fallback")
+    db_path = new_test_db()
+    db.exec(db_path, "INSERT INTO document (id, title, parent_id) VALUES (1, 'CRISPR/Cas9 in fungi', NULL), (2, 'Notes', NULL), (3, 'Cas9', 2), (4, 'Notes/Cas9', NULL);")
+    check(tonumber(document.resolve_link_text(db_path, "CRISPR/Cas9 in fungi")) == 1, "a slash inside a title is part of the title")
+    check(tonumber(document.resolve_link_text(db_path, " CRISPR/Cas9 in fungi ")) == 1, "surrounding blanks are trimmed")
+    check(tonumber(document.resolve_link_text(db_path, "Notes/Cas9")) == 4, "an exact title beats the subject/title reading")
+    check(document.resolve_link_text(db_path, "CRISPR/Cas10") == nil, "no exact title and no such subject: dangling")
+    check(document.resolve_link_text(db_path, "Nothing here") == nil, "a plain unknown title is dangling")
+    os.remove(db_path)
+end
+
 function test_upsert_link_inserts_a_fresh_row()
     print("Testing document.upsert_link inserts at base strength, with created_at")
     db_path = new_test_db()
@@ -307,6 +319,7 @@ end
 test_an_unclosed_bracket_is_not_a_link_and_swallows_nothing()
 test_a_link_never_spans_lines()
 test_a_very_long_title_is_an_ordinary_link()
+test_a_title_containing_a_slash_links_as_written()
 test_upsert_link_inserts_a_fresh_row()
 test_upsert_link_reintroduces_an_archived_row_at_its_old_strength()
 test_upsert_link_heals_a_dangling_row()

@@ -651,6 +651,7 @@ end
 --------------------------------------------------------------------------
 
 -- "subject/title" -> subject, title; "title" alone -> nil, title.
+-- Only the fallback reading of a link -- see document.resolve_link_text.
 function document.parse_link_ref(raw_link)
     trimmed = string.gsub(raw_link, "^%s*(.-)%s*$", "%1")
     slash_pos = string.find(trimmed, "/", 1, true)
@@ -685,6 +686,24 @@ function document.resolve_link(db_path, subject, title)
     return nil
 end
 
+-- Resolves the text inside a [[...]] to a document id, or nil. The
+-- whole text is tried as a title first, so a title that itself
+-- contains "/" (CRISPR/Cas9, PI3K/AKT, 11/08/2026) links as written;
+-- only when no document has that exact title is it read as
+-- "subject/title" (split on the first "/"). An exact title always wins.
+function document.resolve_link_text(db_path, raw_link)
+    trimmed = string.gsub(raw_link, "^%s*(.-)%s*$", "%1")
+    target_id = document.resolve_link(db_path, nil, trimmed)
+    if target_id != nil then
+        return target_id
+    end
+    subject, title = document.parse_link_ref(trimmed)
+    if subject == nil then
+        return nil
+    end
+    return document.resolve_link(db_path, subject, title)
+end
+
 -- The one link grammar, shared by indexing (sync_links) and rendering
 -- (inline_links_to_markdown) so the two can never disagree: [[...]] on
 -- a single line, with no brackets inside. An unclosed [[ therefore
@@ -693,8 +712,9 @@ end
 LINK_PATTERN = "%[%[([^%[%]\n]+)%]%]"
 
 -- How a document is written as a link, or nil if it can't be: the
--- grammar has no escaping, so a title containing "/" (read as
--- "subject/title"), a bracket, or a newline can't be linked at all. A
+-- grammar has no escaping, so a title containing a bracket or a newline
+-- can't be linked at all. A "/" is fine -- resolve_link_text tries the
+-- whole text as a title before reading it as "subject/title". A
 -- title shared with another document gets its parent folder's title in
 -- front ("[[folder/title]]", resolve_link's one-level disambiguator),
 -- and nil if even that doesn't pick this document out. Used wherever
@@ -702,10 +722,10 @@ LINK_PATTERN = "%[%[([^%[%]\n]+)%]%]"
 -- the "Explain connection" prefill, the agent's connection documents.
 function document.link_ref(db_path, document_id)
     doc = entity.get(db_path, "document", tonumber(document_id))
-    if doc == nil or doc.title == nil or string.find(doc.title, "[/%[%]\n]") != nil then
+    if doc == nil or doc.title == nil or string.find(doc.title, "[%[%]\n]") != nil then
         return nil
     end
-    if tonumber(document.resolve_link(db_path, nil, doc.title)) == tonumber(document_id) then
+    if tonumber(document.resolve_link_text(db_path, doc.title)) == tonumber(document_id) then
         return "[[" .. doc.title .. "]]"
     end
     if doc.parent_id == nil or doc.parent_id == "" then
@@ -715,7 +735,7 @@ function document.link_ref(db_path, document_id)
     if parent == nil or string.find(parent.title, "[/%[%]\n]") != nil then
         return nil
     end
-    if tonumber(document.resolve_link(db_path, parent.title, doc.title)) == tonumber(document_id) then
+    if tonumber(document.resolve_link_text(db_path, parent.title .. "/" .. doc.title)) == tonumber(document_id) then
         return "[[" .. parent.title .. "/" .. doc.title .. "]]"
     end
     return nil
@@ -898,8 +918,7 @@ function document.sync_links(db_path, document_id, content)
     end
 
     for _, raw_link in ipairs(ordered) do
-        subject, title = document.parse_link_ref(raw_link)
-        document.upsert_link(db_path, document_id, document.resolve_link(db_path, subject, title), raw_link)
+        document.upsert_link(db_path, document_id, document.resolve_link_text(db_path, raw_link), raw_link)
     end
 end
 
@@ -1089,8 +1108,7 @@ end
 -- handling for this project's own link syntax.
 function document.inline_links_to_markdown(db_path, content)
     return (string.gsub(content, LINK_PATTERN, function(raw_link)
-        subject, title = document.parse_link_ref(raw_link)
-        target_id = document.resolve_link(db_path, subject, title)
+        target_id = document.resolve_link_text(db_path, raw_link)
         if target_id != nil then
             return "[" .. raw_link .. "](document?entity_id=" .. tostring(target_id) .. ")"
         end
@@ -1657,8 +1675,7 @@ function document.resolve_dangling_links(db_path)
         return
     end
     for _, row in ipairs(rows) do
-        subject, title = document.parse_link_ref(row.link_text)
-        to_id = document.resolve_link(db_path, subject, title)
+        to_id = document.resolve_link_text(db_path, row.link_text)
         if to_id != nil then
             db.exec(db_path, string.format(
                 "UPDATE document_link SET to_document_id = %d WHERE id = %d AND to_document_id IS NULL;",
