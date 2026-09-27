@@ -465,6 +465,37 @@ search_for_bioreactor_extra() {
     [[ "$strength" != "null" ]]
 }
 
+@test "/knowledge-graph has colour-by, legend filtering and a hide-orphans toggle that starts off" {
+    run raw_get "/knowledge-graph" "" "$COOKIE"
+    [[ "$output" =~ 'id="platform-kg-color-by"' ]]
+    [[ "$output" =~ '<option value="tag">Colour by tag</option>' ]]
+    [[ "$output" =~ 'id="platform-kg-hide-orphans"' ]]
+    [[ ! "$output" =~ 'id="platform-kg-hide-orphans" checked' ]]
+    [[ "$output" =~ 'var TIER_LEGEND = [' ]]
+}
+
+@test "/knowledge-graph-data gives each node its tags -- pinned and computed, best first, excluded left out" {
+    "$BIN" entity create document title="Tagged doc" content="about cryopreservation" >/dev/null
+    "$BIN" entity create document title="Untagged doc" content="about something else" >/dev/null
+    doc=$(sqlite3 .store/store.db "SELECT id FROM document WHERE title = 'Tagged doc';")
+    "$BIN" entity create tag label="Cryopreservation" source=computed >/dev/null
+    "$BIN" entity create tag label="Tissue culture" source=computed >/dev/null
+    "$BIN" entity create tag label="Excluded subject" source=manual >/dev/null
+    t1=$(sqlite3 .store/store.db "SELECT id FROM tag WHERE label = 'Cryopreservation';")
+    t2=$(sqlite3 .store/store.db "SELECT id FROM tag WHERE label = 'Tissue culture';")
+    t3=$(sqlite3 .store/store.db "SELECT id FROM tag WHERE label = 'Excluded subject';")
+    "$BIN" entity create document_tag document=$doc tag=$t2 score=0.6 decision=computed >/dev/null
+    "$BIN" entity create document_tag document=$doc tag=$t1 score=0.9 decision=computed >/dev/null
+    "$BIN" entity create document_tag document=$doc tag=$t3 decision=excluded >/dev/null
+
+    body=$(json_body "$(raw_get "/knowledge-graph-data" "" "$COOKIE")")
+    tags=$(echo "$body" | jq -c --argjson id "$doc" '.nodes[] | select(.id == $id) | .tags')
+    [ "$tags" = '["Cryopreservation","Tissue culture"]' ]
+    # An untagged node still gets an array, not an object or null.
+    untagged=$(echo "$body" | jq -c --argjson id "$doc" '[.nodes[] | select(.id != $id)][0].tags')
+    [ "$untagged" = '[]' ]
+}
+
 @test "/knowledge-graph-data renders for a plain baseline user" {
     run raw_get "/knowledge-graph-data" "" "$COOKIE"
     [[ "$output" =~ "200 OK" ]]

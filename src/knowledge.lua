@@ -1522,6 +1522,11 @@ function knowledge.reviewed_documents(db_path)
     return rows
 end
 
+-- An empty table that dkjson encodes as [] rather than {}.
+function json_array()
+    return setmetatable({}, {__jsontype = "array"})
+end
+
 -- Backs /knowledge-graph-data (doc/knowledge-graph-explorer.md, Phase
 -- 2): every active document, not just knowledge.list_documents' own
 -- narrower "pool member" set (KNOWLEDGE_MEMBER_WHERE -- retrieved at
@@ -1539,11 +1544,45 @@ function knowledge.graph_nodes(db_path)
         return {}
     end
     rows = attach_and_sort_by_pool_heat(db_path, rows)
+    tags = knowledge.document_tag_labels(db_path)
     nodes = {}
     for _, row in ipairs(rows) do
-        table.insert(nodes, {id = tonumber(row.id), title = row.title, tier = tonumber(row.tier), heat = row.effective_heat})
+        node_tags = tags[tonumber(row.id)]
+        if node_tags == nil then
+            node_tags = json_array()
+        end
+        table.insert(nodes, {id = tonumber(row.id), title = row.title, tier = tonumber(row.tier), heat = row.effective_heat,
+            tags = node_tags})
     end
     return nodes
+end
+
+-- document id -> its tag labels (doc/structure-layers.md): active
+-- memberships a person pinned or the clustering job computed, on
+-- active tags -- pinned first, then best score first, so a node's first
+-- tag is the one to colour it by. "excluded" memberships count as absent.
+function knowledge.document_tag_labels(db_path)
+    rows = db.query(db_path, """
+        SELECT dt.document AS document_id, t.label AS label
+        FROM document_tag dt
+        JOIN tag t ON t.id = dt.tag
+        WHERE dt.decision IN ('computed', 'pinned')
+          AND (dt.archived_at IS NULL OR dt.archived_at = '')
+          AND (t.archived_at IS NULL OR t.archived_at = '')
+        ORDER BY dt.document, CASE WHEN dt.decision = 'pinned' THEN 0 ELSE 1 END, dt.score DESC;
+    """)
+    labels = {}
+    if rows == nil then
+        return labels
+    end
+    for _, row in ipairs(rows) do
+        doc_id = tonumber(row.document_id)
+        if labels[doc_id] == nil then
+            labels[doc_id] = json_array()
+        end
+        table.insert(labels[doc_id], row.label)
+    end
+    return labels
 end
 
 function knowledge.set_tier(db_path, document_id, tier)

@@ -4524,13 +4524,14 @@ end
 -- tiles use (KNOWLEDGE_TIER_COLORS) -- a document's tier reads the
 -- same way on both pages.
 function html.render_knowledge_graph(nonce)
-    legend_items = ""
+    -- Tier labels and fallback colours for the client-built legend (it's
+    -- rebuilt whenever colour-by switches between tier and tag).
+    json = require("dkjson")
+    tier_legend = {}
     for tier = 0, 3 do
-        legend_items = legend_items .. string.format(
-            '<span class="platform-kg-legend-item"><span class="platform-kg-legend-dot" style="background: var(--platform-tier-%d, %s);"></span>%s</span>',
-            tier, KNOWLEDGE_TIER_COLORS[tier], html.html_escape(KNOWLEDGE_TIER_LABELS[tier])
-        )
+        table.insert(tier_legend, {tier = tier, label = KNOWLEDGE_TIER_LABELS[tier], color = KNOWLEDGE_TIER_COLORS[tier]})
     end
+    tier_legend_json = string.gsub(json.encode(tier_legend), "</", "<\\/")
 
     kg_header = render_page_header("Knowledge Graph",
         "<p>Documents sized by heat, connections weighted by link strength -- see <a href=\"knowledge\">Knowledge Pool</a> for the tier/heat breakdown this visualizes.</p>",
@@ -4545,7 +4546,12 @@ function html.render_knowledge_graph(nonce)
         .platform-kg-canvas-wrap { border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); background: var(--platform-bg, #f8fafc); padding: 8px; }
         #platform-kg-canvas { width: 100%%; display: block; border-radius: var(--platform-radius-item, 10px); background: #ffffff; cursor: grab; touch-action: none; }
         .platform-kg-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin-top: 12px; font-size: 0.85rem; color: var(--platform-muted, #64748b); }
-        .platform-kg-legend-item { display: inline-flex; align-items: center; gap: 6px; }
+        .platform-kg-legend-item { display: inline-flex; align-items: center; gap: 6px; background: none; border: none; padding: 0; font: inherit; color: inherit; cursor: pointer; }
+        .platform-kg-legend-item.platform-kg-legend-off { opacity: 0.35; text-decoration: line-through; }
+        .platform-kg-legend-items { display: contents; }
+        .platform-kg-controls { display: inline-flex; align-items: center; gap: 12px; }
+        .platform-kg-controls select { font: inherit; font-size: 0.85rem; padding: 2px 6px; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-sm, 8px); background: #fff; color: inherit; }
+        .platform-kg-controls label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
         .platform-kg-legend-dot { width: 10px; height: 10px; border-radius: 50%%; display: inline-block; }
         .platform-kg-legend-reset { margin-left: auto; background: none; border: none; padding: 0; color: var(--platform-accent, #4f46e5); font-size: 0.85rem; cursor: pointer; text-decoration: underline; }
         .platform-kg-status { padding: 32px; text-align: center; color: var(--platform-muted, #64748b); }
@@ -4566,7 +4572,7 @@ function html.render_knowledge_graph(nonce)
             <canvas id="platform-kg-canvas" height="400"></canvas>
             <p id="platform-kg-status" class="platform-kg-status">Loading graph...</p>
         </div>
-        <div class="platform-kg-legend">%s<button type="button" class="platform-kg-forces-toggle" id="platform-kg-forces-toggle">Forces</button><button type="button" class="platform-kg-legend-reset" id="platform-kg-reset">Reset view</button></div>
+        <div class="platform-kg-legend"><span class="platform-kg-controls"><select id="platform-kg-color-by" aria-label="Colour by"><option value="tier">Colour by tier</option><option value="tag">Colour by tag</option></select><label><input type="checkbox" id="platform-kg-hide-orphans"> Hide orphans</label></span><span class="platform-kg-legend-items" id="platform-kg-legend-items"></span><button type="button" class="platform-kg-forces-toggle" id="platform-kg-forces-toggle">Forces</button><button type="button" class="platform-kg-legend-reset" id="platform-kg-reset">Reset view</button></div>
         <div class="platform-kg-forces" id="platform-kg-forces">
             <div class="platform-kg-force-row"><label for="platform-kg-repel">Repel force</label><input type="range" id="platform-kg-repel" min="1000" max="20000" step="500" value="6000"><span id="platform-kg-repel-val">6000</span></div>
             <div class="platform-kg-force-row"><label for="platform-kg-link-force">Link force</label><input type="range" id="platform-kg-link-force" min="0" max="0.1" step="0.005" value="0.02"><span id="platform-kg-link-force-val">0.02</span></div>
@@ -4591,6 +4597,90 @@ function html.render_knowledge_graph(nonce)
         var centerInput = document.getElementById('platform-kg-center');
         var forcesResetBtn = document.getElementById('platform-kg-forces-reset');
         var nodes = [], links = [], byId = {};
+
+        // -- Colour, filter, hide orphans (doc/structure-layers.md, "Graph
+        // view"). Filtering only hides: hidden nodes keep their place in
+        // the simulation, so toggling doesn't reshuffle the layout.
+        var TIER_LEGEND = %s;
+        // Distinct categorical colours for the most common tags; the
+        // rest share "Other tags", untagged nodes are grey.
+        var TAG_PALETTE = ['#4e79a7', '#f28e2b', '#e15759', '#76b7b2', '#59a14f', '#edc948',
+                           '#b07aa1', '#ff9da7', '#9c755f', '#17becf', '#bcbd22', '#8c564b'];
+        var OTHER_TAG_COLOR = '#94a3b8', NO_TAG_COLOR = '#cbd5e1';
+        var colorBy = document.getElementById('platform-kg-color-by');
+        var hideOrphansInput = document.getElementById('platform-kg-hide-orphans');
+        var legendItems = document.getElementById('platform-kg-legend-items');
+        var VIEW_KEY = 'platform-kg-view-v1';
+        var view = { colorBy: 'tier', hideOrphans: false };
+        try { var saved = JSON.parse(localStorage.getItem(VIEW_KEY) || 'null'); if (saved) { view.colorBy = saved.colorBy === 'tag' ? 'tag' : 'tier'; view.hideOrphans = saved.hideOrphans === true; } } catch (e) {}
+        var hiddenKeys = {}, tagColors = {};
+
+        function saveView() { try { localStorage.setItem(VIEW_KEY, JSON.stringify(view)); } catch (e) {} }
+
+        function nodeKey(n) {
+            if (view.colorBy === 'tier') { return 'tier:' + n.tier; }
+            var first = (n.tags && n.tags.length) ? n.tags[0] : null;
+            if (first === null) { return 'none'; }
+            return tagColors[first] ? 'tag:' + first : 'other';
+        }
+
+        function nodeColor(n) {
+            var key = nodeKey(n);
+            if (key.indexOf('tier:') === 0) { return tierColor(n.tier); }
+            if (key === 'none') { return NO_TAG_COLOR; }
+            if (key === 'other') { return OTHER_TAG_COLOR; }
+            return tagColors[key.slice(4)];
+        }
+
+        function isVisible(n) {
+            if (hiddenKeys[nodeKey(n)]) { return false; }
+            return !(view.hideOrphans && n.degree === 0);
+        }
+
+        function buildLegend() {
+            var entries = [];
+            if (view.colorBy === 'tier') {
+                TIER_LEGEND.forEach(function(t) { entries.push({ key: 'tier:' + t.tier, label: t.label, color: tierColor(t.tier) || t.color }); });
+            } else {
+                var counts = {};
+                nodes.forEach(function(n) { if (n.tags && n.tags.length) { counts[n.tags[0]] = (counts[n.tags[0]] || 0) + 1; } });
+                var ranked = Object.keys(counts).sort(function(a, b) { return counts[b] - counts[a]; });
+                tagColors = {};
+                ranked.slice(0, TAG_PALETTE.length).forEach(function(tag, i) {
+                    tagColors[tag] = TAG_PALETTE[i];
+                    entries.push({ key: 'tag:' + tag, label: tag, color: TAG_PALETTE[i] });
+                });
+                if (ranked.length > TAG_PALETTE.length) { entries.push({ key: 'other', label: 'Other tags', color: OTHER_TAG_COLOR }); }
+                entries.push({ key: 'none', label: ranked.length ? 'No tag' : 'No tags yet', color: NO_TAG_COLOR });
+            }
+            legendItems.innerHTML = '';
+            entries.forEach(function(entry) {
+                var item = document.createElement('button');
+                item.type = 'button';
+                item.className = 'platform-kg-legend-item' + (hiddenKeys[entry.key] ? ' platform-kg-legend-off' : '');
+                item.title = 'Show or hide';
+                var dot = document.createElement('span');
+                dot.className = 'platform-kg-legend-dot';
+                dot.style.background = entry.color;
+                item.appendChild(dot);
+                item.appendChild(document.createTextNode(entry.label));
+                item.addEventListener('click', function() {
+                    hiddenKeys[entry.key] = !hiddenKeys[entry.key];
+                    item.classList.toggle('platform-kg-legend-off', hiddenKeys[entry.key]);
+                    draw();
+                });
+                legendItems.appendChild(item);
+            });
+        }
+
+        colorBy.value = view.colorBy;
+        hideOrphansInput.checked = view.hideOrphans;
+        colorBy.addEventListener('change', function() {
+            view.colorBy = colorBy.value; hiddenKeys = {}; saveView(); buildLegend(); draw();
+        });
+        hideOrphansInput.addEventListener('change', function() {
+            view.hideOrphans = hideOrphansInput.checked; saveView(); draw();
+        });
 
         // Screen-space pan/zoom over a fixed "world" (the coordinates
         // layout() computes once at load) -- node positions themselves
@@ -4635,7 +4725,7 @@ function html.render_knowledge_graph(nonce)
             ctx.setTransform(camera.scale, 0, 0, camera.scale, camera.x, camera.y);
             links.forEach(function(e) {
                 var a = byId[e.from], b = byId[e.to];
-                if (!a || !b) { return; }
+                if (!a || !b || !isVisible(a) || !isVisible(b)) { return; }
                 var strength = (typeof e.strength === 'number') ? e.strength : 1.0;
                 ctx.beginPath();
                 ctx.moveTo(a.x, a.y);
@@ -4647,9 +4737,10 @@ function html.render_knowledge_graph(nonce)
                 ctx.globalAlpha = 1;
             });
             nodes.forEach(function(n) {
+                if (!isVisible(n)) { return; }
                 ctx.beginPath();
                 ctx.arc(n.x, n.y, nodeRadius(n.heat), 0, Math.PI * 2);
-                ctx.fillStyle = tierColor(n.tier);
+                ctx.fillStyle = nodeColor(n);
                 ctx.fill();
             });
         }
@@ -4667,6 +4758,7 @@ function html.render_knowledge_graph(nonce)
         function nodeAt(wx, wy) {
             var best = null, bestDist = Infinity;
             nodes.forEach(function(n) {
+                if (!isVisible(n)) { return; }
                 var dx = n.x - wx, dy = n.y - wy;
                 var d = Math.sqrt(dx * dx + dy * dy);
                 if (d <= nodeRadius(n.heat) && d < bestDist) { best = n; bestDist = d; }
@@ -4688,7 +4780,7 @@ function html.render_knowledge_graph(nonce)
             var best = null, bestDist = Infinity;
             links.forEach(function(e) {
                 var a = byId[e.from], b = byId[e.to];
-                if (!a || !b) { return; }
+                if (!a || !b || !isVisible(a) || !isVisible(b)) { return; }
                 var d = pointSegmentDistance(wx, wy, a.x, a.y, b.x, b.y);
                 if (d <= threshold && d < bestDist) { best = e; bestDist = d; }
             });
@@ -4783,7 +4875,8 @@ function html.render_knowledge_graph(nonce)
             if (n) {
                 canvas.style.cursor = 'pointer';
                 var heat = (typeof n.heat === 'number') ? n.heat : 1.0;
-                showTooltip(ev.clientX, ev.clientY, n.title + '\nheat ' + heat.toFixed(2));
+                var tagLine = (n.tags && n.tags.length) ? '\n' + n.tags.join(', ') : '';
+                showTooltip(ev.clientX, ev.clientY, n.title + tagLine + '\nheat ' + heat.toFixed(2));
                 return;
             }
             var e = edgeAt(w.x, w.y);
@@ -5189,7 +5282,7 @@ function html.render_knowledge_graph(nonce)
         }).then(function(data) {
             nodes = data.nodes || [];
             byId = {};
-            nodes.forEach(function(n) { byId[n.id] = n; n.connWeight = 0; });
+            nodes.forEach(function(n) { byId[n.id] = n; n.connWeight = 0; n.degree = 0; });
             links = (data.edges || []).filter(function(e) { return byId[e.from] && byId[e.to]; });
             // Summed incident edge strength, not just a raw edge count --
             // a node with one heavily-reinforced link is "more connected"
@@ -5200,7 +5293,10 @@ function html.render_knowledge_graph(nonce)
                 var strength = (typeof e.strength === 'number') ? e.strength : 1.0;
                 byId[e.from].connWeight += strength;
                 byId[e.to].connWeight += strength;
+                byId[e.from].degree += 1;
+                byId[e.to].degree += 1;
             });
+            buildLegend();
             if (nodes.length === 0) {
                 status.textContent = 'No documents in the pool yet.';
                 return;
@@ -5215,7 +5311,7 @@ function html.render_knowledge_graph(nonce)
     </script>
 </div>
 """, platform_container_css(), platform_button_css(), platform_page_header_css(),
-     kg_header, legend_items, nonce)
+     kg_header, nonce, tier_legend_json)
 end
 
 -- Backing table for /knowledge's "N pool records" stat and each tier
