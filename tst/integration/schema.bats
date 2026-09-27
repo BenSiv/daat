@@ -105,3 +105,29 @@ EOF
     [[ "$output" =~ "junction" ]]
     [[ "$output" =~ "target" ]]
 }
+
+@test "a field removed from a schema file stops being a field, but its column and data stay" {
+    write_reagent_schema
+    "$BIN" schema add schemas/reagent.lua
+    "$BIN" entity create reagent lot_number=L1 concentration=5 >/dev/null
+
+    cat > schemas/reagent.lua <<'SCHEMA'
+return {
+  name = "reagent",
+  fields = {
+    {name = "lot_number", type = "text", required = true},
+  },
+}
+SCHEMA
+    run "$BIN" schema add schemas/reagent.lua
+    [ "$status" -eq 0 ]
+
+    run sqlite3 .store/store.db "SELECT name FROM entity_field WHERE entity_type = 'reagent' ORDER BY field_order;"
+    [ "$output" = "lot_number" ]
+    # Retiring a field hides it; nothing is deleted.
+    run sqlite3 .store/store.db "SELECT concentration FROM reagent WHERE lot_number = 'L1';"
+    [ "$output" = "5.0" ]
+    # Creating without the retired field works (it was required before).
+    run "$BIN" entity create reagent lot_number=L2
+    [[ "$output" =~ "Created reagent" ]]
+}

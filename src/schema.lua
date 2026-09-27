@@ -490,6 +490,22 @@ function schema.register(db_path, def)
         ))
     end
 
+    -- A field dropped from the schema file stops being a field: forms,
+    -- tables and validation all read entity_field, so its stale row
+    -- would keep it showing (and a required one would keep blocking
+    -- creates). Only the field's definition goes -- its column and every
+    -- value in it stay in the table (nothing is ever deleted), so
+    -- putting the field back restores it with its data.
+    current_names = {}
+    for _, field in ipairs(def.fields) do
+        table.insert(current_names, db.quote(field.name))
+    end
+    retired_sql = string.format("DELETE FROM entity_field WHERE entity_type = %s", db.quote(def.name))
+    if #current_names > 0 then
+        retired_sql = retired_sql .. " AND name NOT IN (" .. table.concat(current_names, ", ") .. ")"
+    end
+    db.exec(db_path, retired_sql .. ";")
+
     schema.sync_table(db_path, def)
     return true
 end
