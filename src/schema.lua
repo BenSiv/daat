@@ -850,6 +850,41 @@ end
 -- automatic one. Multivalue fields never become a column
 -- here at all -- schema.ensure_multi_field_table gives them their own
 -- companion junction table instead.
+-- Every request runs schema init, so concurrent first requests after a
+-- deploy can all see a table, column or index missing and race to add
+-- it -- found rehearsing against real MySQL 8, where the losers raise
+-- ("Table 'tag' already exists", "Duplicate column name", "Duplicate
+-- key name") and the request 500s. A failed DDL statement is only an
+-- error if what it adds still doesn't exist afterwards.
+function add_unless_present(db_path, sql, present)
+    ok, err = pcall(db.exec, db_path, sql)
+    if ok == false and not present() then
+        error(err)
+    end
+end
+
+function ensure_external_id_index(db_path, table_name)
+    index_name = "idx_" .. table_name .. "_external_id"
+    if db.index_exists(db_path, table_name, index_name) == false then
+        add_unless_present(db_path, string.format(
+            "CREATE INDEX %s ON %s (%s);", index_name, table_name, db.text_index_column(db_path, "external_id")
+        ), function() return db.index_exists(db_path, table_name, index_name) end)
+    end
+end
+
+function add_column_unless_present(db_path, table_name, column_name, sql_type)
+    add_unless_present(db_path, string.format(
+        "ALTER TABLE %s ADD COLUMN %s %s;", table_name, db.quote_ident(column_name), sql_type
+    ), function()
+        for _, name in ipairs(db.get_columns(db_path, table_name)) do
+            if name == column_name then
+                return true
+            end
+        end
+        return false
+    end)
+end
+
 function schema.sync_table(db_path, def)
     if db.table_exists(db_path, def.name) == false then
         columns = {"id INTEGER PRIMARY KEY " .. db.autoincrement_keyword(db_path)}
@@ -862,15 +897,9 @@ function schema.sync_table(db_path, def)
             table.insert(columns, db.quote_ident(builtin.name) .. " " .. builtin.sql_type)
         end
         db.exec(db_path, string.format(
-            "CREATE TABLE %s (%s);", def.name, table.concat(columns, ", ")
+            "CREATE TABLE IF NOT EXISTS %s (%s);", def.name, table.concat(columns, ", ")
         ))
-        index_name = "idx_" .. def.name .. "_external_id"
-        if db.index_exists(db_path, def.name, index_name) == false then
-            db.exec(db_path, string.format(
-                "CREATE INDEX %s ON %s (%s);",
-                index_name, def.name, db.text_index_column(db_path, "external_id")
-            ))
-        end
+        ensure_external_id_index(db_path, def.name)
         for _, field in ipairs(def.fields) do
             if is_multi_field_type(field.type) then
                 schema.ensure_multi_field_table(db_path, def.name, field)
@@ -892,25 +921,15 @@ function schema.sync_table(db_path, def)
         elseif is_polymorphic_field_type(field.type) then
             schema.ensure_entity_source_table(db_path)
         elseif have[field.name] == nil then
-            db.exec(db_path, string.format(
-                "ALTER TABLE %s ADD COLUMN %s %s;", def.name, db.quote_ident(field.name), SQL_TYPE[field.type]
-            ))
+            add_column_unless_present(db_path, def.name, field.name, SQL_TYPE[field.type])
         end
     end
     for _, builtin in ipairs(builtin_columns(db_path)) do
         if have[builtin.name] == nil then
-            db.exec(db_path, string.format(
-                "ALTER TABLE %s ADD COLUMN %s %s;", def.name, db.quote_ident(builtin.name), builtin.sql_type
-            ))
+            add_column_unless_present(db_path, def.name, builtin.name, builtin.sql_type)
         end
     end
-    index_name = "idx_" .. def.name .. "_external_id"
-    if db.index_exists(db_path, def.name, index_name) == false then
-        db.exec(db_path, string.format(
-            "CREATE INDEX %s ON %s (%s);",
-            index_name, def.name, db.text_index_column(db_path, "external_id")
-        ))
-    end
+    ensure_external_id_index(db_path, def.name)
 end
 
 -- A cheap-to-compute stand-in for "have the schemas/dropdowns

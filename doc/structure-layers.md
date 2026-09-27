@@ -46,7 +46,7 @@ A tag is a named group of documents about the same subject. Tags are derived, no
 - **Computed:** by clustering every active document on whole-document embeddings, in a job outside daat (see [Boundary](#boundary)). Core stores and shows tags; the clustering method is replaceable.
 - **Named:** one model call per cluster, from its most central titles. Naming is a genuine judgment call, which is where daat uses a model (rule-based by default everywhere else).
 - **Stable across recomputes:** a new cluster inherits an existing tag's name when their members mostly overlap, so tags don't reshuffle on every run.
-- **Manual override:** a person can add or remove a tag on a document, or rename a tag. Overrides are stored apart from computed membership and win on the next recompute.
+- **Manual override:** a person can add or remove a tag on a document, or rename a tag. A membership's `decision` says who owns it: `computed` rows are the job's and it replaces them freely; `pinned` (a person added it) is never removed by the job; `excluded` (a person took it out) is never re-added and counts as absent everywhere. A tag with `source = manual` is a person's, and the job never renames or removes it. Because membership is its own row, one tag per document or several is a question for the job, not for storage.
 
 Whole-document embeddings measure subject, which is what a tag is. They are not how daat judges whether two documents share an idea. Measured on 100 human-reviewed co-retrieval verdicts (2026-09-26, 12 accepted), whole-document similarity separated accepted from rejected pairs with AUC 0.93, mostly because accepted pairs share a subject. The best matching passage pair did as well (AUC 0.91) while also covering a small shared idea inside two documents on different subjects. That makes passages the right basis for connections, and whole documents the right basis for tags.
 
@@ -71,7 +71,7 @@ daat defines what a tag is and shows it. An outside program computes it.
 
 | daat core owns | The clustering job (Python, in `software`) owns |
 |---|---|
-| The data model: `tag` (name, description, source `computed`/`manual`, last run) and `document_tag` (document, tag, score, source), as ordinary entity types | Embeddings: model, chunking, text cleaning. Its own, not daat's internal `document_embedding` cache |
+| The data model, as ordinary core entity types (`src/document.lua`): `tag` (`label`, `description`, `terms`, `source` `computed`/`manual`, `computed_at`) and `document_tag` (`document`, `tag`, `score`, `decision` `computed`/`pinned`/`excluded`) | Embeddings: model, chunking, text cleaning. Its own, not daat's internal `document_embedding` cache |
 | Manual overrides: adding or removing a membership, renaming a tag. A recompute never touches a `manual` row | Algorithm and k; TF-IDF characteristic terms per cluster |
 | Display: graph colour and filters, tags on a document's page | Naming (terms plus a model call); keeping names stable across runs by member overlap |
 | Access: the existing REST API ([api.md](api.md)) | Reading documents and writing tags through that API with an API key |
@@ -115,4 +115,4 @@ The papers pipeline already clusters the literature (`papers/src/analysis/cluste
 2. Tag storage and manual tags, and tags in the graph's colour and filter controls.
 3. The clustering job in `software` (cleaned and chunked embeddings, naming, stable matching, writes through the API), the `cluster_run` type, and the thin `clusters` extension page.
 
-The one-or-several question has to be settled before phase 2 fixes the storage shape.
+Storage supports both one tag per document and several, so the one-or-several question only shapes how the job assigns memberships. The first run (2026-09-27, 2,812 documents, 26 tags) found 15% of documents within 0.02 of their second-best cluster and 40% within 0.05, which argues for a primary tag plus a second tag when the two are close.

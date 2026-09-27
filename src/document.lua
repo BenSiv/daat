@@ -58,6 +58,38 @@ DOCUMENT_SCHEMA = {
     },
 }
 
+-- Derived subject tags (doc/structure-layers.md): computed outside daat
+-- by a clustering job that writes these through the API, with manual
+-- overrides that a recompute never touches. Ordinary entity types, so
+-- they're browsable, editable and ledgered like any other.
+--   tag.source: "computed" (the job's) or "manual" (a person's).
+--   document_tag.decision: "computed" (the job replaces it freely),
+--   "pinned" (a person put the document in the tag; never removed by
+--   the job) or "excluded" (a person took it out; never re-added, and
+--   treated as absent everywhere).
+TAG_SCHEMA = {
+    name = "tag",
+    fields = {
+        -- "label", not "name": every entity table already has a
+        -- bookkeeping `name` column (schema.sync_table).
+        {name = "label", type = "text", required = true, display = true},
+        {name = "description", type = "text", required = false},
+        {name = "terms", type = "text", required = false},
+        {name = "source", type = "select", required = true, values = {"computed", "manual"}},
+        {name = "computed_at", type = "text", required = false},
+    },
+}
+
+DOCUMENT_TAG_SCHEMA = {
+    name = "document_tag",
+    fields = {
+        {name = "document", type = "reference", required = true, entity_type = "document"},
+        {name = "tag", type = "reference", required = true, entity_type = "tag"},
+        {name = "score", type = "number", required = false},
+        {name = "decision", type = "select", required = true, values = {"computed", "pinned", "excluded"}},
+    },
+}
+
 -- One row per distinct [[link]] text in a document's content. Keyed by
 -- its own id rather than by link_text: link text is whatever a title
 -- is, and no key length can promise to hold that (a real paper title
@@ -535,6 +567,8 @@ end
 
 function document.init_schema(db_path)
     schema.register(db_path, DOCUMENT_SCHEMA)
+    schema.register(db_path, TAG_SCHEMA)
+    schema.register(db_path, DOCUMENT_TAG_SCHEMA)
     migrate_document_link_layout(db_path)
     create_document_link_table(db_path, "document_link")
     ensure_document_link_indexes(db_path)

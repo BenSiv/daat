@@ -218,3 +218,23 @@ raw_api_write() {
     run "$BIN" ledger show 1
     [[ "$output" =~ "by api:nightly-sync-job" ]]
 }
+
+@test "tag and document_tag are core types an external job can write through the API (doc/structure-layers.md)" {
+    key=$("$BIN" api-key create tagger i | tail -1)
+    "$BIN" entity create document title="Cryopreservation protocol" content="vitrification steps" >/dev/null
+
+    run raw_api_write POST "/api/v1/tag" "" "$key" '{"label":"Plant cell cryopreservation","terms":"vitrification, cryoprotectant","source":"computed","computed_at":"2026-09-27"}'
+    [[ "$output" =~ '"success":true' ]]
+    tag_id=$(printf '%s' "$output" | grep -o '"created_id":[0-9]*' | grep -o '[0-9]*')
+    [ -n "$tag_id" ]
+
+    run raw_api_write POST "/api/v1/document_tag" "" "$key" "{\"document\":1,\"tag\":${tag_id},\"score\":0.82,\"decision\":\"computed\"}"
+    [[ "$output" =~ '"success":true' ]]
+
+    run raw_api_get "/api/v1/document_tag" "filter_field=document&filter_value=1" "$key"
+    [[ "$output" =~ '"decision":"computed"' || "$output" =~ '"decision": "computed"' ]]
+
+    # decision is a closed set: a manual override is pinned or excluded, nothing else.
+    run raw_api_write POST "/api/v1/document_tag" "" "$key" "{\"document\":1,\"tag\":${tag_id},\"decision\":\"maybe\"}"
+    [[ ! "$output" =~ '"success":true' ]]
+}
