@@ -85,5 +85,5 @@ Considered and rejected: extracting this as a standalone reusable JS asset (or a
 
 ## Still open (Phase 3+)
 - Pan, zoom, drag-to-reposition, click-to-navigate -- none implemented yet.
-- Filtering, `source` (`authored` vs `co-retrieval`) visual distinction, performance at real scale -- Phase 4, unscoped.
+- Filtering and colouring: designed in [structure-layers.md](structure-layers.md) (colour/filter by tier or tag, hide orphans). The `source` (`authored` vs `co-retrieval`) distinction no longer applies: links are content-only, and co-retrieval connections are ordinary connection documents. Performance at real scale -- Phase 4, unscoped.
 - ~~Whether the Setup/Admin gate is actually right for an explorer vs. an analytics page~~ -- resolved (brex 492390825): the whole `/knowledge*` family moved to baseline capability.
