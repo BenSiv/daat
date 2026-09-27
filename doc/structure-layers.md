@@ -43,7 +43,7 @@ The first two tier options and the orphan toggle need no new data, so they can s
 
 A tag is a named group of documents about the same subject. Tags are derived, not written in content. They're recomputed by clustering, and writing them into the text would rewrite documents on every run.
 
-- **Computed:** by clustering document embeddings (whole-document, `document_embedding`). This runs in a daat extension, not in core: core stores and shows tags, while the clustering method is replaceable.
+- **Computed:** by clustering every active document on whole-document embeddings, in a job outside daat (see [Boundary](#boundary)). Core stores and shows tags; the clustering method is replaceable.
 - **Named:** one model call per cluster, from its most central titles. Naming is a genuine judgment call, which is where daat uses a model (rule-based by default everywhere else).
 - **Stable across recomputes:** a new cluster inherits an existing tag's name when their members mostly overlap, so tags don't reshuffle on every run.
 - **Manual override:** a person can add or remove a tag on a document, or rename a tag. Overrides are stored apart from computed membership and win on the next recompute.
@@ -65,18 +65,54 @@ Undecided; needs a closer look at the tradeoffs before building.
 
 A middle path worth evaluating: one computed primary tag used for colour, plus manual extra tags.
 
+## Boundary
+
+daat defines what a tag is and shows it. An outside program computes it.
+
+| daat core owns | The clustering job (Python, in `software`) owns |
+|---|---|
+| The data model: `tag` (name, description, source `computed`/`manual`, last run) and `document_tag` (document, tag, score, source), as ordinary entity types | Embeddings: model, chunking, text cleaning. Its own, not daat's internal `document_embedding` cache |
+| Manual overrides: adding or removing a membership, renaming a tag. A recompute never touches a `manual` row | Algorithm and k; TF-IDF characteristic terms per cluster |
+| Display: graph colour and filters, tags on a document's page | Naming (terms plus a model call); keeping names stable across runs by member overlap |
+| Access: the existing REST API ([api.md](api.md)) | Reading documents and writing tags through that API with an API key |
+
+Because `tag` and `document_tag` are entity types, the job needs **no new extension capability**. It reads `GET /api/v1/document` and writes `POST`/`PATCH /api/v1/tag|document_tag`, and every write lands in the ledger as `api:<key label>`. To keep recomputes from flooding the ledger, it writes only what changed since the last run, and archives (never deletes) memberships that drop out.
+
+Scope: every active document, not only literature.
+
+### What extensions can do today
+
+Checked 2026-09-27 against `entity.build_ctx` and luam's `sandbox.extension_env`:
+
+- `ctx.query(type, filter)` reads **any table**: it only checks that the table exists, so an extension with `read = {"entity"}` can read `user` (password hashes) and `api_key`. That needs restricting to registered entity types, whatever happens with tags.
+- `ctx.create_entity` and `ctx.update_entity` write, and both are ledgered.
+- `net = "outbound"` exposes raw LuaSocket TCP: no HTTP client and no TLS. It can reach a plain-HTTP service on the same host, but not an HTTPS API.
+- Runs happen through before-hooks and queued after-hooks on writes, and through `manual_triggers`, which must return quickly. There is no schedule.
+- UI: a `/ext/<name>` page built from `heading`, `text`, `table`, `button` and `input` elements, with button actions.
+
+### The thin UI extension
+
+A `clusters` extension connects the job to daat at the UI level and computes nothing:
+
+- **`/ext/clusters`:** a table of tags (name, member count, source, last computed). Clicking a tag lists its members.
+- **Manual controls:** rename a tag; pin or remove a document's membership. Each goes through `ctx.update_entity` and is stored as `manual`.
+- **"Recompute clusters" trigger:** creates a `cluster_run` entity with `status = requested` and returns. The job, on a timer in `software/infra`, polls `GET /api/v1/cluster_run?status=requested`, recomputes, writes tags, and sets the run to `done` with a summary, which the page shows.
+
+The request is an entity, so it's ledgered. The extension needs no sockets, and no compute runs inside daat. `tag` and `document_tag` belong in core, because core's graph view reads them. `cluster_run` is specific to this job, so it lives in the deployment (`lims/schemas`).
+
+### Lessons from `software/papers`
+
+The papers pipeline already clusters the literature (`papers/src/analysis/cluster_articles.py`). It embeds with SBERT `all-MiniLM-L6-v2` and runs KMeans with k from 2 to 15 by silhouette, and uses TF-IDF only for each cluster's characteristic terms, which a model then turns into a name. Its one run became Celleste's `reference.subject` field: a deployment `select` field with a fixed 15-value dropdown, never updated since. Four of those 15 names are about PDF boilerplate ("Google Scholar Open Access", "Scientific Literature Access", ...) and cover 245 of 1,683 references. MiniLM reads only about the first 256 tokens of a paper (headers and licence footers), and TF-IDF's `max_df = 0.8` lets repeated boilerplate through. The new job embeds cleaned, chunked text instead of the start of each PDF. Once core tags cover every document, `reference.subject` is redundant and can be retired.
+
 ## Prerequisites
 
-1. **Embedding coverage:** 1,670 active documents in celleste-lims prod have no embedding, mostly imported papers. Run `daat repair embeddings`, then make save-time embedding failures visible instead of silent (`document.reindex_embedding` is best-effort).
-2. **Extension capabilities** (see [extensibility.md](extensibility.md), "What extensions cannot do today"):
-    - reading embeddings, which aren't entities, so `ctx.query` can't reach them;
-    - writing derived tags through `ctx`;
-    - a scheduled run. After-hooks react to writes and manual triggers must return quickly, and neither fits a periodic recompute.
+1. **Embedding coverage:** 1,670 active documents in celleste-lims prod have no embedding, mostly imported papers. The clustering job computes its own embeddings, so this doesn't block tags, but it blocks semantic retrieval and the passage-similarity link gate. Run `daat repair embeddings`, then make save-time embedding failures visible instead of silent (`document.reindex_embedding` is best-effort).
+2. **Restrict `ctx.query` to entity types** (see [Boundary](#what-extensions-can-do-today)). This is a security fix in its own right, and it comes before shipping any new extension.
 
 ## Phases
 
 1. Graph controls on existing data: colour and filter by tier, hide orphans (off by default).
 2. Tag storage and manual tags, and tags in the graph's colour and filter controls.
-3. The embedding backfill and visible failures, then the extension capabilities, then the clustering extension with naming and stable matching.
+3. The clustering job in `software` (cleaned and chunked embeddings, naming, stable matching, writes through the API), the `cluster_run` type, and the thin `clusters` extension page.
 
 The one-or-several question has to be settled before phase 2 fixes the storage shape.
