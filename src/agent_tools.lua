@@ -1193,7 +1193,7 @@ function agent_tools.execute_tool(db_path, author, session_id, tool_name, method
     end
 
     if tool_name == "view" and method_name == "list" then
-        entries = view.all(config.views_dir())
+        entries = view.all(db_path)
         if #entries == 0 then
             return "No views defined."
         end
@@ -1218,7 +1218,7 @@ function agent_tools.execute_tool(db_path, author, session_id, tool_name, method
         if args.name == nil then
             return nil, "run requires name"
         end
-        view_def, view_err = view.load(config.views_dir(), args.name)
+        view_def, view_err = view.load(db_path, args.name)
         if view_def == nil then
             return nil, "no such view: " .. tostring(args.name) .. " (" .. tostring(view_err) .. ")"
         end

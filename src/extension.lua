@@ -95,6 +95,14 @@ RESERVED_TOOL_NAMES = {
     background = true, internet_search = true,
 }
 
+-- An owned name becomes a file name (<kind>/<name>.lua) and, for a
+-- schema, a table name -- the schema pattern is schema.valid_name_syntax's
+-- own; view names may also carry hyphens (e.g. "widgets-in-stock").
+OWNED_NAME_PATTERNS = {
+    schemas = "^[a-z_][a-z0-9_]*$",
+    views = "^[a-z0-9_][a-z0-9_-]*$",
+}
+
 -- Structural validation only -- does the manifest make sense on its own
 -- terms (mirrors schema.validate's role for schema files).
 function extension.validate_manifest(manifest)
@@ -153,6 +161,25 @@ function extension.validate_manifest(manifest)
             end
             if type(tool.parameters) != "table" then
                 return "manifest '" .. tostring(manifest.name) .. "': capabilities.tools entry '" .. tool.name .. "' must have a 'parameters' table"
+            end
+        end
+    end
+    -- capabilities.schemas/views name the entity types and views this
+    -- extension ships as its own schemas/<name>.lua and views/<name>.lua
+    -- files (see extension.owned_definitions). Declared by name rather
+    -- than discovered from the directory, so that owning a new entity
+    -- type -- a new table -- is a capabilities change that needs
+    -- re-approval, the same as any other grant.
+    for _, kind in ipairs({"schemas", "views"}) do
+        if manifest.capabilities != nil and manifest.capabilities[kind] != nil then
+            owned = manifest.capabilities[kind]
+            if type(owned) != "table" then
+                return "manifest '" .. tostring(manifest.name) .. "': capabilities." .. kind .. " must be a list"
+            end
+            for _, owned_name in ipairs(owned) do
+                if type(owned_name) != "string" or string.match(owned_name, OWNED_NAME_PATTERNS[kind]) == nil then
+                    return "manifest '" .. tostring(manifest.name) .. "': capabilities." .. kind .. " entry '" .. tostring(owned_name) .. "' is not a valid name"
+                end
             end
         end
     end
@@ -224,6 +251,63 @@ function extension.all(ext_dir)
         table.insert(result, {name = name, manifest = manifest, err = err})
     end
     return result
+end
+
+-- The schema or view definition files approved extensions own
+-- (`kind` is "schemas" or "views"): one {name, path, extension} per
+-- name declared in capabilities[kind], at <ext_dir>/<dir>/<kind>/<name>.lua.
+-- An unapproved extension owns nothing -- its types are never
+-- registered or updated, though a table registered while it was
+-- approved keeps its data (the same as deleting a file from schemas/).
+-- A declared file that doesn't exist is left for the caller to report
+-- when it tries to load it.
+function extension.owned_definitions(db_path, ext_dir, kind)
+    result = {}
+    for _, entry in ipairs(extension.all(ext_dir)) do
+        if entry.manifest != nil and entry.manifest.capabilities != nil
+           and entry.manifest.capabilities[kind] != nil
+           and extension.is_approved(db_path, entry.manifest) then
+            for _, owned_name in ipairs(entry.manifest.capabilities[kind]) do
+                table.insert(result, {
+                    name = owned_name,
+                    extension = entry.manifest.name,
+                    path = paths.joinpath(ext_dir, entry.name, kind, owned_name .. ".lua"),
+                })
+            end
+        end
+    end
+    return result
+end
+
+-- Merges a deployment directory's own <name>.lua files with the ones
+-- approved extensions own for the same kind -- shared by schema.lua and
+-- view.lua. Two sources defining the same name is an error, never a
+-- silent override. Returns nil plus an error if `dir` itself is missing
+-- and `dir_required` is true.
+function extension.definition_files(db_path, dir, ext_dir, kind, dir_required)
+    files = {}
+    owner_of = {}
+    attr = lfs.attributes(dir)
+    if attr != nil and attr.mode == "directory" then
+        for file_name in lfs.dir(dir) do
+            if string.match(file_name, "%.lua$") != nil then
+                name = string.gsub(file_name, "%.lua$", "")
+                table.insert(files, {name = name, path = paths.joinpath(dir, file_name)})
+                owner_of[name] = kind .. "/" .. file_name
+            end
+        end
+    elseif dir_required == true then
+        return nil, kind .. " directory not found: " .. dir
+    end
+    for _, owned in ipairs(extension.owned_definitions(db_path, ext_dir, kind)) do
+        if owner_of[owned.name] != nil then
+            return nil, "'" .. owned.name .. "' is defined by both " .. owner_of[owned.name] ..
+                " and extension '" .. owned.extension .. "'"
+        end
+        owner_of[owned.name] = "extension '" .. owned.extension .. "'"
+        table.insert(files, owned)
+    end
+    return files
 end
 
 -- Approved extensions that also declare capabilities.ui -- the one
@@ -455,6 +539,12 @@ function extension.capabilities_equal(a, b)
         return false
     end
     if tools_equal(a.tools, b.tools) == false then
+        return false
+    end
+    if string_sets_equal(a.schemas, b.schemas) == false then
+        return false
+    end
+    if string_sets_equal(a.views, b.views) == false then
         return false
     end
     return manual_triggers_equal(a.manual_triggers, b.manual_triggers)

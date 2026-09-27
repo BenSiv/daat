@@ -445,6 +445,25 @@ function render_sitemap_item(href, title, description)
         html.html_escape(description) .. "</p></a></li>"
 end
 
+-- "Related records" styling (related_records_html's markup) -- shared
+-- by the generic /detail page and a document's own page.
+function platform_related_css()
+    return """
+        .platform-related { display: flex; flex-direction: column; gap: 16px; }
+        .platform-related-group {
+            padding: 16px 20px;
+            background: var(--platform-bg, #f8fafc);
+            border: 1px solid var(--platform-border, #e2e8f0);
+            border-radius: var(--platform-radius-md, 12px);
+        }
+        .platform-related-group h4 { margin: 0 0 10px 0; font-size: 0.95rem; color: var(--platform-heading, #0f172a); }
+        .platform-related-group ul { margin: 0 0 10px 0; padding-left: 20px; }
+        .platform-related-group li { font-size: 0.9rem; margin-bottom: 4px; }
+        .platform-related-actions { display: flex; gap: 16px; font-size: 0.85rem; }
+        .platform-related-empty { color: var(--platform-muted, #64748b); font-style: italic; font-size: 0.9rem; margin: 0 0 10px 0; }
+"""
+end
+
 -- Shared page-header CSS -- was hand-copied, with real drift, across
 -- ~19 separate render_* functions in this file: margin-bottom 20px vs
 -- 24px depending which function you looked at, some missing the flex/
@@ -2535,18 +2554,6 @@ function html.render_detail(db_path, entity_type, layout, row, history, nonce, h
         .platform-print-label select { padding: 6px 10px; border-radius: var(--platform-radius-sm, 8px); border: 1px solid var(--platform-border, #e2e8f0); }
         #platform-print-label-status { font-size: 0.85rem; color: var(--platform-muted, #64748b); }
         #platform-print-label-status.platform-admin-message-error { color: #991b1b; }
-        .platform-related { display: flex; flex-direction: column; gap: 16px; }
-        .platform-related-group {
-            padding: 16px 20px;
-            background: var(--platform-bg, #f8fafc);
-            border: 1px solid var(--platform-border, #e2e8f0);
-            border-radius: var(--platform-radius-md, 12px);
-        }
-        .platform-related-group h4 { margin: 0 0 10px 0; font-size: 0.95rem; color: var(--platform-heading, #0f172a); }
-        .platform-related-group ul { margin: 0 0 10px 0; padding-left: 20px; }
-        .platform-related-group li { font-size: 0.9rem; margin-bottom: 4px; }
-        .platform-related-actions { display: flex; gap: 16px; font-size: 0.85rem; }
-        .platform-related-empty { color: var(--platform-muted, #64748b); font-style: italic; font-size: 0.9rem; margin: 0 0 10px 0; }
     </style>
     %s
     <div class="platform-container">
@@ -2569,7 +2576,7 @@ function html.render_detail(db_path, entity_type, layout, row, history, nonce, h
 </div>
 %s
 %s
-""", escaped_type, title_id_part, platform_container_css(), platform_button_css() .. platform_table_wrapper_css(), platform_page_header_css(), html.popover_css(), detail_header, fields_html, related_html, history_rows, html.popover_js(nonce), print_label_js_block)
+""", escaped_type, title_id_part, platform_container_css(), platform_button_css() .. platform_table_wrapper_css(), platform_page_header_css() .. platform_related_css(), html.popover_css(), detail_header, fields_html, related_html, history_rows, html.popover_js(nonce), print_label_js_block)
 end
 
 -- "Related records" -- every real, plain `reference` field
@@ -2818,7 +2825,7 @@ end
 -- uses -- an authoring mistake worth surfacing, not a trust boundary.
 function html.expand_inline_views(db_path, content)
     return (string.gsub(content, "{{view:([%w_]+):(%d+)}}", function(view_name, param_value)
-        view_def, err = view.load(config.views_dir(), view_name)
+        view_def, err = view.load(db_path, view_name)
         if view_def == nil then
             return "{{view:" .. view_name .. ":" .. param_value .. "}}"
         end
@@ -6112,7 +6119,10 @@ function render_document_connection(link, doc_id, can_edit)
         "<div class=\"platform-connection-detail\">" .. context_html .. explain_html .. "</div></li>"
 end
 
-function html.render_document(doc, rendered_html, breadcrumbs, children, links, can_edit)
+-- `related` is cgi.lua's related_records for this document, already
+-- narrowed to the types that aren't the document's own structure (see
+-- document_related_records there); empty renders nothing.
+function html.render_document(db_path, doc, rendered_html, breadcrumbs, children, links, can_edit, related)
     breadcrumb_html = ""
     for i, crumb in ipairs(breadcrumbs) do
         if i > 1 then
@@ -6156,6 +6166,12 @@ function html.render_document(doc, rendered_html, breadcrumbs, children, links, 
     -- had no way to reach it at all.
     history_link = "<a class=\"btn btn-secondary\" href=\"detail?type=document&entity_id=" .. tostring(doc.id) .. "\">History</a>"
 
+    related_block = ""
+    related_html = related_records_html(db_path, related, doc.id)
+    if related_html != "" then
+        related_block = "<div class=\"platform-document-related\">" .. related_html .. "</div>"
+    end
+
     escaped_doc_title = html.html_escape(doc.title)
     doc_header = render_page_header(escaped_doc_title, nil, "<div class=\"platform-header-actions\">" .. history_link .. edit_link .. "</div>")
     return string.format("""
@@ -6172,7 +6188,8 @@ function html.render_document(doc, rendered_html, breadcrumbs, children, links, 
         .platform-document-content a { color: var(--platform-accent, #4f46e5); text-decoration: none; }
         .platform-document-content a:hover { text-decoration: underline; }
         %s
-        .platform-document-children, .platform-document-connections { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--platform-border, #e2e8f0); }
+        .platform-document-children, .platform-document-connections, .platform-document-related { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--platform-border, #e2e8f0); }
+        .platform-document-related .platform-subheading { font-size: 0.95rem; color: var(--platform-muted, #64748b); margin: 0 0 8px 0; }
         .platform-document-children h4, .platform-document-connections h4 { margin: 0 0 8px 0; font-size: 0.95rem; color: var(--platform-muted, #64748b); }
         .platform-document-connections ul { list-style: none; padding: 0; margin: 0; }
         .platform-document-connections li { padding: 8px 0; border-bottom: 1px solid var(--platform-border, #e2e8f0); }
@@ -6192,10 +6209,11 @@ function html.render_document(doc, rendered_html, breadcrumbs, children, links, 
         </div>
         %s
         %s
+        %s
     </div>
 </div>
 """, escaped_doc_title, platform_container_css(), platform_button_css(),
-     platform_page_header_css(), html.plot_css(), breadcrumb_html, doc_header, rendered_html, children_block, connections_block)
+     platform_page_header_css() .. platform_related_css(), html.plot_css(), breadcrumb_html, doc_header, rendered_html, children_block, connections_block, related_block)
 end
 
 -- `doc` is nil for "create a new document", or the current row for

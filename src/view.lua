@@ -33,23 +33,6 @@ function view.init_schema(db_path)
     return db.exec(db_path, string.format(view.SCHEMA, db.now_expr(db_path)))
 end
 
-function view.names(views_dir)
-    names = {}
-    attr = lfs.attributes(views_dir)
-    if attr == nil or attr.mode != "directory" then
-        return names
-    end
-    for dir_name in lfs.dir(views_dir) do
-        if dir_name != "." and dir_name != ".." then
-            if string.match(dir_name, "%.lua$") != nil then
-                name = string.gsub(dir_name, "%.lua$", "")
-                table.insert(names, name)
-            end
-        end
-    end
-    return names
-end
-
 -- Rejects anything but a single, plain SELECT statement: no stacked
 -- statements (a ";" anywhere but optionally trailing), and no
 -- DDL/DML/pragma/attach keywords, matched on word boundaries (not bare
@@ -166,8 +149,7 @@ function view.validate(def)
     return nil
 end
 
-function view.load(views_dir, name)
-    path = paths.joinpath(views_dir, name .. ".lua")
+function view.load_file(path)
     source = paths.read_file(path)
     if source == nil then
         return nil, "cannot open view: " .. path
@@ -183,11 +165,54 @@ function view.load(views_dir, name)
     return result
 end
 
-function view.all(views_dir)
+-- Every view definition file this deployment loads: views/*.lua plus
+-- the ones approved extensions own (see extension.definition_files).
+function view.definition_files(db_path, root)
+    config = require("config")
+    extension = require("extension")
+    return extension.definition_files(db_path, config.views_dir(root), config.extensions_dir(root), "views", false)
+end
+
+-- An extension-owned view must define the name it declared, since
+-- that's the name its extension was approved for (and the name view
+-- approval is recorded under).
+function load_definition_file(f)
+    def, err = view.load_file(f.path)
+    if def != nil and f.extension != nil and def.name != f.name then
+        return nil, "extension '" .. f.extension .. "' declares view '" .. f.name ..
+            "' but " .. f.path .. " defines '" .. tostring(def.name) .. "'"
+    end
+    return def, err
+end
+
+-- views/<name>.lua first, without touching extensions at all -- the
+-- nav rail checks for prioritized_tasks on every request.
+function view.load(db_path, name, root)
+    config = require("config")
+    path = paths.joinpath(config.views_dir(root), name .. ".lua")
+    if paths.file_exists(path) then
+        return view.load_file(path)
+    end
+    files = view.definition_files(db_path, root)
+    if files != nil then
+        for _, f in ipairs(files) do
+            if f.name == name and f.extension != nil then
+                return load_definition_file(f)
+            end
+        end
+    end
+    return nil, "cannot open view: " .. path
+end
+
+function view.all(db_path, root)
+    files, files_err = view.definition_files(db_path, root)
+    if files == nil then
+        return {{name = "(views)", def = nil, err = files_err}}
+    end
     result = {}
-    for _, name in ipairs(view.names(views_dir)) do
-        def, err = view.load(views_dir, name)
-        table.insert(result, {name = name, def = def, err = err})
+    for _, f in ipairs(files) do
+        def, err = load_definition_file(f)
+        table.insert(result, {name = f.name, def = def, err = err})
     end
     return result
 end
@@ -801,12 +826,10 @@ end
 
 -- CLI entry point: `daat view <list|show|approve|revoke> [args]`
 function view.do_view(cmd_args, db_path)
-    config = require("config")
-    views_dir = config.views_dir()
     action = cmd_args[1]
 
     if action == "list" then
-        for _, entry in ipairs(view.all(views_dir)) do
+        for _, entry in ipairs(view.all(db_path)) do
             if entry.def == nil then
                 print(string.format("%-20s ERROR: %s", entry.name, entry.err))
             else
@@ -830,7 +853,7 @@ function view.do_view(cmd_args, db_path)
             print("Usage: daat view show <name>")
             return
         end
-        def, err = view.load(views_dir, name)
+        def, err = view.load(db_path, name)
         if def == nil then
             print("Error: " .. tostring(err))
             return
@@ -856,7 +879,7 @@ function view.do_view(cmd_args, db_path)
             print("Usage: daat view approve <name>")
             return
         end
-        def, err = view.load(views_dir, name)
+        def, err = view.load(db_path, name)
         if def == nil then
             print("Error: " .. tostring(err))
             return

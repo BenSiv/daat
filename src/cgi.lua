@@ -216,6 +216,24 @@ function related_records(db_path, entity_type, entity_id)
     return result
 end
 
+-- The core types that reference documents aren't records anyone adds
+-- from a document's page -- document.parent_id already shows as
+-- Sub-documents, document_tag is the tagging junction -- so a
+-- document's Related records are only the deployment's and extensions'
+-- types (e.g. a task attached to it), each with the usual "+ Add" link
+-- that pre-fills the document.
+DOCUMENT_OWN_REFERENCING_TYPES = {document = true, document_tag = true}
+
+function document_related_records(db_path, document_id)
+    result = {}
+    for _, group in ipairs(related_records(db_path, "document", document_id)) do
+        if DOCUMENT_OWN_REFERENCING_TYPES[group.from_type] == nil then
+            table.insert(result, group)
+        end
+    end
+    return result
+end
+
 -- The `entry` query param is the embedding notebook entry's identifier,
 -- whatever the client sent. Optional.
 function source_from_params(params)
@@ -468,7 +486,7 @@ end
 -- apply); has_tasks_view is still real, not hardcoded -- cheap to
 -- check directly, same as every other route.
 function handle_login(root, db_path, method, nonce, theme, params)
-    has_tasks_view = view.load(config.views_dir(root), "prioritized_tasks") != nil
+    has_tasks_view = view.load(db_path, "prioritized_tasks", root) != nil
     show_forgot_link = config.password_reset_enabled()
 
     if method == "POST" then
@@ -515,7 +533,7 @@ function handle_forgot_password(root, db_path, method, nonce, theme)
     if not config.password_reset_enabled() then
         return print_response("404 Not Found", "text/plain", "")
     end
-    has_tasks_view = view.load(config.views_dir(root), "prioritized_tasks") != nil
+    has_tasks_view = view.load(db_path, "prioritized_tasks", root) != nil
 
     sent = false
     if method == "POST" then
@@ -541,7 +559,7 @@ function handle_reset_password(root, db_path, method, nonce, theme)
     if not config.password_reset_enabled() then
         return print_response("404 Not Found", "text/plain", "")
     end
-    has_tasks_view = view.load(config.views_dir(root), "prioritized_tasks") != nil
+    has_tasks_view = view.load(db_path, "prioritized_tasks", root) != nil
     headers = {"Referrer-Policy: no-referrer", "Cache-Control: no-store"}
 
     token = nil
@@ -716,7 +734,7 @@ function cgi.handle_request()
     -- real links when this deployment actually seeded a
     -- "prioritized_tasks" view -- a fresh/generic install has no
     -- views/ at all, and would otherwise 404 on a raw internal path.
-    has_tasks_view = view.load(config.views_dir(root), "prioritized_tasks") != nil
+    has_tasks_view = view.load(db_path, "prioritized_tasks", root) != nil
     -- Computed once here, threaded through every html.page_shell call
     -- below, rather than each route re-querying it -- same reasoning
     -- as has_tasks_view just above.
@@ -1074,8 +1092,7 @@ function cgi.handle_request()
             return print_response("400 Bad Request", "text/html", "<h3>Error: Missing 'view_name' parameter</h3>")
         end
 
-        views_dir = config.views_dir(root)
-        view_def, err = view.load(views_dir, view_name)
+        view_def, err = view.load(db_path, view_name, root)
         if view_def == nil then
             return print_response("404 Not Found", "text/html", "<h3>Error: " .. tostring(err) .. "</h3>")
         end
@@ -1137,7 +1154,8 @@ function cgi.handle_request()
         breadcrumbs = document.breadcrumbs(db_path, entity_id)
         children = document.children(db_path, entity_id)
         links = document.links(db_path, entity_id)
-        body = html.render_document(doc, rendered_html, breadcrumbs, children, links, true)
+        related = document_related_records(db_path, entity_id)
+        body = html.render_document(db_path, doc, rendered_html, breadcrumbs, children, links, true, related)
         page_context = {page_type = "document", entity_type = "document", entity_id = doc.id, title = doc.title}
         return print_response("200 OK", "text/html",
             html.page_shell(doc.title, "documents", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author, page_context))

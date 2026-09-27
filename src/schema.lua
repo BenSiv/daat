@@ -942,27 +942,69 @@ end
 -- this lets sync_all skip the expensive work entirely on the
 -- overwhelming majority of requests in steady-state traffic (nothing
 -- changed since last time).
-function schema.content_signature(root)
+--
+-- Approved extensions' own schema files count too, which also covers
+-- approval itself: approving or revoking an extension adds or removes
+-- its files from extension.owned_definitions, so the signature changes
+-- and the next request re-syncs.
+function schema.content_signature(db_path, root)
     config = require("config")
-    parts = {}
+    extension = require("extension")
+    paths_to_stat = {}
     for _, dir in ipairs({config.dropdowns_dir(root), config.schemas_dir(root)}) do
         attr = lfs.attributes(dir)
         if attr != nil and attr.mode == "directory" then
-            names = {}
             for file_name in lfs.dir(dir) do
                 if string.match(file_name, "%.lua$") != nil then
-                    table.insert(names, file_name)
+                    table.insert(paths_to_stat, paths.joinpath(dir, file_name))
                 end
-            end
-            table.sort(names)
-            for _, file_name in ipairs(names) do
-                file_attr = lfs.attributes(paths.joinpath(dir, file_name))
-                table.insert(parts, dir .. "/" .. file_name .. ":" ..
-                    tostring(file_attr.modification) .. ":" .. tostring(file_attr.size))
             end
         end
     end
+    for _, owned in ipairs(extension.owned_definitions(db_path, config.extensions_dir(root), "schemas")) do
+        table.insert(paths_to_stat, owned.path)
+    end
+    table.sort(paths_to_stat)
+    parts = {}
+    for _, path in ipairs(paths_to_stat) do
+        file_attr = lfs.attributes(path)
+        if file_attr == nil then
+            table.insert(parts, path .. ":missing")
+        else
+            table.insert(parts, path .. ":" .. tostring(file_attr.modification) .. ":" .. tostring(file_attr.size))
+        end
+    end
     return table.concat(parts, "|")
+end
+
+-- Every schema definition file this deployment loads: schemas/*.lua
+-- plus the ones approved extensions own (see
+-- extension.definition_files). Each is {name, path, extension?}.
+function schema.definition_files(db_path, root)
+    config = require("config")
+    extension = require("extension")
+    return extension.definition_files(db_path, config.schemas_dir(root), config.extensions_dir(root), "schemas", true)
+end
+
+-- The file defining entity type `name`, or nil. schemas/<name>.lua is
+-- checked first, without touching extensions at all, since every
+-- /browse, /detail and /register request comes through here.
+function schema.definition_path(db_path, name, root)
+    config = require("config")
+    path = paths.joinpath(config.schemas_dir(root), name .. ".lua")
+    if paths.file_exists(path) then
+        return path
+    end
+    files = schema.definition_files(db_path, root)
+    if files == nil then
+        return nil
+    end
+    for _, f in ipairs(files) do
+        if f.name == name and f.extension != nil then
+            return f.path
+        end
+    end
+    return nil
 end
 
 function schema.stored_sync_signature(db_path)
@@ -995,7 +1037,7 @@ end
 function schema.sync_all(db_path, root)
     config = require("config")
 
-    signature = schema.content_signature(root)
+    signature = schema.content_signature(db_path, root)
     if signature == schema.stored_sync_signature(db_path) then
         return true
     end
@@ -1014,22 +1056,24 @@ function schema.sync_all(db_path, root)
         end
     end
 
-    schemas_dir = config.schemas_dir(root)
-    attr = lfs.attributes(schemas_dir)
-    if attr == nil or attr.mode != "directory" then
-        return false, "schemas directory not found: " .. schemas_dir
+    files, files_err = schema.definition_files(db_path, root)
+    if files == nil then
+        return false, files_err
     end
 
     defs = {}
-    for file_name in lfs.dir(schemas_dir) do
-        if string.match(file_name, "%.lua$") != nil then
-            full_path = paths.joinpath(schemas_dir, file_name)
-            def, load_err = schema.load_file(full_path)
-            if def == nil then
-                return false, "failed to load " .. full_path .. ": " .. tostring(load_err)
-            end
-            table.insert(defs, def)
+    for _, f in ipairs(files) do
+        def, load_err = schema.load_file(f.path)
+        if def == nil then
+            return false, "failed to load " .. f.path .. ": " .. tostring(load_err)
         end
+        -- An extension may only define the types it declared -- its
+        -- declared names are what was approved.
+        if f.extension != nil and def.name != f.name then
+            return false, "extension '" .. f.extension .. "' declares schema '" .. f.name ..
+                "' but " .. f.path .. " defines '" .. tostring(def.name) .. "'"
+        end
+        table.insert(defs, def)
     end
 
     -- lfs.dir's order is filesystem-arbitrary, not dependency order -- a
@@ -1078,11 +1122,9 @@ end
 -- falling back to the database description (e.g. for a schema whose
 -- file was since removed but whose table/data still exists).
 function schema.layout(db_path, name)
-    config = require("config")
-    schemas_dir = config.schemas_dir()
-    path = paths.joinpath(schemas_dir, name .. ".lua")
+    path = schema.definition_path(db_path, name)
     def = nil
-    if paths.file_exists(path) then
+    if path != nil then
         def = schema.load_file(path)
     end
 

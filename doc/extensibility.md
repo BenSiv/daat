@@ -73,9 +73,28 @@ A manifest declares what an extension needs; it's granted exactly that and nothi
 - `net: outbound` -- opts into outbound networking being available to the extension. Absent by default; an extension that doesn't declare this has no network access, full stop.
 - `ui: {label, icon}` -- opts into a page at `/ext/<name>`, described as a typed "canvas" element tree rather than raw HTML/JS, plus named button actions the page can trigger. See doc/plugin-system-research.md for the full design.
 - `tools: [{name, description, parameters, destructive?}]` -- contributes named tools the chat agent can call mid-conversation, dispatched under `tool_name.method_name` the same way built-in tool groups are. See doc/plugin-system-research.md.
+- `schemas: [<entity type>]` / `views: [<view name>]` -- the extension ships these entity types and views itself, as `extensions/<name>/schemas/<type>.lua` and `extensions/<name>/views/<view>.lua` -- see "Extension-owned entity types and views" below.
 - `manual_triggers: [{name, label, description}]` -- contributes admin-only "run this now" buttons, listed and dispatched from a dedicated `/admin-triggers` route rather than an extension's own `/ext/<name>` page (an extension can offer a manual trigger with no UI page at all). Unlike every other capability, reaching the dispatch route needs the account's own Admin capability, not merely the extension's approval -- a manual trigger runs someone's explicit request, on demand, not a reaction to a write any user made or a tool the model itself decided to call. Runs synchronously and returns a plain `{message = "..."}`; a trigger whose real work is slow is expected to kick that work off elsewhere (an outbound call, a queue write) and return quickly itself, the same way a `ui` action must.
 
 An extension needs an explicit approval before any of its hooks/routes/tools/triggers run at all, and the exact capabilities it declared at that moment are what get recorded as approved. If the manifest's declared capabilities change afterward -- including editing an already-approved `ui`/`tools`/`manual_triggers` entry, not just adding or removing one -- approval is automatically treated as stale until a human reviews and re-approves it -- an extension can't silently escalate what it's allowed to touch just by editing its own manifest.
+
+## Extension-owned entity types and views
+
+A feature that needs its own data -- tasks, say -- can be packaged whole as one extension instead of split across the deployment's `schemas/`, `views/` and `extensions/`: its entity types and views live inside the extension directory, and are enabled, approved and changed as one unit.
+
+```
+extensions/task/
+  manifest.lua          -- capabilities.schemas = {"task"}, capabilities.views = {"prioritized_tasks"}
+  main.lua
+  schemas/task.lua
+  views/prioritized_tasks.lua
+```
+
+An extension never creates tables itself -- there's no DDL capability. Its schema files are ordinary entity type definitions, loaded by the same sandboxed `schema.register` path as the deployment's own `schemas/`, so the table, ledger, validation, `/browse`/`/detail`/`/register` pages and the agent's `entity.*` tools all come from daat exactly as they would for any other type. Views are ordinary view definitions and still need their own `daat view approve`, like any view.
+
+- **Declared by name.** Only the names listed in `capabilities.schemas`/`views` are loaded, and the listed names are part of what gets approved -- so owning a new entity type (a new table) is a capabilities change that makes the extension unapproved until someone re-approves it. Editing an already-declared schema's fields doesn't: that deploys the same way a change to `schemas/` does. A file must define the name it's declared under, or schema sync fails.
+- **Only while approved.** An unapproved extension's types are never registered or updated. Revoking one (or deleting it) never drops anything: a table registered while it was approved keeps its data, exactly like deleting a file from `schemas/`.
+- **No overriding.** The same entity type or view name defined twice -- in `schemas/` and an extension, or in two extensions -- fails schema sync (or `daat view list`) with an error naming both, rather than one silently winning.
 
 ## What extensions cannot do today
 
