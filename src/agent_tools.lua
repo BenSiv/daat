@@ -120,7 +120,7 @@ agent_tools.AGENT_TOOLS = {
         },
         query = {
             destructive = false,
-            description = "Run a read-only SQL SELECT against registered entity tables, for anything entity.list's own single-table exact-match filter can't express: joins across related types (call entity.relationships first to find the join path), counts, aggregates, grouping. Table and column names are this deployment's real registered entity type/field names -- call entity.list_types/entity.fields/entity.relationships first if unsure, don't guess. Must be a single plain SELECT statement (no semicolons, no INSERT/UPDATE/DELETE/DDL) referencing only registered entity tables -- anything else is refused. Results are row-capped (this deployment's own configured limit) -- add your own LIMIT or narrow the query if a result comes back truncated (the truncation note tells you the true total match count, so you know whether narrowing is even worth it). Prefer expressing grouping/matching/deduplication logic (e.g. 'which groups of rows share the exact same set of X') as SQL itself -- GROUP BY with GROUP_CONCAT to build a per-group signature, then compare signatures -- rather than fetching many rows and comparing them yourself; there is no code-execution tool, so 'processed afterward' means reasoned over in your own reply, which doesn't scale to large row counts the way one aggregate query does. If a question genuinely can't be answered without paging through everything (no aggregate expresses it), use background.start rather than looping entity.query with an increasing OFFSET in the foreground -- and if you do page manually anyway, always add an explicit ORDER BY on a unique column (e.g. id): without one, SQL row order across separate LIMIT/OFFSET calls isn't guaranteed, so later pages can silently repeat or skip rows.",
+            description = "Run a read-only SQL SELECT against registered entity tables, for anything entity.list's own single-table exact-match filter can't express: joins across related types (call entity.relationships first to find the join path), counts, aggregates, grouping. Table and column names are this deployment's real registered entity type/field names -- call entity.list_types/entity.fields/entity.relationships first if unsure, don't guess. Every table has an archived_at column: archived rows are deleted/superseded records, so filter `archived_at IS NULL` unless you want them. The SQL dialect is the deployment's database (named in any SQL error; schema tables like sqlite_master/information_schema aren't queryable -- use entity.fields). Must be a single plain SELECT statement (no semicolons, no INSERT/UPDATE/DELETE/DDL) referencing only registered entity tables -- anything else is refused. Results are row-capped (this deployment's own configured limit) -- add your own LIMIT or narrow the query if a result comes back truncated (the truncation note tells you the true total match count, so you know whether narrowing is even worth it). Prefer expressing grouping/matching/deduplication logic (e.g. 'which groups of rows share the exact same set of X') as SQL itself -- GROUP BY with GROUP_CONCAT to build a per-group signature, then compare signatures -- rather than fetching many rows and comparing them yourself; there is no code-execution tool, so 'processed afterward' means reasoned over in your own reply, which doesn't scale to large row counts the way one aggregate query does. If a question genuinely can't be answered without paging through everything (no aggregate expresses it), use background.start rather than looping entity.query with an increasing OFFSET in the foreground -- and if you do page manually anyway, always add an explicit ORDER BY on a unique column (e.g. id): without one, SQL row order across separate LIMIT/OFFSET calls isn't guaranteed, so later pages can silently repeat or skip rows.",
             parameters = {
                 type = "object",
                 properties = {sql = {type = "string", description = "a single SELECT statement"}},
@@ -774,8 +774,22 @@ function agent_tools.execute_tool(db_path, author, session_id, tool_name, method
             if tonumber(f.required) == 1 then
                 required = ", required"
             end
-            table.insert(lines, string.format("%s (%s%s)", f.name, f.type, required))
+            line = string.format("%s (%s%s)", f.name, f.type, required)
+            if f.type == "multi_select" or f.type == "multi_reference" then
+                value_col = "value"
+                if f.type == "multi_reference" then
+                    value_col = f.name .. "_id"
+                end
+                line = line .. " -- not a column on " .. args.entity_type .. ": stored in junction table " ..
+                    schema.multi_field_table_name(args.entity_type, f.name) .. "(" .. args.entity_type .. "_id, " .. value_col .. ")"
+            elseif f.type == "polymorphic_reference" or f.type == "multi_polymorphic_reference" then
+                line = line .. " -- not a column on " .. args.entity_type .. ": stored in entity_source(from_type, from_id, field_name, to_type, to_id); join with from_type = '" ..
+                    args.entity_type .. "' AND field_name = '" .. f.name .. "' AND from_id = " .. args.entity_type .. ".id"
+            end
+            table.insert(lines, line)
         end
+        table.insert(lines, "")
+        table.insert(lines, "System columns on every row (not listed above): id, name, external_id, created_by, created_at, updated_by, updated_at, archived_at (non-NULL = archived; filter archived_at IS NULL for live rows).")
         -- `document` also carries knowledge-pool columns intentionally kept
         -- out of schema.fields (see document.lua's KNOWLEDGE_POOL_SQL_COLUMNS
         -- comment) -- surface them here too, so a query touching
@@ -806,11 +820,14 @@ function agent_tools.execute_tool(db_path, author, session_id, tool_name, method
         if args.sql == nil then
             return nil, "query requires sql"
         end
-        column_names, rows, err, truncated, total_count = view.run_agent_query(db_path, args.sql)
+        column_names, rows, err, truncated, total_count, archived_note = view.run_agent_query(db_path, args.sql)
         if column_names == nil then
             return nil, tostring(err)
         end
         if #rows == 0 then
+            if archived_note != nil then
+                return "Query returned no rows.\n\n" .. archived_note
+            end
             return "Query returned no rows."
         end
         lines = {}
@@ -829,6 +846,9 @@ function agent_tools.execute_tool(db_path, author, session_id, tool_name, method
             else
                 result = result .. "\n\n(truncated at " .. tostring(#rows) .. " rows -- add your own LIMIT or narrow the query for a complete result)"
             end
+        end
+        if archived_note != nil then
+            result = result .. "\n\n" .. archived_note
         end
         return result
     end
@@ -1495,6 +1515,13 @@ wrong values; let plot.from_query build the arrays from the real rows
 instead. Reach for a hand-written fence only when you already have a small
 number of values directly (e.g. numbers stated in the conversation, not
 pulled from a query result).
+
+Queries (entity.query/plot.from_query) run in the """ .. view.sql_dialect_name() .. """.
+Every number you present -- a count, an average, a per-group value in a
+table -- must come directly from a tool result in this conversation. If
+you only retrieved raw rows for some groups, report only those groups; to
+cover many groups, compute the value in one aggregate query instead of
+extrapolating. Never fill in a table with values no tool returned.
 """ .. extra
 end
 

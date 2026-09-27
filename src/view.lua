@@ -494,7 +494,7 @@ function view.run_adhoc(db_path, sql_text)
 
     ok, rows, column_names = pcall(db.query, db_path, query_text)
     if ok == false then
-        return nil, nil, "invalid sql: " .. tostring(rows)
+        return nil, nil, "invalid sql (" .. view.sql_dialect_name() .. "): " .. tostring(rows)
     end
     if rows == nil then
         rows = {}
@@ -636,6 +636,64 @@ function cte_names(sql_text)
     return names
 end
 
+-- Registered entity tables plus the storage tables that hold their
+-- own multi-valued/polymorphic field values -- entity data the model can
+-- already read one row at a time via entity.get, just not joinable in
+-- SQL without these. Seen in prod: "Unknown column 'cm.usage'" (a
+-- multi_select lives in its junction table) and sample lineage walked
+-- ~25 entity.get calls deep because entity_source was refused. None of
+-- these hold anything beyond entity ids/types/values.
+function view.queryable_tables(db_path)
+    allowed = {entity_source = true}
+    for _, t in ipairs(schema.list(db_path)) do
+        allowed[t.name] = true
+        for _, f in ipairs(schema.fields(db_path, t.name)) do
+            if f.type == "multi_select" or f.type == "multi_reference" then
+                allowed[schema.multi_field_table_name(t.name, f.name)] = true
+            end
+        end
+    end
+    return allowed
+end
+
+-- Every registered entity table carries archived_at (see
+-- schema.lua's RESERVED_FIELD_NAMES), and archived rows stay in the
+-- table -- so a query that never mentions archived_at silently counts
+-- them as live. Seen in prod: a nightly archive-and-recreate sync
+-- turned a 5-ingredient recipe into 143 rows. Rewriting the model's
+-- SQL to filter them would have to understand its aliases/joins/CTEs;
+-- a note naming the affected tables is structural enough to reliably
+-- surface the problem, and leaves the choice (sometimes archived rows
+-- ARE wanted) with the query's author.
+function archived_rows_note(db_path, sql_text, referenced)
+    if string.find(string.lower(sql_text), "archived_at", 1, true) != nil then
+        return nil
+    end
+    registered = {}
+    for _, t in ipairs(schema.list(db_path)) do
+        registered[t.name] = true
+    end
+    affected = {}
+    seen = {}
+    for _, name in ipairs(referenced) do
+        if registered[name] == true and seen[name] == nil then
+            seen[name] = true
+            ok, count_rows = pcall(db.query, db_path, "SELECT COUNT(*) AS n FROM " .. name .. " WHERE archived_at IS NOT NULL;")
+            if ok == true and count_rows != nil and count_rows[1] != nil then
+                n = tonumber(count_rows[1].n)
+                if n != nil and n > 0 then
+                    table.insert(affected, name .. " (" .. tostring(n) .. " archived rows)")
+                end
+            end
+        end
+    end
+    if #affected == 0 then
+        return nil
+    end
+    return "Note: this query doesn't filter archived rows, and these tables have some: " .. table.concat(affected, ", ") ..
+        ". Archived rows are deleted/superseded records -- unless you specifically want them, re-run with `<table>.archived_at IS NULL` for each."
+end
+
 -- A separate, smaller default cap than platform_adhoc_row_cap -- that
 -- one is sized for a human reading an HTML table in a browser; this
 -- result goes straight into the model's own prompt/context, where 1000
@@ -654,10 +712,7 @@ function view.run_agent_query(db_path, sql_text)
         return nil, nil, "refusing to run: no FROM/JOIN table found"
     end
 
-    allowed = {}
-    for _, t in ipairs(schema.list(db_path)) do
-        allowed[t.name] = true
-    end
+    allowed = view.queryable_tables(db_path)
     for _, name in ipairs(cte_names(sql_text)) do
         allowed[name] = true
     end
@@ -678,6 +733,9 @@ function view.run_agent_query(db_path, sql_text)
                 return nil, nil, "refusing to run: '" .. name .. "' is a real table, but intentionally excluded from entity.query (a hand-rolled system/derived log, not a registered entity type) -- this isn't a typo or a broken query, just not self-verifiable through this tool; it's still valid SQL for the admin /sql console"
             end
             message = "refusing to run: '" .. name .. "' is not a registered entity type -- only registered entity tables can be queried this way"
+            if name == "sqlite_master" or name == "information_schema" or name == "sqlite_schema" then
+                message = message .. " (to inspect the schema, call entity.list_types/entity.fields/entity.relationships instead; queries run in " .. view.sql_dialect_name() .. ")"
+            end
             suggestion = schema.suggest_type(db_path, name)
             if suggestion != nil then
                 message = message .. " (did you mean '" .. suggestion .. "'?)"
@@ -700,7 +758,7 @@ function view.run_agent_query(db_path, sql_text)
 
     ok, rows, column_names = pcall(db.query, db_path, query_text)
     if ok == false then
-        return nil, nil, "invalid sql: " .. tostring(rows)
+        return nil, nil, "invalid sql (" .. view.sql_dialect_name() .. "): " .. tostring(rows)
     end
     if rows == nil then
         rows = {}
@@ -727,7 +785,18 @@ function view.run_agent_query(db_path, sql_text)
             total_count = tonumber(count_rows[1].n)
         end
     end
-    return column_names, rows, nil, truncated, total_count
+    return column_names, rows, nil, truncated, total_count, archived_rows_note(db_path, sql_text, referenced)
+end
+
+-- The SQL dialect entity.query actually runs, named for the model so it
+-- doesn't guess (seen in prod: sqlite_master/julianday tried ~15 times
+-- against MariaDB).
+function view.sql_dialect_name()
+    config = require("config")
+    if config.db_backend() == "mariadb" then
+        return "MariaDB/MySQL dialect: use DATEDIFF/TIMESTAMPDIFF, LN, window functions; ONLY_FULL_GROUP_BY applies; no sqlite_master/julianday"
+    end
+    return "SQLite dialect: use julianday()/strftime(), no DATEDIFF"
 end
 
 -- CLI entry point: `daat view <list|show|approve|revoke> [args]`

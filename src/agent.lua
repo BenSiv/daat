@@ -721,11 +721,65 @@ function agent.estimate_tokens(text)
     return math.ceil(string.len(text) / 4)
 end
 
+-- How one message reads inside the compaction prompt. Unlike
+-- display_content (written for a human skimming the transcript), the
+-- summarizer needs tool-call *arguments* -- the SQL that actually ran,
+-- the ids that were looked up -- or the summary can only say "a query
+-- ran", and the next turn re-derives it from scratch (seen in prod:
+-- list_types/relationships/fields re-fetched after every compaction).
+-- Both arguments and results are capped so one huge tool result can't
+-- dominate the summarizer's own input.
+COMPACTION_ARGS_CAP = 800
+COMPACTION_RESULT_CAP = 1500
+COMPACTION_USER_REQUESTS_KEPT = 3
+
+function cap_text(text, cap)
+    if text == nil then
+        return ""
+    end
+    if string.len(text) <= cap then
+        return text
+    end
+    return string.sub(text, 1, cap) .. " ...[truncated, " .. tostring(string.len(text) - cap) .. " more chars]"
+end
+
+function compaction_content(msg)
+    if msg.role == "assistant" then
+        decoded, _, _ = json.decode(msg.content)
+        if decoded != nil and decoded.blocks != nil then
+            parts = {}
+            for _, block in ipairs(decoded.blocks) do
+                if block.type == "text" and block.text != nil then
+                    table.insert(parts, block.text)
+                elseif block.type == "toolCall" then
+                    args = ""
+                    if block.arguments != nil then
+                        encoded = json.encode(block.arguments)
+                        if encoded != nil then
+                            args = encoded
+                        end
+                    end
+                    table.insert(parts, "-> " .. tostring(block.name) .. "(" .. cap_text(args, COMPACTION_ARGS_CAP) .. ")")
+                end
+            end
+            return table.concat(parts, "\n")
+        end
+    elseif msg.role == "tool_result" then
+        return cap_text(agent.display_content(msg.content, msg.role), COMPACTION_RESULT_CAP)
+    end
+    return agent.display_content(msg.content, msg.role)
+end
+
 -- Summarizes everything except the last `keep_last` active messages
 -- into one new 'compaction_summary' message once the active window's
 -- estimated token count crosses the threshold, then marks the
 -- summarized originals in_context = 0. Never deletes anything; the
 -- summary is itself just another additive message.
+--
+-- The user's own most recent compacted messages are appended to the
+-- summary verbatim by code, not left to the summarizer: a free-form
+-- summary was seen in prod rewriting the user's actual request into a
+-- different task entirely.
 function agent.compact_if_needed(db_path, session_id, system_prompt, model)
     active = agent.active_messages(db_path, session_id)
 
@@ -750,18 +804,38 @@ function agent.compact_if_needed(db_path, session_id, system_prompt, model)
         table.insert(to_compact, active[i])
     end
 
+    -- Compaction runs right after a new user message is added, so that
+    -- message is always in the kept tail -- but it's often just "yes" /
+    -- "continue" / "I asked for a list", with the real request among
+    -- the compacted messages. Carry the most recent user messages being
+    -- compacted verbatim, most recent last.
+    compacted_user_requests = {}
+    for i = #to_compact, 1, -1 do
+        if to_compact[i].role == "user" and #compacted_user_requests < COMPACTION_USER_REQUESTS_KEPT then
+            table.insert(compacted_user_requests, 1,
+                "- " .. cap_text(agent.display_content(to_compact[i].content, "user"), COMPACTION_ARGS_CAP))
+        end
+    end
+
     summary_prompt = "You are a context compaction engine. Please summarize the following " ..
         "conversation history into a concise, structured Markdown summary of goals, key " ..
         "information established, and progress. Focus on preserving factual details and " ..
-        "state, so that a future model invocation has all the necessary context. Keep the " ..
-        "summary under 300 words.\n\nConversation to summarize:\n"
+        "state, so that a future model invocation has all the necessary context. In particular, " ..
+        "keep verbatim: the user's own requests (never reinterpret them as a different task), " ..
+        "any query text that succeeded, confirmed table/field names, and entity ids with what " ..
+        "they refer to. Only state what the conversation actually shows -- do not infer field " ..
+        "names or results that never appeared. Keep the summary under 400 words.\n\nConversation to summarize:\n"
     for _, msg in ipairs(to_compact) do
-        summary_prompt = summary_prompt .. string.upper(msg.role) .. ": " .. agent.display_content(msg.content, msg.role) .. "\n"
+        summary_prompt = summary_prompt .. string.upper(msg.role) .. ": " .. compaction_content(msg) .. "\n"
     end
 
     summary, err, usage = agent_provider.generate(model, "You are a concise summarizer.", summary_prompt)
     if summary == nil or err != nil then
         return false, err
+    end
+
+    if #compacted_user_requests > 0 then
+        summary = summary .. "\n\n**Earlier user messages (verbatim, most recent last):**\n" .. table.concat(compacted_user_requests, "\n")
     end
 
     summary_message_id = agent.add_message(db_path, session_id, "compaction_summary", summary, true)
@@ -1030,6 +1104,7 @@ end
 SELF_CHECK_PROMPT = """
 [Automated self-check, not the real user.] Before this reply is sent to the user, check it against the conversation and tool results above:
 - Is every factual claim directly supported by a tool result you actually gathered, not assumed or guessed?
+- Does every number in the reply (each table cell, count, average) appear in, or follow by simple arithmetic from, a specific tool result above? A value for a group you never queried is invented, however plausible -- that alone fails this check.
 - If your answer concludes zero, none, or "not found", did you verify the underlying values genuinely don't exist (e.g. a broader search, or checking the value exists at all independent of the specific query/filter you used) rather than trusting a single query or lookup that could itself have been wrong?
 - Is there an obvious next check you skipped that would meaningfully change or confirm the answer?
 - Was the original request genuinely ambiguous, or missing information you couldn't reasonably infer or look up yourself -- and if so, should this have been a clarify.ask instead of a guess?
@@ -1043,8 +1118,8 @@ Otherwise, do not repeat the reply -- just say what to check next, as if continu
 TURN_LIMIT_WRAPUP_PROMPT = """
 [Automated: you've used your entire step budget for this task without reaching a final answer.] Write a short status update for the user, in your own words:
 - What you were trying to find or do, and what you've actually confirmed or ruled out so far -- cite real values from your own tool results above, not vague generalities.
-- Say plainly whether your approach so far was on track and just needs more steps, or whether -- on reflection -- a different approach would get there faster (e.g. one aggregate query instead of paging through rows one batch at a time). The user can't judge this from the raw tool history alone; your own assessment is what lets them decide.
-- End with a direct question: continue as-is, or take a different approach?
+- Decide the next step yourself: either your approach was on track and just needs more steps, or -- on reflection -- a different approach would get there faster (e.g. one aggregate query instead of paging through rows one batch at a time). Say which, and exactly what you will do next.
+- Do not ask the user to choose between approaches -- that is your call, not theirs. Just end with one short line saying you'll carry on with that plan as soon as they reply (any reply, e.g. "continue").
 Do not call any tools -- this is a plain text reply only, and no tool call would run even if you proposed one.
 """
 

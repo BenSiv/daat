@@ -735,7 +735,7 @@ EOF
     session_id=$(extract_query_param "$resp" "session_id")
 
     scripted="$(tool_call_response "research.investigate" '{"question":"loop forever"}')"
-    for i in 1 2 3 4 5 6; do
+    for i in $(seq 1 12); do
         scripted="${scripted}"$'\1'"$(tool_call_response "entity.list_types" '{}')"
     done
     scripted="${scripted}"$'\1'"$(done_response "Giving up after the budget ran out.")"
@@ -756,7 +756,7 @@ EOF
     text_and_call_turn='{"content":[{"type":"text","text":"Found experiment 396, still tracing its source."},{"type":"toolCall","id":"call_1","name":"entity.query","arguments":{"sql":"SELECT 1"}}],"stopReason":"toolUse"}'
     scripted="$(tool_call_response "research.investigate" '{"question":"find the sample lineage"}')"
     scripted="${scripted}"$'\1'"${text_and_call_turn}"
-    for i in 1 2 3 4 5; do
+    for i in $(seq 1 11); do
         scripted="${scripted}"$'\1'"$(tool_call_response "entity.list_types" '{}')"
     done
     scripted="${scripted}"$'\1'"$(done_response "Here is what research found.")"
@@ -1292,6 +1292,92 @@ EOF
 
     run latest_tool_result "$session_id"
     [[ "$output" =~ "showing 1 of 3 total matching rows" ]]
+}
+
+@test "entity.query notes archived rows when the query doesn't filter archived_at, and stays quiet when it does" {
+    write_task_schema
+    "$BIN" entity create task title="Live" status=open >/dev/null
+    "$BIN" entity create task title="Old" status=open >/dev/null
+    sqlite3 "$TEST_DIR/.store/store.db" "UPDATE task SET archived_at = '2026-01-01 00:00:00' WHERE title = 'Old';"
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(tool_call_response "entity.query" '{"sql":"SELECT title FROM task"}')"$'\1'"$(done_response "Here.")"
+    printf '{"session_id":"%s","message":"list tasks"}' "$session_id" | \
+        AGENT_TEST_RESPONSES="$scripted" \
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/chat-widget-send" QUERY_STRING="" \
+        HTTP_COOKIE="$COOKIE" HTTP_X_CSRF_TOKEN="$CSRF" "$BIN" >/dev/null
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "task (1 archived rows)" ]]
+
+    scripted="$(tool_call_response "entity.query" '{"sql":"SELECT title FROM task WHERE archived_at IS NULL"}')"$'\1'"$(done_response "Here.")"
+    printf '{"session_id":"%s","message":"list live tasks"}' "$session_id" | \
+        AGENT_TEST_RESPONSES="$scripted" \
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/chat-widget-send" QUERY_STRING="" \
+        HTTP_COOKIE="$COOKIE" HTTP_X_CSRF_TOKEN="$CSRF" "$BIN" >/dev/null
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "Live" ]]
+    [[ ! "$output" =~ "archived rows" ]]
+}
+
+@test "entity.fields explains junction/polymorphic storage, and entity.query can join them (found live: celleste-lims eval)" {
+    mkdir -p schemas
+    cat > schemas/plant.lua <<'EOF'
+return {
+  name = "plant",
+  fields = {
+    {name = "label", type = "text", required = true},
+  },
+}
+EOF
+    cat > schemas/sample.lua <<'EOF'
+return {
+  name = "sample",
+  fields = {
+    {name = "label", type = "text", required = true},
+    {name = "tags", type = "multi_select", required = false, values = {"a", "b"}},
+    {name = "source", type = "polymorphic_reference", required = false,
+      allowed_entity_types = {"plant", "sample"}},
+  },
+}
+EOF
+    "$BIN" schema add schemas/plant.lua >/dev/null
+    "$BIN" schema add schemas/sample.lua >/dev/null
+    "$BIN" entity create plant label=P1 >/dev/null
+    "$BIN" entity create sample label=S1 source=plant:1 >/dev/null
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(tool_call_response "entity.fields" '{"entity_type":"sample"}')"$'\1'"$(done_response "Here.")"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"fields\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "junction table sample_tags(sample_id, value)" ]]
+    [[ "$output" =~ "stored in entity_source(from_type, from_id, field_name, to_type, to_id)" ]]
+    [[ "$output" =~ "System columns on every row" ]]
+
+    sql="SELECT s.label, es.to_type, es.to_id FROM sample s JOIN entity_source es ON es.from_type = 'sample' AND es.field_name = 'source' AND es.from_id = s.id"
+    scripted="$(tool_call_response "entity.query" "{\"sql\":\"${sql}\"}")"$'\1'"$(done_response "Here.")"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"lineage\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "S1 | plant | 1" ]]
+}
+
+@test "compaction carries the user's compacted requests verbatim, so a later 'continue' doesn't lose the goal" {
+    resp=$(start_chat "$COOKIE" "$CSRF" "Long chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    write_platform_config ', agent_compaction_threshold = 30'
+    scripted="$(tool_call_response "entity.list_types" "{}")"$'\1'"$(tool_call_response "entity.list_types" "{}")"$'\1'"$(done_response "want me to continue?")"
+    printf '{"session_id":"%s","message":"compute the average doubling time per experiment"}' "$session_id" | \
+        AGENT_TEST_RESPONSES="$scripted" \
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/chat-widget-send" QUERY_STRING="" \
+        HTTP_COOKIE="$COOKIE" HTTP_X_CSRF_TOKEN="$CSRF" "$BIN" >/dev/null
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"continue\"}" \
+        "$COOKIE" "$CSRF" "$(done_response "ok")" >/dev/null
+
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT content FROM agent_message WHERE session_id = '${session_id}' AND role = 'compaction_summary' ORDER BY id DESC LIMIT 1;"
+    [[ "$output" =~ "Earlier user messages (verbatim, most recent last):**" ]]
+    [[ "$output" =~ "- compute the average doubling time per experiment" ]]
 }
 
 @test "compaction marks old turns out of context (dimmed) but never deletes them" {

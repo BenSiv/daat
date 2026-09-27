@@ -213,13 +213,13 @@ A built-in assistant, not a bolted-on integration: real per-user conversation se
   | `agent_model` | `"gemini-3.5-flash-lite"` | The real model name passed to every `generate`/`converse`/`embeddings` call |
   | `vertex_project` | none (required) | GCP project `src/provider/agent_vertex.lua`'s REST calls bill against -- never hardcoded |
   | `vertex_region` | `"global"` | Vertex AI region -- `"global"` is the only location that serves the default 3.x-family model as of this writing; a deployment on an older/regional model can still override this |
-  | `agent_max_turns` | 10 | Main tool-calling turn loop's own budget (`agent.run_turn`) |
-  | `agent_research_max_turns` | 6 | `research.investigate`'s isolated sub-loop budget |
+  | `agent_max_turns` | 20 | Main tool-calling turn loop's own budget (`agent.run_turn`) |
+  | `agent_research_max_turns` | 12 | `research.investigate`'s isolated sub-loop budget |
   | `agent_background_max_turns` | 20 | `background.start`'s worker-drained task budget -- looser than the interactive ones since it isn't bound to one HTTP request |
   | `agent_background_max_attempts` | 3 | Retries before a background task is marked permanently `failed` |
   | `agent_search_excerpt_length` | 1200 | Per-result excerpt length `document.search`'s tool result feeds into the model's own prompt |
   | `agent_query_row_cap` | 200 | Row cap on `entity.query` results (goes straight into the model's prompt/context, so much lower than the admin console's own cap) |
-  | `agent_compaction_threshold` | 4000 | Estimated-token threshold that triggers context-window compaction |
+  | `agent_compaction_threshold` | 32000 | Estimated-token threshold that triggers context-window compaction |
   | `platform_adhoc_row_cap` | 1000 | Row cap on the admin-only `/sql` ad-hoc console (a human reading an HTML table, not a model's context budget) |
   | `extension_max_job_attempts` | 5 | Retries before an `extension_job` (after-hook write queue) is marked permanently `failed` |
   | `db_backend` | `"sqlite"` | `"sqlite"` or `"mariadb"` -- see doc/mariadb-migration.md |
