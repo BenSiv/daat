@@ -25,7 +25,31 @@ function test_reply_has_visible_reasoning_detects_markers()
     check(knowledge.reply_has_visible_reasoning("") == false, "empty string should not be flagged")
 end
 
+function test_unverified_claims_need_both_documents()
+    print("Testing unverified_claims: cited authors, years and identifiers must appear in both documents")
+    review = {title = "Cacao biotechnology review", content = "Somatic embryogenesis (Dillinger et al., 2000) and CCN51 clones."}
+    thesis = {title = "Phospholipase D thesis", content = "Bargmann et al. found LePLD relocalization. Dillinger 2000 cited."}
+    check(#knowledge.unverified_claims("the review cites Bargmann et al. on PLD", review, thesis) == 1,
+        "an author only one side mentions is unverified (B cites A's author)")
+    check(#knowledge.unverified_claims("both cite Dillinger et al. (2000) on etymology", review, thesis) == 0,
+        "an author and year both documents mention are verified")
+    check(#knowledge.unverified_claims("both discuss plant stress signalling", review, thesis) == 0,
+        "a reason with no checkable specifics passes (paraphrase can't be checked)")
+    missing = knowledge.unverified_claims("the CCN51 protocol relies on it", review, thesis)
+    check(#missing == 1 and missing[1] == "CCN51", "a letters-and-digits identifier is a claim")
+
+    summary = {title = "Experiment 208 - Summary", content = "Source material from Exp. 141; follow-up in experiment #226."}
+    run = {title = "Experiment 226", content = "Media variants from exp208 and Exp 141."}
+    check(#knowledge.unverified_claims("Experiment 226 executes the design in Experiment 208, both using Exp141", summary, run) == 0,
+        "numbered references match Exp. 141 / experiment #226 / exp208 spellings")
+    check(#knowledge.unverified_claims("Experiment 228 is its source", summary, run) == 1,
+        "a numbered reference neither document mentions is unverified")
+    check(#knowledge.unverified_claims("the 1,058 samples", summary, run) == 0,
+        "a plain number isn't a claim on its own")
+end
+
 function test_classify_reply_four_way_split()
+test_unverified_claims_need_both_documents()
     print("Testing classify_reply's four-way classification (error/reasoning-visible/final/empty)")
     kind, quality, reasoning = knowledge.classify_reply(true, nil)
     check(kind == "error" and quality == "error" and reasoning == "none",

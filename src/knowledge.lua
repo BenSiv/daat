@@ -1046,6 +1046,91 @@ function knowledge.maybe_link_co_retrieved(db_path, author, document_ids)
     end
 end
 
+-- The checkable specifics a link reason asserts: a cited author
+-- ("Bargmann et al."), a year in parentheses ("(2000)"), an identifier
+-- mixing letters and digits ("Exp141", "CCN51", "TcLEC2"), or a
+-- numbered reference ("Experiment 208", "Sample 131", "Chapter 4").
+-- Anything else in the reason is paraphrase, which a rule can't check.
+CLAIM_REFERENCE_WORDS = {"Experiment", "Exp", "Sample", "Table", "Figure", "Chapter"}
+
+function knowledge.reason_claims(reason)
+    claims = {}
+    seen = {}
+    add = function(kind, value)
+        key = kind .. ":" .. string.lower(value)
+        if seen[key] == nil then
+            seen[key] = true
+            table.insert(claims, {kind = kind, value = value})
+        end
+    end
+    if reason == nil then
+        return claims
+    end
+    for surname in string.gmatch(reason, "(%u[%a'%-]+) et al") do
+        add("text", surname)
+    end
+    for group in string.gmatch(reason, "%b()") do
+        for year in string.gmatch(group, "%f[%d](1[89]%d%d)%f[%D]") do
+            add("text", year)
+        end
+        for year in string.gmatch(group, "%f[%d](20%d%d)%f[%D]") do
+            add("text", year)
+        end
+    end
+    for token in string.gmatch(reason, "[%w]+") do
+        -- "Exp141" is a numbered reference (below), matched loosely,
+        -- not a literal identifier.
+        is_reference = false
+        for _, word in ipairs(CLAIM_REFERENCE_WORDS) do
+            if string.match(string.lower(token), "^" .. string.lower(word) .. "%d+$") != nil then
+                is_reference = true
+            end
+        end
+        if not is_reference and string.len(token) >= 3 and string.find(token, "%a%d") != nil then
+            add("text", token)
+        end
+    end
+    for _, word in ipairs(CLAIM_REFERENCE_WORDS) do
+        for number in string.gmatch(reason, "%f[%a]" .. word .. "%.? ?#?(%d+)") do
+            add("reference", word .. " " .. number)
+        end
+    end
+    return claims
+end
+
+-- A claim holds for a document when its title or content contains it
+-- (case-insensitive; a numbered reference also matches "Exp. 208",
+-- "Experiment #208" and "exp208").
+function claim_in_text(claim, text)
+    text = string.gsub(string.lower(text), ",", "")
+    if claim.kind == "text" then
+        return string.find(text, string.lower(claim.value), 1, true) != nil
+    end
+    word, number = string.match(claim.value, "^(%a+) (%d+)$")
+    prefix = string.sub(string.lower(word), 1, 3)
+    return string.find(text, "%f[%a]" .. prefix .. "%a*%.?[ #]*0*" .. number .. "%f[%D]") != nil
+end
+
+-- The claims of a YES reason that aren't in BOTH documents -- empty when
+-- every one is (or the reason makes none). Both, not either: a
+-- connection is about what the two share, and "B cites Katz et al."
+-- would otherwise pass merely because Katz wrote A. Measured on 100
+-- human-reviewed YES verdicts (2026-09-26, 12 accepted): this caught 12
+-- of the 88 rejected -- every invented citation and cross-reference --
+-- and 1 of the 12 accepted (a sample id only one side mentions), which
+-- is re-judged later like any decline rather than lost.
+function knowledge.unverified_claims(reason, doc_a, doc_b)
+    text_a = tostring(doc_a.title) .. "\n" .. tostring(doc_a.content)
+    text_b = tostring(doc_b.title) .. "\n" .. tostring(doc_b.content)
+    missing = {}
+    for _, claim in ipairs(knowledge.reason_claims(reason)) do
+        if not (claim_in_text(claim, text_a) and claim_in_text(claim, text_b)) then
+            table.insert(missing, claim.value)
+        end
+    end
+    return missing
+end
+
 -- On YES, writes the connection down the way a person would: an
 -- ordinary document linking both and saying why (document.
 -- connection_draft), created through the same document.create_page any
@@ -1062,6 +1147,15 @@ function knowledge.evaluate_co_retrieval_pair(db_path, author, doc_a, doc_b, co_
     verdict, reason = knowledge.parse_link_judgment(answer)
     if verdict != "YES" then
         knowledge.record_link_review(db_path, doc_a.id, doc_b.id, co_count, "declined", reason)
+        return
+    end
+    -- A YES whose reason names things the documents don't both contain
+    -- is an invented connection, not a found one: nothing is written.
+    -- Recorded like a decline, so it's re-judged if co-retrieval grows.
+    missing = knowledge.unverified_claims(reason, doc_a, doc_b)
+    if #missing > 0 then
+        knowledge.record_link_review(db_path, doc_a.id, doc_b.id, co_count, "unverified",
+            "not in both documents: " .. table.concat(missing, ", ") .. " -- " .. tostring(reason))
         return
     end
     draft = document.connection_draft(db_path, doc_a.id, doc_b.id, reason)

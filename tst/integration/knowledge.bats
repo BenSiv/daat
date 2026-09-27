@@ -539,6 +539,20 @@ search_for_bioreactor_extra() {
     [[ "$output" =~ "Bioreactor Cleaning and Bioreactor Startup: both are steps of the same bioreactor procedure." ]]
 }
 
+@test "a YES whose reason names something the documents don't both contain writes no connection document" {
+    "$BIN" entity create document title="Bioreactor Cleaning" content="cleaning steps for the bioreactor procedure"
+    "$BIN" entity create document title="Bioreactor Startup" content="startup steps for the bioreactor procedure"
+
+    search_for_bioreactor_extra ""
+    search_for_bioreactor_extra ""
+    search_for_bioreactor_extra "YES: the startup protocol cites Bargmann et al. (2006) for the cleaning steps."
+
+    run sqlite3 .store/store.db "SELECT COUNT(*) FROM document WHERE title = 'Bioreactor Cleaning ↔ Bioreactor Startup';"
+    [ "$output" -eq 0 ]
+    run sqlite3 .store/store.db "SELECT decision, last_co_count, reason FROM knowledge_link_review WHERE document_a_id = 1 AND document_b_id = 2;"
+    [[ "$output" == "unverified|3|not in both documents: Bargmann, 2006 -- the startup protocol cites Bargmann et al. (2006) for the cleaning steps." ]]
+}
+
 @test "a co-retrieved pair the agent declines is remembered, not re-asked on the very next shared retrieval (task #109)" {
     "$BIN" entity create document title="Bioreactor Cleaning" content="cleaning steps for the bioreactor procedure"
     "$BIN" entity create document title="Bioreactor Startup" content="startup steps for the bioreactor procedure"
