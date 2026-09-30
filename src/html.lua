@@ -6016,7 +6016,9 @@ function html.render_document_tree(rows, can_create, nonce)
         .platform-document-tree details[open] > summary::before { transform: rotate(90deg); }
         .platform-tree-leaf { padding: 2px 0 2px 16px; }
         .platform-tree-folder { font-weight: 600; color: var(--platform-text, #334155); user-select: none; }
-        .platform-document-tree a.platform-tree-open { font-weight: 400; font-size: 0.8rem; color: var(--platform-muted, #94a3b8); margin-left: 4px; padding: 0 4px; }
+        .platform-document-tree a.platform-tree-open { font-weight: 400; font-size: 0.8rem; color: var(--platform-muted, #94a3b8); margin-left: 4px; padding: 0 4px; opacity: 0; }
+        /* Only on the row being pointed at (or keyboard-focused), not on every folder. */
+        .platform-document-tree summary:hover > a.platform-tree-open, .platform-document-tree a.platform-tree-open:focus { opacity: 1; }
         .platform-document-tree a.platform-tree-open:hover { color: var(--platform-accent, #4f46e5); text-decoration: none; }
     </style>
     <div class="platform-container">
