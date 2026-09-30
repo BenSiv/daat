@@ -5851,10 +5851,11 @@ end
 -- (top level) starts open so the overall shape is
 -- visible immediately; everything nested starts closed, since a
 -- fully-expanded deep tree is exactly the problem being fixed here.
--- The link and the disclosure triangle are deliberately separate
--- click targets -- summary normally toggles on any click inside it,
--- but browsers let a nested <a>'s own click take over instead, so the
--- title text still navigates rather than only expanding.
+-- A folder row (one with children) behaves like a file tree: clicking
+-- its title only expands/collapses it. It used to be a link that opened
+-- the folder's own page -- a list of sub-document buttons, one more page
+-- per level to click through. The small "open" arrow after the title is
+-- the way to that page, for folders that carry content of their own.
 function render_document_tree_level(by_parent, key, depth)
     children = by_parent[key]
     if children == nil then
@@ -5872,8 +5873,11 @@ function render_document_tree_level(by_parent, key, depth)
             -- level -- the tree got long enough after a real bulk
             -- import that leaving it open was unusable. Was "open" at
             -- depth 0 only; the user navigates inward as needed instead.
-            items = items .. "<li><details><summary>" .. link .. "</summary><ul>" ..
-                nested .. "</ul></details></li>"
+            title = html.html_escape(row.title)
+            open_link = "<a class=\"platform-tree-open\" href=\"document?entity_id=" .. tostring(row.id) ..
+                "\" title=\"Open page\" aria-label=\"Open " .. title .. "\">&#8599;</a>"
+            items = items .. "<li><details><summary><span class=\"platform-tree-folder\">" .. title ..
+                "</span>" .. open_link .. "</summary><ul>" .. nested .. "</ul></details></li>"
         end
     end
     return items
@@ -6011,6 +6015,9 @@ function html.render_document_tree(rows, can_create, nonce)
         }
         .platform-document-tree details[open] > summary::before { transform: rotate(90deg); }
         .platform-tree-leaf { padding: 2px 0 2px 16px; }
+        .platform-tree-folder { font-weight: 600; color: var(--platform-text, #334155); user-select: none; }
+        .platform-document-tree a.platform-tree-open { font-weight: 400; font-size: 0.8rem; color: var(--platform-muted, #94a3b8); margin-left: 4px; padding: 0 4px; }
+        .platform-document-tree a.platform-tree-open:hover { color: var(--platform-accent, #4f46e5); text-decoration: none; }
     </style>
     <div class="platform-container">
         %s
@@ -6138,7 +6145,8 @@ function html.render_document(db_path, doc, rendered_html, breadcrumbs, children
 
     children_html = ""
     for _, child in ipairs(children) do
-        children_html = children_html .. "<li><a class=\"btn btn-secondary\" href=\"document?entity_id=" .. tostring(child.id) .. "\">" ..
+        -- A plain file-tree-style list, not a row of buttons.
+        children_html = children_html .. "<li><a href=\"document?entity_id=" .. tostring(child.id) .. "\">" ..
             html.html_escape(child.title) .. "</a></li>"
     end
     children_block = ""
@@ -6191,6 +6199,10 @@ function html.render_document(db_path, doc, rendered_html, breadcrumbs, children
         .platform-document-children, .platform-document-connections, .platform-document-related { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--platform-border, #e2e8f0); }
         .platform-document-related .platform-subheading { font-size: 0.95rem; color: var(--platform-muted, #64748b); margin: 0 0 8px 0; }
         .platform-document-children h4, .platform-document-connections h4 { margin: 0 0 8px 0; font-size: 0.95rem; color: var(--platform-muted, #64748b); }
+        .platform-document-children ul { list-style: none; padding: 0; margin: 0; }
+        .platform-document-children li { padding: 2px 0 2px 16px; }
+        .platform-document-children a { color: var(--platform-accent, #4f46e5); text-decoration: none; font-weight: 600; }
+        .platform-document-children a:hover { text-decoration: underline; }
         .platform-document-connections ul { list-style: none; padding: 0; margin: 0; }
         .platform-document-connections li { padding: 8px 0; border-bottom: 1px solid var(--platform-border, #e2e8f0); }
         .platform-document-connections li:last-child { border-bottom: none; }

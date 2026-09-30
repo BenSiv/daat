@@ -67,12 +67,16 @@ raw_document_preview() {
 
     run get_route "/documents" ""
     [[ "$output" =~ "200 OK" ]]
-    [[ "$output" =~ 'href="document?entity_id=1">Home' ]]
+    [[ "$output" =~ '<span class="platform-tree-folder">Home</span>' ]]
     # Setup's <li> must be nested inside Guides' <details>, which is
     # nested inside Home's -- not just present anywhere on the page.
     # Collapsible <details>/<summary> nodes now, not a flat always-
     # expanded <ul><li> -- see html.lua's render_document_tree_level.
-    [[ "$output" =~ 'Home</a></summary><ul><li><details><summary><a href="document?entity_id=2">Guides</a></summary><ul><li class="platform-tree-leaf"><a href="document?entity_id=3">Setup' ]]
+    # Folder rows toggle on a click of the title (plain text, no link);
+    # only the small open arrow after it navigates to the folder page.
+    [[ "$output" =~ 'Home</span><a class="platform-tree-open" href="document?entity_id=1" title="Open page" aria-label="Open Home">&#8599;</a></summary><ul><li><details><summary><span class="platform-tree-folder">Guides</span><a class="platform-tree-open" href="document?entity_id=2"' ]]
+    [[ "$output" =~ '</summary><ul><li class="platform-tree-leaf"><a href="document?entity_id=3">Setup' ]]
+    [[ ! "$output" =~ '<summary><a href=' ]]
 }
 
 @test "/document-edit's parent picker disambiguates duplicate titles without ever showing a raw internal id" {
