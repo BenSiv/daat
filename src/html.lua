@@ -4604,6 +4604,12 @@ function html.render_knowledge_graph(nonce)
         var centerInput = document.getElementById('platform-kg-center');
         var forcesResetBtn = document.getElementById('platform-kg-forces-reset');
         var nodes = [], links = [], byId = {};
+        // Only linked nodes take part in the force simulation (simNodes);
+        // orphans -- most of a real pool -- have no springs, only
+        // repulsion, and every one of them made every frame's all-pairs
+        // loops longer (5.5k nodes: ~130ms/frame; 1.3k linked: ~18ms).
+        // They're laid out in a static grid instead (placeOrphans).
+        var simNodes = [], orphans = [];
 
         // -- Colour, filter, hide orphans (doc/structure-layers.md, "Graph
         // view"). Filtering only hides: hidden nodes keep their place in
@@ -4709,16 +4715,23 @@ function html.render_knowledge_graph(nonce)
         resize();
         window.addEventListener('resize', function() { resize(); draw(); });
 
+        // Theme colours are read once, not per node/edge per frame --
+        // getComputedStyle on every draw call was a real cost at pool size.
+        var cssVarCache = {};
+        function cssVar(name, fallback) {
+            if (!(name in cssVarCache)) {
+                var v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+                cssVarCache[name] = v || fallback;
+            }
+            return cssVarCache[name];
+        }
+
         function tierColor(tier) {
-            var style = getComputedStyle(document.documentElement);
-            var v = style.getPropertyValue('--platform-tier-' + tier);
-            return v ? v.trim() : '#8880ec';
+            return cssVar('--platform-tier-' + tier, '#8880ec');
         }
 
         function accentColor() {
-            var style = getComputedStyle(document.documentElement);
-            var v = style.getPropertyValue('--platform-accent');
-            return v ? v.trim() : '#5c52e0';
+            return cssVar('--platform-accent', '#5c52e0');
         }
 
         function nodeRadius(heat) {
@@ -4726,28 +4739,59 @@ function html.render_knowledge_graph(nonce)
             return Math.max(4, Math.min(22, 4 + h * 6));
         }
 
+        // Batched: edges grouped by (width, opacity) bucket and nodes by
+        // colour, one path each, instead of one stroke/fill per element --
+        // and anything outside the visible world rectangle is skipped.
         function draw() {
             ctx.setTransform(1, 0, 0, 1, 0, 0);
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             ctx.setTransform(camera.scale, 0, 0, camera.scale, camera.x, camera.y);
+            var pad = 24;
+            var minX = -camera.x / camera.scale - pad, minY = -camera.y / camera.scale - pad;
+            var maxX = (canvas.width - camera.x) / camera.scale + pad, maxY = (canvas.height - camera.y) / camera.scale + pad;
+
+            var edgeBuckets = {};
             links.forEach(function(e) {
                 var a = byId[e.from], b = byId[e.to];
                 if (!a || !b || !isVisible(a) || !isVisible(b)) { return; }
+                if ((a.x < minX && b.x < minX) || (a.x > maxX && b.x > maxX) ||
+                    (a.y < minY && b.y < minY) || (a.y > maxY && b.y > maxY)) { return; }
                 var strength = (typeof e.strength === 'number') ? e.strength : 1.0;
-                ctx.beginPath();
-                ctx.moveTo(a.x, a.y);
-                ctx.lineTo(b.x, b.y);
-                ctx.lineWidth = Math.max(0.5, Math.min(6, strength));
-                ctx.strokeStyle = accentColor();
-                ctx.globalAlpha = Math.max(0.15, Math.min(0.85, strength / 3));
-                ctx.stroke();
-                ctx.globalAlpha = 1;
+                var width = Math.round(Math.max(0.5, Math.min(6, strength)) * 2) / 2;
+                var alpha = Math.round(Math.max(0.15, Math.min(0.85, strength / 3)) * 20) / 20;
+                var key = width + '|' + alpha;
+                (edgeBuckets[key] = edgeBuckets[key] || { width: width, alpha: alpha, list: [] }).list.push(a, b);
             });
+            ctx.strokeStyle = accentColor();
+            Object.keys(edgeBuckets).forEach(function(key) {
+                var bucket = edgeBuckets[key];
+                ctx.beginPath();
+                for (var i = 0; i < bucket.list.length; i += 2) {
+                    ctx.moveTo(bucket.list[i].x, bucket.list[i].y);
+                    ctx.lineTo(bucket.list[i + 1].x, bucket.list[i + 1].y);
+                }
+                ctx.lineWidth = bucket.width;
+                ctx.globalAlpha = bucket.alpha;
+                ctx.stroke();
+            });
+            ctx.globalAlpha = 1;
+
+            var nodeBuckets = {};
             nodes.forEach(function(n) {
                 if (!isVisible(n)) { return; }
+                var r = nodeRadius(n.heat);
+                if (n.x + r < minX || n.x - r > maxX || n.y + r < minY || n.y - r > maxY) { return; }
+                var color = nodeColor(n);
+                (nodeBuckets[color] = nodeBuckets[color] || []).push(n);
+            });
+            Object.keys(nodeBuckets).forEach(function(color) {
                 ctx.beginPath();
-                ctx.arc(n.x, n.y, nodeRadius(n.heat), 0, Math.PI * 2);
-                ctx.fillStyle = nodeColor(n);
+                nodeBuckets[color].forEach(function(n) {
+                    var r = nodeRadius(n.heat);
+                    ctx.moveTo(n.x + r, n.y);
+                    ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
+                });
+                ctx.fillStyle = color;
                 ctx.fill();
             });
         }
@@ -4813,6 +4857,7 @@ function html.render_knowledge_graph(nonce)
             var w = screenToWorld(ev.clientX - rect.left, ev.clientY - rect.top);
             dragNode.x = w.x;
             dragNode.y = w.y;
+            dragNode.manual = true;
             dragMoved = true;
             hideTooltip();
             wakeSimulation();
@@ -5096,9 +5141,9 @@ function html.render_knowledge_graph(nonce)
         // not meant to be an exact iterative solver.
         function resolveCollisions() {
             for (var pass = 0; pass < 2; pass++) {
-                for (var i = 0; i < nodes.length; i++) {
-                    for (var j = i + 1; j < nodes.length; j++) {
-                        var a = nodes[i], b = nodes[j];
+                for (var i = 0; i < simNodes.length; i++) {
+                    for (var j = i + 1; j < simNodes.length; j++) {
+                        var a = simNodes[i], b = simNodes[j];
                         if (a.fixed && b.fixed) { continue; }
                         var dx = a.x - b.x, dy = a.y - b.y;
                         var dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
@@ -5133,9 +5178,9 @@ function html.render_knowledge_graph(nonce)
         }
 
         function simStep(w, h) {
-            for (var i = 0; i < nodes.length; i++) {
-                for (var j = i + 1; j < nodes.length; j++) {
-                    var a = nodes[i], b = nodes[j];
+            for (var i = 0; i < simNodes.length; i++) {
+                for (var j = i + 1; j < simNodes.length; j++) {
+                    var a = simNodes[i], b = simNodes[j];
                     var dx = a.x - b.x, dy = a.y - b.y;
                     var distSq = (dx * dx + dy * dy) || 0.01;
                     var dist = Math.sqrt(distSq);
@@ -5160,7 +5205,7 @@ function html.render_knowledge_graph(nonce)
                 if (!a.fixed) { a.vx += fx; a.vy += fy; }
                 if (!b.fixed) { b.vx -= fx; b.vy -= fy; }
             });
-            nodes.forEach(function(n) {
+            simNodes.forEach(function(n) {
                 if (n.fixed) { n.vx = 0; n.vy = 0; return; }
                 var centerBoost = 1 + CENTER_CONNECTIVITY_GAIN * Math.log(1 + (n.connWeight || 0));
                 n.vx += (w / 2 - n.x) * CENTER_PULL * centerBoost;
@@ -5174,10 +5219,35 @@ function html.render_knowledge_graph(nonce)
             });
             resolveCollisions();
             var energy = 0;
-            nodes.forEach(function(n) {
+            simNodes.forEach(function(n) {
                 energy += n.vx * n.vx + n.vy * n.vy;
             });
             return energy;
+        }
+
+        // Orphans in a square grid just below the linked cluster, hottest
+        // first -- visible and clickable, but outside the simulation. Run
+        // after each settle, since the cluster's extent moves; a dragged
+        // orphan (manual) keeps wherever it was dropped.
+        function placeOrphans() {
+            var grid = orphans.filter(function(n) { return !n.manual; });
+            if (grid.length === 0) { return; }
+            var minX = Infinity, maxX = -Infinity, maxY = -Infinity;
+            simNodes.forEach(function(n) {
+                minX = Math.min(minX, n.x); maxX = Math.max(maxX, n.x); maxY = Math.max(maxY, n.y);
+            });
+            if (simNodes.length === 0) { minX = 0; maxX = canvas.width; maxY = 0; }
+            var cell = 2 * nodeRadius(Math.max.apply(null, grid.map(function(n) { return n.heat || 0; }))) + COLLISION_PADDING;
+            var cols = Math.ceil(Math.sqrt(grid.length));
+            var left = (minX + maxX) / 2 - (cols - 1) * cell / 2;
+            var top = maxY + 4 * cell;
+            grid.sort(function(a, b) { return (b.heat || 0) - (a.heat || 0); });
+            grid.forEach(function(n, i) {
+                n.x = left + (i %% cols) * cell;
+                n.y = top + Math.floor(i / cols) * cell;
+                n.vx = 0;
+                n.vy = 0;
+            });
         }
 
         function simLoop() {
@@ -5187,11 +5257,13 @@ function html.render_knowledge_graph(nonce)
             // pool's own size regardless of how settled any individual
             // node is, so on a real-sized graph it could sit above a
             // fixed threshold indefinitely and never actually sleep.
-            var avgEnergy = nodes.length > 0 ? energy / nodes.length : 0;
+            var avgEnergy = simNodes.length > 0 ? energy / simNodes.length : 0;
             if (avgEnergy > SLEEP_ENERGY) {
                 requestAnimationFrame(simLoop);
             } else {
                 simRunning = false;
+                placeOrphans();
+                draw();
                 saveCachedLayout();
             }
         }
@@ -5279,7 +5351,11 @@ function html.render_knowledge_graph(nonce)
             // mostly-new-nodes layout needs the larger synchronous
             // pre-settle so the initial paint isn't a chaotic scatter.
             var settleIterations = (cached == null || uncachedCount > nodes.length / 2) ? 120 : 20;
-            for (var iter = 0; iter < settleIterations; iter++) { simStep(w, h); }
+            // Time-boxed: this runs before first paint and blocks the page,
+            // so it stops early on a large graph; the live loop finishes.
+            var settleUntil = Date.now() + 400;
+            for (var iter = 0; iter < settleIterations && Date.now() < settleUntil; iter++) { simStep(w, h); }
+            placeOrphans();
             wakeSimulation();
         }
 
@@ -5303,6 +5379,8 @@ function html.render_knowledge_graph(nonce)
                 byId[e.from].degree += 1;
                 byId[e.to].degree += 1;
             });
+            simNodes = nodes.filter(function(n) { return n.degree > 0; });
+            orphans = nodes.filter(function(n) { return n.degree === 0; });
             buildLegend();
             if (nodes.length === 0) {
                 status.textContent = 'No documents in the pool yet.';

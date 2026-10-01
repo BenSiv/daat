@@ -72,7 +72,7 @@ Considered and rejected: extracting this as a standalone reusable JS asset (or a
 ### Phase 4 -- open, not yet scoped
 - Filtering (by tier, by folder, by date range) -- Obsidian has this; whether it's worth the added UI surface here depends on how large real pools actually get.
 - Whether/how to represent `source` (`authored` vs `co-retrieval`) visually -- distinct from strength, but potentially useful context (e.g. dashed vs solid).
-- Performance ceiling: at what node/edge count does a hand-rolled canvas force simulation stop being smooth, and is that ceiling ever actually reached by a real deployment's pool size.
+- ~~Performance ceiling~~ -- reached and addressed (2026-09-30, brex 323647700). A real pool hit it: 5,509 active documents, 2,589 edges, but only 1,274 linked documents -- 77% orphans. Repulsion and collision resolution are both all-pairs every frame, so at that size a frame cost ~600ms and the synchronous pre-settle froze the page for ~1 minute (measured with prod-shaped data). Now: only linked nodes are simulated -- orphans have no springs, so they were pure cost -- and orphans sit in a static heat-sorted grid below the cluster (`placeOrphans`, re-run after each settle; a dragged orphan stays put); the pre-settle is time-boxed to 400ms; theme colours are read once instead of `getComputedStyle` per node/edge per frame; edges are drawn in a few batched paths by width/opacity bucket and nodes in one path per colour, with off-screen elements skipped. Same data: first paint ~0.45s, ~31fps while settling. Next ceiling, if the *linked* set grows past a few thousand: Barnes-Hut (quadtree) repulsion and a spatial hash for collisions, O(n log n) -- still plain JS, no dependency.
 
 ## Critical files
 - `src/cgi.lua` -- `/knowledge-graph` and `/knowledge-graph-data` routes, mirroring `/knowledge`/`/knowledge-documents`'s existing gating
@@ -85,5 +85,5 @@ Considered and rejected: extracting this as a standalone reusable JS asset (or a
 
 ## Still open (Phase 3+)
 - Pan, zoom, drag-to-reposition, click-to-navigate -- none implemented yet.
-- Filtering and colouring: designed in [structure-layers.md](structure-layers.md) (colour/filter by tier or tag, hide orphans). The `source` (`authored` vs `co-retrieval`) distinction no longer applies: links are content-only, and co-retrieval connections are ordinary connection documents. Performance at real scale -- Phase 4, unscoped.
+- Filtering and colouring: designed in [structure-layers.md](structure-layers.md) (colour/filter by tier or tag, hide orphans). The `source` (`authored` vs `co-retrieval`) distinction no longer applies: links are content-only, and co-retrieval connections are ordinary connection documents. Performance at real scale -- see Phase 4.
 - ~~Whether the Setup/Admin gate is actually right for an explorer vs. an analytics page~~ -- resolved (brex 492390825): the whole `/knowledge*` family moved to baseline capability.
