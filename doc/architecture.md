@@ -54,7 +54,7 @@ Two real providers exist today, both following the exact same shape -- a thin fa
 
 - **`agent_provider.lua`** -> `src/provider/agent_claude.lua` / `agent_vertex.lua` / `agent_test.lua`, picked by `agent_provider` (default `"vertex"`).
 - **`search_provider.lua`** -> `src/provider/search_google_cse.lua` / `search_test.lua`, picked by `search_provider` (default `"google_cse"`).
-- **`mail_provider.lua`** -> `src/provider/mail_smtp.lua` / `mail_test.lua`, picked by `mail_provider` (no default -- unset means the deployment sends no mail, and the forgot-password flow is off).
+- **`mail_provider.lua`** -> `src/provider/mail_smtp.lua` / `mail_graph.lua` / `mail_test.lua`, picked by `mail_provider` (no default -- unset means the deployment sends no mail, and the forgot-password flow is off).
 
 ```mermaid
 graph TB

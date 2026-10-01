@@ -306,12 +306,17 @@ function config.platform_config()
         -- could otherwise point a real user's reset link at their own
         -- server. smtp_user's password is the one secret here and stays
         -- an env var (PLATFORM_SMTP_PASSWORD), same split as
-        -- mariadb_user/PLATFORM_MARIADB_PASSWORD.
+        -- mariadb_user/PLATFORM_MARIADB_PASSWORD. graph_tenant_id/
+        -- graph_client_id are the Microsoft Graph backend's app
+        -- registration (provider/mail_graph.lua); its client secret is
+        -- PLATFORM_GRAPH_CLIENT_SECRET, same split again.
         mail_provider = nil,
         mail_from = nil,
         public_url = nil,
         smtp_url = nil,
         smtp_user = nil,
+        graph_tenant_id = nil,
+        graph_client_id = nil,
     }
 
     path = config.platform_config_path()
@@ -395,7 +400,7 @@ function config.platform_config()
     if type(parsed.nav_hidden) == "table" then
         conf.nav_hidden = validate_nav_key_list(parsed.nav_hidden)
     end
-    for _, key in ipairs({"mail_provider", "mail_from", "public_url", "smtp_url", "smtp_user"}) do
+    for _, key in ipairs({"mail_provider", "mail_from", "public_url", "smtp_url", "smtp_user", "graph_tenant_id", "graph_client_id"}) do
         if type(parsed[key]) == "string" and parsed[key] != "" then
             conf[key] = parsed[key]
         end
