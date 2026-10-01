@@ -54,12 +54,31 @@ function entity.build_ctx(db_path, manifest)
         if can_read == false then
             error("Extension '" .. tostring(manifest.name) .. "' does not have read.entity capability")
         end
+        -- read.entity means registered entity types, not any table: a
+        -- plain table_exists check let an extension read user (password
+        -- hashes), api_key, document_embedding, ... (brex 456424482).
+        if schema.is_registered(db_path, target_type) == false then
+            error("ctx.query: '" .. tostring(target_type) .. "' is not a registered entity type")
+        end
         if db.table_exists(db_path, target_type) == false then
             return {}
         end
+        -- Filter keys must be real columns of the type's table -- its
+        -- system columns or a field that isn't multi-valued/polymorphic
+        -- (those live in side tables) -- since they're spliced into SQL
+        -- as identifiers.
+        columns = {}
+        for _, field in ipairs(schema.fields(db_path, target_type)) do
+            if schema.is_multi_field_type(field.type) == false and schema.is_polymorphic_field_type(field.type) == false then
+                columns[field.name] = true
+            end
+        end
         where = {}
         for k, v in pairs(filter) do
-            table.insert(where, k .. " = " .. db.quote(tostring(v)))
+            if columns[k] != true and schema.is_reserved_field_name(k) == false then
+                error("ctx.query: '" .. tostring(k) .. "' is not a filterable field of " .. target_type)
+            end
+            table.insert(where, db.quote_ident(k) .. " = " .. db.quote(tostring(v)))
         end
         q = "SELECT * FROM " .. target_type
         if #where > 0 then

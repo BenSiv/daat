@@ -68,7 +68,7 @@ Before-hooks and after-hooks are deliberately different code paths, not a timing
 
 A manifest declares what an extension needs; it's granted exactly that and nothing more when its code actually runs:
 
-- `read: [entity]` -- read-only lookups into current entity state via `ctx.query(entity_type, filter)`. No raw query language is ever exposed.
+- `read: [entity]` -- read-only lookups into current entity state via `ctx.query(entity_type, filter)`. No raw query language is ever exposed: `entity_type` must be a registered entity type (not an internal table like `user` or `api_key`), and `filter` is per-field equality on the type's own single-valued fields or its system columns (`id`, `name`, `external_id`, `created_at`, `archived_at`, ...) -- anything else is an error.
 - `write: [entity]` -- access to create or update entities via `ctx`. Most extensions (especially validation rules) declare no write access at all.
 - `net: outbound` -- opts into outbound networking being available to the extension. Absent by default; an extension that doesn't declare this has no network access, full stop.
 - `ui: {label, icon}` -- opts into a page at `/ext/<name>`, described as a typed "canvas" element tree rather than raw HTML/JS, plus named button actions the page can trigger. See doc/plugin-system-research.md for the full design.

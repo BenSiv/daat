@@ -1494,5 +1494,9 @@ end
 -- require() boundary -- see the matching comment in
 -- agent_claude.lua.
 schema.is_multi_field_type = is_multi_field_type
+-- Also entity.build_ctx's ctx.query, which needs the same real-column
+-- rule ensure_table uses for its filter keys.
+schema.is_polymorphic_field_type = is_polymorphic_field_type
+schema.is_reserved_field_name = is_reserved_field_name
 
 return schema

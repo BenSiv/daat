@@ -84,6 +84,8 @@ return {
              parameters = {type = "object", properties = {label = {type = "string"}}, required = {"label"}}},
             {name = "bump", description = "Creates a bumped widget.", destructive = true,
              parameters = {type = "object", properties = {}}},
+            {name = "peek", description = "Queries a type, optionally filtered on one field.", destructive = false,
+             parameters = {type = "object", properties = {type = {type = "string"}, field = {type = "string"}}, required = {"type"}}},
         },
     },
 }
@@ -98,6 +100,17 @@ return {
         bump = function(ctx, args)
             ctx.create_entity("widget", {label = "bumped-by-tool"})
             return "Bumped via tool!"
+        end,
+        peek = function(ctx, args)
+            filter = {}
+            if args.field != nil then
+                filter[args.field] = "gadget"
+            end
+            ok, result = pcall(ctx.query, args.type, filter)
+            if ok then
+                return "peek rows: " .. tostring(#result)
+            end
+            return "peek refused: " .. tostring(result)
         end,
     },
 }
@@ -244,6 +257,37 @@ teardown() {
 
     run latest_tool_result "$session_id"
     [[ "$output" =~ "found 1 widget(s) labeled gadget" ]]
+}
+
+# ctx.query is read.entity, not "read any table" (brex 456424482).
+peek() {
+    "$BIN" entity create widget label="gadget"
+    "$BIN" extension approve tool-demo
+    cookie="session=${TEST_SESSION_COOKIE}; csrf=${TEST_CSRF_TOKEN}"
+    resp=$(start_chat "$cookie" "$TEST_CSRF_TOKEN")
+    session_id=$(extract_query_param "$resp" "session_id")
+    scripted="$(tool_call_response "tool-demo.peek" "$1")"$'\1'"$(done_response "Done.")"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"peek\"}" "$cookie" "$TEST_CSRF_TOKEN" "$scripted" > /dev/null
+    latest_tool_result "$session_id"
+}
+
+@test "ctx.query refuses a table that isn't a registered entity type (user)" {
+    run peek '{"type":"user"}'
+    [[ "$output" =~ "peek refused" ]]
+    [[ "$output" =~ "not a registered entity type" ]]
+}
+
+@test "ctx.query refuses a filter key that isn't one of the type's columns" {
+    run peek '{"type":"widget","field":"label = label OR 1=1 OR label"}'
+    [[ "$output" =~ "peek refused" ]]
+    [[ "$output" =~ "not a filterable field" ]]
+}
+
+@test "ctx.query still filters a registered type on its own field and system columns" {
+    run peek '{"type":"widget","field":"label"}'
+    [[ "$output" =~ "peek rows: 1" ]]
+    run peek '{"type":"widget","field":"external_id"}'
+    [[ "$output" =~ "peek rows: 0" ]]
 }
 
 @test "an approved extension's destructive tool pauses for approval, and approving it really dispatches through ctx" {

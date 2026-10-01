@@ -84,7 +84,7 @@ Scope: every active document, not only literature.
 
 Checked 2026-09-27 against `entity.build_ctx` and luam's `sandbox.extension_env`:
 
-- `ctx.query(type, filter)` reads **any table**: it only checks that the table exists, so an extension with `read = {"entity"}` can read `user` (password hashes) and `api_key`. That needs restricting to registered entity types, whatever happens with tags.
+- `ctx.query(type, filter)` reads registered entity types only (fixed 2026-10-01, brex 456424482; before that it read any table that existed, including `user` and `api_key`). Filter keys must be the type's own single-valued fields or its system columns.
 - `ctx.create_entity` and `ctx.update_entity` write, and both are ledgered.
 - `net = "outbound"` exposes raw LuaSocket TCP: no HTTP client and no TLS. It can reach a plain-HTTP service on the same host, but not an HTTPS API.
 - Runs happen through before-hooks and queued after-hooks on writes, and through `manual_triggers`, which must return quickly. There is no schedule.
@@ -107,7 +107,7 @@ The papers pipeline already clusters the literature (`papers/src/analysis/cluste
 ## Prerequisites
 
 1. **Embedding coverage:** 1,670 active documents in celleste-lims prod have no embedding, mostly imported papers. The clustering job computes its own embeddings, so this doesn't block tags, but it blocks semantic retrieval and the passage-similarity link gate. Run `daat repair embeddings`, then make save-time embedding failures visible instead of silent (`document.reindex_embedding` is best-effort).
-2. **Restrict `ctx.query` to entity types** (see [Boundary](#what-extensions-can-do-today)). This is a security fix in its own right, and it comes before shipping any new extension.
+2. ~~**Restrict `ctx.query` to entity types**~~ -- done 2026-10-01 (see [Boundary](#what-extensions-can-do-today)).
 
 ## Phases
 
