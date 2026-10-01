@@ -4623,9 +4623,21 @@ function html.render_knowledge_graph(nonce)
         var colorBy = document.getElementById('platform-kg-color-by');
         var hideOrphansInput = document.getElementById('platform-kg-hide-orphans');
         var legendItems = document.getElementById('platform-kg-legend-items');
-        var VIEW_KEY = 'platform-kg-view-v1';
-        var view = { colorBy: 'tier', hideOrphans: false };
-        try { var saved = JSON.parse(localStorage.getItem(VIEW_KEY) || 'null'); if (saved) { view.colorBy = saved.colorBy === 'tag' ? 'tag' : 'tier'; view.hideOrphans = saved.hideOrphans === true; } } catch (e) {}
+        // Orphans hidden by default (they sit in a static grid, not the
+        // layout). v2: a v1 entry stored hideOrphans:false whenever the
+        // colour was changed, so only its colour choice carries over.
+        var VIEW_KEY = 'platform-kg-view-v2';
+        var view = { colorBy: 'tier', hideOrphans: true };
+        try {
+            var saved = JSON.parse(localStorage.getItem(VIEW_KEY) || 'null');
+            if (saved) {
+                view.colorBy = saved.colorBy === 'tag' ? 'tag' : 'tier';
+                view.hideOrphans = saved.hideOrphans !== false;
+            } else {
+                var old = JSON.parse(localStorage.getItem('platform-kg-view-v1') || 'null');
+                if (old) { view.colorBy = old.colorBy === 'tag' ? 'tag' : 'tier'; }
+            }
+        } catch (e) {}
         var hiddenKeys = {}, tagColors = {};
 
         function saveView() { try { localStorage.setItem(VIEW_KEY, JSON.stringify(view)); } catch (e) {} }
