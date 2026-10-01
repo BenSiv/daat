@@ -6620,6 +6620,7 @@ function platform_chat_widget_css()
 .platform-chat-widget { position: fixed; right: {{{layout.gutter}}}px; bottom: {{{layout.gutter}}}px; z-index: 1000; font-family: inherit; }
 """, {layout = PLATFORM_LAYOUT}) .. """
 .platform-chat-widget-toggle {
+    position: relative;
     width: 56px; height: 56px; border-radius: 50%;
     background: var(--platform-accent, #4f46e5); color: #ffffff; border: none;
     box-shadow: 0 4px 14px rgba(0,0,0,0.2); cursor: pointer;
@@ -6627,6 +6628,45 @@ function platform_chat_widget_css()
     transition: var(--platform-transition, all 0.15s ease);
 }
 .platform-chat-widget-toggle:hover { filter: brightness(1.08); }
+/* The agent's state, on the button itself so it reads with the panel
+   closed: a ring turning while a turn runs, a heartbeat plus badge while
+   an approval waits on you, a still badge for an answer you haven't seen.
+   Set by updateToggleState() in the widget script. Only transform and
+   opacity animate (cheap, no layout shift); colours are theme tokens. */
+.platform-chat-widget-toggle::before, .platform-chat-widget-toggle::after {
+    content: ""; position: absolute; pointer-events: none; opacity: 0; border-radius: 50%;
+}
+.platform-chat-widget-toggle::before { inset: -5px; }
+.platform-chat-widget-toggle::after {
+    top: 1px; right: 1px; width: 12px; height: 12px;
+    background: #dc2626; border: 2px solid #ffffff;
+}
+.platform-chat-widget-toggle.platform-chat-state-thinking::before {
+    opacity: 1;
+    background: conic-gradient(var(--platform-accent, #4f46e5), var(--platform-accent-2, #6366f1), transparent 75%);
+    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 4px));
+    mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 4px));
+    animation: platform-chat-spin 1.2s linear infinite;
+}
+.platform-chat-widget-toggle.platform-chat-state-waiting {
+    background: var(--platform-accent-2, #6366f1);
+    animation: platform-chat-heartbeat 1.4s ease-in-out infinite;
+}
+.platform-chat-widget-toggle.platform-chat-state-waiting::after,
+.platform-chat-widget-toggle.platform-chat-state-unread::after { opacity: 1; }
+@keyframes platform-chat-spin { to { transform: rotate(1turn); } }
+@keyframes platform-chat-heartbeat {
+    0%, 45%, 100% { transform: scale(1); }
+    10% { transform: scale(1.12); }
+    20% { transform: scale(1.02); }
+    30% { transform: scale(1.1); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .platform-chat-widget-toggle.platform-chat-state-thinking::before {
+        animation: none; background: var(--platform-accent-2, #6366f1);
+    }
+    .platform-chat-widget-toggle.platform-chat-state-waiting { animation: none; }
+}
 """ .. render_lib.render("""
 .platform-chat-widget-panel {
     position: absolute; right: 0; bottom: 64px; width: 320px; height: 440px;
@@ -6832,6 +6872,8 @@ function html.render_chat_widget(nonce, attachments_enabled)
     // Markdown rendering client-side.
     var MARKDOWN_ROLES = {assistant: true, self_check: true, compaction_summary: true};
     function render(state) {
+        awaitingApproval = !!(state && state.pending);
+        updateToggleState();
         if (!state || !state.messages || state.messages.length === 0) {
             messagesEl.innerHTML = '<p class="platform-chat-widget-empty">Ask something, or ask the assistant to search or create a document...</p>';
         } else {
@@ -6977,13 +7019,42 @@ function html.render_chat_widget(nonce, attachments_enabled)
         document.addEventListener('mouseup', onUp);
     });
 
+    // The button's state class (see platform_chat_widget_css): waiting
+    // (an approval prompt is up) wins over thinking (a turn in flight --
+    // a send/approve or a turn resumed on page load), which wins over
+    // unread (a turn finished while the panel was closed). unread is
+    // kept in localStorage so it survives navigating to another page,
+    // and clears when the panel is opened.
+    var UNREAD_KEY = 'platform_chat_widget_unread';
+    var turnsInFlight = 0;
+    var awaitingApproval = false;
+    function isPanelOpen() { return root.classList.contains('platform-chat-widget-open'); }
+    function updateToggleState() {
+        if (isPanelOpen()) { localStorage.removeItem(UNREAD_KEY); }
+        var state = awaitingApproval ? 'waiting' : (turnsInFlight > 0 ? 'thinking' :
+            (localStorage.getItem(UNREAD_KEY) === '1' ? 'unread' : null));
+        ['waiting', 'thinking', 'unread'].forEach(function(name){
+            toggle.classList.toggle('platform-chat-state-' + name, state === name);
+        });
+        toggle.setAttribute('aria-label', {waiting: 'Chat -- waiting for your approval',
+            thinking: 'Chat -- the assistant is working', unread: 'Chat -- new reply'}[state] || 'Chat');
+    }
+    function turnStarted() { turnsInFlight++; updateToggleState(); }
+    function turnEnded(answered) {
+        turnsInFlight = Math.max(0, turnsInFlight - 1);
+        if (answered && !isPanelOpen()) { localStorage.setItem(UNREAD_KEY, '1'); }
+        updateToggleState();
+    }
+
     toggle.addEventListener('click', function(){
         var isOpen = root.classList.toggle('platform-chat-widget-open');
         localStorage.setItem(OPEN_KEY, isOpen ? '1' : '0');
+        updateToggleState();
     });
 
     document.getElementById('platform-chat-widget-new').addEventListener('click', function(){
         localStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem(UNREAD_KEY);
         render(null);
     });
 
@@ -7052,6 +7123,7 @@ function html.render_chat_widget(nonce, attachments_enabled)
         // finished before the button even reappeared can't do anything).
         var settled = false;
         var thinkingEl = showThinking(sessionId);
+        turnStarted();
         var timer = setInterval(function(){
             fetch('api/chat-widget-history?session_id=' + encodeURIComponent(sessionId))
                 .then(function(res){ if (!res.ok) { throw new Error('poll failed'); } return res.json(); })
@@ -7066,11 +7138,13 @@ function html.render_chat_widget(nonce, attachments_enabled)
             clearInterval(timer);
             thinkingEl.remove();
             render(state);
+            turnEnded(true);
             return state;
         }, function(err){
             settled = true;
             clearInterval(timer);
             thinkingEl.remove();
+            turnEnded(false);
             throw err;
         });
     }
@@ -7110,6 +7184,7 @@ function html.render_chat_widget(nonce, attachments_enabled)
         if (!isTurnPending(state)) { return; }
         var attempts = 0;
         var thinkingEl = showThinking(sessionId);
+        turnStarted();
         var timer = setInterval(function(){
             attempts++;
             fetch('api/chat-widget-history?session_id=' + encodeURIComponent(sessionId))
@@ -7119,6 +7194,7 @@ function html.render_chat_widget(nonce, attachments_enabled)
                     if (!isTurnPending(freshState) || attempts >= RESUME_POLL_MAX_ATTEMPTS) {
                         clearInterval(timer);
                         thinkingEl.remove();
+                        turnEnded(!isTurnPending(freshState));
                     } else {
                         thinkingEl = showThinking(sessionId);
                     }
@@ -7310,6 +7386,7 @@ function html.render_chat_widget(nonce, attachments_enabled)
         localStorage.setItem(OPEN_KEY, '1');
     }
 
+    updateToggleState();
     var existingSessionId = localStorage.getItem(STORAGE_KEY);
     if (existingSessionId) {
         fetch('api/chat-widget-history?session_id=' + encodeURIComponent(existingSessionId))
