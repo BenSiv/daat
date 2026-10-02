@@ -4,6 +4,17 @@ Status: proposal, 2026-10-02 (Ben). Not agreed yet. Builds on [structure-layers.
 
 Today a tag is a flat cluster label with a fixed count (`k`) chosen by hand and a one-off name. The goal is a subject ontology that comes from the data and is described by the agent, the same way progressive summarisation and connections already work: the data decides how many subjects there are and how they nest; the agent names them, describes them and judges how they relate; people review and override through the same UI as everything else.
 
+## Two concepts: links and tags
+
+| | `[[link]]` | `#tag` |
+|---|---|---|
+| Is | an edge between two documents | a subject assigned to a group of documents |
+| In the graph | a line between two nodes | colour, filter, legend group; never a node or an edge |
+| Lives in | content (`document_link`) | `tag` / `document_tag`, derived |
+| Relations | none beyond the edge | between tags only: broader, narrower, related, exact match (`tag_relation`) |
+
+Nothing in this plan turns a tag into a document or a tag relation into a link. A tag's description and relations live on the tag; they're never written into any document's content, so they never become `document_link` rows or graph edges.
+
 ## What the ontology is
 
 | Part | Stored as | Decided by |
@@ -13,15 +24,15 @@ Today a tag is a flat cluster label with a fixed count (`k`) chosen by hand and 
 | Broader / narrower | `tag.parent` | the data (the cluster tree); a person's move wins |
 | Related (across branches) | `tag_relation` rows | the agent, on candidates the data proposes |
 | Same subject twice | an `exact_match` proposal | the agent proposes, a person approves |
-| Name and scope | `tag.label`, the subject note | the agent; a person's rename wins |
+| Name and scope | `tag.label`, `tag.description` | the agent; a person's edit wins |
 
 The relation vocabulary is SKOS's (broader, narrower, related, exact match) and nothing more. Membership stays derived and is never written into documents' text ([structure-layers.md](structure-layers.md), Tags).
 
-Each subject gets a **subject note**, an ordinary document filed under a "Subjects" folder: the agent's description of what the subject covers and what it doesn't. `tag.note` points at it. Because it's a document, it's searchable, shows in the graph, has history, enters tiering and heat, and a person edits it like any other page, as connections are ordinary connection documents.
+Each subject's **description** is `tag.description` (the field already exists): the agent's account of what the subject covers and what it doesn't. It's on the tag, not in a document, so a subject never appears as a graph node. A person edits it on the subjects page; edits are ledgered like any entity field.
 
 ### An inference is not an assertion
 
-A relation the data or the agent produced must never look like one a person wrote (open-ontologies' [decision 0001](https://github.com/fabio-rovai/open-ontologies/blob/main/docs/decisions/0001-an-inference-is-not-an-assertion.md): keep inferences in their own graph, so a consumer that forgets to filter sees fewer statements, never wrong ones). So derived relations are not plain `[[links]]` in the note's text. They live in `tag_relation` (`from`, `to`, `kind`, `source`, `score`, `evidence`), and the note renders them in a delimited, regenerated block, the way `apply_citation_links` renders citations: the block is the system's, the rest of the note is whoever wrote it, and a link a person types outside the block is theirs.
+A relation the data or the agent produced must never look like one a person wrote (open-ontologies' [decision 0001](https://github.com/fabio-rovai/open-ontologies/blob/main/docs/decisions/0001-an-inference-is-not-an-assertion.md): keep inferences in their own graph, so a consumer that forgets to filter sees fewer statements, never wrong ones). Relations between tags live in `tag_relation` (`from`, `to`, `kind`, `source`, `score`, `evidence`), apart from content and apart from document links, with their provenance on every row.
 
 Every subject and relation carries its provenance in one of three words, and the UI shows it:
 
@@ -50,8 +61,8 @@ The same numbers say *when* to recompute, as a rule rather than a schedule: afte
 Model calls only for judgment, each memoized on a hash of the subject's members so an unchanged subject is never re-asked, as `knowledge_tier_review` does for tiers:
 
 - **Name** each subject from its most central titles, its terms and, for a broad subject, its children's names.
-- **Write the subject note**: scope, what's in and out, and its broader/narrower links (which the tree already decided).
-- **Judge related pairs.** Candidates come from the data: subjects in different branches whose centres are close, that share many second-best memberships, or whose documents link to each other a lot. The agent answers yes or no per pair, with a reason grounded in both subjects' central documents, like the co-retrieval link judgment. A yes is a `tag_relation` row (`related`, opinion) shown in both notes' generated block.
+- **Write the description** (`tag.description`): scope, what's in and out. Broader and narrower come from the tree, not from the description.
+- **Judge related pairs.** Candidates come from the data: subjects in different branches whose centres are close, that share many second-best memberships, or whose documents link to each other a lot. The agent answers yes or no per pair, with a reason grounded in both subjects' central documents, like the co-retrieval link judgment. A yes is a `tag_relation` row (`related`, opinion), shown on both subjects' entries on the subjects page.
 - **Propose merges and splits.** Two subjects the agent judges to be the same (`exact_match`), or one that covers two unrelated things, become proposals, not changes.
 - **Remember rejections.** A proposal or relation a person rejects is kept as rejected and not raised again unless its evidence changes (its member hash), as declined co-retrieval pairs already are.
 
@@ -76,7 +87,7 @@ The [boundary](structure-layers.md#boundary) stays: numbers outside daat, judgme
 |---|---|
 | Embeddings, micro-clusters, the tree and its cuts | Stores subjects, membership, `tag.parent` |
 | Stable matching, recompute-due rule, incremental assignment | Runs the judgment calls with its own agent provider, triggered when a subject is new or its member hash changes |
-| Related-pair candidates, with their scores (`tag_relation`, measured) | Subject notes, relation judgments, merge/split proposals |
+| Related-pair candidates, with their scores (`tag_relation`, measured) | Descriptions, relation judgments, merge/split proposals |
 | Writes through the REST API, ledgered | UI and manual overrides |
 
 Moving naming from the job into daat means every judgment uses daat's provider, budgets and audit trail, and a person sees all of it in one place.
@@ -85,19 +96,18 @@ Moving naming from the job into daat means every judgment uses daat's provider, 
 
 Like everything else: no special screens beyond one page.
 
-- **Subjects page** (core, next to `/knowledge`): the tree, broad to specific, with document counts, each subject linking to its note and its members. Controls: rename, move under another subject, pin or exclude a document, approve or reject the agent's proposals, request a recompute.
-- **Subject notes** are ordinary documents: read, edit, history, graph.
+- **Subjects page** (core, next to `/knowledge`): the tree, broad to specific, with document counts, each subject showing its description, its related subjects (with provenance) and its members. Controls: rename, edit the description, move under another subject, pin or exclude a document, approve or reject the agent's proposals, request a recompute.
 - **Graph**: colour by broad subject or specific subject (built), filter by subject through the legend.
 - **Document page**: its subjects, as breadcrumbs (broad › specific).
 - **Chat agent tools**: `subject.tree`, `subject.get` (note, members, relations) and `subject.propose`, so the agent can answer "what do we know about X" by subject and propose changes that go through the same approval as other writes.
 
-A person's change always wins over a recompute, at every level: a renamed or moved subject keeps its name and place, pinned and excluded memberships stay, and an edited subject note isn't overwritten (the agent appends a suggested revision instead).
+A person's change always wins over a recompute, at every level: a renamed or moved subject keeps its name and place, pinned and excluded memberships stay, and an edited description isn't overwritten (the agent offers a suggested revision instead).
 
 ## Phases
 
 1. **Done:** `tag.parent`; graph colours by broad or specific subject (daat e7f8eb8).
 2. **Data-driven tree** in the clustering job: micro-clusters, tree, gap-based levels, stable matching per level, the plan report as a tree. Validate on the current pool before applying: does it find sensible broad groups, and are the old literature subjects still there?
-3. **Judgment in daat**: `tag_relation` with provenance and evidence; subject notes with their generated relation block; names, related-pair judgments and merge/split proposals, memoized on member hashes; `tag.note`.
+3. **Judgment in daat**: `tag_relation` with provenance and evidence; names and descriptions, related-pair judgments and merge/split proposals, memoized on member hashes.
 4. **UI**: the subjects page with overrides and proposals; subjects on document pages; agent tools.
 5. **Triggers and lifecycle**: incremental assignment after each sync; the recompute-due rule; the request button; plan risk and rollback.
 6. **Interop, optional**: export the ontology as SKOS/RDF (subjects as `skos:Concept`, with `broader`, `related`, `exactMatch`; documents linked by membership). That lets an outside tool such as [open-ontologies](https://github.com/fabio-rovai/open-ontologies) (an MCP server) check it: no cycles in `broader`, every specific subject under a broad one, transitive closure. Its Obsidian plugin maps a note vault to RDF the same way (notes as individuals, typed links as properties, tags as SKOS concepts) and is the closest prior art for doing this to daat's documents more broadly.
