@@ -5400,6 +5400,16 @@ function html.render_knowledge_graph(nonce)
                 byId[e.to].degree += 1;
             });
             simNodes = nodes.filter(function(n) { return n.degree > 0; });
+            // "Colour by sub-tag" only means something once some tag has a
+            // broader tag (tag.parent); until then it would match "by tag".
+            var nested = nodes.some(function(n) {
+                return n.groups && n.tags && n.groups.join('\n') !== n.tags.join('\n');
+            });
+            if (!nested) {
+                var subOption = colorBy.querySelector('option[value="subtag"]');
+                if (subOption) { subOption.remove(); }
+                if (view.colorBy === 'subtag') { view.colorBy = 'tag'; colorBy.value = 'tag'; }
+            }
             orphans = nodes.filter(function(n) { return n.degree === 0; });
             buildLegend();
             if (nodes.length === 0) {
