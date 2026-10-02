@@ -41,7 +41,7 @@ The first two tier options and the orphan toggle need no new data, so they can s
 
 ## Tags
 
-A tag is a named group of documents about the same subject. Tags are derived, not written in content. They're recomputed by clustering, and writing them into the text would rewrite documents on every run.
+A tag is a named group of documents about the same subject. [tag-ontology.md](tag-ontology.md) proposes turning tags into a data-defined subject hierarchy that the agent describes and relates. Tags are derived, not written in content. They're recomputed by clustering, and writing them into the text would rewrite documents on every run.
 
 - **Computed:** by clustering every active document on whole-document embeddings, in a job outside daat (see [Boundary](#boundary)). Core stores and shows tags; the clustering method is replaceable.
 - **Named:** one model call per cluster, from its most central titles. Naming is a genuine judgment call, which is where daat uses a model (rule-based by default everywhere else).
