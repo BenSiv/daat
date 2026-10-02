@@ -10,7 +10,8 @@ Today a tag is a flat cluster label with a fixed count (`k`) chosen by hand and 
 |---|---|---|
 | Is | an edge between two documents | a subject assigned to a group of documents |
 | In the graph | a line between two nodes | colour, filter, legend group; never a node or an edge |
-| Lives in | content (`document_link`) | `tag` / `document_tag`, derived |
+| Who sets it | a person or the agent, writing `[[Title]]` | a person writing `#tag`, or the clustering job |
+| Stored in | `document_link`, synced from content | `tag` / `document_tag`; text-asserted rows synced from content |
 | Relations | none beyond the edge | between tags only: broader, narrower, related, exact match (`tag_relation`) |
 
 Nothing in this plan turns a tag into a document or a tag relation into a link. A tag's description and relations live on the tag; they're never written into any document's content, so they never become `document_link` rows or graph edges.
@@ -20,13 +21,24 @@ Nothing in this plan turns a tag into a document or a tag relation into a link. 
 | Part | Stored as | Decided by |
 |---|---|---|
 | Subjects | `tag` rows | the data (clustering), at every level |
-| Membership | `document_tag` rows, as now | the data; `pinned`/`excluded` by people |
+| Membership | `document_tag` rows | the data; a person, by writing `#tag` or on the subjects page |
 | Broader / narrower | `tag.parent` | the data (the cluster tree); a person's move wins |
 | Related (across branches) | `tag_relation` rows | the agent, on candidates the data proposes |
 | Same subject twice | an `exact_match` proposal | the agent proposes, a person approves |
 | Name and scope | `tag.label`, `tag.description` | the agent; a person's edit wins |
 
-The relation vocabulary is SKOS's (broader, narrower, related, exact match) and nothing more. Membership stays derived and is never written into documents' text ([structure-layers.md](structure-layers.md), Tags).
+The relation vocabulary is SKOS's (broader, narrower, related, exact match) and nothing more. The job's computed memberships are never written into documents' text, since that would rewrite documents on every run ([structure-layers.md](structure-layers.md), Tags). A person's own assertion can be, exactly as a person writes a `[[link]]`.
+
+### `#tag` in text
+
+A person asserts a subject by writing it in a document's content, the way they assert a link:
+
+- **Syntax.** `#tag`: a `#` not preceded by a letter, digit or `/`, then a letter, then letters, digits, `-`, `_` (`#fermentation`, `#cocoa-butter`). `#broad/specific` also asserts the broader relation (`#cocoa-science/fermentation`). Labels with spaces are matched by their **slug** (lowercase, spaces to `-`): `#cocoa-bean-fermentation` means the subject labelled "Cocoa bean fermentation". Not a tag: Markdown headings (`# Title`, a space follows), anything inside code spans and fences, URL fragments (`page#section`), and all-digit `#123`.
+- **Sync on save**, alongside `document.sync_links`: each `#tag` in the content becomes a `document_tag` row with `decision = pinned` and `via = text`; removing it from the text archives that row. A slug that matches no subject creates one (`source = manual`, asserted), as a dangling `[[link]]` waits for its target. Only `via = text` rows are touched by the sync; memberships set on the subjects page (`via = page`) or by the job (`via = job`) are not.
+- **Precedence.** A `#tag` in the text holds while it's in the text: the job never removes it, and the subjects page shows it as asserted in the document, with "edit the text" rather than a remove button. An `excluded` membership set on the page loses to the same subject written in the text, since the text is the more specific, visible assertion.
+- **Display.** Rendered as a chip that opens the subject; never a `document_link` and never a graph edge.
+- **For the job,** text-asserted memberships are labelled data: they stay put, and they steer naming and stable matching. A computed subject whose members mostly carry `#fermentation` takes that name.
+- **The agent** may write `#tags` in documents it writes; they go through the same approval as the rest of the write and are recorded as asserted by that write, like a link the agent writes.
 
 Each subject's **description** is `tag.description` (the field already exists): the agent's account of what the subject covers and what it doesn't. It's on the tag, not in a document, so a subject never appears as a graph node. A person edits it on the subjects page; edits are ledgered like any entity field.
 
@@ -107,10 +119,11 @@ A person's change always wins over a recompute, at every level: a renamed or mov
 
 1. **Done:** `tag.parent`; graph colours by broad or specific subject (daat e7f8eb8).
 2. **Data-driven tree** in the clustering job: micro-clusters, tree, gap-based levels, stable matching per level, the plan report as a tree. Validate on the current pool before applying: does it find sensible broad groups, and are the old literature subjects still there?
-3. **Judgment in daat**: `tag_relation` with provenance and evidence; names and descriptions, related-pair judgments and merge/split proposals, memoized on member hashes.
-4. **UI**: the subjects page with overrides and proposals; subjects on document pages; agent tools.
-5. **Triggers and lifecycle**: incremental assignment after each sync; the recompute-due rule; the request button; plan risk and rollback.
-6. **Interop, optional**: export the ontology as SKOS/RDF (subjects as `skos:Concept`, with `broader`, `related`, `exactMatch`; documents linked by membership). That lets an outside tool such as [open-ontologies](https://github.com/fabio-rovai/open-ontologies) (an MCP server) check it: no cycles in `broader`, every specific subject under a broad one, transitive closure. Its Obsidian plugin maps a note vault to RDF the same way (notes as individuals, typed links as properties, tags as SKOS concepts) and is the closest prior art for doing this to daat's documents more broadly.
+3. **`#tag` in text**: parse and sync on save (`via = text`), slugs, chips, the precedence rules; `document_tag.via`.
+4. **Judgment in daat**: `tag_relation` with provenance and evidence; names and descriptions, related-pair judgments and merge/split proposals, memoized on member hashes.
+5. **UI**: the subjects page with overrides and proposals; subjects on document pages; agent tools.
+6. **Triggers and lifecycle**: incremental assignment after each sync; the recompute-due rule; the request button; plan risk and rollback.
+7. **Interop, optional**: export the ontology as SKOS/RDF (subjects as `skos:Concept`, with `broader`, `related`, `exactMatch`; documents linked by membership). That lets an outside tool such as [open-ontologies](https://github.com/fabio-rovai/open-ontologies) (an MCP server) check it: no cycles in `broader`, every specific subject under a broad one, transitive closure. Its Obsidian plugin maps a note vault to RDF the same way (notes as individuals, typed links as properties, tags as SKOS concepts) and is the closest prior art for doing this to daat's documents more broadly.
 
 ## Open questions
 
