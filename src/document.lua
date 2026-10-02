@@ -77,6 +77,10 @@ TAG_SCHEMA = {
         {name = "terms", type = "text", required = false},
         {name = "source", type = "select", required = true, values = {"computed", "manual"}},
         {name = "computed_at", type = "text", required = false},
+        -- Optional broader tag this one sits under (one level: broad >
+        -- specific). Documents carry the specific tag; the broad one
+        -- follows from it, e.g. for the graph's colour-by.
+        {name = "parent", type = "reference", required = false, entity_type = "tag"},
     },
 }
 

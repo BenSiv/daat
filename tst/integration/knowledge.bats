@@ -496,6 +496,31 @@ search_for_bioreactor_extra() {
     [ "$untagged" = '[]' ]
 }
 
+@test "/knowledge-graph-data gives each node its broad groups via tag.parent, each once, a parentless tag its own group" {
+    "$BIN" entity create document title="Grouped doc" content="about fermentation" >/dev/null
+    doc=$(sqlite3 .store/store.db "SELECT id FROM document WHERE title = 'Grouped doc';")
+    "$BIN" entity create tag label="Cocoa science" source=computed >/dev/null
+    broad=$(sqlite3 .store/store.db "SELECT id FROM tag WHERE label = 'Cocoa science';")
+    "$BIN" entity create tag label="Fermentation" source=computed parent=$broad >/dev/null
+    "$BIN" entity create tag label="Flavour" source=computed parent=$broad >/dev/null
+    "$BIN" entity create tag label="Standalone" source=manual >/dev/null
+    t1=$(sqlite3 .store/store.db "SELECT id FROM tag WHERE label = 'Fermentation';")
+    t2=$(sqlite3 .store/store.db "SELECT id FROM tag WHERE label = 'Flavour';")
+    t3=$(sqlite3 .store/store.db "SELECT id FROM tag WHERE label = 'Standalone';")
+    "$BIN" entity create document_tag document=$doc tag=$t1 score=0.9 decision=computed >/dev/null
+    "$BIN" entity create document_tag document=$doc tag=$t2 score=0.8 decision=computed >/dev/null
+    "$BIN" entity create document_tag document=$doc tag=$t3 score=0.5 decision=computed >/dev/null
+
+    body=$(json_body "$(raw_get "/knowledge-graph-data" "" "$COOKIE")")
+    node=$(echo "$body" | jq -c --argjson id "$doc" '.nodes[] | select(.id == $id) | {tags, groups}')
+    [ "$node" = '{"tags":["Fermentation","Flavour","Standalone"],"groups":["Cocoa science","Standalone"]}' ]
+}
+
+@test "/knowledge-graph offers colour by sub-tag next to colour by tag" {
+    run raw_get "/knowledge-graph" "" "$COOKIE"
+    [[ "$output" =~ '<option value="subtag">Colour by sub-tag</option>' ]]
+}
+
 @test "/knowledge-graph-data renders for a plain baseline user" {
     run raw_get "/knowledge-graph-data" "" "$COOKIE"
     [[ "$output" =~ "200 OK" ]]

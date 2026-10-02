@@ -4579,7 +4579,7 @@ function html.render_knowledge_graph(nonce)
             <canvas id="platform-kg-canvas" height="400"></canvas>
             <p id="platform-kg-status" class="platform-kg-status">Loading graph...</p>
         </div>
-        <div class="platform-kg-legend"><span class="platform-kg-controls"><select id="platform-kg-color-by" aria-label="Colour by"><option value="tier">Colour by tier</option><option value="tag">Colour by tag</option></select><label><input type="checkbox" id="platform-kg-hide-orphans"> Hide orphans</label></span><span class="platform-kg-legend-items" id="platform-kg-legend-items"></span><button type="button" class="platform-kg-forces-toggle" id="platform-kg-forces-toggle">Forces</button><button type="button" class="platform-kg-legend-reset" id="platform-kg-reset">Reset view</button></div>
+        <div class="platform-kg-legend"><span class="platform-kg-controls"><select id="platform-kg-color-by" aria-label="Colour by"><option value="tier">Colour by tier</option><option value="tag">Colour by tag</option><option value="subtag">Colour by sub-tag</option></select><label><input type="checkbox" id="platform-kg-hide-orphans"> Hide orphans</label></span><span class="platform-kg-legend-items" id="platform-kg-legend-items"></span><button type="button" class="platform-kg-forces-toggle" id="platform-kg-forces-toggle">Forces</button><button type="button" class="platform-kg-legend-reset" id="platform-kg-reset">Reset view</button></div>
         <div class="platform-kg-forces" id="platform-kg-forces">
             <div class="platform-kg-force-row"><label for="platform-kg-repel">Repel force</label><input type="range" id="platform-kg-repel" min="1000" max="20000" step="500" value="6000"><span id="platform-kg-repel-val">6000</span></div>
             <div class="platform-kg-force-row"><label for="platform-kg-link-force">Link force</label><input type="range" id="platform-kg-link-force" min="0" max="0.1" step="0.005" value="0.02"><span id="platform-kg-link-force-val">0.02</span></div>
@@ -4631,7 +4631,7 @@ function html.render_knowledge_graph(nonce)
         try {
             var saved = JSON.parse(localStorage.getItem(VIEW_KEY) || 'null');
             if (saved) {
-                view.colorBy = saved.colorBy === 'tag' ? 'tag' : 'tier';
+                view.colorBy = (saved.colorBy === 'tag' || saved.colorBy === 'subtag') ? saved.colorBy : 'tier';
                 view.hideOrphans = saved.hideOrphans !== false;
             } else {
                 var old = JSON.parse(localStorage.getItem('platform-kg-view-v1') || 'null');
@@ -4642,9 +4642,16 @@ function html.render_knowledge_graph(nonce)
 
         function saveView() { try { localStorage.setItem(VIEW_KEY, JSON.stringify(view)); } catch (e) {} }
 
+        // "tag" colours by the broad tag (tag.parent; a tag without one
+        // is its own group), "subtag" by the specific tag itself.
+        function firstLabel(n) {
+            var list = view.colorBy === 'subtag' ? n.tags : ((n.groups && n.groups.length) ? n.groups : n.tags);
+            return (list && list.length) ? list[0] : null;
+        }
+
         function nodeKey(n) {
             if (view.colorBy === 'tier') { return 'tier:' + n.tier; }
-            var first = (n.tags && n.tags.length) ? n.tags[0] : null;
+            var first = firstLabel(n);
             if (first === null) { return 'none'; }
             return tagColors[first] ? 'tag:' + first : 'other';
         }
@@ -4668,7 +4675,7 @@ function html.render_knowledge_graph(nonce)
                 TIER_LEGEND.forEach(function(t) { entries.push({ key: 'tier:' + t.tier, label: t.label, color: tierColor(t.tier) || t.color }); });
             } else {
                 var counts = {};
-                nodes.forEach(function(n) { if (n.tags && n.tags.length) { counts[n.tags[0]] = (counts[n.tags[0]] || 0) + 1; } });
+                nodes.forEach(function(n) { var first = firstLabel(n); if (first !== null) { counts[first] = (counts[first] || 0) + 1; } });
                 var ranked = Object.keys(counts).sort(function(a, b) { return counts[b] - counts[a]; });
                 tagColors = {};
                 ranked.slice(0, TAG_PALETTE.length).forEach(function(tag, i) {
@@ -4939,7 +4946,8 @@ function html.render_knowledge_graph(nonce)
             if (n) {
                 canvas.style.cursor = 'pointer';
                 var heat = (typeof n.heat === 'number') ? n.heat : 1.0;
-                var tagLine = (n.tags && n.tags.length) ? '\n' + n.tags.join(', ') : '';
+                var groupLine = (n.groups && n.groups.length && n.groups.join(', ') !== (n.tags || []).join(', ')) ? n.groups.join(', ') + ' › ' : '';
+                var tagLine = (n.tags && n.tags.length) ? '\n' + groupLine + n.tags.join(', ') : '';
                 showTooltip(ev.clientX, ev.clientY, n.title + tagLine + '\nheat ' + heat.toFixed(2));
                 return;
             }
