@@ -4697,16 +4697,26 @@ function html.render_knowledge_graph(nonce)
             if (view.colorBy === 'tier') {
                 TIER_LEGEND.forEach(function(t) { entries.push({ key: 'tier:' + t.tier, label: t.label, color: tierColor(t.tier) || t.color }); });
             } else {
-                var counts = {};
-                nodes.forEach(function(n) { var first = firstLabel(n); if (first !== null) { counts[first] = (counts[first] || 0) + 1; } });
-                var ranked = Object.keys(counts).sort(function(a, b) { return counts[b] - counts[a]; });
+                // Largest first by documents (each counted under its main
+                // tag), ties by name so the order is stable; then "Other
+                // tags", then "No tag". Counts are shown so the order reads.
+                var counts = {}, untagged = 0;
+                nodes.forEach(function(n) {
+                    var first = firstLabel(n);
+                    if (first === null) { untagged++; } else { counts[first] = (counts[first] || 0) + 1; }
+                });
+                var ranked = Object.keys(counts).sort(function(a, b) { return (counts[b] - counts[a]) || a.localeCompare(b); });
                 tagColors = {};
                 ranked.slice(0, TAG_PALETTE.length).forEach(function(tag, i) {
                     tagColors[tag] = TAG_PALETTE[i];
-                    entries.push({ key: 'tag:' + tag, label: tag, color: TAG_PALETTE[i] });
+                    entries.push({ key: 'tag:' + tag, label: tag + ' (' + counts[tag] + ')', color: TAG_PALETTE[i] });
                 });
-                if (ranked.length > TAG_PALETTE.length) { entries.push({ key: 'other', label: 'Other tags', color: OTHER_TAG_COLOR }); }
-                entries.push({ key: 'none', label: ranked.length ? 'No tag' : 'No tags yet', color: NO_TAG_COLOR });
+                if (ranked.length > TAG_PALETTE.length) {
+                    var rest = ranked.slice(TAG_PALETTE.length);
+                    var restCount = rest.reduce(function(sum, tag) { return sum + counts[tag]; }, 0);
+                    entries.push({ key: 'other', label: 'Other tags: ' + rest.length + ' (' + restCount + ')', color: OTHER_TAG_COLOR });
+                }
+                entries.push({ key: 'none', label: (ranked.length ? 'No tag' : 'No tags yet') + ' (' + untagged + ')', color: NO_TAG_COLOR });
             }
             legendItems.innerHTML = '';
             entries.forEach(function(entry) {
