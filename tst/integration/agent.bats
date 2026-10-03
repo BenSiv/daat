@@ -525,6 +525,18 @@ SELECT * FROM task
     [[ "$output" =~ '"last_query_sql":"SELECT * FROM task"' ]]
 }
 
+@test "a tool that raises a Lua error becomes an error tool result, not a dead turn" {
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    # query as an object, not a string: the handler raises.
+    scripted="$(tool_call_response "document.search" '{"query":{"x":1}}')"$'\1'"$(done_response "Recovered.")"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"get it\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "tool crashed" ]]
+}
+
 @test "entity.query refuses any table that isn't a registered entity type, even a real internal one" {
     resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
     session_id=$(extract_query_param "$resp" "session_id")
@@ -708,6 +720,7 @@ EOF
 
     run latest_tool_result "$session_id"
     [[ "$output" =~ "not a plain SELECT" ]]
+    [[ "$output" =~ "must start with SELECT" ]]
 
     # Never actually ran -- refused before it ever reached db.query.
     run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM task;"

@@ -1344,7 +1344,7 @@ function agent.run_research_loop(db_path, author, session_id, model, question, m
                 result_text = "ERROR: research is read-only and can't ask the user directly or hand off further -- cannot perform destructive actions, delegate further, ask a clarifying question, or start a background task; report what you've found (including any real ambiguity) instead"
                 is_error = true
             else
-                tool_result, tool_err = agent_tools.execute_tool(db_path, author, session_id, tool_name, method_name, tool_call.arguments)
+                tool_result, tool_err = agent.run_tool(db_path, author, session_id, tool_name, method_name, tool_call.arguments)
                 result_text = tostring(tool_result)
                 if tool_err != nil then
                     result_text = "ERROR: " .. tostring(tool_err)
@@ -1492,6 +1492,21 @@ function agent.run_pending_background_tasks(db_path, model, limit)
         end
     end
     return {ran = ran, failed = failed}
+end
+
+-- execute_tool behind a pcall: a Lua error inside a tool (seen in
+-- prod after document.search) used to abort the whole request, so the
+-- turn died with no tool result and nothing for the model or the user
+-- to see. Now it's an ordinary error result, recorded like any other,
+-- and logged to stderr (the web server's error log).
+function agent.run_tool(db_path, author, session_id, tool_name, method_name, args)
+    agent_tools = require("agent_tools")
+    call_ok, result, err = pcall(agent_tools.execute_tool, db_path, author, session_id, tool_name, method_name, args)
+    if call_ok == false then
+        io.write(io.stderr, "agent tool " .. tostring(tool_name) .. "." .. tostring(method_name) .. " crashed: " .. tostring(result) .. "\n")
+        return nil, "tool crashed: " .. tostring(result)
+    end
+    return result, err
 end
 
 -- Runs the turn loop starting from the session's current active-message
@@ -1693,7 +1708,7 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
                             "ERROR: skipped -- only one destructive action can be proposed per turn; resolve the pending one first, then ask for this one again", true)
                     end
                 else
-                    tool_result, tool_err = agent_tools.execute_tool(db_path, login, session_id, tool_name, method_name, tool_call.arguments)
+                    tool_result, tool_err = agent.run_tool(db_path, login, session_id, tool_name, method_name, tool_call.arguments)
                     summary = tostring(tool_result)
                     is_error = false
                     if tool_err != nil then
@@ -1765,7 +1780,7 @@ function agent.approve_pending(db_path, pending_id, login, system_prompt, model)
         args = {}
     end
 
-    tool_result, tool_err = agent_tools.execute_tool(db_path, login, pending.session_id, pending.tool, pending.method, args)
+    tool_result, tool_err = agent.run_tool(db_path, login, pending.session_id, pending.tool, pending.method, args)
     summary = tostring(tool_result)
     is_error = false
     if tool_err != nil then
