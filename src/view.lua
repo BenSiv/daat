@@ -44,7 +44,10 @@ FORBIDDEN_SQL_WORDS = {
     "pragma", "create", "replace", "vacuum", "reindex", "trigger", "exec",
 }
 
-function view.is_select_only(sql_text)
+-- Nil when sql_text is a single plain SELECT, else why not -- naming
+-- the offending token, so the agent fixes the actual problem instead of
+-- guessing (seen in prod: REPLACE() refused as "not a plain SELECT").
+function view.select_only_problem(sql_text)
     trimmed = string.gsub(sql_text, "^%s+", "")
     trimmed = string.gsub(trimmed, "%s+$", "")
     lowered = string.lower(trimmed)
@@ -53,7 +56,7 @@ function view.is_select_only(sql_text)
     -- looser check: the trailing FORBIDDEN_SQL_WORDS/no-semicolon checks
     -- below still apply to the whole text either way.
     if string.find(lowered, "^select") == nil and string.find(lowered, "^with%f[%A]") == nil then
-        return false
+        return "must start with SELECT (or WITH ... SELECT)"
     end
 
     body = trimmed
@@ -61,15 +64,27 @@ function view.is_select_only(sql_text)
         body = string.sub(trimmed, 1, -2)
     end
     if string.find(body, ";") != nil then
-        return false
+        return "contains ';' -- send one statement, no semicolons"
     end
 
+    -- Keywords inside '...' literals are inert (event_type = 'create').
+    -- Only stripped when there's no backslash: SQLite and MariaDB
+    -- disagree on whether \' ends a literal, so with one present the
+    -- literal boundaries are ambiguous and every word is checked.
+    words_text = lowered
+    if string.find(lowered, "\\", 1, true) == nil then
+        words_text = string.gsub(lowered, "'[^']*'", "''")
+    end
     for _, word in ipairs(FORBIDDEN_SQL_WORDS) do
-        if string.find(lowered, "%f[%a]" .. word .. "%f[%A]") != nil then
-            return false
+        if string.find(words_text, "%f[%a]" .. word .. "%f[%A]") != nil then
+            return "contains '" .. word .. "' outside a quoted string -- refused anywhere, even as a function name like REPLACE()"
         end
     end
-    return true
+    return nil
+end
+
+function view.is_select_only(sql_text)
+    return view.select_only_problem(sql_text) == nil
 end
 
 -- A view may declare at most one runtime parameter (e.g. scoping a
@@ -499,8 +514,9 @@ end
 -- from config.platform_config() per call (not resolved once at load).
 
 function view.run_adhoc(db_path, sql_text)
-    if view.is_select_only(sql_text) == false then
-        return nil, nil, "refusing to run: not a plain SELECT"
+    problem = view.select_only_problem(sql_text)
+    if problem != nil then
+        return nil, nil, "refusing to run: not a plain SELECT -- " .. problem
     end
 
     config = require("config")
@@ -733,8 +749,9 @@ end
 -- worst (and the right number here depends on the configured
 -- AGENT_MODEL's own context budget, not just this code).
 function view.run_agent_query(db_path, sql_text)
-    if view.is_select_only(sql_text) == false then
-        return nil, nil, "refusing to run: not a plain SELECT"
+    problem = view.select_only_problem(sql_text)
+    if problem != nil then
+        return nil, nil, "refusing to run: not a plain SELECT -- " .. problem
     end
 
     config = require("config")

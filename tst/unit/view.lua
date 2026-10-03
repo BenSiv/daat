@@ -128,6 +128,26 @@ function test_is_select_only_still_rejects_ddl_inside_a_with_clause()
         "a stacked statement after a WITH query should still be rejected")
 end
 
+function test_select_only_problem_names_the_offending_token()
+    print("Testing select_only_problem: names the keyword, semicolon or missing SELECT")
+    check(view.select_only_problem("SELECT * FROM sample") == nil, "plain select has no problem")
+    check(string.find(view.select_only_problem("SELECT REPLACE(name, 'a', 'b') FROM sample"), "'replace'", 1, true) != nil,
+        "REPLACE() should be named")
+    check(string.find(view.select_only_problem("SELECT 1; SELECT 2"), "';'", 1, true) != nil, "stacked statement should name ';'")
+    check(string.find(view.select_only_problem("SHOW TABLES"), "must start with SELECT", 1, true) != nil, "non-SELECT should say so")
+end
+
+function test_select_only_ignores_keywords_inside_quoted_strings()
+    print("Testing select_only_problem: keywords inside '...' are inert, unless a backslash makes the literal ambiguous")
+    check(view.is_select_only("SELECT * FROM entity_event WHERE event_type = 'create'") == true,
+        "'create' as a string value should pass")
+    check(view.is_select_only("SELECT * FROM entity_event WHERE event_type IN ('update', 'archive')") == true,
+        "'update' as a string value should pass")
+    check(view.is_select_only("SELECT 'it''s' FROM t WHERE x = 'delete'") == true, "doubled quotes stay inside the literal")
+    check(view.is_select_only("SELECT 'a' FROM t WHERE 1 = 1 OR (DELETE)") == false, "a keyword after a closed literal is still checked")
+    check(view.is_select_only("SELECT 'a\\' ' DELETE FROM t '") == false, "with a backslash, every word is checked")
+end
+
 -- Run them
 test_guess_from_table_plain()
 test_guess_from_table_aliased()
@@ -140,6 +160,8 @@ test_reference_columns_across_join()
 test_reference_columns_first_table_wins_collision()
 test_reference_columns_nil_table_list()
 test_is_select_only_rejects_ddl()
+test_select_only_problem_names_the_offending_token()
+test_select_only_ignores_keywords_inside_quoted_strings()
 test_is_select_only_accepts_a_leading_with_clause()
 test_is_select_only_still_rejects_ddl_inside_a_with_clause()
 
