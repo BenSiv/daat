@@ -300,10 +300,29 @@ EOF
     run raw_admin_action "/admin-users-archive" "$cookie" "csrf_token=${csrf}&login=bob"
     [[ "$output" =~ "302 Found" ]]
 
-    GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/admin-users" QUERY_STRING="" \
+    GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/admin-users" QUERY_STRING="archived=1" \
         HTTP_COOKIE="session=${session}" run "$BIN"
     [[ "$output" =~ 'class="btn btn-secondary">Unarchive</button>' ]]
     [[ ! "$output" =~ 'class="btn btn-danger">Unarchive</button>' ]]
+}
+
+@test "/admin-users hides archived users by default; ?archived=1 shows them" {
+    "$BIN" user add alice secret123 ia
+    "$BIN" user add bob bobpass123 i
+    "$BIN" user add carol carolpass123 i
+    "$BIN" user archive carol
+    session=$(raw_login alice secret123 | grep -o 'Set-Cookie: session=[^;]*' | sed 's/Set-Cookie: session=//')
+
+    GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/admin-users" QUERY_STRING="" \
+        HTTP_COOKIE="session=${session}" run "$BIN"
+    [[ "$output" =~ "bob" ]]
+    [[ ! "$output" =~ "carol" ]]
+    [[ "$output" =~ "Show archived users" ]]
+
+    GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/admin-users" QUERY_STRING="archived=1" \
+        HTTP_COOKIE="session=${session}" run "$BIN"
+    [[ "$output" =~ "carol" ]]
+    [[ "$output" =~ "Hide archived users" ]]
 }
 
 @test "/account lets a plain baseline user change their own password (no Admin capability needed)" {

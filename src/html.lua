@@ -3773,7 +3773,9 @@ end
 -- form data instead (see cgi.lua's require_csrf).
 -- invite_mode: mail is configured, so accounts are created with an
 -- email and get a setup link (auth.invite_user), not a typed password.
-function html.render_admin_users(users, invite_mode, csrf_token, message, is_error)
+-- show_archived: `users` includes archived accounts; the toggle below
+-- links to the other view (?archived=1), so unarchive stays reachable.
+function html.render_admin_users(users, invite_mode, csrf_token, message, is_error, show_archived)
     page_lib = require("page")
 
     message_css_class = "platform-admin-message"
@@ -3814,8 +3816,9 @@ function html.render_admin_users(users, invite_mode, csrf_token, message, is_err
 
     rows = {}
     for _, u in ipairs(users) do
+        is_archived = u.archived_at != nil and u.archived_at != ""
         status = "active"
-        if u.archived_at != nil and u.archived_at != "" then
+        if is_archived then
             status = "archived"
         end
         auth_lib = require("auth")
@@ -3825,7 +3828,7 @@ function html.render_admin_users(users, invite_mode, csrf_token, message, is_err
         archive_action = "archive"
         archive_label = "Archive"
         archive_button_class = "btn-danger"
-        if status == "archived" then
+        if is_archived then
             archive_action = "unarchive"
             archive_label = "Unarchive"
             archive_button_class = "btn-secondary"
@@ -3877,6 +3880,16 @@ function html.render_admin_users(users, invite_mode, csrf_token, message, is_err
             },
         })
     end
+    toggle_fields = {}
+    toggle_label = "Hide archived users"
+    if show_archived != true then
+        toggle_fields = {{type = "hidden", name = "archived", value = "1"}}
+        toggle_label = "Show archived users"
+    end
+    table.insert(sections, {
+        type = "form", method = "GET", action = "admin-users", css_class = "platform-admin-inline-form",
+        fields = toggle_fields, submit_class = "btn-secondary", submit_label = toggle_label,
+    })
     table.insert(sections, {
         type = "table",
         css_class = "platform-admin-users",
@@ -3960,7 +3973,7 @@ function html.render_admin_api_keys(keys, csrf_token, message, is_error, new_raw
         archive_action = "archive"
         archive_label = "Archive"
         archive_button_class = "btn-danger"
-        if status == "archived" then
+        if is_archived then
             archive_action = "unarchive"
             archive_label = "Unarchive"
             archive_button_class = "btn-secondary"
@@ -3992,6 +4005,16 @@ function html.render_admin_api_keys(keys, csrf_token, message, is_error, new_raw
             },
         })
     end
+    toggle_fields = {}
+    toggle_label = "Hide archived users"
+    if show_archived != true then
+        toggle_fields = {{type = "hidden", name = "archived", value = "1"}}
+        toggle_label = "Show archived users"
+    end
+    table.insert(sections, {
+        type = "form", method = "GET", action = "admin-users", css_class = "platform-admin-inline-form",
+        fields = toggle_fields, submit_class = "btn-secondary", submit_label = toggle_label,
+    })
     table.insert(sections, {
         type = "table",
         css_class = "platform-admin-users",

@@ -1310,8 +1310,9 @@ function cgi.handle_request()
         if not cgi.has_capability(capabilities, "a") then
             return print_response("403 Forbidden", "text/html", "<h3>Forbidden: requires Admin capability</h3>")
         end
-        users = auth.list_users(db_path, true)
-        body = html.render_admin_users(users, config.password_reset_enabled(), default_value(cookies.csrf, ""), nil, false)
+        show_archived = params.archived == "1"
+        users = auth.list_users(db_path, show_archived)
+        body = html.render_admin_users(users, config.password_reset_enabled(), default_value(cookies.csrf, ""), nil, false, show_archived)
         return print_response("200 OK", "text/html",
             html.page_shell("Users", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
     end
@@ -1339,7 +1340,7 @@ function cgi.handle_request()
         form = parse_query(io.read("*all"))
         if not require_csrf(cookies, form.csrf_token) then
             users = auth.list_users(db_path, true)
-            body = html.render_admin_users(users, config.password_reset_enabled(), default_value(cookies.csrf, ""), "CSRF check failed.", true)
+            body = html.render_admin_users(users, config.password_reset_enabled(), default_value(cookies.csrf, ""), "CSRF check failed.", true, true)
             return print_response("403 Forbidden", "text/html",
                 html.page_shell("Users", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
         end
@@ -1389,7 +1390,7 @@ function cgi.handle_request()
 
         if ok == nil then
             users = auth.list_users(db_path, true)
-            body = html.render_admin_users(users, config.password_reset_enabled(), default_value(cookies.csrf, ""), tostring(err), true)
+            body = html.render_admin_users(users, config.password_reset_enabled(), default_value(cookies.csrf, ""), tostring(err), true, true)
             return print_response("200 OK", "text/html",
                 html.page_shell("Users", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
         end
