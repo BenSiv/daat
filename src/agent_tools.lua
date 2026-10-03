@@ -20,6 +20,7 @@ entity = require("entity")
 extension = require("extension")
 json = require("dkjson")
 knowledge = require("knowledge")
+ledger = require("ledger")
 schema = require("schema")
 search_provider = require("search_provider")
 template = require("template")
@@ -506,6 +507,8 @@ end
 -- types at all. agent_message/agent_pending_action/agent_background_task
 -- are deliberately absent -- see agent_session's own SQL note above.
 HAND_ROLLED_ENTITY_FIELDS = {
+    document_link = function() return document.link_sql_columns_text() end,
+    entity_event = function() return ledger.event_sql_columns_text() end,
     agent_session = function() return agent.session_sql_columns_text() end,
     document_embedding = function() return document.embedding_sql_columns_text() end,
     knowledge_retrieval = function() return knowledge.hand_rolled_sql_columns_text("knowledge_retrieval") end,

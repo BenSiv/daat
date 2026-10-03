@@ -392,7 +392,28 @@ KNOWLEDGE_POOL_SQL_COLUMNS = {
     {name = "raw_heat", note = "conserved-pool raw heat -- do not average this column alone, see scale_at_write"},
     {name = "scale_at_write", note = "combine as raw_heat * (EXP(knowledge_pool_state.log_pool_scale) / scale_at_write) for the real effective_heat; the separate 'heat' column is legacy and never updated -- ignore it"},
 }
-KNOWLEDGE_POOL_SQL_NOTE = "Related tables, hand-rolled rather than schema.register()'d so entity.list_types/fields never mentions them either: knowledge_pool_state (one row, id=1: pool_scale/log_pool_scale/document_count) and document_link (id, from_document_id, to_document_id, link_text [the text inside [[...]] in from_document_id's content], link_hash, raw_strength, archived_at, created_at [NULL for links predating it]) -- a derived index of [[links]] in document content; why two documents are connected is in content, not here."
+KNOWLEDGE_POOL_SQL_NOTE = "Related tables, hand-rolled rather than schema.register()'d so entity.list_types never mentions them: knowledge_pool_state (one row, id=1: pool_scale/log_pool_scale/document_count) and document_link (queryable via entity.query; entity.fields('document_link') lists its columns) -- a derived index of [[links]] in document content; why two documents are connected is in content, not here."
+
+-- entity.fields('document_link'): it's queryable (view.queryable_tables),
+-- so its columns get the same real-columns answer as document_embedding.
+DOCUMENT_LINK_SQL_COLUMNS = {
+    {name = "id", note = "primary key"},
+    {name = "from_document_id", note = "FK to document.id -- the document whose content holds the [[link]]"},
+    {name = "to_document_id", note = "FK to document.id -- the linked document; NULL while the link points at a page not created yet"},
+    {name = "link_text", note = "the text inside [[...]] in from_document_id's content"},
+    {name = "link_hash", note = "hash of link_text, for matching"},
+    {name = "raw_strength", note = "usage-driven edge strength, starts at 1.0 and grows when the pair is retrieved together"},
+    {name = "archived_at", note = "set when the link left the content -- filter archived_at IS NULL for current links"},
+    {name = "created_at", note = "NULL for links predating the column"},
+}
+
+function document.link_sql_columns_text()
+    lines = {}
+    for _, col in ipairs(DOCUMENT_LINK_SQL_COLUMNS) do
+        table.insert(lines, string.format("%s -- %s", col.name, col.note))
+    end
+    return table.concat(lines, "\n") .. "\nWhy two documents are connected is in content, not here: document.links returns the sentence around each link."
+end
 
 function document.knowledge_pool_sql_columns_text()
     lines = {}

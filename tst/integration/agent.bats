@@ -536,19 +536,49 @@ SELECT * FROM task
     [[ "$output" =~ "not a registered entity type" ]]
 }
 
-@test "entity.query distinguishes a real-but-excluded knowledge-pool companion table (document_link) from an unregistered/typo'd one" {
+@test "entity.query reads document_link across documents, like the links a user sees on each document page" {
+    "$BIN" entity create document title="Target" content="body" >/dev/null
+    "$BIN" entity create document title="Linker" content="see [[Target]]" >/dev/null
     resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
     session_id=$(extract_query_param "$resp" "session_id")
 
-    scripted="$(tool_call_response "entity.query" '{"sql":"SELECT * FROM document_link"}')"
+    scripted="$(tool_call_response "entity.query" '{"sql":"SELECT link_text FROM document_link WHERE archived_at IS NULL"}')"
     raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"how connected are documents\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
     run latest_tool_result "$session_id"
-    [[ "$output" =~ "intentionally excluded from entity.query" ]]
-    [[ ! "$output" =~ "did you mean" ]]
+    [[ ! "$output" =~ "refusing to run" ]]
+    [[ "$output" =~ "Target" ]]
 }
 
-@test "entity.query gives the same real-but-excluded treatment to a table entity.fields documents (agent_session), not just document_link" {
+@test "entity.query reads entity_event, the history a user sees on each detail page" {
+    "$BIN" entity create document title="Edited" content="first" >/dev/null
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(tool_call_response "entity.query" '{"sql":"SELECT event_type, entity_type FROM entity_event WHERE entity_type = '"'"'document'"'"'"}')"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"who edited this\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+
+    run latest_tool_result "$session_id"
+    [[ ! "$output" =~ "refusing to run" ]]
+    [[ "$output" =~ "create" ]]
+}
+
+@test "entity.fields lists the real columns of document_link and entity_event" {
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(tool_call_response "entity.fields" '{"entity_type":"entity_event"}')"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"what is in the history\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "field_changes" ]]
+
+    scripted="$(tool_call_response "entity.fields" '{"entity_type":"document_link"}')"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"what is in links\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "from_document_id" ]]
+}
+
+@test "entity.query gives the real-but-excluded treatment to a table entity.fields documents (agent_session)" {
     resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
     session_id=$(extract_query_param "$resp" "session_id")
 

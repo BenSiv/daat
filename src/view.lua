@@ -581,6 +581,7 @@ end
 -- but never the other way around.
 HAND_ROLLED_DOCUMENTED_TABLES = {
     document_link = true,
+    entity_event = true,
     knowledge_pool_state = true,
     agent_session = true,
     document_embedding = true,
@@ -668,8 +669,14 @@ end
 -- multi_select lives in its junction table) and sample lineage walked
 -- ~25 entity.get calls deep because entity_source was refused. None of
 -- these hold anything beyond entity ids/types/values.
+--
+-- document_link and entity_event follow the same rule from the other
+-- side: the agent sees what a user sees. Every document page shows its
+-- links, every detail page shows its ledger history -- the agent could
+-- read neither across rows (document.links is one document at a time,
+-- entity.get returns current values only).
 function view.queryable_tables(db_path)
-    allowed = {entity_source = true}
+    allowed = {entity_source = true, document_link = true, entity_event = true}
     for _, t in ipairs(schema.list(db_path)) do
         allowed[t.name] = true
         for _, f in ipairs(schema.fields(db_path, t.name)) do

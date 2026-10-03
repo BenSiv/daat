@@ -155,6 +155,29 @@ function ledger.append_archive(db_path, entity_type, entity_id, author, source, 
 end
 
 -- Full event history for one entity, oldest first.
+-- entity.fields('entity_event'): the same history every detail page
+-- shows a user, queryable by the agent via entity.query.
+ENTITY_EVENT_SQL_COLUMNS = {
+    {name = "event_id", note = "primary key, in write order"},
+    {name = "entity_id", note = "the entity's id -- ids come from one sequence shared by every entity type, so also filter entity_type"},
+    {name = "entity_type", note = "registered entity type name (e.g. document)"},
+    {name = "event_type", note = "create, update or archive"},
+    {name = "field_changes", note = "JSON object {field: {old, new}} (create rows have only new) -- old/new hold full values, so a document's content can be long; select it only for the rows you need"},
+    {name = "author", note = "login of who made the change"},
+    {name = "created_at", note = "timestamp of the change"},
+    {name = "source_notebook_entry_id", note = "external source (e.g. a Benchling entry) a synced write came from, else NULL"},
+    {name = "source_row_id", note = "row within that source, else NULL"},
+    {name = "reason", note = "free-text reason given for the change, may be NULL"},
+}
+
+function ledger.event_sql_columns_text()
+    lines = {}
+    for _, col in ipairs(ENTITY_EVENT_SQL_COLUMNS) do
+        table.insert(lines, string.format("%s -- %s", col.name, col.note))
+    end
+    return table.concat(lines, "\n")
+end
+
 function ledger.history(db_path, entity_id)
     rows = db.query(db_path, string.format(
         "SELECT * FROM entity_event WHERE entity_id = %d ORDER BY event_id ASC;", entity_id
