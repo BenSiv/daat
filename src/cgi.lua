@@ -2103,6 +2103,12 @@ function cgi.handle_request()
 
         -- POST /api/v1/<type>/<id>/archive
         if v1_entity_id != nil and v1_action == "archive" and method == "POST" then
+            -- Drain any request body: this route reads none, and a CGI that
+            -- exits with body bytes unread makes the connection close with a
+            -- TCP reset, truncating the response a client already got --
+            -- every archive from cluster_tags.py (body "{}") failed that
+            -- way on 2026-10-03, though each archive had landed.
+            io.read("*all")
             if not via_api_key and not require_csrf(cookies) then
                 return print_response("403 Forbidden", "application/json", json.encode({error = "CSRF check failed"}))
             end
@@ -2123,6 +2129,12 @@ function cgi.handle_request()
 
         -- POST /api/v1/<type>/<id>/unarchive
         if v1_entity_id != nil and v1_action == "unarchive" and method == "POST" then
+            -- Drain any request body: this route reads none, and a CGI that
+            -- exits with body bytes unread makes the connection close with a
+            -- TCP reset, truncating the response a client already got --
+            -- every archive from cluster_tags.py (body "{}") failed that
+            -- way on 2026-10-03, though each archive had landed.
+            io.read("*all")
             if not via_api_key and not require_csrf(cookies) then
                 return print_response("403 Forbidden", "application/json", json.encode({error = "CSRF check failed"}))
             end

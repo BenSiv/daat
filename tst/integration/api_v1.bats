@@ -167,6 +167,19 @@ raw_api_write() {
     [[ "$output" =~ "A2" ]]
 }
 
+@test "archive and unarchive drain a request body they don't use (an unread body made the connection reset and truncate the response)" {
+    key=$("$BIN" api-key create integration i | tail -1)
+    "$BIN" entity create widget label=A
+    for action in archive unarchive; do
+        left=$(printf '{"unused":true}' | {
+            GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD=POST PATH_INFO="/api/v1/widget/1/$action" \
+                HTTP_X_API_KEY="$key" "$BIN" >/dev/null
+            cat
+        })
+        [ -z "$left" ]
+    done
+}
+
 @test "POST /api/v1/<type>/<id>/archive and /unarchive toggle archived_at, never deleting the row" {
     key=$("$BIN" api-key create integration i | tail -1)
     "$BIN" entity create widget label=A
