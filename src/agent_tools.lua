@@ -468,29 +468,6 @@ function issues_summary(issues)
     return table.concat(parts, "; ")
 end
 
--- Grounds the agent's own answers in real document content --
--- document.search already fetches full content for scoring, so the
--- tool result surfaces an excerpt of it too, not just "#id title"
--- lines, letting the model actually read a document before answering
--- rather than only learning which ones might be relevant. Bounded per
--- result (not the full document verbatim) so a search that matches
--- several long documents doesn't balloon every turn's prompt/token
--- cost -- trimmed to the last whole word rather than cutting mid-word.
-function excerpt(text, max_length)
-    if text == nil or text == "" then
-        return ""
-    end
-    if string.len(text) <= max_length then
-        return text
-    end
-    truncated = string.sub(text, 1, max_length)
-    trimmed = string.match(truncated, "^(.*)%s%S*$")
-    if trimmed != nil and string.len(trimmed) > max_length - 40 then
-        truncated = trimmed
-    end
-    return truncated .. "..."
-end
-
 -- Error text for an entity_type argument that isn't registered, with a
 -- suggested correction when schema.suggest_type finds one close enough
 -- (e.g. the plural "samples" -> "sample") -- shared by every entity.*
@@ -662,7 +639,7 @@ function agent_tools.execute_tool(db_path, author, session_id, tool_name, method
                 header = header .. " [one of " .. tostring(title_counts[r.title]) ..
                     " documents titled '" .. r.title .. "' -- distinguish by date/external_id/content above, never by asking the user for the id]"
             end
-            table.insert(lines, header .. "\n" .. excerpt(r.content, config.platform_config().agent_search_excerpt_length))
+            table.insert(lines, header .. "\n" .. document.search_snippet(r.content, args.query, config.platform_config().agent_search_excerpt_length))
         end
         return table.concat(lines, "\n\n")
     end

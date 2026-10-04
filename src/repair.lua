@@ -50,6 +50,11 @@ function repair_embeddings(cmd_args, db_path)
     print(string.format("Reindexed %d document(s), %d failed", reindexed, failed))
 end
 
+function repair_embeddings_packed(cmd_args, db_path)
+    packed = document.repack_all_embeddings(db_path)
+    print(string.format("Packed %d embedding(s)", packed))
+end
+
 function repair_pool_count(cmd_args, db_path)
     count = document.resync_pool_count(db_path)
     print("document_count resynced to " .. tostring(count))
@@ -94,6 +99,8 @@ REPAIRS = {
      description = "Re-parse [[...]] links (and their context notes) from document content into document_link."},
     {name = "embeddings", usage = "embeddings [document_id]", run = repair_embeddings,
      description = "Recompute semantic-search embeddings (one embedding-provider call per document)."},
+    {name = "embeddings-packed", usage = "embeddings-packed", run = repair_embeddings_packed,
+     description = "Pack stored embeddings into the binary form search reads (no provider calls)."},
     {name = "tags", usage = "tags [document_id]", run = repair_tags,
      description = "Rebuild tag centres from memberships, or re-place one document by nearest tag."},
     {name = "tag-evidence", usage = "tag-evidence", run = repair_tag_evidence,

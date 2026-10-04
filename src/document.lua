@@ -484,8 +484,22 @@ DOCUMENT_EMBEDDING_SQL_COLUMNS = {
     {name = "document_id", note = "primary key, FK to document.id"},
     {name = "model", note = "which embedding model produced this vector"},
     {name = "vector_json", note = "the cached embedding vector, JSON-encoded"},
+    {name = "vector_packed", note = "the same vector L2-normalised, as little-endian float32 bytes (what search reads)"},
     {name = "updated_at", note = "timestamp of the last reindex"},
 }
+
+-- vector_packed (see document.pack_vector) postdates the table, so it's
+-- retrofitted here rather than in DOCUMENT_EMBEDDING_SCHEMA -- one path
+-- for new and existing installs alike.
+function ensure_document_embedding_columns(db_path)
+    have = {}
+    for _, name in ipairs(db.get_columns(db_path, "document_embedding")) do
+        have[name] = true
+    end
+    if have["vector_packed"] == nil then
+        db.exec(db_path, "ALTER TABLE document_embedding ADD COLUMN vector_packed BLOB;")
+    end
+end
 
 function document.embedding_sql_columns_text()
     lines = {}
@@ -652,6 +666,7 @@ function document.init_schema(db_path)
     create_document_link_table(db_path, "document_link")
     ensure_document_link_indexes(db_path)
     db.exec(db_path, string.format(DOCUMENT_EMBEDDING_SCHEMA, db.now_expr(db_path)))
+    ensure_document_embedding_columns(db_path)
     tag.init_schema(db_path)
     reference.init_schema(db_path)
     ensure_document_knowledge_columns(db_path)
@@ -2046,11 +2061,18 @@ end
 -- Semantic search
 --------------------------------------------------------------------------
 --
--- Scores every active document directly in Lua rather than a real
--- search index (see doc/architecture.md's "Documents" section for why
--- -- no FTS5 support in this project's SQLite binding) -- revisit only
--- if a real deployment's document count makes an O(n)-per-search scan
--- actually show up.
+-- No real search index (see doc/architecture.md's "Documents" section
+-- for why -- no FTS5 support in this project's SQLite binding), but no
+-- full-content scan in Lua either: the O(n)-per-search scan did show up
+-- once a SharePoint sync brought ~8,000 documents (30-120 s per search).
+-- Lexical counting runs in SQL, and embeddings are read packed (see
+-- document.pack_vector).
+
+-- Binary as a hex literal (X'...'), which both backends read as raw
+-- bytes -- never through db.quote, whose string escaping is for text.
+function hex_literal(bytes)
+    return "X'" .. string.gsub(bytes, ".", function(c) return string.format("%02x", string.byte(c)) end) .. "'"
+end
 
 -- Computes and caches one document's embedding -- best-effort, called
 -- from entity.create/update's document hooks on every save, as well as
@@ -2074,12 +2096,40 @@ function document.reindex_embedding(db_path, document_id)
         return nil, err
     end
 
+    packed = document.pack_vector(vector)
+    packed_literal = "NULL"
+    if packed != nil then
+        packed_literal = hex_literal(packed)
+    end
     db.exec(db_path, string.format(
-        "%s document_embedding (document_id, model, vector_json, updated_at) VALUES (%d, %s, %s, %s);",
+        "%s document_embedding (document_id, model, vector_json, vector_packed, updated_at) VALUES (%d, %s, %s, %s, %s);",
         db.replace_into(db_path),
-        tonumber(document_id), db.quote(EMBEDDING_MODEL), db.quote(json.encode(vector)), db.now_expr(db_path)
+        tonumber(document_id), db.quote(EMBEDDING_MODEL), db.quote(json.encode(vector)), packed_literal, db.now_expr(db_path)
     ))
     return true
+end
+
+-- Rebuilds vector_packed from vector_json -- no provider calls, just a
+-- re-encoding of what's stored (rows saved before vector_packed existed
+-- are searched via a slower JSON fallback until this runs). Returns the
+-- number of rows packed.
+function document.repack_all_embeddings(db_path)
+    json = require("dkjson")
+    rows = db.query(db_path, "SELECT document_id, vector_json FROM document_embedding WHERE vector_packed IS NULL;")
+    packed_count = 0
+    if rows == nil then
+        return 0
+    end
+    for _, row in ipairs(rows) do
+        decoded, _, _ = json.decode(row.vector_json)
+        packed = document.pack_vector(decoded)
+        if packed != nil then
+            db.exec(db_path, string.format("UPDATE document_embedding SET vector_packed = %s WHERE document_id = %d;",
+                hex_literal(packed), tonumber(row.document_id)))
+            packed_count = packed_count + 1
+        end
+    end
+    return packed_count
 end
 
 -- The document.sync_links equivalent of reindex_embedding above --
@@ -2122,116 +2172,351 @@ function escape_pattern(text)
     return (string.gsub(text, "([%(%)%.%%%+%-%*%?%[%]%^%$])", "%%%1"))
 end
 
-function count_matches(text, term)
-    if text == nil or term == nil or term == "" then
-        return 0
-    end
-    text = string.lower(text)
-    term = string.lower(term)
-    pattern = escape_pattern(term)
-    count = 0
-    for _ in string.gmatch(text, pattern) do
-        count = count + 1
-    end
-    return count
+-- Function words dropped from a search query before lexical scoring.
+-- Found live: the agent writes queries like "passage OR subculture OR
+-- degradation" -- every "or" then matched as a substring of nearly every
+-- document ("for", "work", "procedure"), thousands of times in a long
+-- PDF, and buried the real hits under whichever documents were longest.
+SEARCH_STOPWORDS = {}
+for _, word in ipairs({
+    "a", "an", "and", "or", "not", "the", "of", "in", "on", "at", "to", "for", "from", "by", "with",
+    "into", "about", "as", "is", "are", "was", "were", "be", "been", "it", "its", "this", "that",
+    "these", "those", "what", "which", "who", "how", "when", "where", "why", "do", "does", "did",
+    "we", "our", "you", "your", "any", "all", "there", "their", "than", "then", "vs",
+}) do
+    SEARCH_STOPWORDS[word] = true
 end
 
-function cosine_similarity(v1, v2)
-    if v1 == nil or v2 == nil or #v1 == 0 or #v2 == 0 or #v1 != #v2 then
-        return 0.0
-    end
-    dot = 0.0
-    norm_a = 0.0
-    norm_b = 0.0
-    for i = 1, #v1 do
-        dot = dot + v1[i] * v2[i]
-        norm_a = norm_a + v1[i] * v1[i]
-        norm_b = norm_b + v2[i] * v2[i]
-    end
-    if norm_a == 0.0 or norm_b == 0.0 then
-        return 0.0
-    end
-    return dot / (math.sqrt(norm_a) * math.sqrt(norm_b))
-end
+SEARCH_MAX_TERMS = 8
 
-function query_terms(query_text)
+-- Lowercased query words, edge punctuation stripped (quotes, brackets,
+-- a trailing comma or '?', the '*' a model sometimes sends as "match
+-- anything") but inner punctuation kept, since identifiers like
+-- "rt-qpcr" or "c.cot.m-1d" are exactly what people search for here.
+-- Stopwords, one-character fragments and repeats are dropped.
+function document.query_terms(query_text)
     terms = {}
     if query_text == nil then
         return terms
     end
-    for term in string.gmatch(string.lower(query_text), "%S+") do
-        table.insert(terms, term)
+    seen = {}
+    for word in string.gmatch(string.lower(query_text), "%S+") do
+        word = string.gsub(word, "^[%p]+", "")
+        word = string.gsub(word, "[%p]+$", "")
+        if string.len(word) > 1 and SEARCH_STOPWORDS[word] == nil and seen[word] == nil and #terms < SEARCH_MAX_TERMS then
+            seen[word] = true
+            table.insert(terms, word)
+        end
     end
     return terms
 end
 
--- Blended lexical + optional semantic relevance for one document
--- against a parsed query. A document with score 0 and similarity at or
--- below 0.45 is excluded outright (the relevance floor) rather than
--- ranked last -- an irrelevant result showing up at the bottom of a
--- results list is still a wrong result.
-function document.search_score(row, terms, query_text, query_vector, pool_scale)
-    title = row.title
-    if title == nil then
-        title = ""
-    end
-    content = row.content
-    if content == nil then
-        content = ""
-    end
-
-    score = 0
-    for _, term in ipairs(terms) do
-        score = score + (count_matches(title, term) * 4)
-        score = score + count_matches(content, term)
-    end
-
-    if query_text != nil and query_text != "" then
-        lower_query = string.lower(query_text)
-        if string.find(string.lower(title), escape_pattern(lower_query)) != nil then
-            score = score + 6
-        elseif string.find(string.lower(title .. " " .. content), escape_pattern(lower_query)) != nil then
-            score = score + 3
-        end
-    end
-
-    similarity = 0.0
-    if query_vector != nil and row.embedding_vector != nil then
-        similarity = cosine_similarity(query_vector, row.embedding_vector)
-    end
-
-    if score <= 0 and similarity <= 0.45 then
-        return 0
-    end
-
-    final_score = score
-    if similarity > 0 then
-        final_score = final_score + (similarity * 8.0)
-    end
-
-    -- Tier/heat reinforcement, folded in only after the relevance floor
-    -- above -- a heavily-reinforced document that's actually irrelevant
-    -- to this query is still excluded outright, never ranked highly
-    -- just because it's "hot". effective_heat is the conserved-pool
-    -- view (Phase 3 cutover, see doc/heat-decay-redesign.md) -- a
-    -- relative share of a total that scales with pool size, not a
-    -- wall-clock decayed absolute value.
-    tier_weight = document.tier_weight(row.tier)
-    effective_heat = document.pool_effective_heat(row.raw_heat, row.scale_at_write, pool_scale)
-    final_score = final_score + (tier_weight * 10.0) + effective_heat
-
-    return final_score
+-- A LIKE pattern matching `term` anywhere, with LIKE's own wildcards
+-- escaped -- paired with ESCAPE '!' at the call site, which both
+-- backends accept (MySQL's default escape is a backslash, SQLite has
+-- none, so neither default works for both).
+function like_anywhere(term)
+    escaped = string.gsub(term, "([!%%_])", "!%1")
+    return db.quote("%" .. escaped .. "%")
 end
 
--- Searches active documents by blended lexical+embedding relevance,
--- including tier/heat reinforcement. `use_semantic` (default true)
--- computes the *query's* own embedding fresh each call (one cheap,
--- real-time API call) -- but a document only contributes semantic
--- score if it was already indexed via document.reindex_embedding/_all;
--- nothing here computes a document's own embedding on the fly.
--- Documents already folded into a canonical duplicate (merged_into
--- set) are excluded outright -- they'd otherwise compete with their
--- own canonical for the same result slot.
+-- SQL expression for how many times `term` (already lowercase) occurs
+-- in `column`: the length lost by deleting every occurrence, divided by
+-- the term's own length. Plain LENGTH/LOWER/REPLACE, so it means the
+-- same on SQLite and MySQL (byte vs. character LENGTH doesn't matter --
+-- all three LENGTHs use the same unit).
+function occurrence_count_sql(column, term)
+    lowered = "LOWER(COALESCE(" .. column .. ", ''))"
+    quoted = db.quote(term)
+    return string.format("((LENGTH(%s) - LENGTH(REPLACE(%s, %s, ''))) / LENGTH(%s))", lowered, lowered, quoted, quoted)
+end
+
+-- A document is searchable unless archived, folded into a canonical
+-- duplicate (it would compete with its own canonical for the same
+-- slot), or a saved chat session -- transcripts are saved as their own
+-- documents (source_type = 'chat_session', knowledge.sync_session_
+-- document) but a transcript full of tool-call noise would otherwise
+-- pollute results for unrelated real-content queries. Still reachable
+-- directly (entity.get/detail), just not ranked here.
+SEARCHABLE_DOCUMENT_WHERE = """
+(d.archived_at IS NULL OR d.archived_at = '')
+AND (d.merged_into IS NULL OR d.merged_into = '')
+AND (d.source_type IS NULL OR d.source_type != 'chat_session')
+"""
+
+SEARCH_RESULT_COLUMNS = """
+d.id, d.title, d.tier, d.retrieval_count, d.raw_heat, d.scale_at_write,
+d.source_type, d.source_id, d.content_hash, d.created_at, d.external_id
+"""
+
+-- How many candidates each ranking (lexical, semantic) contributes to
+-- the fused list -- well past any `limit` a caller asks for, so fusion
+-- has real overlap to work with.
+SEARCH_CANDIDATES_PER_RANKING = 50
+-- Reciprocal-rank-fusion constant (the standard 60): flattens the gap
+-- between neighbouring ranks so neither ranking's #1 dominates alone.
+SEARCH_RRF_K = 60
+-- Cosine similarity at or below which an embedding match is not a
+-- match at all -- an irrelevant document at the bottom of a results
+-- list is still a wrong result.
+SEARCH_SIMILARITY_FLOOR = 0.45
+-- BM25's usual constants: term-frequency saturation and how strongly a
+-- long document's counts are discounted for its length.
+BM25_K1 = 1.2
+BM25_B = 0.75
+-- A query term in the title counts as this many content-weight hits'
+-- worth of evidence, on top of the content score.
+SEARCH_TITLE_WEIGHT = 2.0
+
+-- How many documents get exact per-term counts (stage 2 below) after
+-- the cheap presence pass narrows the field.
+SEARCH_COUNTED_CANDIDATES = 200
+
+-- Lexical ranking, computed in SQL in two stages, and never by reading
+-- content into Lua. Found live: the previous version selected every
+-- active document's full content and embedding (~290 MB in production)
+-- into Lua on every call and counted substrings there, taking 30-120 s
+-- per search; that, not the model, was most of what users saw as the
+-- agent "sleeping".
+--
+-- Stage 1 asks only *whether* each term occurs (LIKE, which both
+-- backends evaluate case-insensitively and which stops at the first
+-- match) and ranks by the rarity-weighted share of terms present.
+-- Stage 2 counts occurrences (LOWER + REPLACE over the whole text --
+-- the expensive part, so only for the top SEARCH_COUNTED_CANDIDATES)
+-- and ranks those by BM25 over content (saturating term frequency,
+-- document length normalisation, rarer terms weighted higher) plus a
+-- title bonus, so a 500-page PDF that mentions a common word 2,000
+-- times no longer outranks a short note about exactly the thing asked
+-- for.
+function lexical_ranking(db_path, terms, query_text)
+    if #terms == 0 then
+        return {}
+    end
+    presence_columns = {}
+    matches_any = {}
+    for i, term in ipairs(terms) do
+        content_like = "d.content LIKE " .. like_anywhere(term) .. " ESCAPE '!'"
+        title_like = "d.title LIKE " .. like_anywhere(term) .. " ESCAPE '!'"
+        table.insert(presence_columns, string.format("CASE WHEN %s THEN 1 ELSE 0 END AS p%d", content_like, i))
+        table.insert(matches_any, title_like)
+        table.insert(matches_any, content_like)
+    end
+    candidates = db.query(db_path, string.format("""
+        SELECT %s, %s
+        FROM document d
+        WHERE %s AND (%s);
+    """, SEARCH_RESULT_COLUMNS, table.concat(presence_columns, ", "), SEARCHABLE_DOCUMENT_WHERE, table.concat(matches_any, " OR ")))
+    if candidates == nil or #candidates == 0 then
+        return {}
+    end
+
+    total_rows = db.query(db_path, "SELECT COUNT(*) AS n FROM document d WHERE " .. SEARCHABLE_DOCUMENT_WHERE .. ";")
+    total = tonumber(total_rows[1].n)
+    document_frequency = {}
+    for i = 1, #terms do
+        document_frequency[i] = 0
+    end
+    for _, row in ipairs(candidates) do
+        row.title_lower = ""
+        if row.title != nil then
+            row.title_lower = string.lower(row.title)
+        end
+        row.in_title = {}
+        for i, term in ipairs(terms) do
+            row.in_title[i] = string.find(row.title_lower, term, 1, true) != nil
+            if tonumber(row["p" .. tostring(i)]) == 1 or row.in_title[i] == true then
+                document_frequency[i] = document_frequency[i] + 1
+            end
+        end
+    end
+    idf = {}
+    for i = 1, #terms do
+        idf[i] = math.log(1 + (total - document_frequency[i] + 0.5) / (document_frequency[i] + 0.5))
+    end
+    lower_query = ""
+    if query_text != nil then
+        lower_query = string.lower(query_text)
+    end
+
+    -- Stage 1: presence only.
+    for _, row in ipairs(candidates) do
+        presence = 0
+        for i = 1, #terms do
+            if tonumber(row["p" .. tostring(i)]) == 1 then
+                presence = presence + idf[i]
+            end
+            if row.in_title[i] == true then
+                presence = presence + idf[i] * SEARCH_TITLE_WEIGHT
+            end
+        end
+        row.lexical_score = presence
+    end
+    table.sort(candidates, function(a, b) return a.lexical_score > b.lexical_score end)
+    counted = {}
+    for i = 1, math.min(#candidates, SEARCH_COUNTED_CANDIDATES) do
+        table.insert(counted, candidates[i])
+    end
+
+    -- Stage 2: occurrence counts for the survivors.
+    count_columns = {}
+    for i, term in ipairs(terms) do
+        table.insert(count_columns, occurrence_count_sql("d.content", term) .. " AS c" .. tostring(i))
+    end
+    ids = {}
+    by_id = {}
+    for _, row in ipairs(counted) do
+        table.insert(ids, tostring(tonumber(row.id)))
+        by_id[tonumber(row.id)] = row
+    end
+    count_rows = db.query(db_path, string.format("SELECT d.id, LENGTH(COALESCE(d.content, '')) AS content_length, %s FROM document d WHERE d.id IN (%s);",
+        table.concat(count_columns, ", "), table.concat(ids, ", ")))
+    length_sum = 0
+    if count_rows != nil then
+        for _, count_row in ipairs(count_rows) do
+            row = by_id[tonumber(count_row.id)]
+            row.content_length = tonumber(count_row.content_length)
+            for i = 1, #terms do
+                row["c" .. tostring(i)] = tonumber(count_row["c" .. tostring(i)])
+            end
+        end
+    end
+    for _, row in ipairs(counted) do
+        if row.content_length == nil then
+            row.content_length = 0
+        end
+        length_sum = length_sum + row.content_length
+    end
+    -- Average over the counted candidates rather than the whole pool:
+    -- one less full-table pass, and only the ratio between documents
+    -- matters.
+    average_length = math.max(length_sum / #counted, 1)
+
+    for _, row in ipairs(counted) do
+        score = 0
+        length_norm = BM25_K1 * (1 - BM25_B + BM25_B * row.content_length / average_length)
+        for i = 1, #terms do
+            count = row["c" .. tostring(i)]
+            if count != nil and count > 0 then
+                score = score + idf[i] * (count * (BM25_K1 + 1)) / (count + length_norm)
+            end
+            if row.in_title[i] == true then
+                score = score + idf[i] * SEARCH_TITLE_WEIGHT
+            end
+        end
+        -- The whole multi-word query appearing verbatim in the title is
+        -- the strongest single signal a lexical match can give.
+        if #terms > 1 and lower_query != "" and string.find(row.title_lower, lower_query, 1, true) != nil then
+            score = score * 1.5
+        end
+        row.lexical_score = score
+    end
+    table.sort(counted, function(a, b) return a.lexical_score > b.lexical_score end)
+    return counted
+end
+
+-- Embedding vectors are stored twice: vector_json (the record of what
+-- the provider returned, read by tag.lua and visible to entity.query)
+-- and vector_packed, the same vector L2-normalised and packed as
+-- little-endian float32 -- what search actually reads. ~4x smaller on
+-- the wire than the JSON, decoded by one string.unpack instead of a JSON
+-- parse (JSON decoding alone was ~9 s per search over ~8,000 documents),
+-- and pre-normalised so similarity is a plain dot product.
+function document.pack_vector(vector)
+    if vector == nil or #vector == 0 then
+        return nil
+    end
+    norm = 0.0
+    for _, x in ipairs(vector) do
+        norm = norm + x * x
+    end
+    if norm == 0.0 then
+        return nil
+    end
+    norm = math.sqrt(norm)
+    normalized = {}
+    for i, x in ipairs(vector) do
+        normalized[i] = x / norm
+    end
+    return string.pack("<" .. string.rep("f", #normalized), table.unpack(normalized))
+end
+
+function document.unpack_vector(packed)
+    if packed == nil or packed == "" or string.len(packed) % 4 != 0 then
+        return nil
+    end
+    values = {string.unpack("<" .. string.rep("f", string.len(packed) / 4), packed)}
+    table.remove(values) -- string.unpack's trailing "next position"
+    return values
+end
+
+function dot_product(v1, v2)
+    if v1 == nil or v2 == nil or #v1 != #v2 then
+        return 0.0
+    end
+    total = 0.0
+    for i = 1, #v1 do
+        total = total + v1[i] * v2[i]
+    end
+    return total
+end
+
+-- Semantic ranking: every searchable document's embedding against the
+-- query's, keeping those above the similarity floor. Reads only
+-- vector_packed; a row not yet packed (saved before the column existed,
+-- until `daat repair embeddings-packed` runs) falls back to its JSON.
+function semantic_ranking(db_path, query_vector)
+    query_packed = document.pack_vector(query_vector)
+    if query_packed == nil then
+        return {}
+    end
+    query_unit = document.unpack_vector(query_packed)
+    json = require("dkjson")
+    rows = db.query(db_path, string.format("""
+        SELECT e.document_id, e.vector_packed,
+               CASE WHEN e.vector_packed IS NULL THEN e.vector_json END AS vector_json
+        FROM document_embedding e
+        JOIN document d ON d.id = e.document_id
+        WHERE %s;
+    """, SEARCHABLE_DOCUMENT_WHERE))
+    if rows == nil then
+        return {}
+    end
+    ranked = {}
+    for _, row in ipairs(rows) do
+        unit = document.unpack_vector(row.vector_packed)
+        if unit == nil and row.vector_json != nil then
+            decoded, _, _ = json.decode(row.vector_json)
+            unit = document.unpack_vector(document.pack_vector(decoded))
+        end
+        similarity = dot_product(query_unit, unit)
+        if similarity > SEARCH_SIMILARITY_FLOOR then
+            table.insert(ranked, {id = tonumber(row.document_id), similarity = similarity})
+        end
+    end
+    table.sort(ranked, function(a, b) return a.similarity > b.similarity end)
+    return ranked
+end
+
+-- Searches active documents by lexical and embedding relevance, fused by
+-- reciprocal rank (a document near the top of both rankings beats one
+-- at the top of only one; no score-scale tuning between the two), with
+-- tier/heat reinforcement applied last as a bounded multiplier.
+--
+-- Found live: reinforcement used to be *added* -- tier_weight * 10 plus
+-- effective heat, which reaches ~12 for the most-retrieved documents
+-- against a relevance score of a few points -- so the same handful of
+-- "hot" documents (a computational-neuroscience proceedings, a maths
+-- software proceedings) came back for almost any query, which retrieved
+-- them again and made them hotter. As a multiplier capped at +50%,
+-- reinforcement still breaks near-ties between relevant documents but
+-- can't carry an irrelevant one.
+--
+-- `use_semantic` (default true) computes the *query's* own embedding
+-- fresh each call (one cheap API call); a document only contributes a
+-- semantic match if it was already indexed (document.reindex_embedding).
+-- Returns at most `limit` rows, each with its full content (for the
+-- caller's excerpt and knowledge.lua's content_hash) and `score`.
 function document.search(db_path, query_text, limit, use_semantic)
     if limit == nil then
         limit = 20
@@ -2240,40 +2525,65 @@ function document.search(db_path, query_text, limit, use_semantic)
         use_semantic = true
     end
 
-    terms = query_terms(query_text)
+    terms = document.query_terms(query_text)
+    lexical = lexical_ranking(db_path, terms, query_text)
 
-    query_vector = nil
+    semantic = {}
     if use_semantic == true and query_text != nil and query_text != "" then
         agent_provider = require("agent_provider")
-        vector, _ = agent_provider.embeddings(EMBEDDING_MODEL, query_text)
-        query_vector = vector
+        query_vector, _ = agent_provider.embeddings(EMBEDDING_MODEL, query_text)
+        if query_vector != nil then
+            semantic = semantic_ranking(db_path, query_vector)
+        end
     end
 
-    -- Chat sessions are saved as their own searchable documents
-    -- (source_type = 'chat_session', knowledge.sync_session_document)
-    -- but excluded here from ordinary content search -- a transcript
-    -- full of tool-call noise would otherwise pollute results for
-    -- unrelated real-content queries. Still reachable directly
-    -- (entity.get/detail), just not surfaced by document.search's
-    -- relevance ranking.
-    rows = db.query(db_path, """
-        SELECT d.id, d.title, d.content, d.tier, d.retrieval_count,
-               d.raw_heat, d.scale_at_write,
-               d.source_type, d.source_id, d.content_hash, d.created_at, d.external_id, e.vector_json
-        FROM document d
-        LEFT JOIN document_embedding e ON e.document_id = d.id
-        WHERE (d.archived_at IS NULL OR d.archived_at = '')
-          AND (d.merged_into IS NULL OR d.merged_into = '')
-          AND (d.source_type IS NULL OR d.source_type != 'chat_session');
-    """)
-    if rows == nil then
+    fused = {}
+    by_id = {}
+    rankings = {}
+    for rank = 1, math.min(#lexical, SEARCH_CANDIDATES_PER_RANKING) do
+        table.insert(rankings, {id = tonumber(lexical[rank].id), rank = rank, row = lexical[rank]})
+    end
+    for rank = 1, math.min(#semantic, SEARCH_CANDIDATES_PER_RANKING) do
+        table.insert(rankings, {id = semantic[rank].id, rank = rank})
+    end
+    for _, ranked in ipairs(rankings) do
+        entry = by_id[ranked.id]
+        if entry == nil then
+            entry = {id = ranked.id, fused = 0.0}
+            by_id[ranked.id] = entry
+            table.insert(fused, entry)
+        end
+        entry.fused = entry.fused + 1.0 / (SEARCH_RRF_K + ranked.rank)
+        if ranked.row != nil then
+            entry.row = ranked.row
+        end
+    end
+    if #fused == 0 then
         return {}
     end
 
+    -- Semantic-only candidates still need their metadata row.
+    missing = {}
+    for _, entry in ipairs(fused) do
+        if entry.row == nil then
+            table.insert(missing, tostring(entry.id))
+        end
+    end
+    if #missing > 0 then
+        meta_rows = db.query(db_path, string.format("SELECT %s FROM document d WHERE d.id IN (%s);",
+            SEARCH_RESULT_COLUMNS, table.concat(missing, ", ")))
+        if meta_rows != nil then
+            for _, row in ipairs(meta_rows) do
+                entry = by_id[tonumber(row.id)]
+                if entry != nil then
+                    entry.row = row
+                end
+            end
+        end
+    end
+
     -- Phase 3 cutover (see doc/heat-decay-redesign.md): one shared
-    -- pool_scale read, reused for every row's effective_heat below,
-    -- rather than each row decaying independently against its own
-    -- last_retrieved_at.
+    -- pool_scale read, reused for every row's effective_heat.
     document.ensure_pool_state(db_path)
     pool_state_rows = db.query(db_path, "SELECT log_pool_scale FROM knowledge_pool_state WHERE id = 1;")
     pool_scale = 1.0
@@ -2281,17 +2591,16 @@ function document.search(db_path, query_text, limit, use_semantic)
         pool_scale = math.exp(tonumber(pool_state_rows[1].log_pool_scale))
     end
 
-    json = require("dkjson")
     scored = {}
-    for _, row in ipairs(rows) do
-        if row.vector_json != nil then
-            decoded, _, _ = json.decode(row.vector_json)
-            row.embedding_vector = decoded
-        end
-        row_score = document.search_score(row, terms, query_text, query_vector, pool_scale)
-        if row_score > 0 then
+    for _, entry in ipairs(fused) do
+        row = entry.row
+        if row != nil then
+            effective_heat = document.pool_effective_heat(row.raw_heat, row.scale_at_write, pool_scale)
+            heat_boost = 0.1 * math.log(math.max(effective_heat, 0.01) / BASE_HEAT)
+            heat_boost = math.max(-0.1, math.min(heat_boost, 0.15))
+            reinforcement = 1.0 + document.tier_weight(row.tier) + heat_boost
             table.insert(scored, {
-                id = row.id, title = row.title, content = row.content, score = row_score,
+                id = row.id, title = row.title, score = entry.fused * reinforcement,
                 tier = row.tier, retrieval_count = row.retrieval_count,
                 source_type = row.source_type,
                 source_id = row.source_id, content_hash = row.content_hash,
@@ -2299,16 +2608,141 @@ function document.search(db_path, query_text, limit, use_semantic)
             })
         end
     end
-
-    table.sort(scored, function(a, b)
-        return a.score > b.score
-    end)
+    table.sort(scored, function(a, b) return a.score > b.score end)
 
     results = {}
     for i = 1, math.min(limit, #scored) do
         table.insert(results, scored[i])
     end
+    if #results == 0 then
+        return results
+    end
+
+    -- Content only for what's actually returned.
+    ids = {}
+    for _, r in ipairs(results) do
+        table.insert(ids, tostring(tonumber(r.id)))
+    end
+    content_rows = db.query(db_path, string.format("SELECT id, content FROM document WHERE id IN (%s);", table.concat(ids, ", ")))
+    content_by_id = {}
+    if content_rows != nil then
+        for _, row in ipairs(content_rows) do
+            content_by_id[tonumber(row.id)] = row.content
+        end
+    end
+    for _, r in ipairs(results) do
+        r.content = content_by_id[tonumber(r.id)]
+    end
     return results
+end
+
+-- The passage of `content` most worth showing for a search: the window
+-- of `max_length` characters holding the most distinct query terms
+-- (then the most hits), widened back to a line or word start. Found
+-- live: excerpts used to be the first N characters, which for synced
+-- files is a metadata preamble (source path, author, "synced daily"
+-- notice) and a cover page -- the model saw the same boilerplate for
+-- every hit and searched again. With no term in the content (a
+-- semantic-only match), a leading blockquote preamble closed by a
+-- horizontal rule is skipped instead.
+function document.search_snippet(content, query_text, max_length)
+    if content == nil or content == "" then
+        return ""
+    end
+    lower = string.lower(content)
+    snippet_terms = document.query_terms(query_text)
+    hits = {}
+    for i, term in ipairs(snippet_terms) do
+        position = 1
+        while #hits < 2000 do
+            found = string.find(lower, term, position, true)
+            if found == nil then
+                break
+            end
+            table.insert(hits, {at = found, term = i})
+            position = found + string.len(term)
+        end
+    end
+    start = 1
+    if #hits > 0 then
+        table.sort(hits, function(a, b) return a.at < b.at end)
+        best_distinct = 0
+        best_count = 0
+        left = 1
+        in_window = {}
+        for i = 1, #snippet_terms do
+            in_window[i] = 0
+        end
+        distinct = 0
+        for right = 1, #hits do
+            in_window[hits[right].term] = in_window[hits[right].term] + 1
+            if in_window[hits[right].term] == 1 then
+                distinct = distinct + 1
+            end
+            while hits[right].at - hits[left].at > max_length / 2 do
+                in_window[hits[left].term] = in_window[hits[left].term] - 1
+                if in_window[hits[left].term] == 0 then
+                    distinct = distinct - 1
+                end
+                left = left + 1
+            end
+            count = right - left + 1
+            if distinct > best_distinct or (distinct == best_distinct and count > best_count) then
+                best_distinct = distinct
+                best_count = count
+                start = hits[left].at
+            end
+        end
+        -- A little lead-in, from the start of that line if it's close.
+        lead_start = math.max(1, start - 150)
+        line_start = nil
+        search_from = lead_start
+        while true do
+            newline = string.find(content, "\n", search_from, true)
+            if newline == nil or newline >= start then
+                break
+            end
+            line_start = newline + 1
+            search_from = newline + 1
+        end
+        if line_start != nil then
+            start = line_start
+        else
+            start = lead_start
+        end
+    else
+        -- Walk the leading quoted (and blank) lines; only if a "---"
+        -- rule closes them is it a preamble worth skipping.
+        position = 1
+        while string.sub(content, position, position) == ">" or string.sub(content, position, position) == "\n" do
+            line_end = string.find(content, "\n", position, true)
+            if line_end == nil then
+                break
+            end
+            position = line_end + 1
+        end
+        rule_end = string.match(content, "^%-%-%-+\n+()", position)
+        if position > 1 and rule_end != nil then
+            start = rule_end
+        end
+    end
+    while start > 1 and string.find(string.sub(content, start - 1, start - 1), "%w") != nil do
+        start = start - 1
+    end
+    body = string.sub(content, start)
+    prefix = ""
+    if start > 1 then
+        prefix = "..."
+    end
+    if string.len(body) <= max_length then
+        return prefix .. body
+    end
+    truncated = string.sub(body, 1, max_length)
+    trimmed = string.match(truncated, "^(.*)%s%S*$")
+    if trimmed != nil and string.len(trimmed) > max_length - 40 then
+        truncated = trimmed
+    end
+    return prefix .. truncated .. "..."
 end
 
 -- CLI entry point: `daat document create-json`. The link/embedding/

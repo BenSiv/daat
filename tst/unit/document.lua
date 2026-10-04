@@ -238,6 +238,44 @@ function test_weighted_spreading_delta_zero_total_strength_is_a_safe_no_op()
 end
 
 -- Run them
+
+function test_query_terms_drops_operators_stopwords_and_edge_punctuation()
+    print("Testing query_terms drops OR/stopwords and edge punctuation but keeps identifiers")
+    terms = document.query_terms("passage OR subculture, \"RT-qPCR\" (C.COT.M-1D) * of the passage?")
+    check(#terms == 4, "expected 4 terms, got " .. tostring(#terms) .. ": " .. table.concat(terms, "|"))
+    check(terms[1] == "passage" and terms[2] == "subculture", "plain words kept in order")
+    check(terms[3] == "rt-qpcr", "inner hyphen kept, quotes stripped, got " .. tostring(terms[3]))
+    check(terms[4] == "c.cot.m-1d", "inner dots kept, brackets stripped, got " .. tostring(terms[4]))
+end
+
+function test_pack_vector_round_trips_normalised()
+    print("Testing pack_vector/unpack_vector round-trip an L2-normalised float32 vector")
+    packed = document.pack_vector({3.0, 4.0})
+    check(string.len(packed) == 8, "two float32s are 8 bytes")
+    unit = document.unpack_vector(packed)
+    check(#unit == 2, "two values back")
+    check(math.abs(unit[1] - 0.6) < 1e-6 and math.abs(unit[2] - 0.8) < 1e-6, "normalised to (0.6, 0.8)")
+    check(document.pack_vector({0.0, 0.0}) == nil, "a zero vector has no direction")
+    check(document.unpack_vector("abc") == nil, "a non-multiple-of-4 blob is rejected")
+end
+
+function test_search_snippet_centres_on_the_terms_and_skips_a_preamble()
+    print("Testing search_snippet shows the matching passage, not the preamble")
+    preamble = "> **Source:** folder/file.pdf\n> **Author:** someone\n>\n> *Synced daily*\n\n---\n\n"
+    content = preamble .. string.rep("Cover page filler text. ", 100) .. "\nThe core collection was genotyped with a SNP array.\n" .. string.rep("More filler. ", 100)
+    snippet = document.search_snippet(content, "core collection SNP", 200)
+    check(string.find(snippet, "core collection was genotyped", 1, true) != nil, "snippet should contain the match, got: " .. snippet)
+    check(string.find(snippet, "Synced daily", 1, true) == nil, "snippet should not start at the preamble")
+    check(string.sub(snippet, 1, 3) == "...", "a mid-document snippet is marked as such")
+
+    no_match = document.search_snippet(preamble .. "Abstract: something else entirely.", "unrelated", 200)
+    check(string.sub(no_match, 1, 3) == "...", "semantic-only match skips the preamble, got: " .. no_match)
+    check(string.find(no_match, "Abstract:", 1, true) != nil, "and shows what follows it")
+
+    short = document.search_snippet("plain short note about bioreactors", "bioreactors", 200)
+    check(short == "plain short note about bioreactors", "a short match from the start is returned whole, got: " .. short)
+end
+
 test_reinforcement_delta_matches_tier_weights()
 test_promotion_requires_revised_regardless_of_content_shape()
 test_promotion_simple_or_thin_content_lands_tier_1()
@@ -365,6 +403,10 @@ test_weighted_spreading_delta_degenerate_case_matches_old_flat_split()
 test_weighted_spreading_delta_gives_a_reinforced_edge_a_bigger_share()
 test_weighted_spreading_delta_never_exceeds_the_direct_hit_factor()
 test_weighted_spreading_delta_zero_total_strength_is_a_safe_no_op()
+
+test_query_terms_drops_operators_stopwords_and_edge_punctuation()
+test_pack_vector_round_trips_normalised()
+test_search_snippet_centres_on_the_terms_and_skips_a_preamble()
 
 if FAILURES > 0 then
     print(FAILURES .. " test(s) failed")
