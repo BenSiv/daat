@@ -4700,8 +4700,12 @@ function html.render_knowledge_graph(nonce)
                 // Largest first by documents (each counted under its main
                 // tag), ties by name so the order is stable; then "Other
                 // tags", then "No tag". Counts are shown so the order reads.
+                // Only what the graph shows is counted: with orphans hidden
+                // (the default), connected nodes only -- so order, the 12
+                // colours and the numbers all describe the visible graph.
                 var counts = {}, untagged = 0;
                 nodes.forEach(function(n) {
+                    if (view.hideOrphans && n.degree === 0) { return; }
                     var first = firstLabel(n);
                     if (first === null) { untagged++; } else { counts[first] = (counts[first] || 0) + 1; }
                 });
@@ -4744,7 +4748,7 @@ function html.render_knowledge_graph(nonce)
             view.colorBy = colorBy.value; hiddenKeys = {}; saveView(); buildLegend(); draw();
         });
         hideOrphansInput.addEventListener('change', function() {
-            view.hideOrphans = hideOrphansInput.checked; saveView(); draw();
+            view.hideOrphans = hideOrphansInput.checked; saveView(); buildLegend(); draw();
         });
 
         // Screen-space pan/zoom over a fixed "world" (the coordinates
