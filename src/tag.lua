@@ -18,9 +18,10 @@
 -- centre's sum.
 --
 -- Evidence between tags (tag_evidence, "Evidence between tags" in the
--- doc): core's own kinds, `link` and `connection`, are recomputed from
--- document_link and document_tag when read and their inputs changed, not
--- on every write -- one outside job's apply writes thousands of
+-- doc): core's own kinds -- `link`, `connection`, `shared_link` and
+-- `reference:<entity type>` -- are recomputed from document_link,
+-- document_reference and document_tag when read and their inputs
+-- changed, not on every write -- one outside job's apply writes thousands of
 -- memberships, and nothing reads evidence until judgment or display.
 
 db = require("database")
@@ -404,10 +405,13 @@ function tag_evidence_fingerprint(db_path)
                (SELECT COALESCE(MAX(id), 0) FROM document_link) AS last_link,
                (SELECT COUNT(*) FROM document_tag WHERE %s) AS memberships,
                (SELECT COALESCE(MAX(last_event_id), 0) FROM document_tag) AS last_membership,
-               (SELECT COUNT(*) FROM document WHERE %s) AS documents;""", ACTIVE, ACTIVE, ACTIVE))
+               (SELECT COUNT(*) FROM document WHERE %s) AS documents,
+               (SELECT COUNT(*) FROM document_reference) AS refs,
+               (SELECT COALESCE(SUM(entity_id), 0) FROM document_reference) AS ref_sum;""", ACTIVE, ACTIVE, ACTIVE))
     r = rows[1]
-    return string.format("%s/%s/%s/%s/%s", tostring(r.links), tostring(r.last_link),
-        tostring(r.memberships), tostring(r.last_membership), tostring(r.documents))
+    return string.format("%s/%s/%s/%s/%s/%s/%s", tostring(r.links), tostring(r.last_link),
+        tostring(r.memberships), tostring(r.last_membership), tostring(r.documents),
+        tostring(r.refs), tostring(r.ref_sum))
 end
 
 -- Each active document's tags (excluded ones aren't memberships).
@@ -451,7 +455,73 @@ function tag_spread_edge(totals, from_tags, to_tags, ordered)
     end
 end
 
--- Core's evidence, computed: {link = {key -> total}, connection = {...}}.
+-- Documents pointing at the same target -- an entity they reference, a
+-- page they both link -- as evidence between their tags: `targets` maps
+-- each target to {tag -> {document -> true}}. One unit per target,
+-- shared across the tag pairs it touches (inside one tag included), so
+-- a target named everywhere weighs almost nothing. A pair seen from
+-- fewer than two documents on either side gets support 0 -- one
+-- inventory sheet naming nine experiments shouldn't tie two tags -- but
+-- its weight still counts towards the totals lift is measured against.
+function tag_shared_targets(targets)
+    totals = {}
+    for _, by_tag in pairs(targets) do
+        ts = {}
+        for t, _ in pairs(by_tag) do
+            table.insert(ts, t)
+        end
+        table.sort(ts)
+        share = 2.0 / (#ts * (#ts + 1))
+        for i = 1, #ts do
+            for j = i, #ts do
+                key = tostring(ts[i]) .. ":" .. tostring(ts[j])
+                if totals[key] == nil then
+                    totals[key] = {tag_a = ts[i], tag_b = ts[j], weight = 0.0, support = 0, docs_a = {}, docs_b = {}}
+                end
+                entry = totals[key]
+                entry.weight = entry.weight + share
+                entry.support = entry.support + 1
+                for d, _ in pairs(by_tag[ts[i]]) do
+                    entry.docs_a[d] = true
+                end
+                for d, _ in pairs(by_tag[ts[j]]) do
+                    entry.docs_b[d] = true
+                end
+            end
+        end
+    end
+    for _, entry in pairs(totals) do
+        if entry.tag_a != entry.tag_b then
+            na, nb = 0, 0
+            for _, _ in pairs(entry.docs_a) do
+                na = na + 1
+            end
+            for _, _ in pairs(entry.docs_b) do
+                nb = nb + 1
+            end
+            if na < 2 or nb < 2 then
+                entry.support = 0
+            end
+        end
+        entry.docs_a, entry.docs_b = nil, nil
+    end
+    return totals
+end
+
+function tag_add_target(targets, target, tag_ids, document_id)
+    if targets[target] == nil then
+        targets[target] = {}
+    end
+    for _, t in ipairs(tag_ids) do
+        if targets[target][t] == nil then
+            targets[target][t] = {}
+        end
+        targets[target][t][document_id] = true
+    end
+end
+
+-- Core's evidence, computed: {link = {key -> total}, connection = {...},
+-- shared_link = {...}, ["reference:<entity type>"] = {...}}.
 -- link: a [[link]] between two tagged documents, directed. connection:
 -- a connection document (document.is_connection_title, linking exactly
 -- two documents) is one undirected edge between the two; it's an edge,
@@ -465,7 +535,7 @@ function tag_core_evidence(db_path)
         JOIN document f ON f.id = l.from_document_id AND (f.archived_at IS NULL OR f.archived_at = '')
         JOIN document t ON t.id = l.to_document_id AND (t.archived_at IS NULL OR t.archived_at = '')
         WHERE l.to_document_id IS NOT NULL AND (l.archived_at IS NULL OR l.archived_at = '');""")
-    links, connections, ends = {}, {}, {}
+    links, connections, ends, linked_pages = {}, {}, {}, {}
     if rows == nil then
         rows = {}
     end
@@ -476,8 +546,11 @@ function tag_core_evidence(db_path)
                 ends[from_id] = {}
             end
             ends[from_id][to_id] = true
-        elseif from_id != to_id and tags_of[from_id] != nil and tags_of[to_id] != nil then
-            tag_spread_edge(links, tags_of[from_id], tags_of[to_id], true)
+        elseif from_id != to_id and tags_of[from_id] != nil then
+            tag_add_target(linked_pages, to_id, tags_of[from_id], from_id)
+            if tags_of[to_id] != nil then
+                tag_spread_edge(links, tags_of[from_id], tags_of[to_id], true)
+            end
         end
     end
     for _, targets in pairs(ends) do
@@ -489,10 +562,37 @@ function tag_core_evidence(db_path)
             tag_spread_edge(connections, tags_of[pair[1]], tags_of[pair[2]], false)
         end
     end
-    return {link = links, connection = connections}
+    computed = {link = links, connection = connections, shared_link = tag_shared_targets(linked_pages)}
+    refs = db.query(db_path, """
+        SELECT r.document_id, r.entity_type, r.entity_id FROM document_reference r
+        JOIN document d ON d.id = r.document_id AND (d.archived_at IS NULL OR d.archived_at = '');""")
+    if refs == nil then
+        refs = {}
+    end
+    by_type = {}
+    for _, row in ipairs(refs) do
+        doc_id = tonumber(row.document_id)
+        if tags_of[doc_id] != nil then
+            if by_type[row.entity_type] == nil then
+                by_type[row.entity_type] = {}
+            end
+            tag_add_target(by_type[row.entity_type], tonumber(row.entity_id), tags_of[doc_id], doc_id)
+        end
+    end
+    for entity_type, targets in pairs(by_type) do
+        computed["reference:" .. entity_type] = tag_shared_targets(targets)
+    end
+    return computed
 end
 
-TAG_CORE_DIRECTION = {link = "directed", connection = "undirected"}
+-- Only a [[link]] has a direction; every other core kind is a shared
+-- target or a connection, both undirected.
+function tag_core_direction(kind)
+    if kind == "link" then
+        return "directed"
+    end
+    return "undirected"
+end
 
 function tag_round(x)
     return string.format("%.4f", x)
@@ -533,7 +633,7 @@ function tag.refresh_evidence(db_path)
             if seen[kind .. "/" .. key] == nil then
                 entity.create(db_path, "tag_evidence", {
                     tag_a = tostring(total.tag_a), tag_b = tostring(total.tag_b), kind = kind,
-                    direction = TAG_CORE_DIRECTION[kind], weight = tag_round(total.weight),
+                    direction = tag_core_direction(kind), weight = tag_round(total.weight),
                     support = tostring(total.support), producer = "core",
                 }, "system")
                 written = written + 1

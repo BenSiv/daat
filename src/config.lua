@@ -254,6 +254,18 @@ end
 -- -- safe to cache because CGI/CLI both start a fresh Lua process per
 -- request/invocation, so there's never a stale value left over from
 -- an earlier one.
+-- reference_aliases: a list of {pattern, replacement} string pairs;
+-- anything else in it is dropped rather than failing every request.
+function validate_reference_aliases(list)
+    out = {}
+    for _, pair in ipairs(list) do
+        if type(pair) == "table" and type(pair[1]) == "string" and pair[1] != "" and type(pair[2]) == "string" then
+            table.insert(out, {pair[1], pair[2]})
+        end
+    end
+    return out
+end
+
 function config.platform_config()
     if PLATFORM_CONFIG_CACHE != nil then
         return PLATFORM_CONFIG_CACHE
@@ -281,6 +293,11 @@ function config.platform_config()
         -- tag_second_within of the nearest (nil: one tag only).
         tag_dims = 256,
         tag_second_within = 0.02,
+        -- How this deployment's people write its entity names, for
+        -- references (reference.lua): {{lua_pattern, replacement}, ...}
+        -- over lowercased text, e.g. {{"experiment%s*(%d)", "exp%1"}}
+        -- when experiments are named ExpN but written "Experiment N".
+        reference_aliases = nil,
         -- Off by default -- a deployment opts in once pdftotext/pandoc
         -- (see doc's own Dockerfile) are actually installed, rather
         -- than the platform deciding every deployment wants a chat
@@ -385,6 +402,18 @@ function config.platform_config()
     end
     if type(parsed.chat_attachments_enabled) == "boolean" then
         conf.chat_attachments_enabled = parsed.chat_attachments_enabled
+    end
+    if type(parsed.tag_dims) == "number" and parsed.tag_dims >= 1 then
+        conf.tag_dims = parsed.tag_dims
+    end
+    -- A number, or false for one tag per document.
+    if type(parsed.tag_second_within) == "number" then
+        conf.tag_second_within = parsed.tag_second_within
+    elseif parsed.tag_second_within == false then
+        conf.tag_second_within = nil
+    end
+    if type(parsed.reference_aliases) == "table" then
+        conf.reference_aliases = validate_reference_aliases(parsed.reference_aliases)
     end
     if parsed.db_backend == "mariadb" then
         conf.db_backend = "mariadb"

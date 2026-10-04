@@ -39,6 +39,7 @@ db = require("database")
 schema = require("schema")
 entity = require("entity")
 tag = require("tag")
+reference = require("reference")
 json = require("dkjson")
 external_tool = require("external_tool")
 gnuplot = require("gnuplot")
@@ -652,6 +653,7 @@ function document.init_schema(db_path)
     ensure_document_link_indexes(db_path)
     db.exec(db_path, string.format(DOCUMENT_EMBEDDING_SCHEMA, db.now_expr(db_path)))
     tag.init_schema(db_path)
+    reference.init_schema(db_path)
     ensure_document_knowledge_columns(db_path)
     ensure_document_knowledge_indexes(db_path)
     document.ensure_pool_state(db_path)
@@ -1776,12 +1778,14 @@ function document.on_entity_created(db_path, entity_type, entity_id)
         return
     end
     if entity_type != "document" then
+        reference.index_entity(db_path, entity_type, entity_id)
         return
     end
     document.register_pool_document(db_path, entity_id)
     doc = entity.get(db_path, "document", entity_id)
     if doc != nil then
         document.sync_links(db_path, entity_id, doc.content)
+        reference.sync_document(db_path, entity_id, doc.title, doc.content)
         tag.sync_text_tags(db_path, entity_id, doc.content, doc.created_by)
     end
     document.resolve_dangling_links(db_path)
@@ -1827,7 +1831,14 @@ function document.on_entity_updated(db_path, entity_type, entity_id, field_chang
         return
     end
     if entity_type != "document" then
+        reference.index_entity(db_path, entity_type, entity_id)
         return
+    end
+    if field_changes.content != nil or field_changes.title != nil then
+        doc = entity.get(db_path, "document", entity_id)
+        if doc != nil then
+            reference.sync_document(db_path, entity_id, doc.title, doc.content)
+        end
     end
     if field_changes.content != nil then
         doc = entity.get(db_path, "document", entity_id)
@@ -1856,6 +1867,7 @@ function document.on_entity_archived(db_path, entity_type, entity_id)
         return
     end
     if entity_type != "document" then
+        reference.index_entity(db_path, entity_type, entity_id)
         return
     end
     document.return_pool_heat(db_path, entity_id)
@@ -1868,6 +1880,7 @@ function document.on_entity_unarchived(db_path, entity_type, entity_id)
         return
     end
     if entity_type != "document" then
+        reference.index_entity(db_path, entity_type, entity_id)
         return
     end
     document.register_pool_document(db_path, entity_id)

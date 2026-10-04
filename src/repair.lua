@@ -16,6 +16,7 @@
 
 document = require("document")
 tag = require("tag")
+reference = require("reference")
 
 repair = {}
 
@@ -81,6 +82,12 @@ function repair_tag_evidence(cmd_args, db_path)
     print(string.format("Refreshed core tag evidence: %d row(s) written", written))
 end
 
+function repair_references(cmd_args, db_path)
+    names = reference.rebuild_names(db_path)
+    documents = reference.resync_all_documents(db_path)
+    print(string.format("Indexed %d entity name(s); re-read references in %d document(s)", names, documents))
+end
+
 -- Ordered (a list, not a map) so `daat repair`'s listing is stable.
 REPAIRS = {
     {name = "links", usage = "links [document_id]", run = repair_links,
@@ -91,6 +98,8 @@ REPAIRS = {
      description = "Rebuild tag centres from memberships, or re-place one document by nearest tag."},
     {name = "tag-evidence", usage = "tag-evidence", run = repair_tag_evidence,
      description = "Recompute core tag evidence (link, connection) from links and memberships."},
+    {name = "references", usage = "references", run = repair_references,
+     description = "Re-index entity names, then re-read every document's references to them."},
     {name = "pool-count", usage = "pool-count", run = repair_pool_count,
      description = "Recount active documents into knowledge_pool_state.document_count."},
 }
