@@ -60,9 +60,9 @@ Measured on 6,534 documents before writing any Luam (deployment check `increment
 
 ### Evidence between tags
 
-Relations between tags are derived from tags and from the edges between their documents, not read from content: the tag-level graph is the edges between documents lifted onto their tags, compared with what the tags' own totals predict (lift, shrunk towards 1 on little evidence). `tag_evidence` (`tag_a`, `tag_b`, `kind`, `weight`, `support`, `producer`, `updated_at`) holds it, one row per pair and kind:
+Relations between tags are derived from tags and from the edges between their documents, not read from content: the tag-level graph is the edges between documents lifted onto their tags, compared with what the tags' own totals predict (lift, shrunk towards 1 on little evidence). `tag_evidence` (`tag_a`, `tag_b`, `kind`, `direction`, `weight`, `support`, `producer`) holds it, one row per pair, kind and producer, with raw totals only (lift is computed on read, so a row changes only when its edges do):
 
-- **Core kinds:** `link` (`[[links]]`, directed) and `connection` (connection documents), kept current alongside `document.sync_links` and membership changes.
+- **Core kinds:** `link` (`[[links]]`, directed) and `connection` (connection documents), recomputed from links and memberships when read and changed.
 - **Extension kinds:** a deployment extension may write its own kinds (references to its entity types, say), through ordinary entity writes. Like `document` content, the rows are domain-specific and core never interprets them: `kind` is an open string, and core never branches on its value.
 - **Kinds are scored apart and never summed:** each kind's own lift, combined by geometric mean, so a kind with thousands of edges can't outweigh one with dozens. A producer with high-volume edges collapses them first (one unit per underlying thing, minimum support), and evidence is never drawn as graph edges.
 
@@ -72,7 +72,7 @@ Model calls only for judgment, each memoized on a hash of the tag's documents so
 
 ### Provenance and evidence
 
-Kept in the data, not shown as such (after open-ontologies' [decision 0001](https://github.com/fabio-rovai/open-ontologies/blob/main/docs/decisions/0001-an-inference-is-not-an-assertion.md), an inference is not an assertion): relations between tags live in `tag_relation` (`from`, `to`, `kind`, `source`, `score`, `evidence`), apart from content and document links. Each tag, membership and relation records whether it was computed from the data, judged by the agent, or set by a person (person over agent over data), plus enough evidence to check it: central documents and terms, the jump that made a level, a pair's scores, the documents the agent's reason cites.
+Kept in the data, not shown as such (after open-ontologies' [decision 0001](https://github.com/fabio-rovai/open-ontologies/blob/main/docs/decisions/0001-an-inference-is-not-an-assertion.md), an inference is not an assertion): "see also" between tags lives in `tag_relation`, apart from content and document links, with the same `decision` words as `document_tag` (`computed` proposed from evidence or by the agent, `pinned` asserted by a person, `excluded` rejected by a person and never proposed again), a `reason` in words and the `evidence` it came from. Broader is `tag.parent`, never a relation row, so there's one place for it. Each tag, membership and relation records whether it was computed from the data, judged by the agent, or set by a person (person over agent over data), plus enough evidence to check it: central documents and terms, the jump that made a level, a pair's scores, the documents the agent's reason cites.
 
 ### Lifecycle
 
@@ -94,9 +94,9 @@ One rule decides placement:
 ## Phases
 
 1. **Done:** `tag.parent`; graph colours by tag or sub-tag (daat e7f8eb8).
-2. **Schema:** `tag_relation` (`from`, `to`, `kind` broader/related, `source` data/agent/person, `score`, `evidence`), `tag_evidence`, `tag.description` as the tag's definition.
-3. **Tag upkeep in core:** running summaries, join-nearest on save, relative split/merge, broader level, first build in queued chunks; checked against the outside job's tags before it's retired.
-4. **Core evidence:** `link` and `connection` kinds kept current; lift on read.
+2. **Done:** `tag_relation` (`tag_a`, `tag_b`, `decision` computed/pinned/excluded, `score`, `reason`, `evidence`), `tag_evidence` (`tag_a`, `tag_b`, `kind`, `direction`, `weight`, `support`, `producer`), `tag.description` as the tag's definition. Broader isn't a relation: it stays `tag.parent`, so there's one place for it.
+3. **Tag upkeep in core.** *Done (3a):* running centres in `tag_centre` (`src/tag.lua`), kept in step with `document_tag` by its hooks whoever writes it; a new or edited document joins its nearest tag on save (plus a second within `tag_second_within`); `daat repair tags` rebuilds centres or re-places one document. A deployment that already has tags runs `daat repair tags` once to build the centres; until then placement does nothing. *Next:* (3b) relative split/merge and the broader level, behind a setting until the agent names new tags (phase 6); (3c) first build in queued chunks for a deployment with no tags. Checked against the outside job's tags before it's retired.
+4. **Done: core evidence.** `link` (directed) and `connection` (a connection document is one undirected edge, never two links) rows in `tag_evidence`, producer `core`; an edge's unit is shared evenly across its documents' tags. Recomputed when read and its inputs' fingerprint changed (link and membership counts, latest ids), not on every write, since one outside job's apply writes thousands of memberships; `daat repair tag-evidence` forces it. `tag.evidence` returns each row's lift within its own kind (minimum support 3, shrunk towards 1 by two median weights). Parity with the deployment's batch analysis is checked once deployed.
 5. **`#tag` in text:** parse and sync on save, chips, precedence; `document_tag.via`.
 6. **The agent's judgment:** names, definitions (genus = broader tag, difference from siblings, relations from evidence), related/broader on pairs whose evidence crosses the thresholds, merge/split raised in chat; memoized on member and evidence hashes. Thresholds set from labelled pairs first.
 7. **UI:** chips on documents, the tag page, the tags list; agent tools.

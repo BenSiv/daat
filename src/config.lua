@@ -274,6 +274,13 @@ function config.platform_config()
         agent_compaction_threshold = 32000,
         platform_adhoc_row_cap = 1000,
         extension_max_job_attempts = 5,
+        -- Tag upkeep (tag.lua): vectors are the cached embeddings cut to
+        -- tag_dims (256 lost about a point against the full 768 in the
+        -- 2026-10-04 check, at a third of the cost); a document also
+        -- joins its second-nearest tag when that's within
+        -- tag_second_within of the nearest (nil: one tag only).
+        tag_dims = 256,
+        tag_second_within = 0.02,
         -- Off by default -- a deployment opts in once pdftotext/pandoc
         -- (see doc's own Dockerfile) are actually installed, rather
         -- than the platform deciding every deployment wants a chat

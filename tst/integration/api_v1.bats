@@ -251,3 +251,25 @@ raw_api_write() {
     run raw_api_write POST "/api/v1/document_tag" "" "$key" "{\"document\":1,\"tag\":${tag_id},\"decision\":\"maybe\"}"
     [[ ! "$output" =~ '"success":true' ]]
 }
+
+@test "tag_relation and tag_evidence are core types; evidence kinds are open, decisions and directions are not (doc/tag-ontology.md)" {
+    key=$("$BIN" api-key create tagger i | tail -1)
+    run raw_api_write POST "/api/v1/tag" "" "$key" '{"label":"Callus induction","source":"computed"}'
+    a=$(printf '%s' "$output" | grep -o '"created_id":[0-9]*' | grep -o '[0-9]*')
+    run raw_api_write POST "/api/v1/tag" "" "$key" '{"label":"Somatic embryogenesis","source":"computed"}'
+    b=$(printf '%s' "$output" | grep -o '"created_id":[0-9]*' | grep -o '[0-9]*')
+    [ -n "$a" ] && [ -n "$b" ]
+
+    run raw_api_write POST "/api/v1/tag_relation" "" "$key" "{\"tag_a\":${a},\"tag_b\":${b},\"decision\":\"computed\",\"score\":1.8,\"reason\":\"share media and lineage\",\"evidence\":\"{\\\"mention\\\":1.6}\"}"
+    [[ "$output" =~ '"success":true' ]]
+    run raw_api_write POST "/api/v1/tag_relation" "" "$key" "{\"tag_a\":${a},\"tag_b\":${b},\"decision\":\"broader\"}"
+    [[ ! "$output" =~ '"success":true' ]]
+
+    # Any kind a producer names is accepted -- core never interprets it.
+    run raw_api_write POST "/api/v1/tag_evidence" "" "$key" "{\"tag_a\":${a},\"tag_b\":${b},\"kind\":\"lineage\",\"direction\":\"directed\",\"weight\":7,\"support\":7,\"producer\":\"tag-evidence\"}"
+    [[ "$output" =~ '"success":true' ]]
+    run raw_api_get "/api/v1/tag_evidence" "filter_field=kind&filter_value=lineage" "$key"
+    [[ "$output" =~ '"producer":"tag-evidence"' || "$output" =~ '"producer": "tag-evidence"' ]]
+    run raw_api_write POST "/api/v1/tag_evidence" "" "$key" "{\"tag_a\":${a},\"tag_b\":${b},\"kind\":\"link\",\"direction\":\"sideways\",\"weight\":1,\"producer\":\"core\"}"
+    [[ ! "$output" =~ '"success":true' ]]
+}

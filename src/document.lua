@@ -38,6 +38,7 @@
 db = require("database")
 schema = require("schema")
 entity = require("entity")
+tag = require("tag")
 json = require("dkjson")
 external_tool = require("external_tool")
 gnuplot = require("gnuplot")
@@ -73,6 +74,8 @@ TAG_SCHEMA = {
         -- "label", not "name": every entity table already has a
         -- bookkeeping `name` column (schema.sync_table).
         {name = "label", type = "text", required = true, display = true},
+        -- The tag's definition (doc/tag-ontology.md): what it covers and
+        -- how it differs from the tags beside it.
         {name = "description", type = "text", required = false},
         {name = "terms", type = "text", required = false},
         {name = "source", type = "select", required = true, values = {"computed", "manual"}},
@@ -91,6 +94,51 @@ DOCUMENT_TAG_SCHEMA = {
         {name = "tag", type = "reference", required = true, entity_type = "tag"},
         {name = "score", type = "number", required = false},
         {name = "decision", type = "select", required = true, values = {"computed", "pinned", "excluded"}},
+    },
+}
+
+-- "See also" between two tags (doc/tag-ontology.md). Broader is not a
+-- relation here: it's tag.parent, the one place a tag's broader tag is
+-- kept. A pair is stored once, tag_a the smaller id.
+--   decision: "computed" (proposed from evidence or by the agent;
+--   replaced freely), "pinned" (a person asserted it; never removed) or
+--   "excluded" (a person rejected it; never proposed again) -- the same
+--   words as document_tag.decision.
+--   reason: why the two are related, in words; evidence: what it was
+--   derived from (JSON), so it can be checked.
+TAG_RELATION_SCHEMA = {
+    name = "tag_relation",
+    fields = {
+        {name = "tag_a", type = "reference", required = true, entity_type = "tag"},
+        {name = "tag_b", type = "reference", required = true, entity_type = "tag"},
+        {name = "decision", type = "select", required = true, values = {"computed", "pinned", "excluded"}},
+        {name = "score", type = "number", required = false},
+        {name = "reason", type = "text", required = false},
+        {name = "evidence", type = "text", required = false},
+    },
+}
+
+-- Edges between documents, lifted onto their tags: one row per pair,
+-- kind and producer, holding raw totals only (lift is computed on read,
+-- so a row changes only when its underlying edges do). Like a
+-- document's content, the rows can carry deployment-specific meaning:
+-- `kind` is an open string ("link", "connection", or whatever an
+-- extension produces), and core never branches on its value.
+--   direction: "directed" (tag_a -> tag_b) or "undirected" (tag_a the
+--   smaller id; tag_a = tag_b is evidence inside one tag).
+--   weight: the pair's total; support: how many distinct underlying
+--   things (documents, entities) it rests on.
+--   producer: "core", or the extension that wrote the row.
+TAG_EVIDENCE_SCHEMA = {
+    name = "tag_evidence",
+    fields = {
+        {name = "tag_a", type = "reference", required = true, entity_type = "tag"},
+        {name = "tag_b", type = "reference", required = true, entity_type = "tag"},
+        {name = "kind", type = "text", required = true},
+        {name = "direction", type = "select", required = true, values = {"directed", "undirected"}},
+        {name = "weight", type = "number", required = true},
+        {name = "support", type = "number", required = false},
+        {name = "producer", type = "text", required = true},
     },
 }
 
@@ -594,10 +642,13 @@ function document.init_schema(db_path)
     schema.register(db_path, DOCUMENT_SCHEMA)
     schema.register(db_path, TAG_SCHEMA)
     schema.register(db_path, DOCUMENT_TAG_SCHEMA)
+    schema.register(db_path, TAG_RELATION_SCHEMA)
+    schema.register(db_path, TAG_EVIDENCE_SCHEMA)
     migrate_document_link_layout(db_path)
     create_document_link_table(db_path, "document_link")
     ensure_document_link_indexes(db_path)
     db.exec(db_path, string.format(DOCUMENT_EMBEDDING_SCHEMA, db.now_expr(db_path)))
+    tag.init_schema(db_path)
     ensure_document_knowledge_columns(db_path)
     ensure_document_knowledge_indexes(db_path)
     document.ensure_pool_state(db_path)
@@ -1137,6 +1188,15 @@ end
 -- where other notes about the pool live. nil if either document can't
 -- be written as a link (document.link_ref).
 CONNECTION_TITLE_SEPARATOR = " ↔ "
+
+-- Whether a title has a connection document's shape; tag.lua counts such
+-- a document as one edge between the two it links, not as two links.
+function document.is_connection_title(title)
+    if title == nil then
+        return false
+    end
+    return string.find(title, CONNECTION_TITLE_SEPARATOR, 1, true) != nil
+end
 
 function document.connection_draft(db_path, document_a_id, document_b_id, reason)
     ref_a = document.link_ref(db_path, document_a_id)
@@ -1705,6 +1765,10 @@ end
 -- A new document can also be the target a dangling [[link]] elsewhere
 -- has been waiting for (document.resolve_dangling_links).
 function document.on_entity_created(db_path, entity_type, entity_id)
+    if entity_type == "document_tag" then
+        tag.on_membership_created(db_path, entity_id)
+        return
+    end
     if entity_type != "document" then
         return
     end
@@ -1715,6 +1779,7 @@ function document.on_entity_created(db_path, entity_type, entity_id)
     end
     document.resolve_dangling_links(db_path)
     document.reindex_embedding(db_path, entity_id)
+    tag.place_document(db_path, entity_id)
 end
 
 -- Points every active dangling link (to_document_id NULL -- its target
@@ -1750,6 +1815,10 @@ end
 -- can be what one was waiting for). `field_changes` is keyed by field
 -- name.
 function document.on_entity_updated(db_path, entity_type, entity_id, field_changes)
+    if entity_type == "document_tag" then
+        tag.on_membership_updated(db_path, entity_id, field_changes)
+        return
+    end
     if entity_type != "document" then
         return
     end
@@ -1763,23 +1832,39 @@ function document.on_entity_updated(db_path, entity_type, entity_id, field_chang
         document.resolve_dangling_links(db_path)
     end
     if field_changes.content != nil or field_changes.title != nil then
-        document.reindex_embedding(db_path, entity_id)
+        -- The old vector, read before the reindex replaces it, so the
+        -- document's tags swap it for the new one in their centres.
+        old_vector = tag.document_vector(db_path, entity_id)
+        if document.reindex_embedding(db_path, entity_id) == true then
+            tag.on_document_vector_changed(db_path, entity_id, old_vector)
+        end
+        tag.place_document(db_path, entity_id)
     end
 end
 
 function document.on_entity_archived(db_path, entity_type, entity_id)
+    if entity_type == "document_tag" then
+        tag.on_membership_archived(db_path, entity_id, true)
+        return
+    end
     if entity_type != "document" then
         return
     end
     document.return_pool_heat(db_path, entity_id)
+    tag.on_document_archived(db_path, entity_id, true)
 end
 
 function document.on_entity_unarchived(db_path, entity_type, entity_id)
+    if entity_type == "document_tag" then
+        tag.on_membership_archived(db_path, entity_id, false)
+        return
+    end
     if entity_type != "document" then
         return
     end
     document.register_pool_document(db_path, entity_id)
     document.resolve_dangling_links(db_path)
+    tag.on_document_archived(db_path, entity_id, false)
 end
 
 -- Tier is decided by content-processing maturity, not retrieval

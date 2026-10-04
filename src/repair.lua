@@ -15,6 +15,7 @@
 -- them all.
 
 document = require("document")
+tag = require("tag")
 
 repair = {}
 
@@ -53,12 +54,43 @@ function repair_pool_count(cmd_args, db_path)
     print("document_count resynced to " .. tostring(count))
 end
 
+-- With a document id, re-places that one document by nearest tag;
+-- without, rebuilds every tag's centre from its memberships (after
+-- `repair embeddings`, a raw SQL write, or a change of tag_dims).
+function repair_tags(cmd_args, db_path)
+    entity_id = tonumber(cmd_args[2])
+    if entity_id != nil then
+        chosen = tag.place_document(db_path, entity_id)
+        if #chosen == 0 then
+            print("Document #" .. tostring(entity_id) .. " not placed: no embedding, or no tags with a centre")
+            return
+        end
+        names = {}
+        for _, tag_id in ipairs(chosen) do
+            table.insert(names, "#" .. tostring(tag_id))
+        end
+        print("Document #" .. tostring(entity_id) .. " is in tag " .. table.concat(names, ", "))
+        return
+    end
+    tags, members = tag.rebuild_centres(db_path)
+    print(string.format("Rebuilt %d tag centre(s) from %d membership(s)", tags, members))
+end
+
+function repair_tag_evidence(cmd_args, db_path)
+    written = tag.refresh_evidence(db_path)
+    print(string.format("Refreshed core tag evidence: %d row(s) written", written))
+end
+
 -- Ordered (a list, not a map) so `daat repair`'s listing is stable.
 REPAIRS = {
     {name = "links", usage = "links [document_id]", run = repair_links,
      description = "Re-parse [[...]] links (and their context notes) from document content into document_link."},
     {name = "embeddings", usage = "embeddings [document_id]", run = repair_embeddings,
      description = "Recompute semantic-search embeddings (one embedding-provider call per document)."},
+    {name = "tags", usage = "tags [document_id]", run = repair_tags,
+     description = "Rebuild tag centres from memberships, or re-place one document by nearest tag."},
+    {name = "tag-evidence", usage = "tag-evidence", run = repair_tag_evidence,
+     description = "Recompute core tag evidence (link, connection) from links and memberships."},
     {name = "pool-count", usage = "pool-count", run = repair_pool_count,
      description = "Recount active documents into knowledge_pool_state.document_count."},
 }

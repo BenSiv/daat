@@ -38,6 +38,9 @@ end
 function new_test_db(document_count)
     db_path = os.tmpname()
     db.exec(db_path, "CREATE TABLE document (id INTEGER PRIMARY KEY, raw_heat REAL DEFAULT 1.0, scale_at_write REAL DEFAULT 1.0, archived_at TEXT, merged_into INTEGER);")
+    -- Read by on_entity_archived's tag hook (src/tag.lua): no rows, so
+    -- archiving touches no tag centre.
+    db.exec(db_path, "CREATE TABLE document_tag (id INTEGER PRIMARY KEY, document INTEGER, tag INTEGER, decision TEXT, archived_at TEXT);")
     -- on_entity_unarchived also retries dangling links (document.
     -- resolve_dangling_links) -- an empty table is all it needs here.
     db.exec(db_path, "CREATE TABLE document_link (id INTEGER PRIMARY KEY AUTOINCREMENT, from_document_id INTEGER NOT NULL, to_document_id INTEGER, link_text TEXT NOT NULL, link_hash CHAR(64) NOT NULL, raw_strength REAL NOT NULL DEFAULT 1.0, archived_at TEXT DEFAULT NULL, created_at TEXT DEFAULT NULL);")
