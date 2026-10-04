@@ -1,5 +1,6 @@
 -- tag.lifts (src/tag.lua): lift per evidence row, by its own kind only,
--- shrunk towards 1 on little evidence. Pure, so no store is needed.
+-- shrunk towards 1 on little evidence; tag.text_tags: the #tag syntax.
+-- Both pure, so no store is needed.
 
 tag = require("tag")
 
@@ -67,10 +68,45 @@ function test_lift_is_pulled_towards_one()
     check(lift > 1.0 and lift < 2.0, "shrunk lift should sit between 1 and 2, got " .. tostring(lift))
 end
 
+function same(list, expected)
+    if #list != #expected then
+        return false
+    end
+    for i = 1, #list do
+        if list[i] != expected[i] then
+            return false
+        end
+    end
+    return true
+end
+
+function test_text_tags_follow_the_syntax()
+    print("Testing #tag syntax: a letter first, - and _ inside, each tag once, in order, lowercased")
+    found = tag.text_tags("#Fermentation notes on #cocoa-butter and #cocoa_bean, again #fermentation.")
+    check(same(found, {"fermentation", "cocoa-butter", "cocoa_bean"}), "got " .. table.concat(found, ","))
+end
+
+function test_text_tags_skip_what_isnt_a_tag()
+    print("Testing headings, #123, URL fragments, #a/b, spreadsheet errors, [[links]] and code are not tags")
+    content = "# Heading\n## Sub\n#123 and page#section, http://x.org/#frag\n#a/b and [[Notes #draft]]\n`#inline` code\n```\n#fenced\n```\n#REF! and #NAME? cells\n(#real)"
+    found = tag.text_tags(content)
+    check(same(found, {"real"}), "only (#real) should count, got " .. table.concat(found, ","))
+end
+
+function test_slug_matches_how_a_label_is_written()
+    print("Testing a label's slug is how it's written as a #tag")
+    check(tag.slug("Cocoa bean fermentation") == "cocoa-bean-fermentation", "got " .. tag.slug("Cocoa bean fermentation"))
+    check(tag.slug("R and D: meetings!") == "r-and-d-meetings", "got " .. tag.slug("R and D: meetings!"))
+end
+
+
 test_a_pair_linked_more_than_its_tags_predict_lifts_above_one()
 test_rows_under_min_support_get_no_lift()
 test_kinds_are_scored_apart()
 test_lift_is_pulled_towards_one()
+test_text_tags_follow_the_syntax()
+test_text_tags_skip_what_isnt_a_tag()
+test_slug_matches_how_a_label_is_written()
 
 if FAILURES > 0 then
     print(FAILURES .. " test(s) failed")

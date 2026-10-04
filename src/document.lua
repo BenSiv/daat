@@ -94,6 +94,9 @@ DOCUMENT_TAG_SCHEMA = {
         {name = "tag", type = "reference", required = true, entity_type = "tag"},
         {name = "score", type = "number", required = false},
         {name = "decision", type = "select", required = true, values = {"computed", "pinned", "excluded"}},
+        -- "text": the membership is a #tag in the document's content
+        -- (tag.sync_text_tags), kept while the text has it.
+        {name = "via", type = "select", required = false, values = {"text"}},
     },
 }
 
@@ -1497,13 +1500,16 @@ function document.render_plot_fences(html)
     end))
 end
 
--- The full pipeline: resolve "[[...]]" refs into plain Markdown links
--- first, then hand the whole thing to cmark once.
+-- The full pipeline: #tags into links to their tags (before "[[...]]",
+-- whose text they mustn't touch), "[[...]]" refs into plain Markdown
+-- links, then cmark once; a tag's link is then marked as a chip.
 function document.render_html(db_path, content)
     if content == nil or content == "" then
         return ""
     end
-    return document.render_markdown(document.inline_links_to_markdown(db_path, content))
+    html = document.render_markdown(document.inline_links_to_markdown(db_path, tag.inline_text_tags(db_path, content)))
+    html, _ = string.gsub(html, '<a href="detail%?type=tag&amp;entity_id=', '<a class="platform-tag-chip" href="detail?type=tag&amp;entity_id=')
+    return html
 end
 
 --------------------------------------------------------------------------
@@ -1776,6 +1782,7 @@ function document.on_entity_created(db_path, entity_type, entity_id)
     doc = entity.get(db_path, "document", entity_id)
     if doc != nil then
         document.sync_links(db_path, entity_id, doc.content)
+        tag.sync_text_tags(db_path, entity_id, doc.content, doc.created_by)
     end
     document.resolve_dangling_links(db_path)
     document.reindex_embedding(db_path, entity_id)
@@ -1826,6 +1833,7 @@ function document.on_entity_updated(db_path, entity_type, entity_id, field_chang
         doc = entity.get(db_path, "document", entity_id)
         if doc != nil then
             document.sync_links(db_path, entity_id, doc.content)
+            tag.sync_text_tags(db_path, entity_id, doc.content, doc.updated_by, field_changes.content.old)
         end
     end
     if field_changes.title != nil or field_changes.parent_id != nil then

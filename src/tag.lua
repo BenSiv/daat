@@ -641,4 +641,222 @@ function tag.evidence(db_path)
     return tag.lifts(plain, TAG_EVIDENCE_MIN_SUPPORT)
 end
 
+--------------------------------------------------------------------------
+-- #tag in text ("#tag in text" in the doc)
+--------------------------------------------------------------------------
+
+-- A tag's label as it's written in text: lowercase, every run of
+-- anything but letters and digits one "-" ("Cocoa bean fermentation"
+-- -> "cocoa-bean-fermentation").
+function tag.slug(label)
+    slug, _ = string.gsub(string.lower(tostring(label)), "[^%w]+", "-")
+    slug, _ = string.gsub(slug, "^%-+", "")
+    slug, _ = string.gsub(slug, "%-+$", "")
+    return slug
+end
+
+-- The label a new tag gets from its slug: "cocoa-bean" -> "Cocoa bean".
+function tag_label_from_slug(slug)
+    label, _ = string.gsub(slug, "[%-_]+", " ")
+    return string.upper(string.sub(label, 1, 1)) .. string.sub(label, 2)
+end
+
+-- Calls replace(slug, written) for each #tag in plain text (no code in
+-- it) and splices in what it returns, or keeps the text when it returns
+-- nil. A tag starts the text or follows whitespace or "(" -- so a URL's
+-- page#section never counts -- begins with a letter (#123 doesn't), and
+-- isn't followed by "/" (no #a/b paths) or by "!"/"?" (a spreadsheet's
+-- #REF!, #NAME? in imported text). "[[...]]" is skipped whole: a link's
+-- text is a title, not tags.
+function tag_replace_in_text(text, replace)
+    out = {}
+    pos = 1
+    n = string.len(text)
+    while pos <= n do
+        s, e, raw = string.find(text, "#([%a][%w_%-]*)", pos)
+        l1 = string.find(text, "[[", pos, true)
+        if l1 != nil and (s == nil or l1 < s) then
+            l2 = string.find(text, "]]", l1 + 2, true)
+            if l2 == nil then
+                table.insert(out, string.sub(text, pos))
+                pos = n + 1
+            else
+                table.insert(out, string.sub(text, pos, l2 + 1))
+                pos = l2 + 2
+            end
+        elseif s == nil then
+            table.insert(out, string.sub(text, pos))
+            pos = n + 1
+        else
+            trimmed, _ = string.gsub(raw, "[%-_]+$", "")
+            last = s + string.len(trimmed)
+            before_ok = s == 1 or string.find(string.sub(text, s - 1, s - 1), "[%s%(]") != nil
+            after = string.sub(text, e + 1, e + 1)
+            if before_ok and after != "/" and after != "!" and after != "?" then
+                table.insert(out, string.sub(text, pos, s - 1))
+                written = string.sub(text, s, last)
+                replacement = replace(string.lower(trimmed), written)
+                if replacement == nil then
+                    replacement = written
+                end
+                table.insert(out, replacement)
+                pos = last + 1
+            else
+                table.insert(out, string.sub(text, pos, e))
+                pos = e + 1
+            end
+        end
+    end
+    return table.concat(out)
+end
+
+-- tag_replace_in_text over a document's content, leaving code alone:
+-- fenced blocks (``` or ~~~) and inline `code` spans pass through as is.
+function tag_replace_outside_code(content, replace)
+    lines = {}
+    fence = false
+    for line in string.gmatch(content .. "\n", "(.-)\n") do
+        if string.find(line, "^%s*```") != nil or string.find(line, "^%s*~~~") != nil then
+            fence = not fence
+            table.insert(lines, line)
+        elseif fence then
+            table.insert(lines, line)
+        else
+            parts = {}
+            pos = 1
+            while true do
+                s, e = string.find(line, "`[^`]*`", pos)
+                if s == nil then
+                    table.insert(parts, tag_replace_in_text(string.sub(line, pos), replace))
+                    break
+                end
+                table.insert(parts, tag_replace_in_text(string.sub(line, pos, s - 1), replace))
+                table.insert(parts, string.sub(line, s, e))
+                pos = e + 1
+            end
+            table.insert(lines, table.concat(parts))
+        end
+    end
+    return table.concat(lines, "\n")
+end
+
+-- The #tags in a document's content, as slugs, each once, in order.
+function tag.text_tags(content)
+    slugs, seen = {}, {}
+    if content == nil then
+        return slugs
+    end
+    tag_replace_outside_code(content, function(slug, written)
+        if seen[slug] == nil then
+            seen[slug] = true
+            table.insert(slugs, slug)
+        end
+        return nil
+    end)
+    return slugs
+end
+
+function tag_slug_ids(db_path)
+    ids = {}
+    rows = db.query(db_path, string.format("SELECT id, label FROM tag WHERE %s ORDER BY id;", ACTIVE))
+    if rows == nil then
+        return ids
+    end
+    for _, row in ipairs(rows) do
+        slug = tag.slug(row.label)
+        if ids[slug] == nil then
+            ids[slug] = tonumber(row.id)
+        end
+    end
+    return ids
+end
+
+-- On save: each #tag the person wrote is a membership they asserted
+-- (pinned, via text), created with the tag if it doesn't exist yet; one
+-- that left the text is archived. While it's in the text it wins: a
+-- computed membership becomes it, and so does an excluded one (a removal
+-- elsewhere). A pinned membership set some other way is left as it is.
+--
+-- "Wrote" is exact: on an edit (`old_content` given), only #tags the
+-- edit added are asserted -- text that was already there, an import's
+-- say, isn't. And only a person's write counts at all: `author` "system"
+-- or an API key's "api:<label>" (an import, a sync) is skipped, since
+-- text a program copied in isn't anyone asserting a tag. Measured on
+-- 6,865 imported documents, syncing their text would have made 172 tags
+-- out of spreadsheet errors and catalogue numbers. A chat edit is the
+-- chatting person's.
+function tag.sync_text_tags(db_path, document_id, content, author, old_content)
+    if author == nil or author == "system" or string.sub(tostring(author), 1, 4) == "api:" then
+        return
+    end
+    already = {}
+    if old_content != nil then
+        for _, slug in ipairs(tag.text_tags(old_content)) do
+            already[slug] = true
+        end
+    end
+    rows = db.query(db_path, string.format(
+        "SELECT id, tag, decision, via FROM document_tag WHERE document = %d AND %s;", tonumber(document_id), ACTIVE))
+    if rows == nil then
+        rows = {}
+    end
+    by_text = {}
+    for _, row in ipairs(rows) do
+        if row.via == "text" then
+            by_text[tonumber(row.tag)] = true
+        end
+    end
+    ids = tag_slug_ids(db_path)
+    wanted = {}
+    for _, slug in ipairs(tag.text_tags(content)) do
+        if already[slug] == nil or (ids[slug] != nil and by_text[ids[slug]] != nil) then
+            if ids[slug] == nil then
+                ids[slug], _ = entity.create(db_path, "tag", {label = tag_label_from_slug(slug), source = "manual"}, "system")
+            end
+            if ids[slug] != nil then
+                wanted[tonumber(ids[slug])] = true
+            end
+        end
+    end
+    have = {}
+    for _, row in ipairs(rows) do
+        tag_id = tonumber(row.tag)
+        if row.via == "text" then
+            if wanted[tag_id] == nil then
+                archived_id, _ = entity.archive(db_path, "document_tag", tonumber(row.id), "system", nil, "#tag removed from the text")
+                if archived_id != nil then
+                    tag.on_membership_archived(db_path, tonumber(row.id), true)
+                end
+            else
+                have[tag_id] = true
+            end
+        elseif wanted[tag_id] != nil and have[tag_id] == nil then
+            if row.decision != "pinned" then
+                entity.update(db_path, "document_tag", tonumber(row.id), {decision = "pinned", via = "text"}, "system")
+            end
+            have[tag_id] = true
+        end
+    end
+    for tag_id, _ in pairs(wanted) do
+        if have[tag_id] == nil then
+            entity.create(db_path, "document_tag", {
+                document = tostring(document_id), tag = tostring(tag_id), decision = "pinned", via = "text",
+            }, "system")
+        end
+    end
+end
+
+-- For rendering: each #tag naming an existing tag becomes a link to the
+-- tag's page, which document.render_html turns into a chip -- never a
+-- [[link]], so it's never a document_link either.
+function tag.inline_text_tags(db_path, content)
+    ids = tag_slug_ids(db_path)
+    return tag_replace_outside_code(content, function(slug, written)
+        if ids[slug] == nil then
+            return nil
+        end
+        return "[" .. written .. "](detail?type=tag&entity_id=" .. tostring(ids[slug]) .. ")"
+    end)
+end
+
 return tag

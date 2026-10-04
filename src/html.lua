@@ -6342,6 +6342,8 @@ function html.render_document(db_path, doc, rendered_html, breadcrumbs, children
         .platform-document-content h1, .platform-document-content h2, .platform-document-content h3 { margin-top: 1.2em; }
         .platform-document-content a { color: var(--platform-accent, #4f46e5); text-decoration: none; }
         .platform-document-content a:hover { text-decoration: underline; }
+        .platform-document-content a.platform-tag-chip { display: inline-block; padding: 0 8px; border-radius: 999px; background: var(--platform-bg-2, #f1f5f9); font-size: 0.85em; line-height: 1.6; }
+        .platform-document-content a.platform-tag-chip:hover { text-decoration: none; filter: brightness(0.96); }
         %s
         .platform-document-children, .platform-document-connections, .platform-document-related { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--platform-border, #e2e8f0); }
         .platform-document-related .platform-subheading { font-size: 0.95rem; color: var(--platform-muted, #64748b); margin: 0 0 8px 0; }
