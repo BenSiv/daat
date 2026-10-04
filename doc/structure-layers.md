@@ -67,6 +67,8 @@ A middle path worth evaluating: one computed primary tag used for colour, plus m
 
 ## Boundary
 
+Revised 2026-10-04: [tag-ontology.md](tag-ontology.md#where-it-runs) moves tag upkeep into core, incrementally, on daat's own `document_embedding`. The split below describes today's outside job, which stays as an audit until core's tags agree with it, then is retired.
+
 daat defines what a tag is and shows it. An outside program computes it.
 
 | daat core owns | The clustering job (Python, in `software`) owns |
@@ -106,7 +108,7 @@ The papers pipeline already clusters the literature (`papers/src/analysis/cluste
 
 ## Prerequisites
 
-1. **Embedding coverage:** 1,670 active documents in celleste-lims prod have no embedding, mostly imported papers. The clustering job computes its own embeddings, so this doesn't block tags, but it blocks semantic retrieval and the passage-similarity link gate. Run `daat repair embeddings`, then make save-time embedding failures visible instead of silent (`document.reindex_embedding` is best-effort).
+1. **Embedding coverage:** 908 active documents in celleste-lims prod have no embedding (2026-10-01 recount, down from 1,670), all from before save-time embedding. The outside clustering job computes its own embeddings, but tag upkeep in core ([tag-ontology.md](tag-ontology.md)) reads `document_embedding`, so this now blocks tags as well as semantic retrieval and the passage-similarity link gate. Run `daat repair embeddings`, then make save-time embedding failures visible instead of silent (`document.reindex_embedding` is best-effort).
 2. ~~**Restrict `ctx.query` to entity types**~~ -- done 2026-10-01 (see [Boundary](#what-extensions-can-do-today)).
 
 ## Phases
