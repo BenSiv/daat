@@ -93,7 +93,8 @@ function mail_graph.token(conf, secret)
 end
 
 function mail_graph.send(message)
-    conf = config.platform_config()
+    -- This backend's own platform.lua settings (config.setting).
+    conf = {graph_tenant_id = config.setting("graph_tenant_id"), graph_client_id = config.setting("graph_client_id")}
     if not valid_id(conf.graph_tenant_id) then
         return nil, "graph_tenant_id is not set (or invalid) in platform.lua"
     end

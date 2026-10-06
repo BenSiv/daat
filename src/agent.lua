@@ -36,13 +36,12 @@ agent = {}
 -- own timeout is a real, current reason a fixed constant would be
 -- wrong here.
 
--- Same default cgi.lua's own chat routes already use (a real model
--- name is a deployment choice, never hardcoded, read fresh from
--- config.platform_config()) -- exposed here too so main.lua's CLI
--- dispatch (`daat knowledge distill`, `daat agent
--- run-pending-background`) doesn't need its own copy of the fallback.
+-- The model every chat turn uses, for cgi.lua's chat routes and
+-- main.lua's CLI dispatch (`daat knowledge distill`, `daat agent
+-- run-pending-background`) alike: platform.lua's agent_model, else the
+-- provider's own default -- never a model name in core.
 function agent.default_model()
-    return config.platform_config().agent_model
+    return agent_provider.model()
 end
 
 AGENT_SCHEMA = """

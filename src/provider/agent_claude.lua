@@ -44,7 +44,9 @@ external_tool = require("external_tool")
 
 agent_claude = {}
 
-DEFAULT_MODEL = "claude-sonnet-5"
+-- This provider's default for agent_provider.model, used when
+-- platform.lua sets no agent_model. No embeddings here.
+agent_claude.default_model = "claude-sonnet-5"
 ANTHROPIC_VERSION = "2023-06-01"
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 
@@ -233,7 +235,7 @@ end
 -- completed, nothing structured to return.
 function agent_claude.converse(model, system_prompt, messages, tools)
     if model == nil or model == "" then
-        model = DEFAULT_MODEL
+        model = agent_claude.default_model
     end
     payload = {
         model = model,
@@ -270,7 +272,7 @@ end
 
 function agent_claude.generate(model, system_prompt, prompt)
     if model == nil or model == "" then
-        model = DEFAULT_MODEL
+        model = agent_claude.default_model
     end
     payload = {
         model = model,

@@ -1632,7 +1632,7 @@ function cgi.handle_request()
         if session == nil then
             return print_response("404 Not Found", "application/json", json.encode({error = "no such chat session"}))
         end
-        model = config.platform_config().agent_model
+        model = agent.default_model()
         agent.run_turn(db_path, body_data.session_id, author, nil, model, body_data.message)
         return print_response("200 OK", "application/json", json.encode(chat_widget_state(db_path, body_data.session_id)))
     end
@@ -1710,7 +1710,7 @@ function cgi.handle_request()
         if body_data == nil then
             return print_response("400 Bad Request", "application/json", json.encode({error = "Invalid JSON: " .. tostring(err)}))
         end
-        model = config.platform_config().agent_model
+        model = agent.default_model()
         agent.approve_pending(db_path, tonumber(body_data.pending_id), author, nil, model)
         return print_response("200 OK", "application/json", json.encode(chat_widget_state(db_path, body_data.session_id)))
     end
@@ -1747,7 +1747,7 @@ function cgi.handle_request()
         if body_data == nil then
             return print_response("400 Bad Request", "application/json", json.encode({error = "Invalid JSON: " .. tostring(err)}))
         end
-        model = config.platform_config().agent_model
+        model = agent.default_model()
         agent.deny_pending(db_path, tonumber(body_data.pending_id), author, nil, model)
         return print_response("200 OK", "application/json", json.encode(chat_widget_state(db_path, body_data.session_id)))
     end

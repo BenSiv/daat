@@ -185,8 +185,13 @@ EXAMPLE_PLATFORM_LUA = """-- Every field here is optional; see doc/architecture.
 -- for the full list and current defaults. Uncomment and edit only what
 -- this deployment actually needs to override.
 return {
+  -- Which backends to call (unset: that feature is off). The models
+  -- default to the chosen provider's own; name one to pin it.
   -- agent_provider = "vertex",
   -- agent_model = "gemini-3.5-flash-lite",
+  -- embedding_model = "text-embedding-005",
+  -- search_provider = "google_cse",
+  -- The chosen provider's own settings, read by the provider itself:
   -- vertex_project = "your-gcp-project",
   -- vertex_region = "global",
   -- agent_max_turns = 20,

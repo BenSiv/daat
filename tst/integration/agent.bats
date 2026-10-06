@@ -1467,14 +1467,9 @@ EOF
         skip "no usable gcloud application-default credentials"
     fi
 
-    # Explicitly pinned to the vertex provider (also the default) --
-    # this confirms agent_vertex.lua's own direct REST call
-    # still works on its own, independent of which provider
-    # platform.lua's agent_provider happens to default to. Still a
-    # real, live module: document.lua's embeddings call always
-    # delegates to it regardless of agent_provider, since
-    # agent_vertex.lua is the only provider with embeddings
-    # support.
+    # Explicitly pinned to the vertex provider -- this confirms
+    # agent_vertex.lua's own direct REST call still works on its own,
+    # independent of which provider a deployment's platform.lua names.
     cat > "${TEST_DIR}/vertex_check.lua" <<EOF
 package.path = "${PROJECT_ROOT}/src/?.lua;" .. package.path
 agent_provider = require("agent_provider")

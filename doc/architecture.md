@@ -209,10 +209,15 @@ A built-in assistant, not a bolted-on integration: real per-user conversation se
 - **Turn budgets, row caps, and retry counts are configurable via platform.lua, not hardcoded** -- the right value for any of these genuinely depends on things a deployment chooses (which model `agent_model` names, that provider's own latency, how much data this deployment actually holds), not on this code. Read fresh per call via `config.platform_config()` (memoized per-process, not resolved once at load) -- see `theme.lua`'s own precedent for the file-shaped config pattern this follows. Confirmed live why this matters: a self-check loop needing several rounds to converge on a real production turn took long enough to exceed the load balancer's own (separately configurable) timeout.
   | `platform.lua` field | Default | Controls |
   |---|---|---|
-  | `agent_provider` | `"vertex"` | Which named backend `agent_provider.lua` loads (`"vertex"`, or `"test"` for the deterministic stub) |
-  | `agent_model` | `"gemini-3.5-flash-lite"` | The real model name passed to every `generate`/`converse`/`embeddings` call |
-  | `vertex_project` | none (required) | GCP project `src/provider/agent_vertex.lua`'s REST calls bill against -- never hardcoded |
-  | `vertex_region` | `"global"` | Vertex AI region -- `"global"` is the only location that serves the default 3.x-family model as of this writing; a deployment on an older/regional model can still override this |
+  | `agent_provider` | none (chat and model calls off) | Which named backend `agent_provider.lua` loads (`"vertex"`, `"claude"`, or `"test"` for the deterministic stub) |
+  | `agent_model` | the provider's own | Model for every `generate`/`converse` call: chat, distillation, link and tier judgment |
+  | `embedding_model` | the provider's own | Model for every `embeddings` call; stored with each vector, and search compares only vectors from the current one (so a change needs `daat repair embeddings`) |
+  | `search_provider` | none (web search off) | Which named backend `search_provider.lua` loads (`"google_cse"`, or `"test"`) |
+
+  Core names no provider and no model. Each provider owns its defaults (`default_model`, `default_embedding_model` on the provider module) and its own settings, which it reads from platform.lua through `config.setting(key)`: `vertex_project` (required) and `vertex_region` (default `"global"`) for `agent_vertex.lua`; `smtp_url`/`smtp_user` for `mail_smtp.lua`; `graph_tenant_id`/`graph_client_id` for `mail_graph.lua`.
+
+  | `platform.lua` field | Default | Controls |
+  |---|---|---|
   | `agent_max_turns` | 20 | Main tool-calling turn loop's own budget (`agent.run_turn`) |
   | `agent_research_max_turns` | 12 | `research.investigate`'s isolated sub-loop budget |
   | `agent_background_max_turns` | 20 | `background.start`'s worker-drained task budget -- looser than the interactive ones since it isn't bound to one HTTP request |

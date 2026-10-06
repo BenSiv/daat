@@ -705,8 +705,9 @@ end
 -- approve in the first place. Best-effort like everything else that
 -- calls an external API from a save/review path (e.g. document.
 -- reindex_embedding) -- a provider hiccup here must never fail the
--- review pass, let alone the search request that triggered it.
-DISTILL_MODEL = "gemini-3.5-flash-lite"
+-- review pass, let alone the search request that triggered it. The
+-- model is the deployment's agent_model (a nil model is
+-- agent_provider.model()), as for link evaluation and tier judgment.
 
 -- Found live (task: bring back the "hypothesis/definition, not a
 -- subject title" lesson from a real curation chat): the model's first
@@ -752,7 +753,7 @@ function knowledge.maybe_distill(db_path, author, doc, content_shape)
     if body == nil then
         body = ""
     end
-    distilled, err = agent_provider.generate(DISTILL_MODEL, DISTILL_SYSTEM_PROMPT, body)
+    distilled, err = agent_provider.generate(nil, DISTILL_SYSTEM_PROMPT, body)
     if distilled == nil then
         return nil
     end
@@ -812,8 +813,6 @@ CO_RETRIEVAL_REEVALUATION_STEP = 3
 -- table -- matches document.reinforcement_delta's own tier-0 floor,
 -- which is otherwise unrelated to this value.
 LINK_REINFORCEMENT_DELTA = 0.15
-
-LINK_EVALUATION_MODEL = DISTILL_MODEL
 
 LINK_EVALUATION_SYSTEM_PROMPT = """
 Two documents from the same knowledge pool have repeatedly been retrieved together in the same searches. Judge whether they describe a genuinely meaningful connection (the same topic, a real dependency, one explains or extends the other) as opposed to just coincidental overlap in unrelated searches. Reply on a single line: YES or NO, a colon, then one sentence. For YES, the sentence states the specific connection in terms of the documents' content (what one says about, uses from, or adds to the other) -- not merely that they are related or were retrieved together. For NO, the sentence says why the overlap is coincidental. A YES sentence is written into a note that links both documents right before it, so refer to them by what they are, never as "Document A" or "Document B". Example: "YES: the subculture protocol calls for exactly this medium recipe."
@@ -1140,7 +1139,7 @@ end
 -- any document's; nothing marks it as the agent's.
 function knowledge.evaluate_co_retrieval_pair(db_path, author, doc_a, doc_b, co_count)
     agent_provider = require("agent_provider")
-    answer, err = agent_provider.generate(LINK_EVALUATION_MODEL, LINK_EVALUATION_SYSTEM_PROMPT, knowledge.link_pair_prompt(doc_a, doc_b))
+    answer, err = agent_provider.generate(nil, LINK_EVALUATION_SYSTEM_PROMPT, knowledge.link_pair_prompt(doc_a, doc_b))
     if answer == nil then
         return
     end
@@ -1177,8 +1176,6 @@ end
 -- and maybe_link_co_retrieved already are: a rule-triggered side effect
 -- of review, not a model choosing to act, and fully reversible (tier is
 -- recomputed fresh, bidirectionally, on every judged review).
-
-TIER_JUDGMENT_MODEL = DISTILL_MODEL
 
 -- Found live: a short calibration table and a short, mostly-links
 -- experiment note both got judged tier 3 -- both genuinely short and
@@ -1304,7 +1301,7 @@ function knowledge.judge_promotion_target(db_path, doc, current_tier, content_sh
             )
         end
     end
-    answer, err = agent_provider.generate(TIER_JUDGMENT_MODEL, TIER_JUDGMENT_SYSTEM_PROMPT, prompt)
+    answer, err = agent_provider.generate(nil, TIER_JUDGMENT_SYSTEM_PROMPT, prompt)
     tier = nil
     if answer != nil then
         trimmed = string.gsub(answer, "^%s*(.-)%s*$", "%1")

@@ -34,6 +34,7 @@ end
 
 CONF = {graph_tenant_id = "celleste-bio.com", graph_client_id = "11111111-2222-3333-4444-555555555555"}
 config.platform_config = function() return CONF end
+config.setting = function(key) return CONF[key] end
 
 SECRET = "s3cret-value"
 real_getenv = os.getenv

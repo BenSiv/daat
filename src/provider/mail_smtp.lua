@@ -26,7 +26,13 @@ function curl_config_quote(s)
 end
 
 function mail_smtp.send(message)
-    conf = config.platform_config()
+    -- This backend's own platform.lua settings (config.setting).
+    conf = {}
+    for _, key in ipairs({"smtp_url", "smtp_user"}) do
+        if type(config.setting(key)) == "string" then
+            conf[key] = config.setting(key)
+        end
+    end
     if conf.smtp_url == nil then
         return nil, "smtp_url is not set in platform.lua"
     end

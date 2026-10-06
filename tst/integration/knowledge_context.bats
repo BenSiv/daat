@@ -57,7 +57,7 @@ send_message() {
 
     run sqlite3 .store/store.db "SELECT session_id, model_id, prompt_tokens, completion_tokens FROM knowledge_context;"
     [[ "$output" =~ "$chat_session" ]]
-    [[ "$output" =~ "gemini-3.5-flash-lite" ]]
+    [[ "$output" =~ "test-model" ]]
     # Real (estimated-under-test-provider) counts, not nil/empty.
     [[ ! "$output" =~ "||" ]]
 }

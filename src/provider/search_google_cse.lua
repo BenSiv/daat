@@ -1,8 +1,7 @@
 -- Google Programmable Search (Custom Search JSON API) backend for
--- search_provider.lua's own facade -- selected by default
--- (config.platform_config().search_provider == "google_cse") since
--- it's the only real backend today, but no longer hardcoded into the
--- calling code the way the old, single-file web_search.lua was.
+-- search_provider.lua's own facade -- selected by platform.lua's
+-- search_provider = "google_cse", no longer hardcoded into the calling
+-- code the way the old, single-file web_search.lua was.
 --
 -- Requires GOOGLE_SEARCH_API_KEY and GOOGLE_SEARCH_ENGINE_ID in the
 -- environment (PassEnv'd the same way ANTHROPIC_API_KEY/

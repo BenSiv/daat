@@ -34,6 +34,9 @@ json = require("dkjson")
 
 agent_test = {}
 
+agent_test.default_model = "test-model"
+agent_test.default_embedding_model = "test-embedding"
+
 TEST_RESPONSE_INDEX = 0
 
 -- Same char/4 heuristic as agent.estimate_tokens (not cross-required

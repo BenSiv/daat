@@ -25,6 +25,8 @@ SESSION_SECRET_FILE = "session_secret"
 THEME_FILE = "theme.lua"
 PLATFORM_CONFIG_FILE = "platform.lua"
 PLATFORM_CONFIG_CACHE = nil
+-- platform.lua's table as written, for config.setting.
+PLATFORM_SETTINGS_CACHE = {}
 
 -- The CSS custom-property names a theme.lua may override -- matches
 -- html.lua's own var(--platform-*, <fallback>) usage sites exactly, so a
@@ -271,12 +273,19 @@ function config.platform_config()
         return PLATFORM_CONFIG_CACHE
     end
 
+    -- Which backend to call is the deployment's choice, so core names
+    -- none: nil agent_provider/search_provider/mail_provider means that
+    -- feature is off. A nil agent_model/embedding_model means the
+    -- chosen provider's own default (agent_provider.model/
+    -- embedding_model). A provider's own settings (a cloud project, a
+    -- mail server) aren't listed here either: the provider reads them
+    -- itself through config.setting.
+    PLATFORM_SETTINGS_CACHE = {}
     conf = {
-        agent_provider = "vertex",
-        agent_model = "gemini-3.5-flash-lite",
-        search_provider = "google_cse",
-        vertex_project = nil,
-        vertex_region = nil,
+        agent_provider = nil,
+        agent_model = nil,
+        embedding_model = nil,
+        search_provider = nil,
         agent_max_turns = 20,
         agent_research_max_turns = 12,
         agent_background_max_turns = 20,
@@ -328,19 +337,11 @@ function config.platform_config()
         -- the emailed reset link -- deliberately config, never derived
         -- from the request's Host header, which a caller controls and
         -- could otherwise point a real user's reset link at their own
-        -- server. smtp_user's password is the one secret here and stays
-        -- an env var (PLATFORM_SMTP_PASSWORD), same split as
-        -- mariadb_user/PLATFORM_MARIADB_PASSWORD. graph_tenant_id/
-        -- graph_client_id are the Microsoft Graph backend's app
-        -- registration (provider/mail_graph.lua); its client secret is
-        -- PLATFORM_GRAPH_CLIENT_SECRET, same split again.
+        -- server. The backend's own settings (an SMTP server, a Graph
+        -- app registration) are its own, read through config.setting.
         mail_provider = nil,
         mail_from = nil,
         public_url = nil,
-        smtp_url = nil,
-        smtp_user = nil,
-        graph_tenant_id = nil,
-        graph_client_id = nil,
     }
 
     path = config.platform_config_path()
@@ -361,17 +362,15 @@ function config.platform_config()
     if type(parsed.agent_provider) == "string" and parsed.agent_provider != "" then
         conf.agent_provider = parsed.agent_provider
     end
+    PLATFORM_SETTINGS_CACHE = parsed
     if type(parsed.agent_model) == "string" and parsed.agent_model != "" then
         conf.agent_model = parsed.agent_model
     end
+    if type(parsed.embedding_model) == "string" and parsed.embedding_model != "" then
+        conf.embedding_model = parsed.embedding_model
+    end
     if type(parsed.search_provider) == "string" and parsed.search_provider != "" then
         conf.search_provider = parsed.search_provider
-    end
-    if type(parsed.vertex_project) == "string" and parsed.vertex_project != "" then
-        conf.vertex_project = parsed.vertex_project
-    end
-    if type(parsed.vertex_region) == "string" and parsed.vertex_region != "" then
-        conf.vertex_region = parsed.vertex_region
     end
     if type(parsed.agent_max_turns) == "number" then
         conf.agent_max_turns = parsed.agent_max_turns
@@ -436,7 +435,7 @@ function config.platform_config()
     if type(parsed.nav_hidden) == "table" then
         conf.nav_hidden = validate_nav_key_list(parsed.nav_hidden)
     end
-    for _, key in ipairs({"mail_provider", "mail_from", "public_url", "smtp_url", "smtp_user", "graph_tenant_id", "graph_client_id"}) do
+    for _, key in ipairs({"mail_provider", "mail_from", "public_url"}) do
         if type(parsed[key]) == "string" and parsed[key] != "" then
             conf[key] = parsed[key]
         end
@@ -444,6 +443,18 @@ function config.platform_config()
 
     PLATFORM_CONFIG_CACHE = conf
     return conf
+end
+
+-- A provider's own platform.lua setting (vertex_project, smtp_url,
+-- ...), as written: core doesn't know these keys, so the provider that
+-- reads one checks it. An empty string counts as unset.
+function config.setting(key)
+    config.platform_config()
+    value = PLATFORM_SETTINGS_CACHE[key]
+    if value == "" then
+        return nil
+    end
+    return value
 end
 
 -- The forgot-password flow needs all three: something to send with,

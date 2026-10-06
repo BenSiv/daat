@@ -65,10 +65,11 @@
 -- functionCall part is actually present, not from finishReason alone.
 --
 -- Requires `gcloud` on PATH, already authenticated (`gcloud auth
--- application-default login`), and two platform.lua fields (see
--- config.platform_config()): vertex_project (required, no default --
--- this is a real, potentially billed GCP project, never hardcoded
--- here) and vertex_region (optional, defaults to us-central1).
+-- application-default login`), and two platform.lua settings of its
+-- own, read through config.setting (core doesn't know them):
+-- vertex_project (required, no default -- this is a real, potentially
+-- billed GCP project, never hardcoded here) and vertex_region
+-- (optional, defaults to DEFAULT_REGION below).
 
 json = require("dkjson")
 config = require("config")
@@ -77,8 +78,13 @@ paths = require("paths")
 
 agent_vertex = {}
 
--- Confirmed live: gemini-3.5-flash-lite (config.lua's own default
--- agent_model as of brex 153144598) 404s on a regional endpoint like
+-- This provider's defaults for agent_provider.model/embedding_model,
+-- used when platform.lua sets no agent_model/embedding_model.
+agent_vertex.default_model = "gemini-3.5-flash-lite"
+agent_vertex.default_embedding_model = "text-embedding-005"
+
+-- Confirmed live: gemini-3.5-flash-lite (this provider's default
+-- model as of brex 153144598) 404s on a regional endpoint like
 -- us-central1 -- "global" is not just an option for a 3.x-family model,
 -- it's the only location that actually serves one. Falls back to this
 -- only when platform.lua sets no vertex_region of its own; a
@@ -101,13 +107,12 @@ DEFAULT_REGION = "global"
 REQUEST_TIMEOUT_SECONDS = 120
 
 function vertex_config()
-    conf = config.platform_config()
-    project = conf.vertex_project
-    if project == nil or project == "" then
+    project = config.setting("vertex_project")
+    if type(project) != "string" then
         return nil, nil, "vertex_project is not set in platform.lua"
     end
-    region = conf.vertex_region
-    if region == nil or region == "" then
+    region = config.setting("vertex_region")
+    if type(region) != "string" then
         region = DEFAULT_REGION
     end
     return project, region

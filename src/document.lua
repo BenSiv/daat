@@ -353,6 +353,10 @@ end
 -- bulk backfill (a provider
 -- outage, or documents saved before this cache existed). Search itself
 -- only ever *reads* this cache; it never computes an embedding on the fly.
+-- `model` is the embedding model that made the vector
+-- (agent_provider.embedding_model -- platform.lua's embedding_model, else
+-- the provider's default); search compares only vectors from the current
+-- one, so after a change of model `daat repair embeddings` re-embeds.
 DOCUMENT_EMBEDDING_SCHEMA = """
 CREATE TABLE IF NOT EXISTS document_embedding (
     document_id INTEGER PRIMARY KEY,
@@ -361,8 +365,6 @@ CREATE TABLE IF NOT EXISTS document_embedding (
     updated_at TEXT DEFAULT (%s)
 );
 """
-
-EMBEDDING_MODEL = "text-embedding-005"
 
 -- Knowledge Pool scoring columns live directly on `document` (see
 -- doc/architecture.md's "Knowledge pool" section for why) -- these are
@@ -2091,7 +2093,11 @@ function document.reindex_embedding(db_path, document_id)
         text = text .. "\n" .. doc.content
     end
 
-    vector, err = agent_provider.embeddings(EMBEDDING_MODEL, text)
+    model = agent_provider.embedding_model()
+    if model == nil then
+        return nil, "no embedding model: no agent_provider, or it has no embeddings"
+    end
+    vector, err = agent_provider.embeddings(model, text)
     if vector == nil then
         return nil, err
     end
@@ -2104,7 +2110,7 @@ function document.reindex_embedding(db_path, document_id)
     db.exec(db_path, string.format(
         "%s document_embedding (document_id, model, vector_json, vector_packed, updated_at) VALUES (%d, %s, %s, %s, %s);",
         db.replace_into(db_path),
-        tonumber(document_id), db.quote(EMBEDDING_MODEL), db.quote(json.encode(vector)), packed_literal, db.now_expr(db_path)
+        tonumber(document_id), db.quote(model), db.quote(json.encode(vector)), packed_literal, db.now_expr(db_path)
     ))
     return true
 end
@@ -2465,7 +2471,7 @@ end
 -- query's, keeping those above the similarity floor. Reads only
 -- vector_packed; a row not yet packed (saved before the column existed,
 -- until `daat repair embeddings-packed` runs) falls back to its JSON.
-function semantic_ranking(db_path, query_vector)
+function semantic_ranking(db_path, query_vector, model)
     query_packed = document.pack_vector(query_vector)
     if query_packed == nil then
         return {}
@@ -2477,8 +2483,8 @@ function semantic_ranking(db_path, query_vector)
                CASE WHEN e.vector_packed IS NULL THEN e.vector_json END AS vector_json
         FROM document_embedding e
         JOIN document d ON d.id = e.document_id
-        WHERE %s;
-    """, SEARCHABLE_DOCUMENT_WHERE))
+        WHERE e.model = %s AND %s;
+    """, db.quote(model), SEARCHABLE_DOCUMENT_WHERE))
     if rows == nil then
         return {}
     end
@@ -2531,9 +2537,12 @@ function document.search(db_path, query_text, limit, use_semantic)
     semantic = {}
     if use_semantic == true and query_text != nil and query_text != "" then
         agent_provider = require("agent_provider")
-        query_vector, _ = agent_provider.embeddings(EMBEDDING_MODEL, query_text)
-        if query_vector != nil then
-            semantic = semantic_ranking(db_path, query_vector)
+        model = agent_provider.embedding_model()
+        if model != nil then
+            query_vector, _ = agent_provider.embeddings(model, query_text)
+            if query_vector != nil then
+                semantic = semantic_ranking(db_path, query_vector, model)
+            end
         end
     end
 
