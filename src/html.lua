@@ -4635,8 +4635,6 @@ function html.render_knowledge_graph(nonce)
         // loops longer (5.5k nodes: ~130ms/frame; 1.3k linked: ~18ms).
         // They're laid out in a static grid instead (placeOrphans).
         var simNodes = [], orphans = [];
-        // Orphan blocks by tag, with their labels (placeOrphans, draw).
-        var orphanBlocks = [], ORPHAN_LABEL_FONT = '11px sans-serif';
 
         // -- Colour, filter, hide orphans (doc/structure-layers.md, "Graph
         // view"). Filtering only hides: hidden nodes keep their place in
@@ -4853,16 +4851,6 @@ function html.render_knowledge_graph(nonce)
                 });
                 ctx.fillStyle = color;
                 ctx.fill();
-            });
-
-            // Each orphan block's tag, above it -- only while it has a
-            // node showing (orphans shown, its colour not hidden).
-            ctx.font = ORPHAN_LABEL_FONT;
-            ctx.textBaseline = 'bottom';
-            ctx.fillStyle = cssVar('--platform-muted', '#64748b');
-            orphanBlocks.forEach(function(block) {
-                if (block.y < minY || block.y > maxY || !block.nodes.some(isVisible)) { return; }
-                ctx.fillText(block.label, block.x, block.y);
             });
         }
 
@@ -5352,18 +5340,24 @@ function html.render_knowledge_graph(nonce)
             return energy;
         }
 
-        // Orphans below the linked cluster, one block per tag (a node's
-        // main tag, as "Colour by tag"; untagged ones last), hottest first
-        // within a block -- so unlinked documents on the same subject sit
-        // together. Blocks run left to right in the order their tags sit
-        // across the linked cluster, so a tag's orphans land under its
-        // linked nodes (tags with none come after, largest first),
-        // wrapping at the cluster's width. Visible and clickable, but
-        // outside the simulation. Run after each settle, since the
-        // cluster's extent moves; a dragged orphan (manual) keeps wherever
-        // it was dropped.
+        // Orphans in a square grid just below the linked cluster -- one
+        // grid, in one fixed order: hottest first, then highest tier, then
+        // by tag (untagged last), then id. Grouping by whatever the colour
+        // shows would reshuffle on every colour change; this order reads
+        // the same under any colouring. Visible and clickable, but outside
+        // the simulation. Run after each settle, since the cluster's
+        // extent moves; a dragged orphan (manual) keeps wherever it was
+        // dropped.
+        function orphanOrder(a, b) {
+            var ta = groupTags(a)[0], tb = groupTags(b)[0];
+            return ((b.heat || 0) - (a.heat || 0)) ||
+                ((b.tier || 0) - (a.tier || 0)) ||
+                ((ta === undefined) - (tb === undefined)) ||
+                (ta && tb ? ta.localeCompare(tb) : 0) ||
+                (a.id - b.id);
+        }
+
         function placeOrphans() {
-            orphanBlocks = [];
             var grid = orphans.filter(function(n) { return !n.manual; });
             if (grid.length === 0) { return; }
             var minX = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -5372,43 +5366,15 @@ function html.render_knowledge_graph(nonce)
             });
             if (simNodes.length === 0) { minX = 0; maxX = canvas.width; maxY = 0; }
             var cell = 2 * nodeRadius(Math.max.apply(null, grid.map(function(n) { return n.heat || 0; }))) + COLLISION_PADDING;
-            var byTag = {}, order = [];
-            grid.forEach(function(n) {
-                var key = groupTags(n)[0] || '';
-                if (!byTag[key]) { byTag[key] = []; order.push(key); }
-                byTag[key].push(n);
-            });
-            var centres = tagCentres();
-            order.sort(function(a, b) {
-                if (a === '' || b === '') { return a === '' ? 1 : -1; }
-                var ca = centres[a], cb = centres[b];
-                if (ca && cb) { return ca.x - cb.x; }
-                if (ca || cb) { return ca ? -1 : 1; }
-                return (byTag[b].length - byTag[a].length) || a.localeCompare(b);
-            });
-            ctx.font = ORPHAN_LABEL_FONT;
-            var gap = 2 * cell, labelSpace = cell;
-            var rowWidth = Math.max(maxX - minX, 12 * cell);
-            var left = (minX + maxX) / 2 - rowWidth / 2;
-            var x = left, y = maxY + 4 * cell, rowHeight = 0;
-            order.forEach(function(key) {
-                var members = byTag[key];
-                members.sort(function(a, b) { return (b.heat || 0) - (a.heat || 0); });
-                var label = key === '' ? 'No tag' : key;
-                var cols = Math.ceil(Math.sqrt(members.length));
-                var width = Math.max(cols * cell, ctx.measureText(label).width);
-                if (x > left && x + width > left + rowWidth) {
-                    x = left; y += rowHeight + gap; rowHeight = 0;
-                }
-                orphanBlocks.push({ label: label, x: x - cell / 2, y: y, nodes: members });
-                members.forEach(function(n, i) {
-                    n.x = x + (i %% cols) * cell;
-                    n.y = y + labelSpace + Math.floor(i / cols) * cell;
-                    n.vx = 0;
-                    n.vy = 0;
-                });
-                x += width + gap;
-                rowHeight = Math.max(rowHeight, labelSpace + Math.ceil(members.length / cols) * cell);
+            var cols = Math.ceil(Math.sqrt(grid.length));
+            var left = (minX + maxX) / 2 - (cols - 1) * cell / 2;
+            var top = maxY + 4 * cell;
+            grid.sort(orphanOrder);
+            grid.forEach(function(n, i) {
+                n.x = left + (i %% cols) * cell;
+                n.y = top + Math.floor(i / cols) * cell;
+                n.vx = 0;
+                n.vy = 0;
             });
         }
 
