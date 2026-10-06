@@ -33,7 +33,7 @@ setup_test_env() {
 write_platform_config() {
     local extra_lua_fields="${1:-}"
     cat > "$TEST_DIR/platform.lua" <<EOF
-return {agent_provider = "test", search_provider = "test"${extra_lua_fields}}
+return {agent_provider = "test", search_provider = "test", embedding_quiet_minutes = 0${extra_lua_fields}}
 EOF
 }
 

@@ -543,9 +543,10 @@ EOF
 @test "repair with no name lists every repair; the old document backfill actions are gone" {
     run "$BIN" repair
     [[ "$output" =~ "links [document_id]" ]]
-    [[ "$output" =~ "embeddings [document_id]" ]]
+    [[ "$output" =~ "embeddings [document_id | --all]" ]]
+    [[ "$output" =~ "knowledge [--dry-run]" ]]
     [[ "$output" =~ "pool-count" ]]
 
     run "$BIN" document resync-links
-    [[ "$output" =~ "Usage: daat document create-json" ]]
+    [[ "$output" =~ "Usage: daat document <create-json|embed-pending>" ]]
 }

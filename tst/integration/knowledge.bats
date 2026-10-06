@@ -57,6 +57,11 @@ search_for_bioreactor_extra() {
     fi
     scripted="${scripted}"$'\1'"$(done_response "Found it.")"
     raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"find bioreactor pages\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+    # A transcript is searchable like any document, so this chat's own
+    # ("find bioreactor pages") would join later searches' co-retrieval
+    # and its review calls would take the scripted slots above -- set
+    # aside so only the documents under test are retrieved together.
+    sqlite3 .store/store.db "UPDATE document SET archived_at = '2026-01-01 00:00:00' WHERE source_type = 'chat_session';"
 }
 
 @test "daat knowledge stats shows all zeros on a fresh store" {
@@ -101,25 +106,19 @@ search_for_bioreactor_extra() {
     [[ "$tool_result" =~ "never by asking the user for the id" ]]
 }
 
-@test "document.search excludes chat-session transcripts from results, even when they match the query" {
-    # Found live: searching for real domain content ("standard experiment
-    # page template") returned old chat transcripts (containing the
-    # query's own words, since the user's message is part of the
-    # transcript) mixed in with real docs, degrading the agent's own
-    # ability to find real content via its own document.search tool.
+@test "document.search ranks chat-session transcripts like any other document" {
+    # Knowledge is one level: a transcript is found by what it says and
+    # ranked by usage, never left out for being a chat (it once was,
+    # 99fe276 -- reversed).
     "$BIN" entity create document title="Bioreactor SOP" content="cleaning steps for the bioreactor procedure"
     search_for_bioreactor
-    # this first session's own transcript is now a real document
-    # (source_type='chat_session') containing "find bioreactor pages"
-    # verbatim -- confirm it actually exists, so this test would have
-    # caught the real bug (nothing to exclude if it were never created).
     chat_doc_count=$(sqlite3 .store/store.db "SELECT COUNT(*) FROM document WHERE source_type='chat_session' AND content LIKE '%bioreactor%';")
     [ "$chat_doc_count" -ge 1 ]
 
     search_for_bioreactor
     tool_result=$(sqlite3 .store/store.db "SELECT content FROM agent_message WHERE role='tool_result' ORDER BY id DESC LIMIT 1;")
     [[ "$tool_result" =~ "Bioreactor SOP" ]]
-    [[ ! "$tool_result" =~ "Chat:" ]]
+    [[ "$tool_result" =~ "Chat:" ]]
 }
 
 @test "a chat search creates a tier-0 note, logs the retrieval, and runs review" {

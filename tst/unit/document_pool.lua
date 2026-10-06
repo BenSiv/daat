@@ -14,6 +14,12 @@
 
 document = require("document")
 db = require("database")
+entity = require("entity")
+
+-- These tables are bare (no entity registry), so unarchive's re-read of
+-- the document's links and references finds nothing to read -- this
+-- file is about pool heat only.
+entity.get = function() return nil end
 
 FAILURES = 0
 
@@ -38,6 +44,10 @@ end
 function new_test_db(document_count)
     db_path = os.tmpname()
     db.exec(db_path, "CREATE TABLE document (id INTEGER PRIMARY KEY, raw_heat REAL DEFAULT 1.0, scale_at_write REAL DEFAULT 1.0, archived_at TEXT, merged_into INTEGER);")
+    -- What on_entity_archived clears (document.drop_derived).
+    db.exec(db_path, "CREATE TABLE document_embedding (document_id INTEGER PRIMARY KEY);")
+    db.exec(db_path, "CREATE TABLE document_embedding_due (document_id INTEGER PRIMARY KEY, queued_at TEXT);")
+    db.exec(db_path, "CREATE TABLE document_reference (document_id INTEGER);")
     -- Read by on_entity_archived's tag hook (src/tag.lua): no rows, so
     -- archiving touches no tag centre.
     db.exec(db_path, "CREATE TABLE document_tag (id INTEGER PRIMARY KEY, document INTEGER, tag INTEGER, decision TEXT, archived_at TEXT);")

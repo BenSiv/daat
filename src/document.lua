@@ -44,6 +44,7 @@ json = require("dkjson")
 external_tool = require("external_tool")
 gnuplot = require("gnuplot")
 hmac = require("hmac")
+config = require("config")
 
 document = {}
 
@@ -342,17 +343,19 @@ function sql_null_to_nil(value)
 end
 
 
--- A document's cached semantic-search embedding. Recomputed on every
--- every create/update (document.on_entity_created/on_entity_updated)
--- -- one embedding API call per save, not a corpus reindex.
--- Best-effort: document.reindex_embedding returns nil/err rather than
--- throwing on failure (an unconfigured provider, a network hiccup,
--- ...), and the hooks ignore that return value entirely -- a document
--- save must never fail just because the embedding call did.
+-- A document's cached semantic-search embedding. A save doesn't call
+-- the provider: it queues the document in document_embedding_due, and
+-- `daat document embed-pending` (document.embed_pending, on the
+-- deployment's job timer) embeds it once it has gone
+-- embedding_quiet_minutes without another edit -- so a document saved
+-- again and again (a chat transcript, after every turn) costs one
+-- embedding, not one per save. text_hash is the hash of the exact text
+-- embedded, so a queued document whose text came back unchanged isn't
+-- re-embedded. Best-effort: a failed call leaves the document queued for
+-- the next run, and a save never fails because of it.
 -- document.reindex_all_embeddings/`daat repair embeddings` exist for
--- bulk backfill (a provider
--- outage, or documents saved before this cache existed). Search itself
--- only ever *reads* this cache; it never computes an embedding on the fly.
+-- recovery (a provider outage, a change of model). Search itself only
+-- ever *reads* this cache; it never computes an embedding on the fly.
 -- `model` is the embedding model that made the vector
 -- (agent_provider.embedding_model -- platform.lua's embedding_model, else
 -- the provider's default); search compares only vectors from the current
@@ -363,6 +366,16 @@ CREATE TABLE IF NOT EXISTS document_embedding (
     model TEXT NOT NULL,
     vector_json TEXT NOT NULL,
     updated_at TEXT DEFAULT (%s)
+);
+"""
+
+-- Documents saved since their embedding was made, with when they were
+-- last saved (UTC, "YYYY-MM-DD HH:MM:SS", written by Lua so the quiet-
+-- period comparison means the same on SQLite and MariaDB).
+DOCUMENT_EMBEDDING_DUE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS document_embedding_due (
+    document_id INTEGER PRIMARY KEY,
+    queued_at VARCHAR(19) NOT NULL
 );
 """
 
@@ -487,12 +500,14 @@ DOCUMENT_EMBEDDING_SQL_COLUMNS = {
     {name = "model", note = "which embedding model produced this vector"},
     {name = "vector_json", note = "the cached embedding vector, JSON-encoded"},
     {name = "vector_packed", note = "the same vector L2-normalised, as little-endian float32 bytes (what search reads)"},
+    {name = "text_hash", note = "hash of the exact text embedded (NULL: made before this column, assumed current)"},
     {name = "updated_at", note = "timestamp of the last reindex"},
 }
 
--- vector_packed (see document.pack_vector) postdates the table, so it's
--- retrofitted here rather than in DOCUMENT_EMBEDDING_SCHEMA -- one path
--- for new and existing installs alike.
+-- vector_packed (see document.pack_vector) and text_hash postdate the
+-- table, so they're retrofitted here rather than in
+-- DOCUMENT_EMBEDDING_SCHEMA -- one path for new and existing installs
+-- alike.
 function ensure_document_embedding_columns(db_path)
     have = {}
     for _, name in ipairs(db.get_columns(db_path, "document_embedding")) do
@@ -500,6 +515,9 @@ function ensure_document_embedding_columns(db_path)
     end
     if have["vector_packed"] == nil then
         db.exec(db_path, "ALTER TABLE document_embedding ADD COLUMN vector_packed BLOB;")
+    end
+    if have["text_hash"] == nil then
+        db.exec(db_path, "ALTER TABLE document_embedding ADD COLUMN text_hash VARCHAR(64);")
     end
 end
 
@@ -669,6 +687,7 @@ function document.init_schema(db_path)
     ensure_document_link_indexes(db_path)
     db.exec(db_path, string.format(DOCUMENT_EMBEDDING_SCHEMA, db.now_expr(db_path)))
     ensure_document_embedding_columns(db_path)
+    db.exec(db_path, DOCUMENT_EMBEDDING_DUE_SCHEMA)
     tag.init_schema(db_path)
     reference.init_schema(db_path)
     ensure_document_knowledge_columns(db_path)
@@ -1806,8 +1825,7 @@ function document.on_entity_created(db_path, entity_type, entity_id)
         tag.sync_text_tags(db_path, entity_id, doc.content, doc.created_by)
     end
     document.resolve_dangling_links(db_path)
-    document.reindex_embedding(db_path, entity_id)
-    tag.place_document(db_path, entity_id)
+    document.queue_embedding(db_path, entity_id)
 end
 
 -- Points every active dangling link (to_document_id NULL -- its target
@@ -1868,13 +1886,7 @@ function document.on_entity_updated(db_path, entity_type, entity_id, field_chang
         document.resolve_dangling_links(db_path)
     end
     if field_changes.content != nil or field_changes.title != nil then
-        -- The old vector, read before the reindex replaces it, so the
-        -- document's tags swap it for the new one in their centres.
-        old_vector = tag.document_vector(db_path, entity_id)
-        if document.reindex_embedding(db_path, entity_id) == true then
-            tag.on_document_vector_changed(db_path, entity_id, old_vector)
-        end
-        tag.place_document(db_path, entity_id)
+        document.queue_embedding(db_path, entity_id)
     end
 end
 
@@ -1888,7 +1900,9 @@ function document.on_entity_archived(db_path, entity_type, entity_id)
         return
     end
     document.return_pool_heat(db_path, entity_id)
+    -- Before drop_derived: it reads the vector it takes out of the centres.
     tag.on_document_archived(db_path, entity_id, true)
+    document.drop_derived(db_path, entity_id)
 end
 
 function document.on_entity_unarchived(db_path, entity_type, entity_id)
@@ -1901,8 +1915,33 @@ function document.on_entity_unarchived(db_path, entity_type, entity_id)
         return
     end
     document.register_pool_document(db_path, entity_id)
+    doc = entity.get(db_path, "document", entity_id)
+    if doc != nil then
+        document.sync_links(db_path, entity_id, doc.content)
+        reference.sync_document(db_path, entity_id, doc.title, doc.content)
+    end
     document.resolve_dangling_links(db_path)
-    tag.on_document_archived(db_path, entity_id, false)
+    -- Its vector went with the archive (drop_derived); re-embedding puts
+    -- it back into its tags' centres (document.refresh_embedding). One
+    -- archived before drop_derived existed still has its row, though
+    -- its vector already left the centres -- cleared so the refresh
+    -- doesn't take it out a second time.
+    db.exec(db_path, string.format("DELETE FROM document_embedding WHERE document_id = %d;", tonumber(entity_id)))
+    document.queue_embedding(db_path, entity_id)
+end
+
+-- What an archived document leaves behind: rows derived from it, all
+-- rebuilt on unarchive (document.on_entity_unarchived). Its outgoing
+-- links are archived rather than deleted, so their raw_strength comes
+-- back with them.
+function document.drop_derived(db_path, document_id)
+    document_id = tonumber(document_id)
+    db.exec(db_path, string.format("DELETE FROM document_embedding WHERE document_id = %d;", document_id))
+    db.exec(db_path, string.format("DELETE FROM document_embedding_due WHERE document_id = %d;", document_id))
+    db.exec(db_path, string.format("DELETE FROM document_reference WHERE document_id = %d;", document_id))
+    db.exec(db_path, string.format(
+        "UPDATE document_link SET archived_at = %s WHERE from_document_id = %d AND (archived_at IS NULL OR archived_at = '');",
+        db.now_expr(db_path), document_id))
 end
 
 -- Tier is decided by content-processing maturity, not retrieval
@@ -2076,11 +2115,20 @@ function hex_literal(bytes)
     return "X'" .. string.gsub(bytes, ".", function(c) return string.format("%02x", string.byte(c)) end) .. "'"
 end
 
--- Computes and caches one document's embedding -- best-effort, called
--- from entity.create/update's document hooks on every save, as well as
--- explicitly via `daat repair embeddings` for bulk backfill (see
--- DOCUMENT_EMBEDDING_SCHEMA's own comment).
-function document.reindex_embedding(db_path, document_id)
+-- The text a document's embedding is made from.
+function embedding_text(doc)
+    text = doc.title
+    if doc.content != nil and doc.content != "" then
+        text = text .. "\n" .. doc.content
+    end
+    return text
+end
+
+-- Computes and caches one document's embedding -- best-effort (see
+-- DOCUMENT_EMBEDDING_SCHEMA's own comment). With if_changed, a document
+-- whose stored vector was made from the same text by the same model is
+-- left alone. -> true (embedded), false (unchanged), or nil, err.
+function document.reindex_embedding(db_path, document_id, if_changed)
     agent_provider = require("agent_provider")
     json = require("dkjson")
 
@@ -2088,14 +2136,19 @@ function document.reindex_embedding(db_path, document_id)
     if doc == nil then
         return nil, "no such document"
     end
-    text = doc.title
-    if doc.content != nil and doc.content != "" then
-        text = text .. "\n" .. doc.content
-    end
+    text = embedding_text(doc)
 
     model = agent_provider.embedding_model()
     if model == nil then
         return nil, "no embedding model: no agent_provider, or it has no embeddings"
+    end
+    text_hash = hmac.sha256("document_embedding", text)
+    if if_changed == true then
+        rows = db.query(db_path, string.format(
+            "SELECT model, text_hash FROM document_embedding WHERE document_id = %d;", tonumber(document_id)))
+        if rows != nil and rows[1] != nil and rows[1].model == model and rows[1].text_hash == text_hash then
+            return false
+        end
     end
     vector, err = agent_provider.embeddings(model, text)
     if vector == nil then
@@ -2108,11 +2161,88 @@ function document.reindex_embedding(db_path, document_id)
         packed_literal = hex_literal(packed)
     end
     db.exec(db_path, string.format(
-        "%s document_embedding (document_id, model, vector_json, vector_packed, updated_at) VALUES (%d, %s, %s, %s, %s);",
+        "%s document_embedding (document_id, model, vector_json, vector_packed, text_hash, updated_at) VALUES (%d, %s, %s, %s, %s, %s);",
         db.replace_into(db_path),
-        tonumber(document_id), db.quote(model), db.quote(json.encode(vector)), packed_literal, db.now_expr(db_path)
+        tonumber(document_id), db.quote(model), db.quote(json.encode(vector)), packed_literal, db.quote(text_hash), db.now_expr(db_path)
     ))
     return true
+end
+
+-- Re-embeds a document if its text changed, then swaps the new vector
+-- into its tags' centres and places it by nearest tag (tag.lua) -- the
+-- tag upkeep a save used to do, now done once the vector exists.
+-- -> as document.reindex_embedding.
+function document.refresh_embedding(db_path, document_id)
+    old_vector = tag.document_vector(db_path, document_id)
+    embedded, err = document.reindex_embedding(db_path, document_id, true)
+    if embedded == true then
+        tag.on_document_vector_changed(db_path, document_id, old_vector)
+        tag.place_document(db_path, document_id)
+    end
+    return embedded, err
+end
+
+function utc_timestamp(seconds)
+    return os.date("!%Y-%m-%d %H:%M:%S", seconds)
+end
+
+-- Called by every save of a document's title or content: the embedding
+-- waits for the quiet period (DOCUMENT_EMBEDDING_SCHEMA's comment). A
+-- later save moves queued_at forward, so the wait restarts.
+function document.queue_embedding(db_path, document_id)
+    if config.platform_config().embedding_quiet_minutes == 0 then
+        document.refresh_embedding(db_path, document_id)
+        return
+    end
+    db.exec(db_path, string.format(
+        "%s document_embedding_due (document_id, queued_at) VALUES (%d, %s);",
+        db.replace_into(db_path), tonumber(document_id), db.quote(utc_timestamp(os.time()))))
+end
+
+-- `daat document embed-pending`: embeds every queued document that has
+-- gone embedding_quiet_minutes without a save. A document archived
+-- since it was queued is dropped from the queue; one whose call failed
+-- stays for the next run. -> {embedded, unchanged, failed, dropped,
+-- waiting}.
+function document.embed_pending(db_path)
+    quiet_minutes = config.platform_config().embedding_quiet_minutes
+    cutoff = utc_timestamp(os.time() - quiet_minutes * 60)
+    rows = db.query(db_path, string.format("""
+        SELECT q.document_id, q.queued_at, d.id AS live_id FROM document_embedding_due q
+        LEFT JOIN document d ON d.id = q.document_id AND (d.archived_at IS NULL OR d.archived_at = '')
+        WHERE q.queued_at <= %s ORDER BY q.queued_at;""", db.quote(cutoff)))
+    if rows == nil then
+        rows = {}
+    end
+    counts = {embedded = 0, unchanged = 0, failed = 0, dropped = 0, waiting = 0}
+    for _, row in ipairs(rows) do
+        document_id = tonumber(row.document_id)
+        outcome = "dropped"
+        if sql_null_to_nil(row.live_id) != nil then
+            -- pcalled: a raised SQL error on one document mustn't stop
+            -- the rest of the queue.
+            ok, embedded = pcall(document.refresh_embedding, db_path, document_id)
+            if ok == true and embedded == true then
+                outcome = "embedded"
+            elseif ok == true and embedded == false then
+                outcome = "unchanged"
+            else
+                outcome = "failed"
+            end
+        end
+        counts[outcome] = counts[outcome] + 1
+        if outcome != "failed" then
+            -- Only if not saved again meanwhile (queued_at unchanged).
+            db.exec(db_path, string.format(
+                "DELETE FROM document_embedding_due WHERE document_id = %d AND queued_at = %s;",
+                document_id, db.quote(row.queued_at)))
+        end
+    end
+    waiting = db.query(db_path, "SELECT COUNT(*) AS n FROM document_embedding_due;")
+    if waiting != nil and waiting[1] != nil then
+        counts.waiting = tonumber(waiting[1].n) - counts.failed
+    end
+    return counts
 end
 
 -- Rebuilds vector_packed from vector_json -- no provider calls, just a
@@ -2160,18 +2290,42 @@ function document.resync_all_links(db_path)
     return resynced
 end
 
-function document.reindex_all_embeddings(db_path)
+-- Every active document whose embedding is missing, from another model
+-- than the current one, or made from other text; with `all`, every
+-- active document. A row from before text_hash existed (NULL) is taken
+-- as current: until then every save re-embedded on the spot.
+-- -> reindexed, failed, unchanged.
+function document.reindex_all_embeddings(db_path, all)
+    agent_provider = require("agent_provider")
+    model = agent_provider.embedding_model()
+    stored = {}
+    rows = db.query(db_path, "SELECT document_id, model, text_hash FROM document_embedding;")
+    if rows == nil then
+        rows = {}
+    end
+    for _, row in ipairs(rows) do
+        stored[tonumber(row.document_id)] = row
+    end
     reindexed = 0
     failed = 0
-    for _, row in ipairs(document.all_active(db_path)) do
-        ok, err = document.reindex_embedding(db_path, row.id)
-        if ok == true then
-            reindexed = reindexed + 1
+    unchanged = 0
+    for _, doc in ipairs(document.all_active(db_path)) do
+        row = stored[tonumber(doc.id)]
+        if all != true and row != nil and row.model == model and sql_null_to_nil(row.text_hash) == nil then
+            unchanged = unchanged + 1
         else
-            failed = failed + 1
+            if_changed = all != true and row != nil and row.model == model
+            ok, err = document.reindex_embedding(db_path, doc.id, if_changed)
+            if ok == true then
+                reindexed = reindexed + 1
+            elseif ok == false then
+                unchanged = unchanged + 1
+            else
+                failed = failed + 1
+            end
         end
     end
-    return reindexed, failed
+    return reindexed, failed, unchanged
 end
 
 function escape_pattern(text)
@@ -2237,17 +2391,14 @@ function occurrence_count_sql(column, term)
     return string.format("((LENGTH(%s) - LENGTH(REPLACE(%s, %s, ''))) / LENGTH(%s))", lowered, lowered, quoted, quoted)
 end
 
--- A document is searchable unless archived, folded into a canonical
+-- A document is searchable unless archived or folded into a canonical
 -- duplicate (it would compete with its own canonical for the same
--- slot), or a saved chat session -- transcripts are saved as their own
--- documents (source_type = 'chat_session', knowledge.sync_session_
--- document) but a transcript full of tool-call noise would otherwise
--- pollute results for unrelated real-content queries. Still reachable
--- directly (entity.get/detail), just not ranked here.
+-- slot). Never by kind: a chat transcript, a distilled note and a
+-- synced file are all knowledge on the same level, ranked by relevance
+-- and usage (heat, tier) alone.
 SEARCHABLE_DOCUMENT_WHERE = """
 (d.archived_at IS NULL OR d.archived_at = '')
 AND (d.merged_into IS NULL OR d.merged_into = '')
-AND (d.source_type IS NULL OR d.source_type != 'chat_session')
 """
 
 SEARCH_RESULT_COLUMNS = """
@@ -2757,8 +2908,67 @@ end
 -- CLI entry point: `daat document create-json`. The link/embedding/
 -- pool-count backfills that used to live here are `daat repair` now
 -- (src/repair.lua).
+-- `daat repair knowledge`: rows derived from documents (or tags) that
+-- are no longer active -- leftovers from before document.drop_derived
+-- ran on archive, or from a raw SQL write. Only rows rebuilt from active
+-- documents anyway: never the knowledge_* history, memberships or the
+-- ledger. Embeddings from another model than the current one are only
+-- counted: deleting them would just leave search without vectors until
+-- `daat repair embeddings` re-embeds. -> {{label, action, count}, ...}
+ACTIVE_DOCUMENT_IDS = "SELECT id FROM document WHERE archived_at IS NULL OR archived_at = ''"
+ACTIVE_TAG_IDS = "SELECT id FROM tag WHERE archived_at IS NULL OR archived_at = ''"
+
+function document.prune_derived(db_path, dry_run)
+    checks = {
+        {label = "embeddings of archived or missing documents", action = "deleted",
+         tbl = "document_embedding", where = "document_id NOT IN (" .. ACTIVE_DOCUMENT_IDS .. ")"},
+        {label = "queued embeddings of archived or missing documents", action = "deleted",
+         tbl = "document_embedding_due", where = "document_id NOT IN (" .. ACTIVE_DOCUMENT_IDS .. ")"},
+        {label = "references from archived or missing documents", action = "deleted",
+         tbl = "document_reference", where = "document_id NOT IN (" .. ACTIVE_DOCUMENT_IDS .. ")"},
+        {label = "live links from archived or missing documents", action = "archived",
+         tbl = "document_link", where = "(archived_at IS NULL OR archived_at = '') AND from_document_id NOT IN (" .. ACTIVE_DOCUMENT_IDS .. ")"},
+        {label = "centres of archived or missing tags", action = "deleted",
+         tbl = "tag_centre", where = "tag_id NOT IN (" .. ACTIVE_TAG_IDS .. ")"},
+    }
+    results = {}
+    for _, check in ipairs(checks) do
+        rows = db.query(db_path, string.format("SELECT COUNT(*) AS n FROM %s WHERE %s;", check.tbl, check.where))
+        count = 0
+        if rows != nil and rows[1] != nil then
+            count = tonumber(rows[1].n)
+        end
+        if count > 0 and dry_run != true then
+            if check.action == "archived" then
+                db.exec(db_path, string.format("UPDATE %s SET archived_at = %s WHERE %s;", check.tbl, db.now_expr(db_path), check.where))
+            else
+                db.exec(db_path, string.format("DELETE FROM %s WHERE %s;", check.tbl, check.where))
+            end
+        end
+        table.insert(results, {label = check.label, action = check.action, count = count})
+    end
+
+    agent_provider = require("agent_provider")
+    model = agent_provider.embedding_model()
+    if model != nil then
+        rows = db.query(db_path, string.format("SELECT COUNT(*) AS n FROM document_embedding WHERE model != %s;", db.quote(model)))
+        if rows != nil and rows[1] != nil then
+            table.insert(results, {label = "embeddings from another model than " .. model .. " (run `daat repair embeddings`)",
+                action = "left", count = tonumber(rows[1].n)})
+        end
+    end
+    return results
+end
+
 function document.do_document(cmd_args, db_path)
     action = cmd_args[1]
+
+    if action == "embed-pending" then
+        counts = document.embed_pending(db_path)
+        print(string.format("Embedded %d, unchanged %d, failed %d, dropped %d (archived); %d still waiting",
+            counts.embedded, counts.unchanged, counts.failed, counts.dropped, counts.waiting))
+        return
+    end
 
     -- Bulk document import (e.g. meeting notes, a literature corpus).
     -- Links and embeddings come from entity.create's own document hook
@@ -2798,7 +3008,7 @@ function document.do_document(cmd_args, db_path)
         return
     end
 
-    print("Usage: daat document create-json")
+    print("Usage: daat document <create-json|embed-pending>")
 end
 
 return document

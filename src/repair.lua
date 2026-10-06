@@ -46,8 +46,8 @@ function repair_embeddings(cmd_args, db_path)
         print("Reindexed embedding for document #" .. tostring(entity_id))
         return
     end
-    reindexed, failed = document.reindex_all_embeddings(db_path)
-    print(string.format("Reindexed %d document(s), %d failed", reindexed, failed))
+    reindexed, failed, unchanged = document.reindex_all_embeddings(db_path, entity_id == nil and cmd_args[2] == "--all")
+    print(string.format("Reindexed %d document(s), %d failed, %d unchanged", reindexed, failed, unchanged))
 end
 
 function repair_embeddings_packed(cmd_args, db_path)
@@ -82,6 +82,17 @@ function repair_tags(cmd_args, db_path)
     print(string.format("Rebuilt %d tag centre(s) from %d membership(s)", tags, members))
 end
 
+function repair_knowledge(cmd_args, db_path)
+    dry_run = cmd_args[2] == "--dry-run"
+    for _, result in ipairs(document.prune_derived(db_path, dry_run)) do
+        action = result.action
+        if dry_run and action != "left" then
+            action = "would be " .. action
+        end
+        print(string.format("%6d %s: %s", result.count, result.label, action))
+    end
+end
+
 function repair_tag_evidence(cmd_args, db_path)
     written = tag.refresh_evidence(db_path)
     print(string.format("Refreshed core tag evidence: %d row(s) written", written))
@@ -97,8 +108,8 @@ end
 REPAIRS = {
     {name = "links", usage = "links [document_id]", run = repair_links,
      description = "Re-parse [[...]] links (and their context notes) from document content into document_link."},
-    {name = "embeddings", usage = "embeddings [document_id]", run = repair_embeddings,
-     description = "Recompute semantic-search embeddings (one embedding-provider call per document)."},
+    {name = "embeddings", usage = "embeddings [document_id | --all]", run = repair_embeddings,
+     description = "Embed documents whose embedding is missing, from another model, or of changed text (--all: every document; one provider call each)."},
     {name = "embeddings-packed", usage = "embeddings-packed", run = repair_embeddings_packed,
      description = "Pack stored embeddings into the binary form search reads (no provider calls)."},
     {name = "tags", usage = "tags [document_id]", run = repair_tags,
@@ -107,6 +118,8 @@ REPAIRS = {
      description = "Recompute core tag evidence (link, connection) from links and memberships."},
     {name = "references", usage = "references", run = repair_references,
      description = "Re-index entity names, then re-read every document's references to them."},
+    {name = "knowledge", usage = "knowledge [--dry-run]", run = repair_knowledge,
+     description = "Remove rows derived from archived documents or tags (embeddings, references; links archived); counts embeddings from another model."},
     {name = "pool-count", usage = "pool-count", run = repair_pool_count,
      description = "Recount active documents into knowledge_pool_state.document_count."},
 }

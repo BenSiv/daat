@@ -302,6 +302,12 @@ function config.platform_config()
         -- tag_second_within of the nearest (nil: one tag only).
         tag_dims = 256,
         tag_second_within = 0.02,
+        -- A saved document is (re-)embedded once it has gone this many
+        -- minutes without another edit (`daat document embed-pending`,
+        -- on the deployment's job timer), so a document edited again
+        -- and again -- a chat transcript after every turn -- costs one
+        -- embedding, not one per save. 0 embeds on save.
+        embedding_quiet_minutes = 5,
         -- How this deployment's people write its entity names, for
         -- references (reference.lua): {{lua_pattern, replacement}, ...}
         -- over lowercased text, e.g. {{"experiment%s*(%d)", "exp%1"}}
@@ -401,6 +407,9 @@ function config.platform_config()
     end
     if type(parsed.chat_attachments_enabled) == "boolean" then
         conf.chat_attachments_enabled = parsed.chat_attachments_enabled
+    end
+    if type(parsed.embedding_quiet_minutes) == "number" and parsed.embedding_quiet_minutes >= 0 then
+        conf.embedding_quiet_minutes = parsed.embedding_quiet_minutes
     end
     if type(parsed.tag_dims) == "number" and parsed.tag_dims >= 1 then
         conf.tag_dims = parsed.tag_dims
