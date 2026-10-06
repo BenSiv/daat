@@ -437,6 +437,7 @@ search_for_bioreactor_extra() {
     [[ "$output" =~ 'id="platform-kg-link-force"' ]]
     [[ "$output" =~ 'id="platform-kg-link-distance"' ]]
     [[ "$output" =~ 'id="platform-kg-center"' ]]
+    [[ "$output" =~ 'id="platform-kg-tag-force"' ]]
     [[ "$output" =~ 'id="platform-kg-forces-reset"' ]]
 }
 

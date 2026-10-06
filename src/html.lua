@@ -4608,6 +4608,7 @@ function html.render_knowledge_graph(nonce)
             <div class="platform-kg-force-row"><label for="platform-kg-link-force">Link force</label><input type="range" id="platform-kg-link-force" min="0" max="0.1" step="0.005" value="0.02"><span id="platform-kg-link-force-val">0.02</span></div>
             <div class="platform-kg-force-row"><label for="platform-kg-link-distance">Link distance</label><input type="range" id="platform-kg-link-distance" min="30" max="200" step="5" value="70"><span id="platform-kg-link-distance-val">70</span></div>
             <div class="platform-kg-force-row"><label for="platform-kg-center">Center force</label><input type="range" id="platform-kg-center" min="0" max="0.005" step="0.0001" value="0.001"><span id="platform-kg-center-val">0.001</span></div>
+            <div class="platform-kg-force-row"><label for="platform-kg-tag-force">Tag force</label><input type="range" id="platform-kg-tag-force" min="0" max="0.05" step="0.001" value="0.005"><span id="platform-kg-tag-force-val">0.005</span></div>
             <button type="button" class="platform-kg-forces-reset" id="platform-kg-forces-reset">Reset to defaults</button>
         </div>
         <div class="platform-kg-tooltip" id="platform-kg-tooltip"></div>
@@ -4625,6 +4626,7 @@ function html.render_knowledge_graph(nonce)
         var linkForceInput = document.getElementById('platform-kg-link-force');
         var linkDistanceInput = document.getElementById('platform-kg-link-distance');
         var centerInput = document.getElementById('platform-kg-center');
+        var tagForceInput = document.getElementById('platform-kg-tag-force');
         var forcesResetBtn = document.getElementById('platform-kg-forces-reset');
         var nodes = [], links = [], byId = {};
         // Only linked nodes take part in the force simulation (simNodes);
@@ -4633,6 +4635,8 @@ function html.render_knowledge_graph(nonce)
         // loops longer (5.5k nodes: ~130ms/frame; 1.3k linked: ~18ms).
         // They're laid out in a static grid instead (placeOrphans).
         var simNodes = [], orphans = [];
+        // Orphan blocks by tag, with their labels (placeOrphans, draw).
+        var orphanBlocks = [], ORPHAN_LABEL_FONT = '11px sans-serif';
 
         // -- Colour, filter, hide orphans (doc/structure-layers.md, "Graph
         // view"). Filtering only hides: hidden nodes keep their place in
@@ -4850,6 +4854,16 @@ function html.render_knowledge_graph(nonce)
                 ctx.fillStyle = color;
                 ctx.fill();
             });
+
+            // Each orphan block's tag, above it -- only while it has a
+            // node showing (orphans shown, its colour not hidden).
+            ctx.font = ORPHAN_LABEL_FONT;
+            ctx.textBaseline = 'bottom';
+            ctx.fillStyle = cssVar('--platform-muted', '#64748b');
+            orphanBlocks.forEach(function(block) {
+                if (block.y < minY || block.y > maxY || !block.nodes.some(isVisible)) { return; }
+                ctx.fillText(block.label, block.x, block.y);
+            });
         }
 
         // -- Interaction: pan, zoom, drag-to-reposition, click-to-
@@ -5042,7 +5056,16 @@ function html.render_knowledge_graph(nonce)
         var SPRING = 0.02;
         var SPRING_LENGTH = 70;
         var CENTER_PULL = 0.001;
-        var FORCE_DEFAULTS = { repulsion: REPULSION, spring: SPRING, springLength: SPRING_LENGTH, centerPull: CENTER_PULL };
+        // Tag force: every node is pulled toward the middle of the other
+        // nodes sharing its tag (the broad tag, as "Colour by tag"), so
+        // documents about the same thing gather even with no link between
+        // them -- always on, whatever the colouring. A quarter of a link's
+        // spring by default, so links still decide the shape and tags only
+        // group what links leave loose. Toward a centre rather than a
+        // spring per same-tag pair: O(n) a frame, where pairs would be
+        // O(n^2) inside a big tag.
+        var TAG_PULL = 0.005;
+        var FORCE_DEFAULTS = { repulsion: REPULSION, spring: SPRING, springLength: SPRING_LENGTH, centerPull: CENTER_PULL, tagPull: TAG_PULL };
         var SPRING_STRENGTH_CAP = 3; // caps a heavily-reinforced edge's pull -- raw_strength grows unbounded over time (link-strength-redesign.md), layout shouldn't
         var DAMPING = 0.8; // was 0.85 -- kills more velocity per frame, so overshoot/oscillation dies out instead of visibly jittering
         var MAX_SPEED = 8; // per-axis px/frame clamp -- keeps any single step's force spike (e.g. two nodes landing very close) from reading as a jerk
@@ -5108,7 +5131,7 @@ function html.render_knowledge_graph(nonce)
         function saveForceValues() {
             try {
                 window.localStorage.setItem(FORCES_VALUES_KEY, JSON.stringify({
-                    repulsion: REPULSION, spring: SPRING, springLength: SPRING_LENGTH, centerPull: CENTER_PULL
+                    repulsion: REPULSION, spring: SPRING, springLength: SPRING_LENGTH, centerPull: CENTER_PULL, tagPull: TAG_PULL
                 }));
             } catch (err) {
                 // ignore -- next load just falls back to defaults
@@ -5120,6 +5143,7 @@ function html.render_knowledge_graph(nonce)
             document.getElementById('platform-kg-link-force-val').textContent = SPRING;
             document.getElementById('platform-kg-link-distance-val').textContent = SPRING_LENGTH;
             document.getElementById('platform-kg-center-val').textContent = CENTER_PULL;
+            document.getElementById('platform-kg-tag-force-val').textContent = TAG_PULL;
         }
 
         function applyForceValuesToInputs() {
@@ -5127,6 +5151,7 @@ function html.render_knowledge_graph(nonce)
             linkForceInput.value = SPRING;
             linkDistanceInput.value = SPRING_LENGTH;
             centerInput.value = CENTER_PULL;
+            tagForceInput.value = TAG_PULL;
             updateForceLabels();
         }
 
@@ -5136,6 +5161,7 @@ function html.render_knowledge_graph(nonce)
             if (typeof savedForces.spring === 'number') { SPRING = savedForces.spring; }
             if (typeof savedForces.springLength === 'number') { SPRING_LENGTH = savedForces.springLength; }
             if (typeof savedForces.centerPull === 'number') { CENTER_PULL = savedForces.centerPull; }
+            if (typeof savedForces.tagPull === 'number') { TAG_PULL = savedForces.tagPull; }
         }
         applyForceValuesToInputs();
 
@@ -5174,11 +5200,18 @@ function html.render_knowledge_graph(nonce)
             saveForceValues();
             wakeSimulation();
         });
+        tagForceInput.addEventListener('input', function() {
+            TAG_PULL = parseFloat(tagForceInput.value);
+            updateForceLabels();
+            saveForceValues();
+            wakeSimulation();
+        });
         forcesResetBtn.addEventListener('click', function() {
             REPULSION = FORCE_DEFAULTS.repulsion;
             SPRING = FORCE_DEFAULTS.spring;
             SPRING_LENGTH = FORCE_DEFAULTS.springLength;
             CENTER_PULL = FORCE_DEFAULTS.centerPull;
+            TAG_PULL = FORCE_DEFAULTS.tagPull;
             applyForceValuesToInputs();
             try {
                 window.localStorage.removeItem(FORCES_VALUES_KEY);
@@ -5234,6 +5267,29 @@ function html.render_knowledge_graph(nonce)
             }
         }
 
+        // A node's tags for grouping: its broad tags (main first), or its
+        // tags when they have no broader one -- the "Colour by tag" level.
+        function groupTags(n) {
+            var list = (n.groups && n.groups.length) ? n.groups : n.tags;
+            return list || [];
+        }
+
+        // Middle of each tag's simulated nodes: {tag: {x, y, count}}.
+        function tagCentres() {
+            var centres = {};
+            simNodes.forEach(function(n) {
+                groupTags(n).forEach(function(tag) {
+                    var c = centres[tag] || (centres[tag] = { x: 0, y: 0, count: 0 });
+                    c.x += n.x; c.y += n.y; c.count++;
+                });
+            });
+            Object.keys(centres).forEach(function(tag) {
+                var c = centres[tag];
+                c.x /= c.count; c.y /= c.count;
+            });
+            return centres;
+        }
+
         function simStep(w, h) {
             for (var i = 0; i < simNodes.length; i++) {
                 for (var j = i + 1; j < simNodes.length; j++) {
@@ -5262,6 +5318,20 @@ function html.render_knowledge_graph(nonce)
                 if (!a.fixed) { a.vx += fx; a.vy += fy; }
                 if (!b.fixed) { b.vx -= fx; b.vy -= fy; }
             });
+            // Toward each tag's centre, split across a node's tags (a main
+            // tag and a close second each pull half).
+            if (TAG_PULL > 0) {
+                var centres = tagCentres();
+                simNodes.forEach(function(n) {
+                    if (n.fixed) { return; }
+                    var tags = groupTags(n).filter(function(tag) { return centres[tag].count > 1; });
+                    tags.forEach(function(tag) {
+                        var c = centres[tag];
+                        n.vx += (c.x - n.x) * TAG_PULL / tags.length;
+                        n.vy += (c.y - n.y) * TAG_PULL / tags.length;
+                    });
+                });
+            }
             simNodes.forEach(function(n) {
                 if (n.fixed) { n.vx = 0; n.vy = 0; return; }
                 var centerBoost = 1 + CENTER_CONNECTIVITY_GAIN * Math.log(1 + (n.connWeight || 0));
@@ -5282,11 +5352,18 @@ function html.render_knowledge_graph(nonce)
             return energy;
         }
 
-        // Orphans in a square grid just below the linked cluster, hottest
-        // first -- visible and clickable, but outside the simulation. Run
-        // after each settle, since the cluster's extent moves; a dragged
-        // orphan (manual) keeps wherever it was dropped.
+        // Orphans below the linked cluster, one block per tag (a node's
+        // main tag, as "Colour by tag"; untagged ones last), hottest first
+        // within a block -- so unlinked documents on the same subject sit
+        // together. Blocks run left to right in the order their tags sit
+        // across the linked cluster, so a tag's orphans land under its
+        // linked nodes (tags with none come after, largest first),
+        // wrapping at the cluster's width. Visible and clickable, but
+        // outside the simulation. Run after each settle, since the
+        // cluster's extent moves; a dragged orphan (manual) keeps wherever
+        // it was dropped.
         function placeOrphans() {
+            orphanBlocks = [];
             var grid = orphans.filter(function(n) { return !n.manual; });
             if (grid.length === 0) { return; }
             var minX = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -5295,15 +5372,43 @@ function html.render_knowledge_graph(nonce)
             });
             if (simNodes.length === 0) { minX = 0; maxX = canvas.width; maxY = 0; }
             var cell = 2 * nodeRadius(Math.max.apply(null, grid.map(function(n) { return n.heat || 0; }))) + COLLISION_PADDING;
-            var cols = Math.ceil(Math.sqrt(grid.length));
-            var left = (minX + maxX) / 2 - (cols - 1) * cell / 2;
-            var top = maxY + 4 * cell;
-            grid.sort(function(a, b) { return (b.heat || 0) - (a.heat || 0); });
-            grid.forEach(function(n, i) {
-                n.x = left + (i %% cols) * cell;
-                n.y = top + Math.floor(i / cols) * cell;
-                n.vx = 0;
-                n.vy = 0;
+            var byTag = {}, order = [];
+            grid.forEach(function(n) {
+                var key = groupTags(n)[0] || '';
+                if (!byTag[key]) { byTag[key] = []; order.push(key); }
+                byTag[key].push(n);
+            });
+            var centres = tagCentres();
+            order.sort(function(a, b) {
+                if (a === '' || b === '') { return a === '' ? 1 : -1; }
+                var ca = centres[a], cb = centres[b];
+                if (ca && cb) { return ca.x - cb.x; }
+                if (ca || cb) { return ca ? -1 : 1; }
+                return (byTag[b].length - byTag[a].length) || a.localeCompare(b);
+            });
+            ctx.font = ORPHAN_LABEL_FONT;
+            var gap = 2 * cell, labelSpace = cell;
+            var rowWidth = Math.max(maxX - minX, 12 * cell);
+            var left = (minX + maxX) / 2 - rowWidth / 2;
+            var x = left, y = maxY + 4 * cell, rowHeight = 0;
+            order.forEach(function(key) {
+                var members = byTag[key];
+                members.sort(function(a, b) { return (b.heat || 0) - (a.heat || 0); });
+                var label = key === '' ? 'No tag' : key;
+                var cols = Math.ceil(Math.sqrt(members.length));
+                var width = Math.max(cols * cell, ctx.measureText(label).width);
+                if (x > left && x + width > left + rowWidth) {
+                    x = left; y += rowHeight + gap; rowHeight = 0;
+                }
+                orphanBlocks.push({ label: label, x: x - cell / 2, y: y, nodes: members });
+                members.forEach(function(n, i) {
+                    n.x = x + (i %% cols) * cell;
+                    n.y = y + labelSpace + Math.floor(i / cols) * cell;
+                    n.vx = 0;
+                    n.vy = 0;
+                });
+                x += width + gap;
+                rowHeight = Math.max(rowHeight, labelSpace + Math.ceil(members.length / cols) * cell);
             });
         }
 
