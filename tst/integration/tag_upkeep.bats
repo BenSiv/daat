@@ -204,3 +204,17 @@ converged_tags() {
     [[ ! "$output" =~ "tag upkeep" ]]
     [ "$(db "SELECT COUNT(*) FROM tag;")" = "1" ]
 }
+
+@test "a --pairs-above review judges every pair above the cosine, writes nothing, and is refused without --dry-run" {
+    converged_tags
+    AGENT_TEST_RESPONSES=$'SAME -- one subject\nNAME: Merged | x' run "$BIN" repair tags --restructure --dry-run --judge --pairs-above -1
+    [ "$(printf '%s\n' "$output" | grep -c '^merge #')" = "3" ]
+    [[ "$output" =~ "SAME -- one subject" ]]
+    [[ ! "$output" =~ "fit #" ]]
+    [ "$(db "SELECT COUNT(*) FROM tag_judgment;")" = "0" ]
+    [ "$(db "SELECT COUNT(*) FROM tag WHERE archived_at IS NULL OR archived_at = '';")" = "3" ]
+
+    run "$BIN" repair tags --restructure --pairs-above -1
+    [[ "$output" =~ "--pairs-above is a review: run it with --dry-run" ]]
+    [ "$(db "SELECT COUNT(*) FROM tag WHERE archived_at IS NULL OR archived_at = '';")" = "3" ]
+}

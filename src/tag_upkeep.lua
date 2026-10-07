@@ -48,6 +48,8 @@ TAG_FIT_GROWTH = 0.20
 -- Agent calls per run, so one run's cost stays bounded; the rest wait
 -- for the next run.
 TAG_JUDGMENTS_PER_RUN = 5
+-- A --pairs-above review asks about at most this many pairs.
+TAG_REVIEW_PAIRS = 20
 TAG_TWO_MEANS_ROUNDS = 10
 TAG_PROMPT_TITLES = 8
 TAG_PROMPT_EXCERPT = 200
@@ -360,16 +362,23 @@ end
 
 -- What the data proposes right now: splits first, then merges (closest
 -- pair first, each tag in at most one proposal), then fit checks for
--- tags left untouched. Manual tags take no part.
-function tag_upkeep.proposals(db_path, dry_run)
+-- tags left untouched. Manual tags take no part. With `pairs_above` (a
+-- review: tags built elsewhere can start closer than the build baseline
+-- assumes), every pair above that cosine is proposed as a merge, and
+-- nothing else.
+function tag_upkeep.proposals(db_path, dry_run, pairs_above)
     tags = tag_upkeep.tags(db_path)
     baselines, merge_cosine = upkeep_baselines(db_path, tags, dry_run)
+    review = pairs_above != nil
+    if review then
+        merge_cosine = pairs_above
+    end
     split_min = config.platform_config().tag_split_min
     busy = {}
     proposals = {}
     for _, t in ipairs(tags) do
         base = baselines[t.id]
-        if t.source != "manual" and t.members >= split_min and t.spread > base.built_spread * TAG_SPLIT_SPREAD then
+        if not review and t.source != "manual" and t.members >= split_min and t.spread > base.built_spread * TAG_SPLIT_SPREAD then
             table.insert(proposals, {kind = "split", a = t, built_spread = base.built_spread})
             busy[t.id] = true
         end
@@ -389,7 +398,7 @@ function tag_upkeep.proposals(db_path, dry_run)
     table.sort(pairs_found, function(x, y) return x[3] > y[3] end)
     for _, pair in ipairs(pairs_found) do
         ta, tb = pair[1], pair[2]
-        if busy[ta.id] == nil and busy[tb.id] == nil then
+        if review or (busy[ta.id] == nil and busy[tb.id] == nil) then
             if tb.members > ta.members then
                 ta, tb = tb, ta
             end
@@ -399,7 +408,7 @@ function tag_upkeep.proposals(db_path, dry_run)
     end
     for _, t in ipairs(tags) do
         base = baselines[t.id]
-        if busy[t.id] == nil and t.source != "manual" and t.members >= base.fit_members * (1 + TAG_FIT_GROWTH)
+        if not review and busy[t.id] == nil and t.source != "manual" and t.members >= base.fit_members * (1 + TAG_FIT_GROWTH)
                 and t.members > base.fit_members then
             table.insert(proposals, {kind = "fit", a = t, fit_members = base.fit_members})
         end
@@ -736,13 +745,21 @@ function upkeep_describe(p)
 end
 
 -- One upkeep pass. opts: judge (ask the agent), apply (write: verdicts,
--- changes, baselines). Without apply nothing is written. -> report lines.
+-- changes, baselines), pairs_above (the merge review, never applied).
+-- Without apply nothing is written. -> report lines.
 function tag_upkeep.run(db_path, opts)
     -- Its own tables, idempotently: a CLI or job run on a store no web
     -- request has touched since a deploy wouldn't have them yet.
     tag_upkeep.init_schema(db_path)
     report = {}
-    proposals = tag_upkeep.proposals(db_path, not opts.apply)
+    if opts.pairs_above != nil and opts.apply then
+        return {"--pairs-above is a review: run it with --dry-run"}
+    end
+    proposals = tag_upkeep.proposals(db_path, not opts.apply, opts.pairs_above)
+    limit = TAG_JUDGMENTS_PER_RUN
+    if opts.pairs_above != nil then
+        limit = TAG_REVIEW_PAIRS
+    end
     asked = 0
     for _, p in ipairs(proposals) do
         line = upkeep_describe(p)
@@ -751,7 +768,7 @@ function tag_upkeep.run(db_path, opts)
             line = line .. ": kept -- judged " .. standing.verdict .. " before (" .. tostring(standing.reason) .. ")"
         elseif not opts.judge then
             line = line .. ": would ask the agent"
-        elseif asked >= TAG_JUDGMENTS_PER_RUN then
+        elseif asked >= limit then
             line = line .. ": left for the next run"
         else
             asked = asked + 1
