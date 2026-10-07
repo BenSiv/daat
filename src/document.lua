@@ -689,6 +689,7 @@ function document.init_schema(db_path)
     ensure_document_embedding_columns(db_path)
     db.exec(db_path, DOCUMENT_EMBEDDING_DUE_SCHEMA)
     tag.init_schema(db_path)
+    require("tag_upkeep").init_schema(db_path)
     reference.init_schema(db_path)
     ensure_document_knowledge_columns(db_path)
     ensure_document_knowledge_indexes(db_path)
@@ -2242,6 +2243,18 @@ function document.embed_pending(db_path)
     if waiting != nil and waiting[1] != nil then
         counts.waiting = tonumber(waiting[1].n) - counts.failed
     end
+    -- New vectors moved the tags' centres: the tags themselves may now
+    -- want a split, merge or new label (tag_upkeep.lua). pcalled: a
+    -- failure there mustn't undo the embedding work reported above.
+    counts.upkeep = {}
+    if counts.embedded > 0 and config.platform_config().tag_restructure == true then
+        ok, report = pcall(require("tag_upkeep").run, db_path, {judge = true, apply = true})
+        if ok then
+            counts.upkeep = report
+        else
+            counts.upkeep = {"tag upkeep failed: " .. tostring(report)}
+        end
+    end
     return counts
 end
 
@@ -2967,6 +2980,9 @@ function document.do_document(cmd_args, db_path)
         counts = document.embed_pending(db_path)
         print(string.format("Embedded %d, unchanged %d, failed %d, dropped %d (archived); %d still waiting",
             counts.embedded, counts.unchanged, counts.failed, counts.dropped, counts.waiting))
+        for _, line in ipairs(counts.upkeep) do
+            print("tag upkeep: " .. line)
+        end
         return
     end
 

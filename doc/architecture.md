@@ -213,6 +213,8 @@ A built-in assistant, not a bolted-on integration: real per-user conversation se
   | `agent_model` | the provider's own | Model for every `generate`/`converse` call: chat, distillation, link and tier judgment |
   | `embedding_model` | the provider's own | Model for every `embeddings` call; stored with each vector, and search compares only vectors from the current one (so a change needs `daat repair embeddings`) |
   | `embedding_quiet_minutes` | 5 | How long a saved document goes without another edit before `daat document embed-pending` embeds it (0: on save) |
+  | `tag_restructure` | `false` | Split, merge and label checks by the agent after `embed-pending` embeds anything (`tag_upkeep.lua`); review `daat repair tags --restructure --dry-run --judge` first |
+  | `tag_split_min` | 40 | A tag with fewer members is never split |
   | `search_provider` | none (web search off) | Which named backend `search_provider.lua` loads (`"google_cse"`, or `"test"`) |
 
   Core names no provider and no model. Each provider owns its defaults (`default_model`, `default_embedding_model` on the provider module) and its own settings, which it reads from platform.lua through `config.setting(key)`: `vertex_project` (required) and `vertex_region` (default `"global"`) for `agent_vertex.lua`; `smtp_url`/`smtp_user` for `mail_smtp.lua`; `graph_tenant_id`/`graph_client_id` for `mail_graph.lua`.

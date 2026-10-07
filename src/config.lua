@@ -308,6 +308,13 @@ function config.platform_config()
         -- and again -- a chat transcript after every turn -- costs one
         -- embedding, not one per save. 0 embeds on save.
         embedding_quiet_minutes = 5,
+        -- Tag restructuring (tag_upkeep.lua): split, merge and label
+        -- checks, each decided by the agent, after embed-pending embeds
+        -- anything. Off until a deployment has reviewed `daat repair tags
+        -- --restructure --dry-run --judge` on its own tags. A tag smaller
+        -- than tag_split_min is never split.
+        tag_restructure = false,
+        tag_split_min = 40,
         -- How this deployment's people write its entity names, for
         -- references (reference.lua): {{lua_pattern, replacement}, ...}
         -- over lowercased text, e.g. {{"experiment%s*(%d)", "exp%1"}}
@@ -412,6 +419,12 @@ function config.platform_config()
     end
     if type(parsed.embedding_quiet_minutes) == "number" and parsed.embedding_quiet_minutes >= 0 then
         conf.embedding_quiet_minutes = parsed.embedding_quiet_minutes
+    end
+    if parsed.tag_restructure == true or parsed.tag_restructure == false then
+        conf.tag_restructure = parsed.tag_restructure
+    end
+    if type(parsed.tag_split_min) == "number" and parsed.tag_split_min >= 2 then
+        conf.tag_split_min = parsed.tag_split_min
     end
     if type(parsed.tag_dims) == "number" and parsed.tag_dims >= 1 then
         conf.tag_dims = parsed.tag_dims

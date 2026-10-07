@@ -16,6 +16,7 @@
 
 document = require("document")
 tag = require("tag")
+tag_upkeep = require("tag_upkeep")
 reference = require("reference")
 
 repair = {}
@@ -78,7 +79,25 @@ function repair_tags(cmd_args, db_path)
         print("Document #" .. tostring(entity_id) .. " is in tag " .. table.concat(names, ", "))
         return
     end
+    flags = {}
+    for i = 2, #cmd_args do
+        flags[cmd_args[i]] = true
+    end
+    if flags["--restructure"] == true then
+        -- --dry-run: proposals only; --judge with it: the agent's
+        -- verdicts too; neither: judge and apply (doc/tag-ontology.md).
+        dry_run = flags["--dry-run"] == true
+        report = tag_upkeep.run(db_path, {judge = (not dry_run) or flags["--judge"] == true, apply = not dry_run})
+        if #report == 0 then
+            print("Nothing to restructure")
+        end
+        for _, line in ipairs(report) do
+            print(line)
+        end
+        return
+    end
     tags, members = tag.rebuild_centres(db_path)
+    tag_upkeep.record_baselines(db_path)
     print(string.format("Rebuilt %d tag centre(s) from %d membership(s)", tags, members))
 end
 
@@ -112,8 +131,8 @@ REPAIRS = {
      description = "Embed documents whose embedding is missing, from another model, or of changed text (--all: every document; one provider call each)."},
     {name = "embeddings-packed", usage = "embeddings-packed", run = repair_embeddings_packed,
      description = "Pack stored embeddings into the binary form search reads (no provider calls)."},
-    {name = "tags", usage = "tags [document_id]", run = repair_tags,
-     description = "Rebuild tag centres from memberships, or re-place one document by nearest tag."},
+    {name = "tags", usage = "tags [document_id | --restructure [--dry-run [--judge]]]", run = repair_tags,
+     description = "Rebuild tag centres from memberships (and the upkeep baselines), re-place one document by nearest tag, or split/merge/re-check tags with the agent's judgment."},
     {name = "tag-evidence", usage = "tag-evidence", run = repair_tag_evidence,
      description = "Recompute core tag evidence (link, connection) from links and memberships."},
     {name = "references", usage = "references", run = repair_references,

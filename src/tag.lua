@@ -89,6 +89,10 @@ function tag_dot(a, b)
     return s
 end
 
+-- For tag_upkeep.lua, which works on the same vectors.
+tag.unit = tag_unit
+tag.dot = tag_dot
+
 -- The document's tagging vector, or nil when it has no embedding yet.
 function tag.document_vector(db_path, document_id)
     rows = db.query(db_path, string.format(
