@@ -405,7 +405,9 @@ function config.platform_config()
     if type(parsed.extension_max_job_attempts) == "number" then
         conf.extension_max_job_attempts = parsed.extension_max_job_attempts
     end
-    if type(parsed.chat_attachments_enabled) == "boolean" then
+    -- true/false compared directly: Luam's type() calls them "flag", not
+    -- "boolean" (schema.lua's same note).
+    if parsed.chat_attachments_enabled == true or parsed.chat_attachments_enabled == false then
         conf.chat_attachments_enabled = parsed.chat_attachments_enabled
     end
     if type(parsed.embedding_quiet_minutes) == "number" and parsed.embedding_quiet_minutes >= 0 then
