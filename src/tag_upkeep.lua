@@ -402,7 +402,7 @@ function tag_upkeep.proposals(db_path, dry_run, pairs_above)
             if tb.members > ta.members then
                 ta, tb = tb, ta
             end
-            table.insert(proposals, {kind = "merge", a = ta, b = tb, cosine = pair[3], merge_cosine = merge_cosine})
+            table.insert(proposals, {kind = "merge", a = ta, b = tb, cosine = pair[3], merge_cosine = merge_cosine, review = review})
             busy[ta.id], busy[tb.id] = true, true
         end
     end
@@ -737,8 +737,12 @@ function upkeep_describe(p)
         return string.format("split #%d %q (%d members, spread %.3f, built %.3f)",
             p.a.id, p.a.label, p.a.members, p.a.spread, p.built_spread)
     elseif p.kind == "merge" then
-        return string.format("merge #%d %q (%d) and #%d %q (%d) (centres %.3f apart in cosine, closest at build %.3f)",
-            p.a.id, p.a.label, p.a.members, p.b.id, p.b.label, p.b.members, p.cosine, p.merge_cosine)
+        threshold = "closest at build"
+        if p.review then
+            threshold = "reviewing pairs above"
+        end
+        return string.format("merge #%d %q (%d) and #%d %q (%d) (centres %.3f apart in cosine, %s %.3f)",
+            p.a.id, p.a.label, p.a.members, p.b.id, p.b.label, p.b.members, p.cosine, threshold, p.merge_cosine)
     end
     return string.format("fit #%d %q (%d members, %d when its label was last judged)",
         p.a.id, p.a.label, p.a.members, p.fit_members)

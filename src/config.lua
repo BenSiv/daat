@@ -268,6 +268,21 @@ function validate_reference_aliases(list)
     return out
 end
 
+-- A list of Lua patterns; a non-string or a malformed pattern is dropped
+-- rather than failing every embedding.
+function validate_patterns(list)
+    out = {}
+    for _, pattern in ipairs(list) do
+        if type(pattern) == "string" and pattern != "" then
+            ok, _ = pcall(string.find, "", pattern)
+            if ok then
+                table.insert(out, pattern)
+            end
+        end
+    end
+    return out
+end
+
 function config.platform_config()
     if PLATFORM_CONFIG_CACHE != nil then
         return PLATFORM_CONFIG_CACHE
@@ -308,6 +323,12 @@ function config.platform_config()
         -- and again -- a chat transcript after every turn -- costs one
         -- embedding, not one per save. 0 embeds on save.
         embedding_quiet_minutes = 5,
+        -- Lua patterns: a content line any of them matches is left out of
+        -- the text a document's embedding is made from (document.lua's
+        -- embedding_text) -- a sync's own header, template boilerplate.
+        -- Changing them changes text hashes: `daat repair embeddings`
+        -- re-embeds what changed.
+        embedding_skip = nil,
         -- Tag restructuring (tag_upkeep.lua): split, merge and label
         -- checks, each decided by the agent, after embed-pending embeds
         -- anything. Off until a deployment has reviewed `daat repair tags
@@ -419,6 +440,9 @@ function config.platform_config()
     end
     if type(parsed.embedding_quiet_minutes) == "number" and parsed.embedding_quiet_minutes >= 0 then
         conf.embedding_quiet_minutes = parsed.embedding_quiet_minutes
+    end
+    if type(parsed.embedding_skip) == "table" then
+        conf.embedding_skip = validate_patterns(parsed.embedding_skip)
     end
     if parsed.tag_restructure == true or parsed.tag_restructure == false then
         conf.tag_restructure = parsed.tag_restructure

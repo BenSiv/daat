@@ -2116,13 +2116,84 @@ function hex_literal(bytes)
     return "X'" .. string.gsub(bytes, ".", function(c) return string.format("%02x", string.byte(c)) end) .. "'"
 end
 
--- The text a document's embedding is made from.
-function embedding_text(doc)
+-- The text a document's embedding was made from before the rules below
+-- -- what a row with no text_hash (made before it existed) was made from.
+function legacy_embedding_text(doc)
     text = doc.title
     if doc.content != nil and doc.content != "" then
         text = text .. "\n" .. doc.content
     end
     return text
+end
+
+-- A chat transcript's conversation: what the people and the agent said,
+-- without tool calls or raw tool results (agent.all_messages(..., false),
+-- the live chat view's own rendering). nil when it isn't a transcript.
+function transcript_conversation(db_path, document_id)
+    rows = db.query(db_path, string.format(
+        "SELECT source_type, source_ref FROM document WHERE id = %d;", tonumber(document_id)))
+    if rows == nil or rows[1] == nil or rows[1].source_type != "chat_session" or sql_null_to_nil(rows[1].source_ref) == nil then
+        return nil
+    end
+    agent = require("agent")
+    parts = {}
+    for _, msg in ipairs(agent.all_messages(db_path, rows[1].source_ref, false)) do
+        if (msg.role == "user" or msg.role == "assistant") and msg.content != nil and msg.content != "" then
+            label = "User"
+            if msg.role == "assistant" then
+                label = "Assistant"
+            end
+            table.insert(parts, label .. ": " .. msg.content)
+        end
+    end
+    return table.concat(parts, "\n\n")
+end
+
+-- The text a document's embedding is made from: what the document is
+-- about, not where it came from. Its title and content, less every line
+-- one of platform.lua's embedding_skip patterns matches (a sync's own
+-- header, a template's boilerplate) -- a SharePoint path and author in
+-- every synced file drew documents together by folder, not subject
+-- (2026-10-07). A chat transcript is embedded from its conversation
+-- alone (transcript_conversation).
+function embedding_text(db_path, doc)
+    body = transcript_conversation(db_path, doc.id)
+    if body == nil then
+        body = doc.content
+    end
+    if body == nil then
+        body = ""
+    end
+    patterns = config.platform_config().embedding_skip
+    if patterns != nil and #patterns > 0 then
+        kept = {}
+        for line in string.gmatch(body .. "\n", "(.-)\n") do
+            skip = false
+            for _, pattern in ipairs(patterns) do
+                if string.find(line, pattern) != nil then
+                    skip = true
+                    break
+                end
+            end
+            if skip == false then
+                table.insert(kept, line)
+            end
+        end
+        body = table.concat(kept, "\n")
+    end
+    body = string.gsub(body, "^%s+", "")
+    if body == "" then
+        return doc.title
+    end
+    return doc.title .. "\n" .. body
+end
+
+function document.embedding_text(db_path, document_id)
+    doc = entity.get(db_path, "document", document_id)
+    if doc == nil then
+        return nil
+    end
+    return embedding_text(db_path, doc)
 end
 
 -- Computes and caches one document's embedding -- best-effort (see
@@ -2137,7 +2208,7 @@ function document.reindex_embedding(db_path, document_id, if_changed)
     if doc == nil then
         return nil, "no such document"
     end
-    text = embedding_text(doc)
+    text = embedding_text(db_path, doc)
 
     model = agent_provider.embedding_model()
     if model == nil then
@@ -2305,8 +2376,9 @@ end
 
 -- Every active document whose embedding is missing, from another model
 -- than the current one, or made from other text; with `all`, every
--- active document. A row from before text_hash existed (NULL) is taken
--- as current: until then every save re-embedded on the spot.
+-- active document. A row from before text_hash existed (NULL) was made
+-- from legacy_embedding_text: when today's rules give the same text it's
+-- current, and only its hash is filled in (no provider call).
 -- -> reindexed, failed, unchanged.
 function document.reindex_all_embeddings(db_path, all)
     agent_provider = require("agent_provider")
@@ -2324,7 +2396,19 @@ function document.reindex_all_embeddings(db_path, all)
     unchanged = 0
     for _, doc in ipairs(document.all_active(db_path)) do
         row = stored[tonumber(doc.id)]
+        legacy_current = false
         if all != true and row != nil and row.model == model and sql_null_to_nil(row.text_hash) == nil then
+            current = entity.get(db_path, "document", doc.id)
+            if current != nil then
+                text = embedding_text(db_path, current)
+                if text == legacy_embedding_text(current) then
+                    db.exec(db_path, string.format("UPDATE document_embedding SET text_hash = %s WHERE document_id = %d;",
+                        db.quote(hmac.sha256("document_embedding", text)), tonumber(doc.id)))
+                    legacy_current = true
+                end
+            end
+        end
+        if legacy_current then
             unchanged = unchanged + 1
         else
             if_changed = all != true and row != nil and row.model == model
@@ -2976,6 +3060,18 @@ end
 function document.do_document(cmd_args, db_path)
     action = cmd_args[1]
 
+    -- What a document's embedding is made from, after embedding_skip
+    -- and the transcript rule -- to check a pattern against real text.
+    if action == "embedding-text" then
+        text = document.embedding_text(db_path, tonumber(cmd_args[2]))
+        if text == nil then
+            print("Usage: daat document embedding-text <document_id>")
+            return
+        end
+        print(text)
+        return
+    end
+
     if action == "embed-pending" then
         counts = document.embed_pending(db_path)
         print(string.format("Embedded %d, unchanged %d, failed %d, dropped %d (archived); %d still waiting",
@@ -3024,7 +3120,7 @@ function document.do_document(cmd_args, db_path)
         return
     end
 
-    print("Usage: daat document <create-json|embed-pending>")
+    print("Usage: daat document <create-json|embed-pending|embedding-text>")
 end
 
 return document

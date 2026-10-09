@@ -212,6 +212,7 @@ A built-in assistant, not a bolted-on integration: real per-user conversation se
   | `agent_provider` | none (chat and model calls off) | Which named backend `agent_provider.lua` loads (`"vertex"`, `"claude"`, or `"test"` for the deterministic stub) |
   | `agent_model` | the provider's own | Model for every `generate`/`converse` call: chat, distillation, link and tier judgment |
   | `embedding_model` | the provider's own | Model for every `embeddings` call; stored with each vector, and search compares only vectors from the current one (so a change needs `daat repair embeddings`) |
+  | `embedding_skip` | none | Lua patterns: a content line one matches is left out of what the document's embedding is made from (a sync's header, template boilerplate); a chat transcript is embedded from its conversation only, without tool calls or results. `daat document embedding-text <id>` shows the result |
   | `embedding_quiet_minutes` | 5 | How long a saved document goes without another edit before `daat document embed-pending` embeds it (0: on save) |
   | `tag_restructure` | `false` | Split, merge and label checks by the agent after `embed-pending` embeds anything (`tag_upkeep.lua`); review `daat repair tags --restructure --dry-run --judge` first |
   | `tag_split_min` | 40 | A tag with fewer members is never split |

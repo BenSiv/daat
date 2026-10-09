@@ -145,3 +145,39 @@ backdate_queue() {
     run "$BIN" repair embeddings --all
     [[ "$output" =~ "Reindexed 4 document(s), 0 failed, 0 unchanged" ]]
 }
+
+@test "embedding_skip leaves a sync's header lines out of the embedded text, not the content" {
+    write_platform_config ', embedding_quiet_minutes = 0, embedding_skip = {"^> %*%*Source:", "^>%s*$", "^%-%-%-%s*$", "([", 5}'
+    content=$'> **Source:** [Lab/Media/M9.xlsx](https://example.org/M9)\n>\n---\n\nM9 medium recipe for cotyledon cultures'
+    id=$(new_document "M9" "$content")
+    run "$BIN" document embedding-text "$id"
+    [ "$output" = $'M9\nM9 medium recipe for cotyledon cultures' ]
+    # The document itself keeps its header.
+    [[ "$(db "SELECT content FROM document WHERE id = $id;")" =~ "Source:" ]]
+}
+
+@test "a chat transcript is embedded from what was said, without tool calls or tool results" {
+    id=$(new_document "Chat: media" "placeholder")
+    db "INSERT INTO agent_session (id, login, title) VALUES ('s1', 'admin', 'media');"
+    db "INSERT INTO agent_message (session_id, role, content) VALUES ('s1', 'user', 'which medium for cotyledons?');"
+    db "INSERT INTO agent_message (session_id, role, content) VALUES ('s1', 'tool_result', 'raw search output #12 #13');"
+    db "INSERT INTO agent_message (session_id, role, content) VALUES ('s1', 'assistant', 'M9, per the protocol.');"
+    db "UPDATE document SET source_type = 'chat_session', source_ref = 's1' WHERE id = $id;"
+    run "$BIN" document embedding-text "$id"
+    [[ "$output" =~ "User: which medium for cotyledons?" ]]
+    [[ "$output" =~ "Assistant: M9, per the protocol." ]]
+    [[ ! "$output" =~ "raw search output" ]]
+    [[ ! "$output" =~ "placeholder" ]]
+}
+
+@test "repair embeddings fills in a legacy row's hash when its text is unchanged, and re-embeds it when the rules changed its text" {
+    plain=$(new_document "Plain" "nothing to skip here")
+    synced=$(new_document "Synced" $'> **Source:** somewhere\nthe real content')
+    db "UPDATE document_embedding SET text_hash = NULL, updated_at = '2000-01-01 00:00:00';"
+    write_platform_config ', embedding_quiet_minutes = 0, embedding_skip = {"^> %*%*Source:"}'
+    run "$BIN" repair embeddings
+    [[ "$output" =~ "Reindexed 1 document(s), 0 failed, 1 unchanged" ]]
+    [ "$(db "SELECT updated_at FROM document_embedding WHERE document_id = $plain;")" = "2000-01-01 00:00:00" ]
+    [ -n "$(db "SELECT text_hash FROM document_embedding WHERE document_id = $plain;")" ]
+    [ "$(db "SELECT updated_at FROM document_embedding WHERE document_id = $synced;")" != "2000-01-01 00:00:00" ]
+}
