@@ -548,5 +548,5 @@ EOF
     [[ "$output" =~ "pool-count" ]]
 
     run "$BIN" document resync-links
-    [[ "$output" =~ "Usage: daat document <create-json|embed-pending>" ]]
+    [[ "$output" =~ "Usage: daat document <create-json|embed-pending|embedding-text>" ]]
 }
