@@ -218,3 +218,27 @@ converged_tags() {
     [[ "$output" =~ "--pairs-above is a review: run it with --dry-run" ]]
     [ "$(db "SELECT COUNT(*) FROM tag WHERE archived_at IS NULL OR archived_at = '';")" = "3" ]
 }
+
+@test "daat tag merge folds tags into one: memberships move (pinned too), a document on both isn't duplicated, the rest are archived" {
+    for i in 1 2 3; do M[$i]=$(new_document "Induction media $i" 1 0.0$i 0); done
+    for i in 1 2; do S[$i]=$(new_document "Stock media $i" 1 0 0.0$i); done
+    C1=$(new_document "Cotyledon media 1" 1 0.01 0.01)
+    INDUCTION=$(new_tag "Induction media"); STOCK=$(new_tag "Stock media"); COT=$(new_tag "Cotyledon media")
+    for i in 1 2 3; do member "${M[$i]}" "$INDUCTION"; done
+    member "${S[1]}" "$STOCK"; member "${S[2]}" "$STOCK" pinned
+    member "$C1" "$COT"; member "${M[1]}" "$COT"
+
+    run "$BIN" tag merge "$INDUCTION" "$STOCK" "$COT" --label "Culture media preparation" --description "Preparing culture media."
+    [[ "$output" =~ "Merged #$STOCK into #$INDUCTION: 2 memberships moved, 0 already on #$INDUCTION" ]]
+    [[ "$output" =~ "Merged #$COT into #$INDUCTION: 1 memberships moved, 1 already on #$INDUCTION" ]]
+    [ "$(db "SELECT label FROM tag WHERE id = $INDUCTION;")" = "Culture media preparation" ]
+    [ "$(members_of "$INDUCTION")" = "6" ]
+    [ "$(db "SELECT COUNT(*) FROM document_tag WHERE document = ${S[2]} AND tag = $INDUCTION AND decision = 'pinned';")" = "1" ]
+    [ -n "$(db "SELECT archived_at FROM tag WHERE id = $STOCK;")" ]
+    [ -n "$(db "SELECT archived_at FROM tag WHERE id = $COT;")" ]
+    [ "$(db "SELECT members FROM tag_centre WHERE tag_id = $INDUCTION;")" = "6" ]
+    [ "$(db "SELECT COUNT(*) FROM tag_centre WHERE tag_id IN ($STOCK, $COT);")" = "0" ]
+
+    run "$BIN" tag merge "$INDUCTION" 999999
+    [[ "$output" =~ "Usage: daat tag merge" ]]
+}

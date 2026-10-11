@@ -166,21 +166,66 @@ function upkeep_save_merge_cosine(db_path, merge_cosine)
         db.replace_into(db_path), merge_cosine))
 end
 
--- The highest cosine between two centres (1.0 with fewer than two tags,
--- so nothing merges).
+-- How close two tags are: the cosine of their centred centres (nil when
+-- either has none -- a lone tag, or vectors of another length).
+function upkeep_closeness(a, b)
+    if a.centred == nil or b.centred == nil or #a.centred != #b.centred then
+        return nil
+    end
+    return tag.dot(a.centred, b.centred)
+end
+
+-- The closest pair of tags (1.0 with fewer than two, so nothing merges).
 function upkeep_closest_pair(tags)
-    best = -1.0
+    best = nil
     for i = 1, #tags do
         for j = i + 1, #tags do
-            if #tags[i].centre == #tags[j].centre then
-                best = math.max(best, tag.dot(tags[i].centre, tags[j].centre))
+            closeness = upkeep_closeness(tags[i], tags[j])
+            if closeness != nil and (best == nil or closeness > best) then
+                best = closeness
             end
         end
     end
-    if best < -0.5 then
+    if best == nil then
         return 1.0
     end
     return best
+end
+
+-- Each tag's centre with the pool's average taken out (t.centred), for
+-- comparing tags with each other. In daat's vectors every document in
+-- one field shares a large common direction, so raw centres all sit close
+-- (prod 2026-10-07: median pair 0.81, closest 0.97) while 92% of documents
+-- are still nearest their own tag; with the average removed the median
+-- pair is -0.07 and only real overlaps stay close. The average comes from
+-- the running summaries: every tag's sum over all their members.
+function upkeep_centre_tags(tags)
+    if #tags < 2 then
+        return
+    end
+    total, count = {}, 0
+    for _, t in ipairs(tags) do
+        if #total == 0 then
+            for i = 1, #t.sum do
+                total[i] = 0.0
+            end
+        end
+        if #t.sum == #total then
+            for i = 1, #total do
+                total[i] = total[i] + t.sum[i]
+            end
+            count = count + t.members
+        end
+    end
+    for _, t in ipairs(tags) do
+        if #t.sum == #total then
+            shifted = {}
+            for i = 1, #total do
+                shifted[i] = t.sum[i] / t.members - total[i] / count
+            end
+            t.centred = tag.unit(shifted, nil)
+        end
+    end
 end
 
 -- Every active tag with a centre: {{id, label, description, source,
@@ -208,6 +253,7 @@ function tag_upkeep.tags(db_path)
             end
         end
     end
+    upkeep_centre_tags(tags)
     return tags
 end
 
@@ -387,8 +433,8 @@ function tag_upkeep.proposals(db_path, dry_run, pairs_above)
     for i = 1, #tags do
         for j = i + 1, #tags do
             ta, tb = tags[i], tags[j]
-            if ta.source != "manual" and tb.source != "manual" and #ta.centre == #tb.centre then
-                cosine = tag.dot(ta.centre, tb.centre)
+            cosine = upkeep_closeness(ta, tb)
+            if ta.source != "manual" and tb.source != "manual" and cosine != nil then
                 if cosine > merge_cosine then
                     table.insert(pairs_found, {ta, tb, cosine})
                 end
@@ -640,6 +686,32 @@ function upkeep_save_spread(db_path, tag_id, spread)
     db.exec(db_path, string.format("UPDATE tag_upkeep SET built_spread = %.6f WHERE tag_id = %d;", spread, tonumber(tag_id)))
 end
 
+-- Moves every membership of tag `from` onto tag `into` (a document
+-- already on `into` keeps that one and the other is archived), then
+-- archives `from`. Ledgered writes; tag.lua's hooks keep the centres.
+-- -> moved, deduplicated.
+function tag_upkeep.merge(db_path, into, from, author, reason)
+    on_keep = {}
+    for _, m in ipairs(upkeep_members(db_path, into)) do
+        on_keep[m.document] = true
+    end
+    moved, deduplicated = 0, 0
+    for _, m in ipairs(upkeep_members(db_path, from)) do
+        if on_keep[m.document] == true then
+            entity.archive(db_path, "document_tag", m.membership, author, nil, reason)
+            tag.on_membership_archived(db_path, m.membership, true)
+            deduplicated = deduplicated + 1
+        else
+            entity.update(db_path, "document_tag", m.membership, {tag = tostring(into)}, author, nil, reason)
+            on_keep[m.document] = true
+            moved = moved + 1
+        end
+    end
+    entity.archive(db_path, "tag", from, author, nil, reason)
+    db.exec(db_path, string.format("DELETE FROM tag_upkeep WHERE tag_id = %d;", tonumber(from)))
+    return moved, deduplicated
+end
+
 -- Carries out a judged proposal. -> what was done, in words.
 function upkeep_apply(db_path, p, parsed)
     if p.kind == "split" then
@@ -688,27 +760,12 @@ function upkeep_apply(db_path, p, parsed)
         if name != nil and upkeep_label_taken(db_path, name.label, {[p.a.id] = true, [p.b.id] = true}) then
             return "not merged: the proposed label is already another tag's"
         end
-        members = upkeep_members(db_path, p.b.id)
-        for _, m in ipairs(members) do
+        for _, m in ipairs(upkeep_members(db_path, p.b.id)) do
             if m.decision != "computed" then
                 return "not merged: a person pinned a document to #" .. p.b.id
             end
         end
-        on_keep = {}
-        for _, m in ipairs(upkeep_members(db_path, p.a.id)) do
-            on_keep[m.document] = true
-        end
-        reason = "tag upkeep: merged into #" .. p.a.id
-        for _, m in ipairs(members) do
-            if on_keep[m.document] == true then
-                entity.archive(db_path, "document_tag", m.membership, "system", nil, reason)
-                tag.on_membership_archived(db_path, m.membership, true)
-            else
-                entity.update(db_path, "document_tag", m.membership, {tag = tostring(p.a.id)}, "system", nil, reason)
-            end
-        end
-        entity.archive(db_path, "tag", p.b.id, "system", nil, reason)
-        db.exec(db_path, string.format("DELETE FROM tag_upkeep WHERE tag_id = %d;", p.b.id))
+        tag_upkeep.merge(db_path, p.a.id, p.b.id, "system", "tag upkeep: merged into #" .. p.a.id)
         upkeep_rename(db_path, p.a, name, "tag upkeep: merged")
         upkeep_rebaseline(db_path, {p.a.id})
         return string.format("merged #%d into #%d", p.b.id, p.a.id)
@@ -741,7 +798,7 @@ function upkeep_describe(p)
         if p.review then
             threshold = "reviewing pairs above"
         end
-        return string.format("merge #%d %q (%d) and #%d %q (%d) (centres %.3f apart in cosine, %s %.3f)",
+        return string.format("merge #%d %q (%d) and #%d %q (%d) (closeness %.3f, %s %.3f)",
             p.a.id, p.a.label, p.a.members, p.b.id, p.b.label, p.b.members, p.cosine, threshold, p.merge_cosine)
     end
     return string.format("fit #%d %q (%d members, %d when its label was last judged)",
@@ -795,6 +852,61 @@ function tag_upkeep.run(db_path, opts)
         table.insert(report, line)
     end
     return report
+end
+
+-- `daat tag merge <into> <from>... [--label L] [--description D]`: a
+-- person's merge. Unlike upkeep's own, it moves pinned memberships too
+-- (a person asked for it); the merged tag's baselines start over.
+function tag_upkeep.do_tag(cmd_args, db_path)
+    usage = "Usage: daat tag merge <into_id> <from_id>... [--label <label>] [--description <text>]"
+    if cmd_args[1] != "merge" then
+        print(usage)
+        return
+    end
+    into = tonumber(cmd_args[2])
+    from, values = {}, {}
+    i = 3
+    while i <= #cmd_args do
+        if cmd_args[i] == "--label" or cmd_args[i] == "--description" then
+            values[string.sub(cmd_args[i], 3)] = cmd_args[i + 1]
+            i = i + 2
+        else
+            table.insert(from, tonumber(cmd_args[i]))
+            i = i + 1
+        end
+    end
+    if into == nil or #from == 0 then
+        print(usage)
+        return
+    end
+    tag_upkeep.init_schema(db_path)
+    ids = {[into] = true}
+    for _, id in ipairs(from) do
+        if id == nil or id == into or entity.get(db_path, "tag", id) == nil then
+            print(usage)
+            return
+        end
+        ids[id] = true
+    end
+    if entity.get(db_path, "tag", into) == nil then
+        print("No such tag: #" .. tostring(into))
+        return
+    end
+    if values.label != nil and upkeep_label_taken(db_path, values.label, ids) then
+        print("Another tag already has the label " .. values.label)
+        return
+    end
+    author = os.getenv("USER")
+    for _, id in ipairs(from) do
+        moved, deduplicated = tag_upkeep.merge(db_path, into, id, author, "merged into #" .. into)
+        print(string.format("Merged #%d into #%d: %d memberships moved, %d already on #%d", id, into, moved, deduplicated, into))
+    end
+    if next(values) != nil then
+        entity.update(db_path, "tag", into, values, author, nil, "merged")
+    end
+    upkeep_rebaseline(db_path, {into})
+    row = entity.get(db_path, "tag", into)
+    print(string.format("#%d %q", into, row.label))
 end
 
 return tag_upkeep
