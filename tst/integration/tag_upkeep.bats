@@ -242,3 +242,15 @@ converged_tags() {
     run "$BIN" tag merge "$INDUCTION" 999999
     [[ "$output" =~ "Usage: daat tag merge" ]]
 }
+
+@test "right after repair tags nothing is proposed: the closest pair at build isn't closer than itself" {
+    write_platform_config ", tag_split_min = 100"
+    for i in 1 2 3; do X[$i]=$(new_document "Near A $i" 1 0.3$i 0.1); done
+    for i in 1 2 3; do Y[$i]=$(new_document "Near B $i" 0.9 0.4$i 0.2); done
+    for i in 1 2 3; do Z[$i]=$(new_document "Far $i" 0 0.1$i 1); done
+    A=$(new_tag "A"); B=$(new_tag "B"); C=$(new_tag "C")
+    for i in 1 2 3; do member "${X[$i]}" "$A"; member "${Y[$i]}" "$B"; member "${Z[$i]}" "$C"; done
+    "$BIN" repair tags >/dev/null
+    run "$BIN" repair tags --restructure --dry-run
+    [[ "$output" =~ "Nothing to restructure" ]]
+}

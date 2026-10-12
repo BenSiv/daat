@@ -157,12 +157,14 @@ function sql_text(value)
 end
 
 function upkeep_save_baseline(db_path, tag_id, spread, fit_members)
-    db.exec(db_path, string.format("%s tag_upkeep (tag_id, built_spread, fit_members) VALUES (%d, %.6f, %d);",
+    db.exec(db_path, string.format("%s tag_upkeep (tag_id, built_spread, fit_members) VALUES (%d, %.17g, %d);",
         db.replace_into(db_path), tonumber(tag_id), spread, fit_members))
 end
 
 function upkeep_save_merge_cosine(db_path, merge_cosine)
-    db.exec(db_path, string.format("%s tag_upkeep_state (id, merge_cosine) VALUES (1, %.6f);",
+    -- Full precision: the closest pair at build must not compare as
+    -- closer than itself once read back.
+    db.exec(db_path, string.format("%s tag_upkeep_state (id, merge_cosine) VALUES (1, %.17g);",
         db.replace_into(db_path), merge_cosine))
 end
 
@@ -683,7 +685,7 @@ end
 -- A split judged SAME: the tag's current looseness is accepted as its
 -- own, so it's proposed again only if it loosens TAG_SPLIT_SPREAD more.
 function upkeep_save_spread(db_path, tag_id, spread)
-    db.exec(db_path, string.format("UPDATE tag_upkeep SET built_spread = %.6f WHERE tag_id = %d;", spread, tonumber(tag_id)))
+    db.exec(db_path, string.format("UPDATE tag_upkeep SET built_spread = %.17g WHERE tag_id = %d;", spread, tonumber(tag_id)))
 end
 
 -- Moves every membership of tag `from` onto tag `into` (a document
