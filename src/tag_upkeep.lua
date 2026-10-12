@@ -856,11 +856,21 @@ function tag_upkeep.run(db_path, opts)
     return report
 end
 
--- `daat tag merge <into> <from>... [--label L] [--description D]`: a
--- person's merge. Unlike upkeep's own, it moves pinned memberships too
+-- `daat tag build`: tag_build.lua's cold start. `daat tag merge <into>
+-- <from>... [--label L] [--description D]`: a person's merge. Unlike upkeep's own, it moves pinned memberships too
 -- (a person asked for it); the merged tag's baselines start over.
 function tag_upkeep.do_tag(cmd_args, db_path)
-    usage = "Usage: daat tag merge <into_id> <from_id>... [--label <label>] [--description <text>]"
+    usage = "Usage: daat tag merge <into_id> <from_id>... [--label <label>] [--description <text>]\n" ..
+        "       daat tag build [--dry-run [--name]]"
+    if cmd_args[1] == "build" then
+        flags = {}
+        for i = 2, #cmd_args do
+            flags[cmd_args[i]] = true
+        end
+        -- Required here, not at the top: tag_build.lua requires this file.
+        require("tag_build").run(db_path, {dry_run = flags["--dry-run"] == true, name = flags["--name"] == true})
+        return
+    end
     if cmd_args[1] != "merge" then
         print(usage)
         return
@@ -910,5 +920,10 @@ function tag_upkeep.do_tag(cmd_args, db_path)
     row = entity.get(db_path, "tag", into)
     print(string.format("#%d %q", into, row.label))
 end
+
+-- For tag_build.lua, which names the tags it builds the same way.
+tag_upkeep.context = upkeep_context
+tag_upkeep.titles = upkeep_titles
+tag_upkeep.label_taken = upkeep_label_taken
 
 return tag_upkeep
