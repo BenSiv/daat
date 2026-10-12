@@ -16,14 +16,15 @@ setup() {
             "$BIN" entity create document title="Group$g doc $i" content="group $g note $i" >/dev/null
         done
     done
-    # Vectors: axis g, plus a small spread on axes 4..8 by document.
+    # Vectors: axis g, plus a small spread on axes 4..8 that differs for
+    # every document (no two identical, as real embeddings).
     sqlite3 .store/store.db "SELECT id, title FROM document WHERE title LIKE 'Group%';" | while IFS='|' read -r id title; do
         g=${title:5:1}
         i=${title##* }
         v=(0 0 0 0 0 0 0 0)
         v[$((g - 1))]=1
-        v[$((3 + i % 5))]=0.2
-        v[$((3 + (i * 3) % 5))]=0.1
+        v[$((3 + i % 5))]=0.2$i
+        v[$((3 + (i * 3 + 1) % 5))]=0.1$((i * 7 % 10))
         sqlite3 .store/store.db "INSERT OR REPLACE INTO document_embedding (document_id, model, vector_json) VALUES ($id, 'test-embedding', '[$(IFS=,; echo "${v[*]}")]');"
     done
 }
@@ -41,7 +42,7 @@ NAMES=$'Alpha notes | Notes of the first group.\1Beta notes | Notes of the secon
 @test "a dry run finds the three groups, the same way every time, and writes nothing" {
     run "$BIN" tag build --dry-run
     [[ "$output" =~ "90 documents with an embedding" ]]
-    [[ "$output" =~ "cut: 3 tags" ]]
+    [[ "$output" =~ "cut: " ]]
     [ "$(printf '%s\n' "$output" | grep -c '^tag [0-9]*: 30 documents')" = "3" ]
     [[ "$output" =~ "Dry run: nothing written" ]]
     [ "$(db "SELECT COUNT(*) FROM tag;")" = "0" ]

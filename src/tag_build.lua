@@ -5,12 +5,13 @@
 --   1. Vectors: each document's tagging vector (tag_dims) with the pool's
 --      average taken out, renormalised -- in one field every document
 --      shares a large common direction (tag_upkeep.lua's comment).
---   2. Micro-clusters: spherical k-means, k ~ sqrt(n/2), seeded k-means++
+--   2. Micro-clusters: spherical k-means, k ~ sqrt(n) (up to
+--      BUILD_MICRO_MAX, as cluster_tags.py), seeded k-means++
 --      from a fixed seed, so the same pool always builds the same way.
 --   3. Consensus (evidence accumulation, as cluster_tags.py's --tree, but
 --      over micro-clusters rather than documents, which an n x n matrix
 --      can't hold in Luam): BUILD_RUNS more k-means runs, each on a
---      BUILD_FRACTION resample with k drawn around the micro count; for
+--      BUILD_FRACTION resample with k drawn from m/2 to 2m; for
 --      each pair of micro-clusters, the share of their documents' pairs
 --      that landed together.
 --   4. Average linkage over 1 - that share, cut where a level lives
@@ -45,6 +46,13 @@ BUILD_FRACTION = 0.8
 BUILD_MAX_ITERATIONS = 15
 BUILD_TAG_RANGE = {15, 60}
 BUILD_MIN_SIZE = 10
+-- Micro-clusters: sqrt(n), capped -- above the tag range's top on a
+-- real pool, or the cut has no resolution near it (prod 2026-10-12:
+-- sqrt(n/2) = 63 micro-clusters cut at 60 tags, the range's edge). No
+-- floor beyond 2: on a small pool a fixed floor leaves micro-clusters of
+-- a few documents that consensus runs never put together.
+BUILD_MICRO_MAX = 150
+BUILD_DOCS_PER_TAG = 60
 
 NAMING_PROMPT = """You name one group of documents from a lab's knowledge base, built as a tag.
 Reply with one line: <label> | <one-sentence description of what the documents are about>.
@@ -315,12 +323,13 @@ function build_cut(merges, m, groups)
         parent[merge[2]] = m + step
         remaining = remaining - 1
     end
-    roots, out = {}, {}
+    -- Groups numbered 1..count in order of first appearance.
+    roots, out, count = {}, {}, 0
     for i = 1, m do
         r = find(i)
         if roots[r] == nil then
-            roots[r] = #out + 1
-            table.insert(out, 0)
+            count = count + 1
+            roots[r] = count
         end
         out[i] = roots[r]
     end
@@ -328,15 +337,19 @@ function build_cut(merges, m, groups)
 end
 
 -- The tag count whose level lives longest within the range: cutting after
--- merge i leaves m - i groups, living for h[i+1] - h[i].
-function build_choose(merges, m)
-    low = math.min(BUILD_TAG_RANGE[1], math.max(2, math.floor(m / 2)))
+-- merge i leaves m - i groups, living for h[i+1] - h[i]. The range's floor
+-- scales with the pool -- a tag per BUILD_DOCS_PER_TAG documents at least,
+-- up to BUILD_TAG_RANGE's -- so a small pool can have a few tags.
+function build_choose(merges, m, n)
+    low = math.min(BUILD_TAG_RANGE[1], math.max(2, math.floor(n / BUILD_DOCS_PER_TAG)))
     high = math.min(BUILD_TAG_RANGE[2], m - 1)
     best, best_life = nil, -1.0
     for i = 1, #merges - 1 do
         groups = m - i
         life = merges[i + 1][3] - merges[i][3]
-        if groups >= low and groups <= high and life > best_life then
+        -- >=: merges run from many groups to few, so a tie goes to the
+        -- coarser cut -- the simpler answer.
+        if groups >= low and groups <= high and life >= best_life then
             best, best_life = groups, life
         end
     end
@@ -446,7 +459,7 @@ function tag_build.plan(db_path, report)
         return nil, "fewer than two documents with an embedding"
     end
     report(string.format("%d documents with an embedding (pool average removed, %d dimensions)", n, #vectors[1]))
-    m = math.max(2, math.floor(math.sqrt(n / 2) + 0.5))
+    m = math.max(2, math.min(BUILD_MICRO_MAX, math.floor(math.sqrt(n) + 0.5)))
     rng = build_rng(BUILD_SEED)
     everyone = {}
     for i = 1, n do
@@ -484,7 +497,10 @@ function tag_build.plan(db_path, report)
                 table.insert(sample, i)
             end
         end
-        k = math.max(2, math.floor(m / 2) + rng(math.max(1, 2 * m - math.floor(m / 2))) - 1)
+        -- k from m/2 to 2m, as cluster_tags.py: a run much coarser than
+        -- the real groups forces some of them together and blurs them.
+        k_low = math.max(2, math.floor(m / 2))
+        k = k_low + rng(math.max(1, 2 * m - k_low + 1)) - 1
         labels, _ = build_kmeans(vectors, sample, k, rng)
         hist = {}
         for a = 1, m do
@@ -532,11 +548,14 @@ function tag_build.plan(db_path, report)
         end
     end
     merges = build_average_linkage(distance, count)
-    groups, life, low, high = build_choose(merges, m)
+    groups, life, low, high = build_choose(merges, m, n)
     group_of = build_cut(merges, m, groups)
     report(string.format("cut: %d tags (level lives %.3f; range %d-%d)", groups, life, low, high))
 
     tags = build_assign(vectors, micro, group_of, groups)
+    if #tags != groups then
+        report(string.format("%d tags after dissolving those under %d documents", #tags, BUILD_MIN_SIZE))
+    end
     return {ids = ids, vectors = vectors, tags = tags, micro = m, groups = groups, life = life, low = low, high = high}
 end
 
