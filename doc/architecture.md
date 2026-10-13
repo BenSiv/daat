@@ -216,6 +216,7 @@ A built-in assistant, not a bolted-on integration: real per-user conversation se
   | `embedding_quiet_minutes` | 5 | How long a saved document goes without another edit before `daat document embed-pending` embeds it (0: on save) |
   | `tag_restructure` | `false` | Split, merge and label checks by the agent after `embed-pending` embeds anything (`tag_upkeep.lua`); review `daat repair tags --restructure --dry-run --judge` first |
   | `tag_split_min` | 40 | A tag with fewer members is never split |
+  | `tag_min_text` | 200 | A document whose embedded text has fewer characters besides its title (a folder page, a template, a file with no text) isn't tagged -- by placement or the cold start; it stays searchable |
   | `search_provider` | none (web search off) | Which named backend `search_provider.lua` loads (`"google_cse"`, or `"test"`) |
 
   Core names no provider and no model. Each provider owns its defaults (`default_model`, `default_embedding_model` on the provider module) and its own settings, which it reads from platform.lua through `config.setting(key)`: `vertex_project` (required) and `vertex_region` (default `"global"`) for `agent_vertex.lua`; `smtp_url`/`smtp_user` for `mail_smtp.lua`; `graph_tenant_id`/`graph_client_id` for `mail_graph.lua`.

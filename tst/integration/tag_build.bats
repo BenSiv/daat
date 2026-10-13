@@ -80,3 +80,14 @@ NAMES=$'Alpha notes | Notes of the first group.\1Beta notes | Notes of the secon
     [ "$(db "SELECT COUNT(DISTINCT label) FROM tag;")" = "3" ]
     [ "$(db "SELECT GROUP_CONCAT(label, ',') FROM (SELECT label FROM tag ORDER BY label);")" = "Bench notes,Desk notes,Field notes" ]
 }
+
+@test "documents with too little text of their own are left out of the build" {
+    for i in 1 2 3 4 5; do "$BIN" entity create document title="Folder $i" content="" >/dev/null; done
+    db "UPDATE document_embedding SET body_chars = 0 WHERE document_id IN (SELECT id FROM document WHERE title LIKE 'Folder %');"
+    db "INSERT OR IGNORE INTO document_embedding (document_id, model, vector_json, body_chars) SELECT id, 'test-embedding', '[0,0,0,1,1,0,0,0]', 0 FROM document WHERE title LIKE 'Folder %';"
+    write_platform_config ", tag_min_text = 200"
+    run "$BIN" tag build --dry-run
+    [[ "$output" =~ "90 documents with an embedding" ]]
+    [[ "$output" =~ "5 left out with under 200 characters of text" ]]
+    [ "$(printf '%s\n' "$output" | grep -c '^tag [0-9]*: 30 documents')" = "3" ]
+}

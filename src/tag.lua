@@ -286,8 +286,24 @@ function tag.on_document_archived(db_path, document_id, archived)
     end
 end
 
+-- Too little text of its own to have a subject (tag_min_text): the
+-- embedding's body_chars, or nil when not known yet.
+function tag_too_short(db_path, document_id)
+    rows = db.query(db_path, string.format(
+        "SELECT body_chars FROM document_embedding WHERE document_id = %d;", tonumber(document_id)))
+    if rows == nil or rows[1] == nil then
+        return false
+    end
+    body_chars = tonumber(rows[1].body_chars)
+    if body_chars == nil then
+        return false
+    end
+    return body_chars < config.platform_config().tag_min_text
+end
+
 -- Join the nearest tag: the best-scoring active centre, plus the second
--- best when it's within `tag_second_within` of the best. Only `computed`
+-- best when it's within `tag_second_within` of the best -- unless the
+-- document has too little text to have a subject (tag_too_short). Only `computed`
 -- memberships are this function's to change: a `pinned` tag stays and
 -- isn't duplicated, an `excluded` one is never chosen. Returns the
 -- chosen tag ids (empty when there are no tags or no vector yet).
@@ -295,6 +311,18 @@ function tag.place_document(db_path, document_id)
     chosen = {}
     vector = tag.document_vector(db_path, document_id)
     if vector == nil then
+        return chosen
+    end
+    -- Too little text: no computed tag (one it had is archived); a
+    -- person's pinned tags stay.
+    if tag_too_short(db_path, document_id) then
+        for _, row in ipairs(tag_memberships(db_path, document_id)) do
+            if row.decision == "computed" then
+                if entity.archive(db_path, "document_tag", tonumber(row.id), "system", nil, "tag upkeep: too little text") != nil then
+                    tag.on_membership_archived(db_path, tonumber(row.id), true)
+                end
+            end
+        end
         return chosen
     end
     centres = tag.active_centres(db_path)

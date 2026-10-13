@@ -335,6 +335,11 @@ function config.platform_config()
         -- --restructure --dry-run --judge` on its own tags. A tag smaller
         -- than tag_split_min is never split.
         tag_restructure = false,
+        -- A document whose embedded text has fewer characters than this
+        -- besides its title (a folder page, a template, a file with no
+        -- extractable text) has nothing to say what it's about: it isn't
+        -- tagged, by placement or the cold start. Still searchable.
+        tag_min_text = 200,
         tag_split_min = 40,
         -- How this deployment's people write its entity names, for
         -- references (reference.lua): {{lua_pattern, replacement}, ...}
@@ -446,6 +451,9 @@ function config.platform_config()
     end
     if parsed.tag_restructure == true or parsed.tag_restructure == false then
         conf.tag_restructure = parsed.tag_restructure
+    end
+    if type(parsed.tag_min_text) == "number" and parsed.tag_min_text >= 0 then
+        conf.tag_min_text = parsed.tag_min_text
     end
     if type(parsed.tag_split_min) == "number" and parsed.tag_split_min >= 2 then
         conf.tag_split_min = parsed.tag_split_min

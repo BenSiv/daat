@@ -501,10 +501,11 @@ DOCUMENT_EMBEDDING_SQL_COLUMNS = {
     {name = "vector_json", note = "the cached embedding vector, JSON-encoded"},
     {name = "vector_packed", note = "the same vector L2-normalised, as little-endian float32 bytes (what search reads)"},
     {name = "text_hash", note = "hash of the exact text embedded (NULL: made before this column, assumed current)"},
+    {name = "body_chars", note = "length of that text besides the title (NULL: not known yet; `daat repair embeddings` fills it)"},
     {name = "updated_at", note = "timestamp of the last reindex"},
 }
 
--- vector_packed (see document.pack_vector) and text_hash postdate the
+-- vector_packed (see document.pack_vector), text_hash and body_chars postdate the
 -- table, so they're retrofitted here rather than in
 -- DOCUMENT_EMBEDDING_SCHEMA -- one path for new and existing installs
 -- alike.
@@ -518,6 +519,9 @@ function ensure_document_embedding_columns(db_path)
     end
     if have["text_hash"] == nil then
         db.exec(db_path, "ALTER TABLE document_embedding ADD COLUMN text_hash VARCHAR(64);")
+    end
+    if have["body_chars"] == nil then
+        db.exec(db_path, "ALTER TABLE document_embedding ADD COLUMN body_chars INTEGER;")
     end
 end
 
@@ -2155,7 +2159,9 @@ end
 -- header, a template's boilerplate) -- a SharePoint path and author in
 -- every synced file drew documents together by folder, not subject
 -- (2026-10-07). A chat transcript is embedded from its conversation
--- alone (transcript_conversation).
+-- alone (transcript_conversation). Also returns the length of that text
+-- besides the title (document_embedding.body_chars): a document with
+-- too little of its own isn't tagged (tag_min_text).
 function embedding_text(db_path, doc)
     body = transcript_conversation(db_path, doc.id)
     if body == nil then
@@ -2182,10 +2188,11 @@ function embedding_text(db_path, doc)
         body = table.concat(kept, "\n")
     end
     body = string.gsub(body, "^%s+", "")
+    body = string.gsub(body, "%s+$", "")
     if body == "" then
-        return doc.title
+        return doc.title, 0
     end
-    return doc.title .. "\n" .. body
+    return doc.title .. "\n" .. body, string.len(body)
 end
 
 function document.embedding_text(db_path, document_id)
@@ -2193,7 +2200,8 @@ function document.embedding_text(db_path, document_id)
     if doc == nil then
         return nil
     end
-    return embedding_text(db_path, doc)
+    text, _ = embedding_text(db_path, doc)
+    return text
 end
 
 -- Computes and caches one document's embedding -- best-effort (see
@@ -2208,7 +2216,7 @@ function document.reindex_embedding(db_path, document_id, if_changed)
     if doc == nil then
         return nil, "no such document"
     end
-    text = embedding_text(db_path, doc)
+    text, body_chars = embedding_text(db_path, doc)
 
     model = agent_provider.embedding_model()
     if model == nil then
@@ -2217,8 +2225,12 @@ function document.reindex_embedding(db_path, document_id, if_changed)
     text_hash = hmac.sha256("document_embedding", text)
     if if_changed == true then
         rows = db.query(db_path, string.format(
-            "SELECT model, text_hash FROM document_embedding WHERE document_id = %d;", tonumber(document_id)))
+            "SELECT model, text_hash, body_chars FROM document_embedding WHERE document_id = %d;", tonumber(document_id)))
         if rows != nil and rows[1] != nil and rows[1].model == model and rows[1].text_hash == text_hash then
+            if sql_null_to_nil(rows[1].body_chars) == nil then
+                db.exec(db_path, string.format("UPDATE document_embedding SET body_chars = %d WHERE document_id = %d;",
+                    body_chars, tonumber(document_id)))
+            end
             return false
         end
     end
@@ -2233,9 +2245,9 @@ function document.reindex_embedding(db_path, document_id, if_changed)
         packed_literal = hex_literal(packed)
     end
     db.exec(db_path, string.format(
-        "%s document_embedding (document_id, model, vector_json, vector_packed, text_hash, updated_at) VALUES (%d, %s, %s, %s, %s, %s);",
+        "%s document_embedding (document_id, model, vector_json, vector_packed, text_hash, body_chars, updated_at) VALUES (%d, %s, %s, %s, %s, %d, %s);",
         db.replace_into(db_path),
-        tonumber(document_id), db.quote(model), db.quote(json.encode(vector)), packed_literal, db.quote(text_hash), db.now_expr(db_path)
+        tonumber(document_id), db.quote(model), db.quote(json.encode(vector)), packed_literal, db.quote(text_hash), body_chars, db.now_expr(db_path)
     ))
     return true
 end
@@ -2400,10 +2412,10 @@ function document.reindex_all_embeddings(db_path, all)
         if all != true and row != nil and row.model == model and sql_null_to_nil(row.text_hash) == nil then
             current = entity.get(db_path, "document", doc.id)
             if current != nil then
-                text = embedding_text(db_path, current)
+                text, body_chars = embedding_text(db_path, current)
                 if text == legacy_embedding_text(current) then
-                    db.exec(db_path, string.format("UPDATE document_embedding SET text_hash = %s WHERE document_id = %d;",
-                        db.quote(hmac.sha256("document_embedding", text)), tonumber(doc.id)))
+                    db.exec(db_path, string.format("UPDATE document_embedding SET text_hash = %s, body_chars = %d WHERE document_id = %d;",
+                        db.quote(hmac.sha256("document_embedding", text)), body_chars, tonumber(doc.id)))
                     legacy_current = true
                 end
             end

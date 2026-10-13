@@ -254,3 +254,23 @@ converged_tags() {
     run "$BIN" repair tags --restructure --dry-run
     [[ "$output" =~ "Nothing to restructure" ]]
 }
+
+@test "a document with too little text isn't placed, and loses a computed tag it had; a pinned one stays" {
+    for i in 1 2 3; do X[$i]=$(new_document "Long $i" 1 0.0$i 0); done
+    T=$(new_tag "Cultures"); P=$(new_tag "Pinned by hand")
+    for i in 1 2 3; do member "${X[$i]}" "$T"; done
+    "$BIN" repair tags >/dev/null
+    short=$(new_document "Folder" 0 0.05 1)
+    long=$(new_document "Protocol" 1 0.04 0)
+    member "$short" "$T"; member "$short" "$P" pinned
+    db "UPDATE document_embedding SET body_chars = 12 WHERE document_id = $short;"
+    db "UPDATE document_embedding SET body_chars = 900 WHERE document_id = $long;"
+    write_platform_config ", tag_min_text = 200"
+
+    run "$BIN" repair tags "$short"
+    [[ "$output" =~ "not placed" ]]
+    [ "$(db "SELECT COUNT(*) FROM document_tag WHERE document = $short AND tag = $T AND (archived_at IS NULL OR archived_at = '');")" = "0" ]
+    [ "$(db "SELECT COUNT(*) FROM document_tag WHERE document = $short AND tag = $P AND decision = 'pinned' AND (archived_at IS NULL OR archived_at = '');")" = "1" ]
+    run "$BIN" repair tags "$long"
+    [[ "$output" =~ "is in tag #$T" ]]
+}

@@ -17,6 +17,8 @@
 --   4. Average linkage over 1 - that share, cut where a level lives
 --      longest (the gap between successive merge heights) within
 --      BUILD_TAG_RANGE.
+--      Documents with under tag_min_text characters of their own text
+--      (a folder page, a template, a file with no text) are left out.
 --   5. Every document joins its nearest tag centre (and a second within
 --      tag_second_within); tags under BUILD_MIN_SIZE are dissolved into
 --      their neighbours first.
@@ -41,6 +43,8 @@ document = require("document")
 tag_build = {}
 
 BUILD_SEED = 42
+-- Documents build_vectors left out for too little text (for the report).
+BUILD_SHORT = 0
 BUILD_RUNS = 10
 BUILD_FRACTION = 0.8
 BUILD_MAX_ITERATIONS = 15
@@ -123,24 +127,33 @@ end
 function build_vectors(db_path)
     dims = config.platform_config().tag_dims
     rows = db.query(db_path, """
-        SELECT e.document_id, e.vector_packed,
+        SELECT e.document_id, e.vector_packed, e.body_chars,
                CASE WHEN e.vector_packed IS NULL THEN e.vector_json END AS vector_json
         FROM document_embedding e JOIN document d ON d.id = e.document_id
         WHERE (d.archived_at IS NULL OR d.archived_at = '') ORDER BY e.document_id;""")
     ids, raw = {}, {}
+    min_text = config.platform_config().tag_min_text
+    BUILD_SHORT = 0
     for _, row in ipairs(build_list(rows)) do
-        full = document.unpack_vector(row.vector_packed)
-        if full == nil and row.vector_json != nil and row.vector_json != "" then
-            decoded, _, _ = json.decode(row.vector_json)
-            if type(decoded) == "table" then
-                full = decoded
+        -- Too little text of its own to have a subject (tag_min_text);
+        -- body_chars unknown (NULL) counts as enough.
+        body_chars = tonumber(row.body_chars)
+        if body_chars != nil and body_chars < min_text then
+            BUILD_SHORT = BUILD_SHORT + 1
+        else
+            full = document.unpack_vector(row.vector_packed)
+            if full == nil and row.vector_json != nil and row.vector_json != "" then
+                decoded, _, _ = json.decode(row.vector_json)
+                if type(decoded) == "table" then
+                    full = decoded
+                end
             end
-        end
-        if full != nil and #full > 0 then
-            cut = tag.unit(full, dims)
-            if cut != nil then
-                table.insert(ids, tonumber(row.document_id))
-                table.insert(raw, cut)
+            if full != nil and #full > 0 then
+                cut = tag.unit(full, dims)
+                if cut != nil then
+                    table.insert(ids, tonumber(row.document_id))
+                    table.insert(raw, cut)
+                end
             end
         end
     end
@@ -458,7 +471,8 @@ function tag_build.plan(db_path, report)
     if n < 2 then
         return nil, "fewer than two documents with an embedding"
     end
-    report(string.format("%d documents with an embedding (pool average removed, %d dimensions)", n, #vectors[1]))
+    report(string.format("%d documents with an embedding (pool average removed, %d dimensions); %d left out with under %d characters of text",
+        n, #vectors[1], BUILD_SHORT, config.platform_config().tag_min_text))
     m = math.max(2, math.min(BUILD_MICRO_MAX, math.floor(math.sqrt(n) + 0.5)))
     rng = build_rng(BUILD_SEED)
     everyone = {}
