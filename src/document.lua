@@ -178,6 +178,15 @@ function document.link_hash(link_text)
     return hmac.sha256("document_link", link_text)
 end
 
+-- Hash of the content a document's links are synced from
+-- (document_link_sync.content_hash).
+function document.link_sync_hash(content)
+    if content == nil then
+        content = ""
+    end
+    return hmac.sha256("document_link_sync", content)
+end
+
 function create_document_link_table(db_path, table_name)
     db.exec(db_path, string.format(DOCUMENT_LINK_TABLE_SQL, table_name, db.autoincrement_keyword(db_path)))
 end
@@ -376,6 +385,17 @@ DOCUMENT_EMBEDDING_DUE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS document_embedding_due (
     document_id INTEGER PRIMARY KEY,
     queued_at VARCHAR(19) NOT NULL
+);
+"""
+
+-- The content each document's document_link rows were last synced from
+-- (document.sync_links writes it on every path), so `daat repair links`
+-- can skip documents whose content hasn't changed since. Derived like
+-- document_link itself: archiving drops the row (document.drop_derived).
+DOCUMENT_LINK_SYNC_SCHEMA = """
+CREATE TABLE IF NOT EXISTS document_link_sync (
+    document_id INTEGER PRIMARY KEY,
+    content_hash VARCHAR(64) NOT NULL
 );
 """
 
@@ -692,6 +712,7 @@ function document.init_schema(db_path)
     db.exec(db_path, string.format(DOCUMENT_EMBEDDING_SCHEMA, db.now_expr(db_path)))
     ensure_document_embedding_columns(db_path)
     db.exec(db_path, DOCUMENT_EMBEDDING_DUE_SCHEMA)
+    db.exec(db_path, DOCUMENT_LINK_SYNC_SCHEMA)
     tag.init_schema(db_path)
     require("tag_upkeep").init_schema(db_path)
     reference.init_schema(db_path)
@@ -1076,6 +1097,11 @@ function document.sync_links(db_path, document_id, content)
     for _, raw_link in ipairs(ordered) do
         document.upsert_link(db_path, document_id, document.resolve_link_text(db_path, raw_link), raw_link)
     end
+
+    db.exec(db_path, string.format(
+        "%s document_link_sync (document_id, content_hash) VALUES (%d, %s);",
+        db.replace_into(db_path), tonumber(document_id), db.quote(document.link_sync_hash(content))
+    ))
 end
 
 -- Documents linked to/from `document_id` (both directions, self never
@@ -1944,6 +1970,7 @@ function document.drop_derived(db_path, document_id)
     db.exec(db_path, string.format("DELETE FROM document_embedding WHERE document_id = %d;", document_id))
     db.exec(db_path, string.format("DELETE FROM document_embedding_due WHERE document_id = %d;", document_id))
     db.exec(db_path, string.format("DELETE FROM document_reference WHERE document_id = %d;", document_id))
+    db.exec(db_path, string.format("DELETE FROM document_link_sync WHERE document_id = %d;", document_id))
     db.exec(db_path, string.format(
         "UPDATE document_link SET archived_at = %s WHERE from_document_id = %d AND (archived_at IS NULL OR archived_at = '');",
         db.now_expr(db_path), document_id))
@@ -2377,13 +2404,51 @@ function document.resync_links(db_path, document_id)
     return true
 end
 
-function document.resync_all_links(db_path)
-    resynced = 0
-    for _, row in ipairs(document.all_active(db_path)) do
-        document.resync_links(db_path, row.id)
-        resynced = resynced + 1
+-- Content is read RESYNC_LINKS_PAGE documents at a time, not one
+-- entity.get each nor the whole corpus in one result.
+RESYNC_LINKS_PAGE = 200
+
+-- Re-syncs every active document whose content differs from what its
+-- links were last synced from (document_link_sync), or has no such row;
+-- with `all`, every active document. Unchanged content would give the
+-- same rows, bar a dangling link whose target exists by now -- one
+-- resolve_dangling_links pass at the end covers those.
+-- -> resynced, unchanged.
+function document.resync_all_links(db_path, all)
+    stored = {}
+    if all != true then
+        rows = db.query(db_path, "SELECT document_id, content_hash FROM document_link_sync;")
+        if rows == nil then
+            rows = {}
+        end
+        for _, row in ipairs(rows) do
+            stored[tonumber(row.document_id)] = row.content_hash
+        end
     end
-    return resynced
+    resynced = 0
+    unchanged = 0
+    last_id = 0
+    while true do
+        page = db.query(db_path, string.format(
+            "SELECT id, content FROM document WHERE (archived_at IS NULL OR archived_at = '') AND id > %d ORDER BY id ASC LIMIT %d;",
+            last_id, RESYNC_LINKS_PAGE))
+        if page == nil or #page == 0 then
+            break
+        end
+        for _, row in ipairs(page) do
+            id = tonumber(row.id)
+            content = sql_null_to_nil(row.content)
+            if stored[id] != nil and stored[id] == document.link_sync_hash(content) then
+                unchanged = unchanged + 1
+            else
+                document.sync_links(db_path, id, content)
+                resynced = resynced + 1
+            end
+            last_id = id
+        end
+    end
+    document.resolve_dangling_links(db_path)
+    return resynced, unchanged
 end
 
 -- Every active document whose embedding is missing, from another model
@@ -3037,6 +3102,8 @@ function document.prune_derived(db_path, dry_run)
          tbl = "document_reference", where = "document_id NOT IN (" .. ACTIVE_DOCUMENT_IDS .. ")"},
         {label = "live links from archived or missing documents", action = "archived",
          tbl = "document_link", where = "(archived_at IS NULL OR archived_at = '') AND from_document_id NOT IN (" .. ACTIVE_DOCUMENT_IDS .. ")"},
+        {label = "link sync records of archived or missing documents", action = "deleted",
+         tbl = "document_link_sync", where = "document_id NOT IN (" .. ACTIVE_DOCUMENT_IDS .. ")"},
         {label = "centres of archived or missing tags", action = "deleted",
          tbl = "tag_centre", where = "tag_id NOT IN (" .. ACTIVE_TAG_IDS .. ")"},
     }

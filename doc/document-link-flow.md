@@ -1,6 +1,6 @@
 # document_link: how links get created and read
 
-Content is the only place knowledge lives. `document_link` is a purely derived index of the `[[links]]` in document content: dropping it and running `daat repair links` loses nothing but usage metadata (strength, archive and creation times). Every reader queries the index; only one writer fills it, from content, and it runs on every write path. *Why* two documents are connected is never stored on a link -- it's the sentence around the link in content, or a document that links both and says why, written the same way by a person or the agent.
+Content is the only place knowledge lives. `document_link` is a purely derived index of the `[[links]]` in document content: dropping it and running `daat repair links --all` loses nothing but usage metadata (strength, archive and creation times). Every reader queries the index; only one writer fills it, from content, and it runs on every write path. *Why* two documents are connected is never stored on a link -- it's the sentence around the link in content, or a document that links both and says why, written the same way by a person or the agent.
 
 ```mermaid
 flowchart LR
@@ -44,7 +44,7 @@ A link is `[[target]]` or `[[folder/target]]` on a single line, with no brackets
 
 `sync_links` makes a document's rows match its content: every `[[link]]` in it goes through `document.upsert_link`, and every active row whose link text no longer appears is archived, not deleted, so `raw_strength` survives the link being retyped later -- retyping a deleted link reintroduces the same row at its old strength rather than starting over at `BASE_LINK_STRENGTH`. `upsert_link` also heals a dangling row (`to_document_id` NULL) once its target resolves, and never replaces a target it already has.
 
-A dangling link heals on its own too: creating, renaming, moving or unarchiving a document runs `document.resolve_dangling_links`, which re-resolves every active dangling row, so a bulk import's forward links complete as their targets arrive. `daat repair links` is left for content that reached the table without going through `entity` at all -- a raw SQL insert, a restored backup.
+A dangling link heals on its own too: creating, renaming, moving or unarchiving a document runs `document.resolve_dangling_links`, which re-resolves every active dangling row, so a bulk import's forward links complete as their targets arrive. `daat repair links` is left for content that reached the table without going through `entity` at all -- a raw SQL insert, a restored backup. It is incremental: `document.sync_links` records the hash of the content it synced from in `document_link_sync` (dropped with the other derived rows on archive), and the repair re-syncs only documents whose content differs or have no record, then runs one `resolve_dangling_links` pass; `--all` re-syncs every document.
 
 Rows are keyed by their own `id`, with uniqueness per (document, link text) enforced on `link_hash` (SHA-256 of the link text): link text is whatever a title is, and no key length can promise to hold that -- a real paper title overflowed the old `VARCHAR(255)` key.
 

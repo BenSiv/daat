@@ -537,12 +537,35 @@ EOF
     [ "$output" = "2|1" ]
 
     run "$BIN" repair links
-    [[ "$output" =~ "Resynced links for 2 document(s)" ]]
+    [[ "$output" =~ "Resynced links for 0 document(s), 2 unchanged" ]]
+}
+
+@test "repair links redoes only documents whose content changed since their links were synced; --all redoes everything" {
+    save_document "csrf_token=${CSRF}&title=Home&parent_id=&content=Welcome." >/dev/null
+    save_document "csrf_token=${CSRF}&title=Guide&parent_id=&content=See [[Home]]." >/dev/null
+    save_document "csrf_token=${CSRF}&title=Notes&parent_id=&content=nothing yet" >/dev/null
+    store() { bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db \"$1\""; }
+    [ "$(store 'SELECT COUNT(*) FROM document_link_sync;')" = "3" ]
+
+    # Changed behind the hooks' back (a raw SQL write).
+    store "UPDATE document SET content = 'Back to [[Guide]].' WHERE id = 3;"
+    run "$BIN" repair links
+    [[ "$output" =~ "Resynced links for 1 document(s), 2 unchanged" ]]
+    [ "$(store 'SELECT from_document_id, to_document_id FROM document_link ORDER BY from_document_id;')" = $'2|1\n3|2' ]
+
+    run "$BIN" repair links
+    [[ "$output" =~ "Resynced links for 0 document(s), 3 unchanged" ]]
+    run "$BIN" repair links --all
+    [[ "$output" =~ "Resynced links for 3 document(s), 0 unchanged" ]]
+
+    # Archiving drops the sync record with the rest of the derived rows.
+    "$BIN" entity archive document 3 >/dev/null
+    [ "$(store 'SELECT COUNT(*) FROM document_link_sync WHERE document_id = 3;')" = "0" ]
 }
 
 @test "repair with no name lists every repair; the old document backfill actions are gone" {
     run "$BIN" repair
-    [[ "$output" =~ "links [document_id]" ]]
+    [[ "$output" =~ "links [document_id | --all]" ]]
     [[ "$output" =~ "embeddings [document_id | --all]" ]]
     [[ "$output" =~ "knowledge [--dry-run]" ]]
     [[ "$output" =~ "pool-count" ]]

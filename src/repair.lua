@@ -32,8 +32,8 @@ function repair_links(cmd_args, db_path)
         print("Resynced links for document #" .. tostring(entity_id))
         return
     end
-    resynced = document.resync_all_links(db_path)
-    print(string.format("Resynced links for %d document(s)", resynced))
+    resynced, unchanged = document.resync_all_links(db_path, cmd_args[2] == "--all")
+    print(string.format("Resynced links for %d document(s), %d unchanged", resynced, unchanged))
 end
 
 function repair_embeddings(cmd_args, db_path)
@@ -136,8 +136,8 @@ end
 
 -- Ordered (a list, not a map) so `daat repair`'s listing is stable.
 REPAIRS = {
-    {name = "links", usage = "links [document_id]", run = repair_links,
-     description = "Re-parse [[...]] links (and their context notes) from document content into document_link."},
+    {name = "links", usage = "links [document_id | --all]", run = repair_links,
+     description = "Re-parse [[...]] links from document content into document_link, for documents whose content changed since their links were last synced (--all: every document)."},
     {name = "embeddings", usage = "embeddings [document_id | --all]", run = repair_embeddings,
      description = "Embed documents whose embedding is missing, from another model, or of changed text (--all: every document; one provider call each)."},
     {name = "embeddings-packed", usage = "embeddings-packed", run = repair_embeddings_packed,
