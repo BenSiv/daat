@@ -93,6 +93,13 @@ end
 -- header) but returns the decoded structured shape converse() callers
 -- expect, rather than raw text.
 function agent_test.converse(model, system_prompt, messages, tools)
+    -- AGENT_TEST_CONVERSE_DELAY (seconds): every call takes this long,
+    -- like a slow real model call -- for heartbeat/staleness tests.
+    delay = tonumber(os.getenv("AGENT_TEST_CONVERSE_DELAY"))
+    if delay != nil and delay > 0 then
+        os.execute("sleep " .. tostring(delay))
+    end
+
     capture_path = os.getenv("AGENT_TEST_CAPTURE_SYSTEM_PROMPT")
     if capture_path != nil and capture_path != "" then
         capture_file = io.open(capture_path, "w")

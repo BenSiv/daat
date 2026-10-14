@@ -1400,6 +1400,13 @@ function agent.run_research_loop(db_path, author, session_id, model, question, m
     last_real_text = nil
 
     for turn = 1, max_turns do
+        -- One research.investigate call is a whole sub-loop inside a
+        -- single tool call of the chat turn: without its own beats, a
+        -- long investigation passed agent_turn_stale_seconds and the
+        -- running chat turn was settled as stalled (found live:
+        -- celleste-lims, "summarize the latest R&D meetings"). A no-op
+        -- for a background task, whose session isn't marked running.
+        agent.turn_heartbeat(db_path, session_id)
         response, err, usage = agent_provider.converse(model, RESEARCH_SYSTEM_PROMPT, messages, tools)
         if response == nil then
             if last_real_text != nil then
@@ -1459,6 +1466,7 @@ function agent.run_research_loop(db_path, author, session_id, model, question, m
                 role = "toolResult", toolCallId = tool_call.id, toolName = tool_call.name,
                 content = {{type = "text", text = result_text}}, isError = is_error,
             })
+            agent.turn_heartbeat(db_path, session_id)
         end
     end
 

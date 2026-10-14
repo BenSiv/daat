@@ -79,6 +79,27 @@ wait_idle() {
     [ "$(store "SELECT turn_state FROM agent_session WHERE id = '${sid}';")" = "idle" ]
 }
 
+@test "a long research.investigate keeps the turn's heartbeat alive -- it isn't settled as stalled mid-investigation" {
+    # Stale after 3 s; every model call takes 1 s. The investigation
+    # makes three of them inside one tool call (4+ s without a beat of
+    # its own); elsewhere at most two calls run back to back (the final
+    # answer and its self-check, ~2 s).
+    write_platform_config ', agent_turn_mode = "detached", agent_turn_stale_seconds = 3'
+    export AGENT_TEST_CONVERSE_DELAY=1
+    sid=$(new_session)
+    scripted="$(tool_call_response "research.investigate" '{"question":"what types exist"}')"$'\1'"$(tool_call_response "entity.list_types" "{}")"$'\1'"$(tool_call_response "entity.list_types" "{}")"$'\1'"$(done_response "There is a task type.")"$'\1'"$(done_response "Found it: task.")"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${sid}\",\"message\":\"investigate the types\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+
+    # Poll the way the widget does -- each read settles a stale turn.
+    for i in $(seq 1 60); do
+        run raw_get "/api/chat-widget-history" "session_id=${sid}" "$COOKIE"
+        [ "$(json_body "$output" | jq -r '.running')" = "false" ] && break
+        sleep 0.25
+    done
+    [ "$(store "SELECT COUNT(*) FROM agent_message WHERE session_id = '${sid}' AND role = 'error';")" = "0" ]
+    [[ "$(json_body "$output" | jq -r '.messages[-1].content')" =~ "Found it: task." ]]
+}
+
 @test "denying a pending action hands the rest of the turn to a worker" {
     sid=$(new_session)
     scripted="$(tool_call_response "document.create" '{"title":"Denied Page","content":"hello"}')"
