@@ -6666,7 +6666,7 @@ end
 -- cgi.lua outright ("attempt to index global 'CHAT_MARKDOWN_ROLES' (a
 -- nil value)") the moment a route that isn't html.lua's own tries to
 -- read it.
-html.CHAT_MARKDOWN_ROLES = {assistant = true, self_check = true, compaction_summary = true}
+html.CHAT_MARKDOWN_ROLES = {assistant = true, self_check = true, compaction_summary = true, progress = true}
 
 -- Full-width, one-row-per-session list -- clicking a session hands it
 -- off to the floating widget (see html.render_chat's own comment) and
@@ -6991,14 +6991,14 @@ function html.render_chat_widget(nonce, attachments_enabled)
         return parts.join(' ');
     }
 
-    var ROLE_LABELS = {user: 'You', assistant: 'Assistant', tool_result: 'Tool result', compaction_summary: 'Compacted summary', self_check: 'Self-check', error: 'Error'};
+    var ROLE_LABELS = {user: 'You', assistant: 'Assistant', tool_result: 'Tool result', compaction_summary: 'Compacted summary', self_check: 'Self-check', error: 'Error', progress: 'Progress'};
     // Same roles as html.lua's own CHAT_MARKDOWN_ROLES -- the server
     // (chat_widget_state, cgi.lua) already rendered these through
     // cmark-gfm before this JSON ever reached the browser, so this JS
     // trusts and embeds that HTML directly rather than re-escaping it
     // (which would just show the literal tags) or re-implementing
     // Markdown rendering client-side.
-    var MARKDOWN_ROLES = {assistant: true, self_check: true, compaction_summary: true};
+    var MARKDOWN_ROLES = {assistant: true, self_check: true, compaction_summary: true, progress: true};
     function render(state) {
         awaitingApproval = !!(state && state.pending);
         updateToggleState();
@@ -7019,7 +7019,7 @@ function html.render_chat_widget(nonce, attachments_enabled)
                 var extraClass = '';
                 if (isFinal) {
                     extraClass = ' platform-chat-final';
-                } else if (msg.role === 'assistant' || msg.role === 'tool_result' || msg.role === 'self_check') {
+                } else if (msg.role === 'assistant' || msg.role === 'tool_result' || msg.role === 'self_check' || msg.role === 'progress') {
                     extraClass = ' platform-chat-step';
                 }
                 html += '<div class="platform-chat-msg platform-chat-' + msg.role + extraClass + '"><strong>' + PlatformJS.escapeHtml(label) + ':</strong> ' + body + '</div>';
@@ -7249,19 +7249,36 @@ function html.render_chat_widget(nonce, attachments_enabled)
         // answered reply (found live: reported as "the Stop button
         // didn't stop the agent" -- clicking a Stop tied to a turn that
         // finished before the button even reappeared can't do anything).
+        //
+        // A detached turn (agent_turn_mode "detached", agent.lua) answers
+        // the send at once with running: true; the turn is over when a
+        // poll says running: false. The server settles a turn whose
+        // worker died (agent.turn_status), so that always comes.
         var settled = false;
+        var sendDone = false;
+        var finishTurn, failTurn;
+        var turnOver = new Promise(function(resolve, reject){ finishTurn = resolve; failTurn = reject; });
         var thinkingEl = showThinking(sessionId);
         turnStarted();
         var timer = setInterval(function(){
             fetch('api/chat-widget-history?session_id=' + encodeURIComponent(sessionId))
                 .then(function(res){ if (!res.ok) { throw new Error('poll failed'); } return res.json(); })
                 .then(function(state){
+                    if (settled) { return; }
                     render(state);
-                    if (!settled) { thinkingEl = showThinking(sessionId); }
+                    if (sendDone && !state.running) { finishTurn(state); return; }
+                    thinkingEl = showThinking(sessionId);
                 })
                 .catch(function(){ /* transient -- the next tick tries again */ });
         }, HISTORY_POLL_MS);
-        return sendPromise.then(function(state){
+        sendPromise.then(function(state){
+            // An error-only reply (e.g. 409: a turn is still running)
+            // has no messages -- rendering it would blank the panel.
+            if (!state || !state.messages) { failTurn(new Error((state && state.error) || 'send failed')); return; }
+            sendDone = true;
+            if (!state.running) { finishTurn(state); }
+        }, failTurn);
+        return turnOver.then(function(state){
             settled = true;
             clearInterval(timer);
             thinkingEl.remove();
@@ -7297,6 +7314,8 @@ function html.render_chat_widget(nonce, attachments_enabled)
     function isTurnPending(state) {
         if (!state || !state.messages || state.messages.length === 0) { return false; }
         if (state.pending) { return false; } // an approval prompt is a settled, actionable state, not "still running"
+        // A detached turn says so itself; an inline one is inferred.
+        if (typeof state.running === 'boolean') { return state.running; }
         return state.messages[state.messages.length - 1].role === 'user';
     }
 
@@ -7319,7 +7338,10 @@ function html.render_chat_widget(nonce, attachments_enabled)
                 .then(function(res){ if (!res.ok) { throw new Error('poll failed'); } return res.json(); })
                 .then(function(freshState){
                     render(freshState);
-                    if (!isTurnPending(freshState) || attempts >= RESUME_POLL_MAX_ATTEMPTS) {
+                    // The cap is for inline turns, which can't say they
+                    // died; a detached one is settled by the server.
+                    var capped = typeof freshState.running !== 'boolean' && attempts >= RESUME_POLL_MAX_ATTEMPTS;
+                    if (!isTurnPending(freshState) || capped) {
                         clearInterval(timer);
                         thinkingEl.remove();
                         turnEnded(!isTurnPending(freshState));
@@ -7460,7 +7482,8 @@ function html.render_chat_widget(nonce, attachments_enabled)
             pollWhilePending(sessionId, PlatformJS.postJSON('api/chat-widget-approve', {pending_id: e.target.getAttribute('data-approve'), session_id: sessionId}))
                 .catch(function(){ showFetchError(); });
         } else if (e.target.hasAttribute('data-deny')) {
-            PlatformJS.postJSON('api/chat-widget-deny', {pending_id: e.target.getAttribute('data-deny'), session_id: sessionId}).then(render);
+            pollWhilePending(sessionId, PlatformJS.postJSON('api/chat-widget-deny', {pending_id: e.target.getAttribute('data-deny'), session_id: sessionId}))
+                .catch(function(){ showFetchError(); });
         } else if (e.target.hasAttribute('data-stop')) {
             // Fire-and-forget: this doesn't resolve the in-flight
             // chat-widget-send call itself -- it just flags the session

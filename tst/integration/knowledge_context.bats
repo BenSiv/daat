@@ -122,7 +122,7 @@ send_message() {
     read session csrf < <(session_for admin secret123)
     chat_session=$(start_chat "$session" "$csrf" "Test")
     cat > "${TEST_DIR}/platform.lua" <<'EOF'
-return {agent_provider = "nonexistent-provider"}
+return {agent_provider = "nonexistent-provider", agent_turn_mode = "inline"}
 EOF
     printf '{"session_id":"%s","message":"hi"}' "$chat_session" | \
         GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/chat-widget-send" QUERY_STRING="" \
@@ -144,7 +144,7 @@ EOF
     read session csrf < <(session_for admin secret123)
     chat_session=$(start_chat "$session" "$csrf" "Test")
     cat > "${TEST_DIR}/platform.lua" <<'EOF'
-return {agent_provider = "nonexistent-provider"}
+return {agent_provider = "nonexistent-provider", agent_turn_mode = "inline"}
 EOF
     resp=$(printf '{"session_id":"%s","message":"hi"}' "$chat_session" | \
         GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/chat-widget-send" QUERY_STRING="" \

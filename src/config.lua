@@ -302,6 +302,18 @@ function config.platform_config()
         embedding_model = nil,
         search_provider = nil,
         agent_max_turns = 20,
+        -- "detached": a chat turn runs in its own worker process, not
+        -- the web request (agent.lua, "Detached turns"); "inline": in
+        -- the request, as before.
+        agent_turn_mode = "detached",
+        -- A detached turn with no progress for this long is reported as
+        -- stopped.
+        agent_turn_stale_seconds = 180,
+        -- A detached turn that spends its step budget goes on with a
+        -- fresh one (and a progress note) up to this many more times,
+        -- within this many minutes in all.
+        agent_auto_continue_max = 3,
+        agent_auto_continue_minutes = 10,
         agent_research_max_turns = 12,
         agent_background_max_turns = 20,
         agent_background_max_attempts = 3,
@@ -413,6 +425,18 @@ function config.platform_config()
     end
     if type(parsed.agent_max_turns) == "number" then
         conf.agent_max_turns = parsed.agent_max_turns
+    end
+    if parsed.agent_turn_mode == "detached" or parsed.agent_turn_mode == "inline" then
+        conf.agent_turn_mode = parsed.agent_turn_mode
+    end
+    if type(parsed.agent_turn_stale_seconds) == "number" then
+        conf.agent_turn_stale_seconds = parsed.agent_turn_stale_seconds
+    end
+    if type(parsed.agent_auto_continue_max) == "number" then
+        conf.agent_auto_continue_max = parsed.agent_auto_continue_max
+    end
+    if type(parsed.agent_auto_continue_minutes) == "number" then
+        conf.agent_auto_continue_minutes = parsed.agent_auto_continue_minutes
     end
     if type(parsed.agent_research_max_turns) == "number" then
         conf.agent_research_max_turns = parsed.agent_research_max_turns
