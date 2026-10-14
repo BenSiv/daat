@@ -798,8 +798,20 @@ function agent.compact_if_needed(db_path, session_id, system_prompt, model)
         return false
     end
 
+    -- Never cut between an assistant turn and its tool results: a kept
+    -- tail starting on tool_result rows sends results for calls the
+    -- model can no longer see, which Vertex rejects outright (see
+    -- pair_tool_results). Move the cut back to that assistant turn.
+    cut = #active - keep_last
+    while cut > 0 and active[cut + 1].role == "tool_result" do
+        cut = cut - 1
+    end
+    if cut == 0 then
+        return false
+    end
+
     to_compact = {}
-    for i = 1, #active - keep_last do
+    for i = 1, cut do
         table.insert(to_compact, active[i])
     end
 
@@ -1005,6 +1017,73 @@ end
 -- The turn loop
 --------------------------------------------------------------------------
 
+-- Found live (celleste-lims, "Please ensure that the number of function
+-- response parts is equal to the number of function call parts"): the
+-- stored rows don't always pair up. A turn killed mid-tool-loop (load
+-- balancer timeout) leaves calls without results; a pending destructive
+-- call the user talked past instead of approving has none until later;
+-- an older compaction cut could keep a call's results but compact the
+-- call itself away. Repaired here rather than in each provider: the
+-- results answering an assistant turn are emitted right after it, in
+-- call order, an unanswered call gets an explicit error result, and a
+-- result with no open call to answer becomes a plain user-role note --
+-- same degrade-don't-drop rule as a legacy tool_result row below.
+function pair_tool_results(history)
+    paired = {}
+    open_calls = {}
+    answers = {}
+
+    function flush_open_calls()
+        for _, call in ipairs(open_calls) do
+            answer = answers[call.id]
+            if answer == nil then
+                answer = {
+                    role = "toolResult",
+                    toolCallId = call.id,
+                    toolName = call.name,
+                    content = {{type = "text", text = "ERROR: no result was recorded for this call -- the turn was interrupted before it finished. Run it again if you still need it."}},
+                    isError = true,
+                }
+            end
+            table.insert(paired, answer)
+        end
+        open_calls = {}
+        answers = {}
+    end
+
+    for _, msg in ipairs(history) do
+        if msg.role == "toolResult" then
+            is_open = false
+            for _, call in ipairs(open_calls) do
+                if call.id == msg.toolCallId then
+                    is_open = true
+                end
+            end
+            if is_open and answers[msg.toolCallId] == nil then
+                answers[msg.toolCallId] = msg
+            else
+                text = ""
+                if msg.content != nil and msg.content[1] != nil then
+                    text = tostring(msg.content[1].text)
+                end
+                table.insert(paired, {role = "user", content = "[Prior tool result, " .. tostring(msg.toolName) .. "]: " .. text})
+            end
+        else
+            flush_open_calls()
+            table.insert(paired, msg)
+            if msg.role == "assistant" then
+                for _, block in ipairs(msg.content) do
+                    if block.type == "toolCall" then
+                        table.insert(open_calls, block)
+                    end
+                end
+            end
+        end
+    end
+    flush_open_calls()
+    return paired
+end
+
 -- Builds the real, structured message list agent_provider.converse
 -- sends to the model (this codebase's own canonical shape -- see
 -- doc/agent-protocol.md, and agent_vertex.lua's own header
@@ -1021,6 +1100,11 @@ end
 -- legacy-tag rendering), an old tool_result becomes a plain user-role
 -- note, since Gemini's own toolResult message requires a toolCallId to
 -- correlate against a prior toolCall that an old row never had.
+--
+-- Every toolCall is paired with exactly one toolResult on the way out
+-- (see pair_tool_results above) -- both Gemini and Claude reject the
+-- whole request otherwise, and since nothing here is ever deleted, one
+-- unpaired row would fail every later message in that session.
 function build_history_messages(messages)
     result = {}
     for _, msg in ipairs(messages) do
@@ -1065,7 +1149,7 @@ function build_history_messages(messages)
             table.insert(result, {role = "user", content = "[Automated self-check, not the real user -- your own prior reply was just reviewed against the conversation and found lacking. The note below is that review, not new information from the person you're talking to; read it as your own continued investigation, then act on it.]\n\n" .. msg.content})
         end
     end
-    return result
+    return pair_tool_results(result)
 end
 
 -- Every toolCall block in a reply, in the order the model proposed

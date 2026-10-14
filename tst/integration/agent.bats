@@ -1448,6 +1448,56 @@ EOF
     [[ "$output" =~ "message number 1" ]]
 }
 
+@test "an interrupted tool-call turn is repaired before the next request -- every call gets one result, a stray result becomes a note (found live: celleste-lims Vertex 'number of function response parts')" {
+    resp=$(start_chat "$COOKIE" "$CSRF" "Interrupted")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    # The turn died after the model asked for two documents searches:
+    # only call_1's result was stored, and a result for a call that
+    # never existed (call_9) sits after it.
+    db="$TEST_DIR/.store/store.db"
+    sqlite3 "$db" "INSERT INTO agent_message (session_id, role, content) VALUES ('${session_id}', 'user', 'summarize the last R&D meetings');"
+    sqlite3 "$db" "INSERT INTO agent_message (session_id, role, content) VALUES ('${session_id}', 'assistant', '{\"blocks\":[{\"type\":\"toolCall\",\"id\":\"call_1\",\"name\":\"document.search\",\"arguments\":{\"query\":\"R&D meeting\"}},{\"type\":\"toolCall\",\"id\":\"call_2\",\"name\":\"document.search\",\"arguments\":{\"query\":\"minutes\"}}]}');"
+    sqlite3 "$db" "INSERT INTO agent_message (session_id, role, content) VALUES ('${session_id}', 'tool_result', '{\"tool_call_id\":\"call_1\",\"tool_name\":\"document.search\",\"text\":\"first search result\",\"is_error\":false}');"
+    sqlite3 "$db" "INSERT INTO agent_message (session_id, role, content) VALUES ('${session_id}', 'tool_result', '{\"tool_call_id\":\"call_9\",\"tool_name\":\"document.search\",\"text\":\"stray result\",\"is_error\":false}');"
+
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"try again\"}" "$COOKIE" "$CSRF" "$(done_response "ok")" >/dev/null
+
+    run sqlite3 "$db" "SELECT prompt FROM knowledge_context WHERE session_id = '${session_id}' ORDER BY id ASC LIMIT 1;"
+    [[ "$output" =~ '"toolCallId":"call_1"' ]]
+    [[ "$output" =~ '"toolCallId":"call_2"' ]]
+    [[ "$output" =~ "no result was recorded for this call" ]]
+    [[ ! "$output" =~ '"toolCallId":"call_9"' ]]
+    [[ "$output" =~ "[Prior tool result, document.search]: stray result" ]]
+    run raw_get "/api/chat-widget-history" "session_id=${session_id}" "$COOKIE"
+    [[ "$output" =~ "ok" ]]
+}
+
+@test "compaction never keeps a tool result while compacting away the call it answers" {
+    write_task_schema
+    resp=$(start_chat "$COOKIE" "$CSRF" "Long chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    write_platform_config ', agent_compaction_threshold = 30'
+    # user, assistant(3 calls), 3 results, final answer -- then "continue"
+    # makes 7 active rows, and the plain keep-last-4 cut would land on
+    # the second tool result.
+    scripted="$(multi_tool_call_response "entity.list_types" "{}" "entity.list_types" "{}" "entity.list_types" "{}")"$'\1'"$(done_response "Listed.")"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"list the types three times\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"continue\"}" "$COOKIE" "$CSRF" "$(done_response "ok")" >/dev/null
+
+    # Every in-context tool_result still has its assistant call in context.
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM agent_message WHERE session_id = '${session_id}' AND in_context = 1 AND role = 'tool_result';"
+    results_kept="$output"
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM agent_message WHERE session_id = '${session_id}' AND in_context = 1 AND role = 'assistant' AND content LIKE '%toolCall%';"
+    if [ "$results_kept" -gt 0 ]; then
+        [ "$output" -eq 1 ]
+        [ "$results_kept" -eq 3 ]
+    fi
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM agent_message WHERE session_id = '${session_id}' AND role = 'compaction_summary';"
+    [ "$output" -ge 1 ]
+}
+
 # --- Real Vertex AI end-to-end confirmation ---
 #
 # Deliberately NOT hardcoding a project id here (that would bake a
