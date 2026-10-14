@@ -10,8 +10,11 @@
 --   merge -- two tags whose centres came closer than any two were when
 --            built; the agent says SAME (merged into the larger, named
 --            for the whole) or DIFFERENT (kept apart);
---   fit   -- a tag that took in TAG_FIT_GROWTH more members since its
---            label was last judged; the agent says whether the label and
+--   fit   -- a tag whose members changed by TAG_FIT_CHANGE since its
+--            label was last judged -- grown, or shrunk (found live on
+--            celleste-lims: "R&D Meeting Notes" kept its label after its
+--            meeting notes moved to another tag and only company admin
+--            documents were left); the agent says whether the label and
 --            description still fit (FITS) or proposes new ones (RENAME).
 --
 -- Spread comes from the running summary alone: the sum of a tag's unit
@@ -44,7 +47,7 @@ tag_upkeep = {}
 
 TAG_SPLIT_SPREAD = 1.15
 TAG_REJUDGE_CHANGE = 0.10
-TAG_FIT_GROWTH = 0.20
+TAG_FIT_CHANGE = 0.20
 -- Agent calls per run, so one run's cost stays bounded; the rest wait
 -- for the next run.
 TAG_JUDGMENTS_PER_RUN = 5
@@ -456,8 +459,9 @@ function tag_upkeep.proposals(db_path, dry_run, pairs_above)
     end
     for _, t in ipairs(tags) do
         base = baselines[t.id]
-        if not review and busy[t.id] == nil and t.source != "manual" and t.members >= base.fit_members * (1 + TAG_FIT_GROWTH)
-                and t.members > base.fit_members then
+        grown = t.members >= base.fit_members * (1 + TAG_FIT_CHANGE) and t.members > base.fit_members
+        shrunk = t.members <= base.fit_members * (1 - TAG_FIT_CHANGE) and t.members < base.fit_members
+        if not review and busy[t.id] == nil and t.source != "manual" and (grown or shrunk) then
             table.insert(proposals, {kind = "fit", a = t, fit_members = base.fit_members})
         end
     end
@@ -677,7 +681,7 @@ function upkeep_rebaseline(db_path, ids)
 end
 
 -- A label judged against `members` documents: the next fit check waits
--- for TAG_FIT_GROWTH more. The tag's built spread is left alone.
+-- for TAG_FIT_CHANGE more, or fewer. The tag's built spread is left alone.
 function upkeep_save_fit(db_path, tag_id, members)
     db.exec(db_path, string.format("UPDATE tag_upkeep SET fit_members = %d WHERE tag_id = %d;", members, tonumber(tag_id)))
 end

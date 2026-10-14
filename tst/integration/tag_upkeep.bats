@@ -183,6 +183,26 @@ converged_tags() {
     [[ "$output" =~ "Nothing to restructure" ]]
 }
 
+@test "a tag that shrank is re-checked too -- its label may no longer fit what's left (found live: celleste-lims)" {
+    write_platform_config ", tag_split_min = 100"
+    for i in 1 2 3 4 5 6; do D[$i]=$(new_document "Meeting $i" 1 0.0$i 0); done
+    T=$(new_tag "Meeting notes")
+    for i in 1 2 3 4 5 6; do member "${D[$i]}" "$T"; done
+    "$BIN" repair tags >/dev/null
+    run "$BIN" repair tags --restructure --dry-run
+    [[ "$output" =~ "Nothing to restructure" ]]
+
+    for i in 1 2; do
+        "$BIN" entity archive document_tag "$(db "SELECT id FROM document_tag WHERE document = ${D[$i]} AND tag = $T;")" >/dev/null
+    done
+    AGENT_TEST_RESPONSES=$'RENAME -- the meetings left\nNAME: Company planning | Plans and policies.' run "$BIN" repair tags --restructure
+    [[ "$output" =~ "fit #$T \"Meeting notes\" (4 members, 6 when its label was last judged)" ]]
+    [ "$(db "SELECT label FROM tag WHERE id = $T;")" = "Company planning" ]
+    [ "$(db "SELECT fit_members FROM tag_upkeep WHERE tag_id = $T;")" = "4" ]
+    run "$BIN" repair tags --restructure --dry-run
+    [[ "$output" =~ "Nothing to restructure" ]]
+}
+
 @test "with tag_restructure on, embed-pending runs the upkeep after embedding" {
     loosened_tag
     write_platform_config ", tag_split_min = 4, tag_restructure = true, embedding_quiet_minutes = 5"
