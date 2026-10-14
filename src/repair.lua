@@ -136,7 +136,11 @@ end
 
 function repair_connections(cmd_args, db_path)
     knowledge = require("knowledge")
-    for _, line in ipairs(knowledge.repair_connections(db_path, cmd_args[2] == "--dry-run")) do
+    flags = {}
+    for i = 2, #cmd_args do
+        flags[cmd_args[i]] = true
+    end
+    for _, line in ipairs(knowledge.repair_connections(db_path, flags["--dry-run"] == true, flags["--all"] == true)) do
         print(line)
     end
 end
@@ -157,8 +161,8 @@ REPAIRS = {
      description = "Re-index entity names, then re-read every document's references to them."},
     {name = "knowledge", usage = "knowledge [--dry-run]", run = repair_knowledge,
      description = "Remove rows derived from archived documents or tags (embeddings, references; links archived); counts embeddings from another model."},
-    {name = "connections", usage = "connections [--dry-run]", run = repair_connections,
-     description = "Ask the agent again why two documents are connected, for every connection document (A ↔ B) that doesn't say what both share: rewrite it with a real reason, or archive it (--dry-run: list them, no model calls)."},
+    {name = "connections", usage = "connections [--all] [--dry-run]", run = repair_connections,
+     description = "Ask the agent again why two documents are connected, for every connection document (A ↔ B) that doesn't say what both share (--all: every one): rewrite it with a real reason, or archive it; one connecting another connection document is archived (--dry-run: list them, no model calls)."},
     {name = "pool-count", usage = "pool-count", run = repair_pool_count,
      description = "Recount active documents into knowledge_pool_state.document_count."},
 }

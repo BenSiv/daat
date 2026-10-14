@@ -1271,6 +1271,23 @@ function document.is_connection_title(title)
     return string.find(title, CONNECTION_TITLE_SEPARATOR, 1, true) != nil
 end
 
+-- How many " ↔ " a title holds: a chain of connections has more than one.
+function document.connection_title_count(title)
+    if title == nil then
+        return 0
+    end
+    count = 0
+    start = 1
+    while true do
+        found = string.find(title, CONNECTION_TITLE_SEPARATOR, start, true)
+        if found == nil then
+            return count
+        end
+        count = count + 1
+        start = found + 1
+    end
+end
+
 function document.connection_draft(db_path, document_a_id, document_b_id, reason)
     ref_a = document.link_ref(db_path, document_a_id)
     ref_b = document.link_ref(db_path, document_b_id)

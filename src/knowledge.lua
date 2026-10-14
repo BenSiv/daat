@@ -1050,7 +1050,12 @@ function knowledge.maybe_link_co_retrieved(db_path, author, document_ids)
             if knowledge.due_for_link_review(review, co_count) then
                 doc_a = knowledge.get_document(db_path, doc_a_id)
                 doc_b = knowledge.get_document(db_path, doc_b_id)
-                if doc_a != nil and doc_b != nil then
+                -- A connection document is never one end of another:
+                -- retrieved with its own two ends it was judged connected
+                -- to them again, building chains of connections of
+                -- connections (found live: celleste-lims, 248 of 672).
+                if doc_a != nil and doc_b != nil and not document.is_connection_title(doc_a.title)
+                        and not document.is_connection_title(doc_b.title) then
                     if knowledge.co_retrieval_eligible(co_count, tonumber(doc_a.retrieval_count), tonumber(doc_b.retrieval_count)) then
                         knowledge.evaluate_co_retrieval_pair(db_path, author, doc_a, doc_b, co_count)
                     end
@@ -1228,14 +1233,15 @@ function revoke_connection(db_path, connection_id, why)
 end
 
 -- `daat repair connections`: every connection document ("A ↔ B") whose
--- reason is too thin to say what the two share is explained again --
--- the model is asked the same question co-retrieval asks; a reason that
--- passes judge_link replaces the old one, anything else archives the
--- connection document, which takes its links with it. One whose two
--- ends aren't both still active is archived without asking. With
--- dry_run, only lists what it would look at (no model calls).
+-- reason is too thin to say what the two share (with `all`, every one)
+-- is explained again -- the model is asked the same question
+-- co-retrieval asks; a reason that passes judge_link replaces the old
+-- one, anything else archives the connection document, which takes its
+-- links with it. One whose two ends aren't both still active, or that
+-- connects another connection document, is archived without asking.
+-- With dry_run, only lists what it would do (no model calls).
 -- -> report lines
-function knowledge.repair_connections(db_path, dry_run)
+function knowledge.repair_connections(db_path, dry_run, all)
     rows = db.query(db_path, string.format(
         "SELECT id FROM document WHERE title LIKE %s AND (archived_at IS NULL OR archived_at = '') ORDER BY id;",
         db.quote("%" .. document.CONNECTION_TITLE_SEPARATOR .. "%")))
@@ -1247,18 +1253,37 @@ function knowledge.repair_connections(db_path, dry_run)
     for _, row in ipairs(rows) do
         connection = entity.get(db_path, "document", tonumber(row.id))
         old_reason = knowledge.connection_reason(connection.content)
-        if knowledge.link_reason_too_thin(old_reason) then
+        if all == true or knowledge.link_reason_too_thin(old_reason) or document.connection_title_count(connection.title) > 1 then
             ends = db.query(db_path, string.format(
-                "SELECT DISTINCT l.to_document_id AS id FROM document_link l JOIN document d ON d.id = l.to_document_id " ..
+                "SELECT DISTINCT l.to_document_id AS id, d.title FROM document_link l JOIN document d ON d.id = l.to_document_id " ..
                 "WHERE l.from_document_id = %d AND (l.archived_at IS NULL OR l.archived_at = '') " ..
                 "AND (d.archived_at IS NULL OR d.archived_at = '') ORDER BY l.to_document_id;", tonumber(connection.id)))
+            if ends == nil then
+                ends = {}
+            end
+            chained = document.connection_title_count(connection.title) > 1
+            for _, e in ipairs(ends) do
+                if document.is_connection_title(e.title) then
+                    chained = true
+                end
+            end
             label = "#" .. tostring(connection.id) .. " " .. tostring(connection.title)
+            why = nil
+            if chained then
+                why = "it connects another connection document"
+            elseif #ends != 2 then
+                why = "its two documents aren't both active"
+            end
             if dry_run then
-                table.insert(report, "would explain or revoke " .. label)
-            elseif ends == nil or #ends != 2 then
-                revoke_connection(db_path, connection.id, "its two documents aren't both active")
+                if why != nil then
+                    table.insert(report, "would revoke " .. label .. ": " .. why)
+                else
+                    table.insert(report, "would explain or revoke " .. label)
+                end
+            elseif why != nil then
+                revoke_connection(db_path, connection.id, why)
                 counts.revoked = counts.revoked + 1
-                table.insert(report, "revoked " .. label .. ": its two documents aren't both active")
+                table.insert(report, "revoked " .. label .. ": " .. why)
             else
                 doc_a = knowledge.get_document(db_path, tonumber(ends[1].id))
                 doc_b = knowledge.get_document(db_path, tonumber(ends[2].id))

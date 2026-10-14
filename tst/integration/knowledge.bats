@@ -664,6 +664,38 @@ make_thin_connection() {
     [ "$output" = "2" ]
 }
 
+@test "a connection document retrieved with another document is never connected to it -- no chains of connections (found live: celleste-lims, 248 of 672)" {
+    "$BIN" entity create document title="Cleaning" content="cleaning steps" >/dev/null
+    "$BIN" entity create document title="Startup" content="startup steps" >/dev/null
+    "$BIN" entity create document title="Feed" content="feed schedule for the bioreactor procedure" >/dev/null
+    "$BIN" entity create document title="Cleaning ↔ Startup" content="[[Cleaning]] and [[Startup]]: the cleaning and startup steps both belong to the bioreactor procedure." >/dev/null
+    # Every document here is retrieved by every search: settle Feed's
+    # pairs with the two plain documents, so the only pair left to judge
+    # is Feed with the connection document.
+    sqlite3 .store/store.db "INSERT INTO knowledge_link_review (document_a_id, document_b_id, last_co_count, decision, reason, evaluated_at) VALUES (1, 3, 0, 'linked', 'set up', '2026-01-01 00:00:00'), (2, 3, 0, 'linked', 'set up', '2026-01-01 00:00:00');"
+
+    search_for_bioreactor_extra ""
+    search_for_bioreactor_extra ""
+    # Twice: the review's distill call takes the first scripted answer.
+    yes="YES: the feed schedule runs right after the cleaning and startup steps of the bioreactor procedure."
+    search_for_bioreactor_extra "${yes}"$'\1'"${yes}"
+
+    run sqlite3 .store/store.db "SELECT COUNT(*) FROM document WHERE title LIKE '%↔%↔%';"
+    [ "$output" = "0" ]
+}
+
+@test "repair connections revokes a chain (a connection of a connection) without asking, and --all re-judges an explained one" {
+    make_thin_connection
+    "$BIN" entity create document title="Bioreactor Feed" content="feed schedule for the bioreactor procedure" >/dev/null
+    "$BIN" entity create document title="Bioreactor Feed ↔ Bioreactor Cleaning ↔ Bioreactor Startup" content="[[Bioreactor Feed]] and [[Bioreactor Cleaning ↔ Bioreactor Startup]]: the feed schedule follows the cleaning and startup steps of the bioreactor procedure." >/dev/null
+
+    run env AGENT_TEST_RESPONSES="NO: the overlap is coincidental, nothing specific is shared." "$BIN" repair connections --all
+    [[ "$output" =~ "revoked #6 Bioreactor Feed ↔ Bioreactor Cleaning ↔ Bioreactor Startup: it connects another connection document" ]]
+    [[ "$output" =~ "0 explained, 3 revoked, 0 already explained" ]]
+    run sqlite3 .store/store.db "SELECT COUNT(*) FROM document WHERE title LIKE '%↔%' AND archived_at IS NULL;"
+    [ "$output" = "0" ]
+}
+
 @test "a co-retrieved pair the agent declines is remembered, not re-asked on the very next shared retrieval (task #109)" {
     "$BIN" entity create document title="Bioreactor Cleaning" content="cleaning steps for the bioreactor procedure"
     "$BIN" entity create document title="Bioreactor Startup" content="startup steps for the bioreactor procedure"
