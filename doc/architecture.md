@@ -224,6 +224,10 @@ A built-in assistant, not a bolted-on integration: real per-user conversation se
   | `platform.lua` field | Default | Controls |
   |---|---|---|
   | `agent_max_turns` | 20 | Main tool-calling turn loop's own budget (`agent.run_turn`) |
+  | `agent_turn_mode` | `"detached"` | `"detached"`: the chat send records the message and starts `daat agent continue <session>` as its own process (`agent.spawn_turn_worker`), so no request timeout can cut a turn off; the widget polls `/api/chat-widget-history` while it reports `running`. Worker output goes to `.store/agent-worker.log`. `"inline"`: the turn runs inside the request, as before |
+  | `agent_turn_stale_seconds` | 180 | A detached turn with no heartbeat (one per step and per tool call) for this long is settled with an error row saying it stopped, and the session freed |
+  | `agent_auto_continue_max` | 3 | A detached turn that spends its step budget goes on with a fresh one, after a one-line `progress` note, up to this many more times; then it stops with the usual status update |
+  | `agent_auto_continue_minutes` | 10 | Wall-clock limit for auto-continuing one detached turn |
   | `agent_research_max_turns` | 12 | `research.investigate`'s isolated sub-loop budget |
   | `agent_background_max_turns` | 20 | `background.start`'s worker-drained task budget -- looser than the interactive ones since it isn't bound to one HTTP request |
   | `agent_background_max_attempts` | 3 | Retries before a background task is marked permanently `failed` |

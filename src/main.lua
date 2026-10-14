@@ -109,6 +109,27 @@ function main()
         return
     end
 
+    -- The detached-turn worker (agent.spawn_turn_worker starts it from
+    -- the web request): runs one session's turn to its end.
+    if command == "agent" and arg[2] == "continue" then
+        if arg[3] == nil then
+            print("Usage: daat agent continue <session_id>")
+            return
+        end
+        if config.is_initialized(".") == false then
+            print("Not initialized. Run 'daat init' first.")
+            return
+        end
+        db_path = config.db_path(".")
+        result, err = agent.continue_turn(db_path, arg[3], agent.default_model())
+        if result == nil then
+            print("Error: " .. tostring(err))
+            return
+        end
+        print(string.format("Turn %s: %s", arg[3], tostring(result.status)))
+        return
+    end
+
     func = command_funcs[command]
     if func == nil then
         print("'" .. command .. "' is not a valid command")

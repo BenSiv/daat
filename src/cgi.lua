@@ -64,6 +64,9 @@ end
 -- below, all of which end by returning "here's the state now" so the
 -- floating widget (see html.page_shell) never has to separately poll.
 function chat_widget_state(db_path, session_id)
+    -- Read before the messages, so a turn settled as stalled right now
+    -- (agent.turn_status records an error row) shows that row too.
+    running = agent.turn_status(db_path, session_id) == "running"
     -- false: the widget is a human-facing view -- tool calls/raw tool
     -- results are filtered out (see agent.all_messages' own comment);
     -- the complete record is untouched in agent_message and in the
@@ -97,7 +100,21 @@ function chat_widget_state(db_path, session_id)
     -- just above: real SQL text, not a generic exposure of every tool
     -- call's raw arguments.
     last_query_sql = agent.last_console_query_sql(db_path, session_id)
-    return {session_id = session_id, messages = messages, pending = pending_out, last_query_sql = last_query_sql}
+    return {session_id = session_id, messages = messages, pending = pending_out, last_query_sql = last_query_sql, running = running}
+end
+
+-- Hands a session's turn to a worker (agent_turn_mode "detached") or
+-- runs it here (inline). `user_message` is recorded first when given.
+function run_chat_turn(db_path, root, session_id, author, user_message)
+    if config.platform_config().agent_turn_mode == "inline" then
+        agent.run_turn(db_path, session_id, author, nil, agent.default_model(), user_message)
+        return
+    end
+    if user_message != nil and user_message != "" then
+        agent.add_message(db_path, session_id, "user", user_message, true)
+        agent.maybe_set_title_from_message(db_path, session_id, author, user_message)
+    end
+    agent.start_detached_turn(db_path, root, session_id)
 end
 
 -- Collapses entity.create/update's issues list into one human-readable
@@ -1632,8 +1649,12 @@ function cgi.handle_request()
         if session == nil then
             return print_response("404 Not Found", "application/json", json.encode({error = "no such chat session"}))
         end
-        model = agent.default_model()
-        agent.run_turn(db_path, body_data.session_id, author, nil, model, body_data.message)
+        -- One turn at a time per session: a second message while a
+        -- worker is still writing the first reply would race it.
+        if agent.turn_status(db_path, body_data.session_id) == "running" then
+            return print_response("409 Conflict", "application/json", json.encode({error = "the assistant is still answering the previous message"}))
+        end
+        run_chat_turn(db_path, root, body_data.session_id, author, body_data.message)
         return print_response("200 OK", "application/json", json.encode(chat_widget_state(db_path, body_data.session_id)))
     end
 
@@ -1711,7 +1732,11 @@ function cgi.handle_request()
             return print_response("400 Bad Request", "application/json", json.encode({error = "Invalid JSON: " .. tostring(err)}))
         end
         model = agent.default_model()
-        agent.approve_pending(db_path, tonumber(body_data.pending_id), author, nil, model)
+        inline = config.platform_config().agent_turn_mode == "inline"
+        result = agent.approve_pending(db_path, tonumber(body_data.pending_id), author, nil, model, inline)
+        if inline == false and result != nil then
+            agent.start_detached_turn(db_path, root, result.session_id)
+        end
         return print_response("200 OK", "application/json", json.encode(chat_widget_state(db_path, body_data.session_id)))
     end
 
@@ -1748,7 +1773,11 @@ function cgi.handle_request()
             return print_response("400 Bad Request", "application/json", json.encode({error = "Invalid JSON: " .. tostring(err)}))
         end
         model = agent.default_model()
-        agent.deny_pending(db_path, tonumber(body_data.pending_id), author, nil, model)
+        inline = config.platform_config().agent_turn_mode == "inline"
+        result = agent.deny_pending(db_path, tonumber(body_data.pending_id), author, nil, model, inline)
+        if inline == false and result != nil then
+            agent.start_detached_turn(db_path, root, result.session_id)
+        end
         return print_response("200 OK", "application/json", json.encode(chat_widget_state(db_path, body_data.session_id)))
     end
 

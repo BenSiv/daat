@@ -20,6 +20,7 @@ knowledge = require("knowledge")
 auth = require("auth")
 template = require("template")
 config = require("config")
+paths = require("paths")
 view = require("view")
 search_provider = require("search_provider")
 extension = require("extension")
@@ -171,6 +172,14 @@ function ensure_agent_session_columns(db_path)
     end
     if have["cancel_requested"] == nil then
         db.exec(db_path, "ALTER TABLE agent_session ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0;")
+    end
+    -- Detached turns (see "Detached turns" below): whether a worker is
+    -- writing this session's reply, and when it last made progress.
+    if have["turn_state"] == nil then
+        db.exec(db_path, "ALTER TABLE agent_session ADD COLUMN turn_state VARCHAR(40) NOT NULL DEFAULT 'idle';")
+    end
+    if have["turn_heartbeat_at"] == nil then
+        db.exec(db_path, "ALTER TABLE agent_session ADD COLUMN turn_heartbeat_at VARCHAR(19);")
     end
 end
 
@@ -1210,6 +1219,13 @@ STOP_REQUESTED_WRAPUP_PROMPT = """
 [Automated: the user asked you to stop before you gave a final answer.] Write a short status update for the user, in your own words: what you were trying to find or do, and what you've actually confirmed or ruled out so far -- cite real values from your own tool results above, not vague generalities. Do not call any tools -- this is a plain text reply only, and no tool call would run even if you proposed one.
 """
 
+-- Between two step budgets of an auto-continued turn (see run_turn's
+-- `options.auto_continue`): a line for the user, who otherwise sees
+-- nothing but "working" while the turn goes on.
+PROGRESS_NOTE_PROMPT = """
+[Automated: you've used one step budget and will continue automatically with a fresh one -- the user does not need to reply.] Write one or two short sentences for the user: what you've confirmed so far (cite real values from your tool results above) and what you're doing next. Do not ask the user anything. Do not call any tools -- this is a plain text reply only.
+"""
+
 -- Spends one more no-tools model call (same shape as run_self_check's
 -- own) to have the model explain, in its own words, where an
 -- interrupted investigation actually got to -- shared by both ways
@@ -1223,7 +1239,7 @@ STOP_REQUESTED_WRAPUP_PROMPT = """
 -- fails -- fails open, same reasoning as run_self_check's own comment:
 -- there's no budget left to retry, so a plain honest message beats
 -- silence.
-function run_turn_wrapup(db_path, session_id, login, system_prompt, model, prompt_text, fallback_text)
+function run_turn_wrapup(db_path, session_id, login, system_prompt, model, prompt_text, fallback_text, role)
     wrapup_history = build_history_messages(agent.active_messages(db_path, session_id))
     table.insert(wrapup_history, {role = "user", content = prompt_text})
     wrapup_audit_prompt = json.encode(wrapup_history)
@@ -1241,7 +1257,12 @@ function run_turn_wrapup(db_path, session_id, login, system_prompt, model, promp
         message_text = fallback_text
     end
 
-    message_id = agent.add_message(db_path, session_id, "assistant", json.encode({blocks = {{type = "text", text = message_text}}}), true)
+    message_id = nil
+    if role == "progress" then
+        message_id = agent.add_message(db_path, session_id, "progress", message_text, true)
+    else
+        message_id = agent.add_message(db_path, session_id, "assistant", json.encode({blocks = {{type = "text", text = message_text}}}), true)
+    end
     context_id = knowledge.record_context(db_path, session_id, message_id, wrapup_audit_prompt, model, nil, wrapup_usage)
     knowledge.record_chat_eval(db_path, session_id, context_id, message_id, agent_provider.name(), model, false, message_text)
     return message_text
@@ -1526,6 +1547,145 @@ end
 -- it exists purely so a resumed task can still be attributed to the
 -- same real login the original chat session belongs to, exactly as if
 -- that user's own turn had just kept running.
+--------------------------------------------------------------------------
+-- Detached turns
+--------------------------------------------------------------------------
+
+-- A chat turn used to run inside the web request that sent the message,
+-- so the load balancer's timeout (180 s) or Apache's killed long turns
+-- with no reply and no error row (2026-10-13 review: 28 of 115 user
+-- turns got nothing back). With agent_turn_mode = "detached" (the
+-- default) the request records the message, marks the session running
+-- and starts `daat agent continue <session>` as its own process
+-- (agent.spawn_turn_worker); the widget polls /api/chat-widget-history
+-- until the turn is no longer running. The worker beats a heartbeat
+-- every step; a running turn with no beat for agent_turn_stale_seconds
+-- is settled once, by whichever reader sees it first, with an error row
+-- saying so (agent.turn_status). "inline" keeps the old in-request turn.
+
+function utc_now()
+    return os.date("!%Y-%m-%d %H:%M:%S")
+end
+
+function utc_seconds(stamp)
+    year, month, day, hour, min, sec = string.match(tostring(stamp), "^(%d+)-(%d+)-(%d+) (%d+):(%d+):(%d+)")
+    if year == nil then
+        return nil
+    end
+    -- os.time reads the table as local time; the offset cancels out in
+    -- the difference with utc_now() parsed the same way.
+    return os.time({year = tonumber(year), month = tonumber(month), day = tonumber(day),
+        hour = tonumber(hour), min = tonumber(min), sec = tonumber(sec)})
+end
+
+function agent.mark_turn_running(db_path, session_id)
+    db.exec(db_path, string.format("UPDATE agent_session SET turn_state = 'running', turn_heartbeat_at = %s WHERE id = %s;",
+        db.quote(utc_now()), db.quote(session_id)))
+end
+
+function agent.turn_heartbeat(db_path, session_id)
+    db.exec(db_path, string.format("UPDATE agent_session SET turn_heartbeat_at = %s WHERE id = %s AND turn_state = 'running';",
+        db.quote(utc_now()), db.quote(session_id)))
+end
+
+function agent.mark_turn_idle(db_path, session_id)
+    db.exec(db_path, string.format("UPDATE agent_session SET turn_state = 'idle' WHERE id = %s;", db.quote(session_id)))
+end
+
+STALLED_TURN_MESSAGE = "ERROR: The assistant stopped before finishing this reply (no progress for %d minutes). Send your message again to retry."
+
+-- "idle" or "running". A running turn whose heartbeat is older than
+-- agent_turn_stale_seconds is settled here: the reader that claims it
+-- (a conditional UPDATE to a state only it knows, read back) records
+-- one error row and sets the session idle -- concurrent readers never
+-- write the row twice.
+function agent.turn_status(db_path, session_id)
+    rows = db.query(db_path, string.format("SELECT turn_state, turn_heartbeat_at FROM agent_session WHERE id = %s;", db.quote(session_id)))
+    if rows == nil or rows[1] == nil or rows[1].turn_state != "running" then
+        return "idle"
+    end
+    beat = utc_seconds(rows[1].turn_heartbeat_at)
+    stale_after = config.platform_config().agent_turn_stale_seconds
+    if beat != nil and utc_seconds(utc_now()) - beat <= stale_after then
+        return "running"
+    end
+    claim = "stalled-" .. random_session_token()
+    db.exec(db_path, string.format(
+        "UPDATE agent_session SET turn_state = %s WHERE id = %s AND turn_state = 'running' AND turn_heartbeat_at = %s;",
+        db.quote(claim), db.quote(session_id), db.quote(tostring(rows[1].turn_heartbeat_at))))
+    check = db.query(db_path, string.format("SELECT turn_state FROM agent_session WHERE id = %s;", db.quote(session_id)))
+    if check != nil and check[1] != nil and check[1].turn_state == claim then
+        agent.add_message(db_path, session_id, "error",
+            string.format(STALLED_TURN_MESSAGE, math.ceil(stale_after / 60)), true)
+        agent.mark_turn_idle(db_path, session_id)
+    end
+    return "idle"
+end
+
+-- The binary to run the worker with: the CGI's own (SCRIPT_FILENAME),
+-- else DAAT_BIN, else `daat` on PATH.
+function agent_worker_binary()
+    for _, name in ipairs({"SCRIPT_FILENAME", "DAAT_BIN"}) do
+        value = os.getenv(name)
+        if value != nil and value != "" then
+            return value
+        end
+    end
+    return "daat"
+end
+
+-- Starts `daat agent continue <session_id>` in `root` (the store's
+-- directory, where the CLI finds it), in its own session so the web
+-- server neither waits for it nor kills it with the request; its output
+-- is appended to the store's agent-worker.log. GATEWAY_INTERFACE and
+-- REQUEST_METHOD are unset for it: inherited from the request, either
+-- would make the binary start as CGI instead of the CLI (main.lua).
+-- -> true, or nil, error.
+function agent.spawn_turn_worker(root, session_id)
+    external_tool = require("external_tool")
+    log_path = paths.joinpath(config.store_dir(root), "agent-worker.log")
+    cmd = string.format("cd %s && env -u GATEWAY_INTERFACE -u REQUEST_METHOD setsid %s agent continue %s </dev/null >>%s 2>&1 &",
+        external_tool.shell_quote(root), external_tool.shell_quote(agent_worker_binary()),
+        external_tool.shell_quote(session_id), external_tool.shell_quote(log_path))
+    ok = os.execute(cmd)
+    if ok != true and ok != 0 then
+        return nil, "could not start the turn worker"
+    end
+    return true
+end
+
+-- Hands the rest of the session's turn to a worker process: marks it
+-- running and spawns; if the spawn fails, records why and sets it idle.
+function agent.start_detached_turn(db_path, root, session_id)
+    agent.mark_turn_running(db_path, session_id)
+    ok, err = agent.spawn_turn_worker(root, session_id)
+    if ok == nil then
+        agent.add_message(db_path, session_id, "error", "ERROR: " .. tostring(err), true)
+        agent.mark_turn_idle(db_path, session_id)
+        return nil, err
+    end
+    return true
+end
+
+-- The worker's entry point (`daat agent continue <session_id>`): runs
+-- the turn loop from the session's history, then sets the session idle
+-- whatever happened. A crash is recorded as an error row, not lost.
+function agent.continue_turn(db_path, session_id, model)
+    login = agent.session_login(db_path, session_id)
+    if login == nil then
+        return nil, "no such chat session"
+    end
+    agent.mark_turn_running(db_path, session_id)
+    ok, result = pcall(agent.run_turn, db_path, session_id, login, nil, model, nil, {auto_continue = true})
+    if ok == false then
+        io.write(io.stderr, "agent continue " .. tostring(session_id) .. " crashed: " .. tostring(result) .. "\n")
+        agent.add_message(db_path, session_id, "error", "ERROR: the assistant crashed while answering: " .. tostring(result), true)
+        result = {status = "error", message = tostring(result)}
+    end
+    agent.mark_turn_idle(db_path, session_id)
+    return result
+end
+
 function agent.session_login(db_path, session_id)
     rows = db.query(db_path, string.format(
         "SELECT login FROM agent_session WHERE id = %s;", db.quote(session_id)
@@ -1608,7 +1768,9 @@ end
 -- oversight: the approval pause is itself a human circuit breaker, so
 -- restarting the budget on resume doesn't reopen an unbounded-loop risk
 -- the way it would in a fully autonomous run with no pauses at all.
-function agent.run_turn(db_path, session_id, login, system_prompt, model, user_message)
+-- `options.auto_continue` (the detached worker only) goes on past a
+-- spent budget by itself, within agent_auto_continue_max/_minutes.
+function agent.run_turn(db_path, session_id, login, system_prompt, model, user_message, options)
     agent_tools = require("agent_tools")
     if system_prompt == nil or system_prompt == "" then
         system_prompt = agent_tools.default_system_prompt()
@@ -1632,200 +1794,231 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
     -- (checked, then cleared, every time it's found set) -- that's the
     -- only place a stale flag can ever survive past.
     max_turns = config.platform_config().agent_max_turns
-    for turn = 1, max_turns do
-        if agent.cancel_requested(db_path, session_id) == true then
-            agent.clear_cancel(db_path, session_id)
-            stop_message = run_turn_wrapup(db_path, session_id, login, system_prompt, model, STOP_REQUESTED_WRAPUP_PROMPT,
-                "Stopped at your request. Whatever I found along the way is visible above in the tool call history.")
-            agent_tools.sync_session_document(db_path, login, session_id)
-            return {status = "stopped", message = stop_message}
-        end
-
-        active = agent.active_messages(db_path, session_id)
-        history_messages = build_history_messages(active)
-        audit_prompt = json.encode(history_messages)
-
-        response, err, usage = agent_provider.converse(model, system_prompt, history_messages, agent.tool_declarations(db_path))
-        if response == nil then
-            -- Persisted, not just returned -- so a provider failure is
-            -- never silently invisible: without a recorded row, the
-            -- turn would just vanish with no trace in the transcript
-            -- for any call site (chat-message, chat-widget-send/
-            -- approve/deny) that doesn't happen to inspect this
-            -- specific return value. role = "error", not "tool_result"
-            -- -- found live: chat_widget_state (cgi.lua) always calls
-            -- all_messages(..., false), which strips every tool_result
-            -- row as raw tool output the widget was never meant to
-            -- show -- that filter was silently eating this error too,
-            -- so a real, already-logged failure never reached the
-            -- browser at all (spinner just disappears). "error" is its
-            -- own first-class role precisely so that filter leaves it
-            -- alone.
-            error_message_id = agent.add_message(db_path, session_id, "error", "ERROR: " .. tostring(err), true)
-            -- Still recorded even on failure -- what was actually sent
-            -- is exactly as much an audit fact as what came back, and
-            -- usage/reasoning simply don't apply here.
-            context_id = knowledge.record_context(db_path, session_id, error_message_id, audit_prompt, model, nil, nil)
-            knowledge.record_chat_eval(db_path, session_id, context_id, error_message_id, agent_provider.name(), model, true, nil)
-            return {status = "error", message = tostring(err)}
-        end
-
-        -- A connectivity-level infrastructure failure (nil response,
-        -- handled above) is distinct from the LLM call itself failing
-        -- (auth, rate limit, a malformed request) -- the provider
-        -- surfaces the latter as a real, structured reply with
-        -- stopReason "error"/"aborted" rather than an exception (see
-        -- agent_vertex.lua's own .converse() comment); treated
-        -- the same way as a connectivity failure from run_turn's own
-        -- perspective, since either way there's no usable reply to act
-        -- on this turn.
-        if response.stopReason == "error" or response.stopReason == "aborted" then
-            error_message = response.errorMessage
-            if error_message == nil then
-                error_message = "model call failed (stopReason: " .. tostring(response.stopReason) .. ")"
-            end
-            -- role = "error" -- see the connectivity-failure branch
-            -- above for why this must not be "tool_result".
-            error_message_id = agent.add_message(db_path, session_id, "error", "ERROR: " .. tostring(error_message), true)
-            context_id = knowledge.record_context(db_path, session_id, error_message_id, audit_prompt, model, nil, usage)
-            knowledge.record_chat_eval(db_path, session_id, context_id, error_message_id, agent_provider.name(), model, true, nil)
-            return {status = "error", message = tostring(error_message)}
-        end
-
-        content_blocks = response.content
-        if content_blocks == nil then
-            content_blocks = {}
-        end
-        message_id = agent.add_message(db_path, session_id, "assistant", json.encode({blocks = content_blocks}), true)
-        display_text = display_blocks(content_blocks)
-
-        -- Persist the exact prompt/reasoning/tokens for this turn (see
-        -- doc/architecture.md's "Knowledge pool" section, "Full
-        -- prompt/reasoning/token persistence"). Real thinking content
-        -- (Gemini 2.5's own thought-summary blocks, see
-        -- extract_thinking_text) gets split out into its own document
-        -- (source_type='reasoning', a real document under the
-        -- Knowledge Pool folder, not a separate table) -- it then goes
-        -- through the same tiering/retrieval/decay pipeline as every
-        -- other pool document, rather than sitting in a second,
-        -- parallel log only this table can see. Falls back to the
-        -- legacy text-pattern check (knowledge.reply_has_visible_
-        -- reasoning) only when there's no real thinking block at all
-        -- -- some other provider/model might still leak reasoning as
-        -- plain text instead of a real structured block.
-        reasoning_document_id = nil
-        thinking_text = extract_thinking_text(content_blocks)
-        if thinking_text != nil then
-            reasoning_document_id = knowledge.create_document_note(db_path, login,
-                "Chat reasoning (session " .. tostring(session_id) .. ")", thinking_text,
-                "reasoning", message_id, tostring(session_id))
-        elseif knowledge.reply_has_visible_reasoning(display_text) then
-            reasoning_document_id = knowledge.create_document_note(db_path, login,
-                "Chat reasoning (session " .. tostring(session_id) .. ")", display_text,
-                "reasoning", message_id, tostring(session_id))
-        end
-        context_id = knowledge.record_context(db_path, session_id, message_id, audit_prompt, model, reasoning_document_id, usage)
-        knowledge.record_chat_eval(db_path, session_id, context_id, message_id, agent_provider.name(), model, false, display_text)
-
-        tool_calls = all_tool_calls(content_blocks)
-        if #tool_calls == 0 then
-            -- A plain reply (stopReason "stop"/"length") is a PROPOSED
-            -- final answer -- the provider's own stopReason already
-            -- distinguishes "the model wants to call a tool" (toolUse)
-            -- from "the model is finished" (stop/length), but
-            -- "finished" isn't the same as "correct." run_self_check
-            -- gets one more real turn to verify it before it actually
-            -- goes out -- skipped only on the very last allowed turn,
-            -- where there's no budget left to act on a critique anyway,
-            -- so a real answer shouldn't be downgraded into a generic
-            -- turn-limit failure instead.
-            confirmed = true
-            if turn < max_turns then
-                active_after_answer = agent.active_messages(db_path, session_id)
-                confirmed = run_self_check(db_path, session_id, system_prompt, model, active_after_answer)
-            end
-            if confirmed == true then
+    malformed_retried = false
+    -- An auto-continued turn (options.auto_continue: the detached
+    -- worker, which no request timeout bounds) starts a fresh step
+    -- budget when one runs out, with a progress note for the user,
+    -- up to agent_auto_continue_max more budgets and
+    -- agent_auto_continue_minutes in all; only then does it stop and
+    -- report where it got to.
+    auto_continue = options != nil and options.auto_continue == true
+    continuations = 0
+    turn_started_at = os.time()
+    while true do
+        for turn = 1, max_turns do
+            agent.turn_heartbeat(db_path, session_id)
+            if agent.cancel_requested(db_path, session_id) == true then
+                agent.clear_cancel(db_path, session_id)
+                stop_message = run_turn_wrapup(db_path, session_id, login, system_prompt, model, STOP_REQUESTED_WRAPUP_PROMPT,
+                    "Stopped at your request. Whatever I found along the way is visible above in the tool call history.")
                 agent_tools.sync_session_document(db_path, login, session_id)
-                return {status = "done", message = display_text}
+                return {status = "stopped", message = stop_message}
             end
-        else
-            -- Every non-destructive call in this turn runs now, in the
-            -- order proposed -- real parallel-tool-call support (see
-            -- all_tool_calls' own comment). At most one destructive call
-            -- can still pause for approval per turn: the pending-approval
-            -- state machine (agent_pending_action) only tracks one
-            -- outstanding action per session, so the first destructive
-            -- call found pauses the whole turn same as before; any
-            -- destructive call after it gets an explicit "skipped" result
-            -- instead of being silently dropped, so every call the model
-            -- made still gets a real, visible outcome to react to.
-            -- clarify.ask is handled the same "first one wins" way, but
-            -- checked ahead of pending_call below: asking the user
-            -- something is the safer default over auto-pausing a write
-            -- proposed in the same breath, on the rare turn that proposes
-            -- both.
-            pending_call = nil
-            clarify_call = nil
-            for _, tool_call in ipairs(tool_calls) do
-                if tool_call.arguments == nil then
-                    tool_call.arguments = {}
+
+            active = agent.active_messages(db_path, session_id)
+            history_messages = build_history_messages(active)
+            audit_prompt = json.encode(history_messages)
+
+            response, err, usage = agent_provider.converse(model, system_prompt, history_messages, agent.tool_declarations(db_path))
+            -- Gemini sometimes emits a tool call it can't encode
+            -- (finishReason MALFORMED_FUNCTION_CALL); asking again usually
+            -- works, so the first one in a turn is retried before it's an
+            -- error.
+            if response != nil and response.stopReason == "error" and malformed_retried == false
+                    and string.find(tostring(response.errorMessage), "MALFORMED_FUNCTION_CALL", 1, true) != nil then
+                malformed_retried = true
+                response, err, usage = agent_provider.converse(model, system_prompt, history_messages, agent.tool_declarations(db_path))
+            end
+            if response == nil then
+                -- Persisted, not just returned -- so a provider failure is
+                -- never silently invisible: without a recorded row, the
+                -- turn would just vanish with no trace in the transcript
+                -- for any call site (chat-message, chat-widget-send/
+                -- approve/deny) that doesn't happen to inspect this
+                -- specific return value. role = "error", not "tool_result"
+                -- -- found live: chat_widget_state (cgi.lua) always calls
+                -- all_messages(..., false), which strips every tool_result
+                -- row as raw tool output the widget was never meant to
+                -- show -- that filter was silently eating this error too,
+                -- so a real, already-logged failure never reached the
+                -- browser at all (spinner just disappears). "error" is its
+                -- own first-class role precisely so that filter leaves it
+                -- alone.
+                error_message_id = agent.add_message(db_path, session_id, "error", "ERROR: " .. tostring(err), true)
+                -- Still recorded even on failure -- what was actually sent
+                -- is exactly as much an audit fact as what came back, and
+                -- usage/reasoning simply don't apply here.
+                context_id = knowledge.record_context(db_path, session_id, error_message_id, audit_prompt, model, nil, nil)
+                knowledge.record_chat_eval(db_path, session_id, context_id, error_message_id, agent_provider.name(), model, true, nil)
+                return {status = "error", message = tostring(err)}
+            end
+
+            -- A connectivity-level infrastructure failure (nil response,
+            -- handled above) is distinct from the LLM call itself failing
+            -- (auth, rate limit, a malformed request) -- the provider
+            -- surfaces the latter as a real, structured reply with
+            -- stopReason "error"/"aborted" rather than an exception (see
+            -- agent_vertex.lua's own .converse() comment); treated
+            -- the same way as a connectivity failure from run_turn's own
+            -- perspective, since either way there's no usable reply to act
+            -- on this turn.
+            if response.stopReason == "error" or response.stopReason == "aborted" then
+                error_message = response.errorMessage
+                if error_message == nil then
+                    error_message = "model call failed (stopReason: " .. tostring(response.stopReason) .. ")"
                 end
-                tool_name, method_name = split_tool_name(tool_call.name)
-                if tool_name == nil or not agent.is_known_tool(db_path, tool_name, method_name) then
-                    agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name,
-                        "ERROR: unknown tool " .. tostring(tool_call.name), true)
-                elseif tool_name == "clarify" and method_name == "ask" then
-                    if clarify_call == nil then
-                        clarify_call = tool_call
+                -- role = "error" -- see the connectivity-failure branch
+                -- above for why this must not be "tool_result".
+                error_message_id = agent.add_message(db_path, session_id, "error", "ERROR: " .. tostring(error_message), true)
+                context_id = knowledge.record_context(db_path, session_id, error_message_id, audit_prompt, model, nil, usage)
+                knowledge.record_chat_eval(db_path, session_id, context_id, error_message_id, agent_provider.name(), model, true, nil)
+                return {status = "error", message = tostring(error_message)}
+            end
+
+            content_blocks = response.content
+            if content_blocks == nil then
+                content_blocks = {}
+            end
+            message_id = agent.add_message(db_path, session_id, "assistant", json.encode({blocks = content_blocks}), true)
+            display_text = display_blocks(content_blocks)
+
+            -- Persist the exact prompt/reasoning/tokens for this turn (see
+            -- doc/architecture.md's "Knowledge pool" section, "Full
+            -- prompt/reasoning/token persistence"). Real thinking content
+            -- (Gemini 2.5's own thought-summary blocks, see
+            -- extract_thinking_text) gets split out into its own document
+            -- (source_type='reasoning', a real document under the
+            -- Knowledge Pool folder, not a separate table) -- it then goes
+            -- through the same tiering/retrieval/decay pipeline as every
+            -- other pool document, rather than sitting in a second,
+            -- parallel log only this table can see. Falls back to the
+            -- legacy text-pattern check (knowledge.reply_has_visible_
+            -- reasoning) only when there's no real thinking block at all
+            -- -- some other provider/model might still leak reasoning as
+            -- plain text instead of a real structured block.
+            reasoning_document_id = nil
+            thinking_text = extract_thinking_text(content_blocks)
+            if thinking_text != nil then
+                reasoning_document_id = knowledge.create_document_note(db_path, login,
+                    "Chat reasoning (session " .. tostring(session_id) .. ")", thinking_text,
+                    "reasoning", message_id, tostring(session_id))
+            elseif knowledge.reply_has_visible_reasoning(display_text) then
+                reasoning_document_id = knowledge.create_document_note(db_path, login,
+                    "Chat reasoning (session " .. tostring(session_id) .. ")", display_text,
+                    "reasoning", message_id, tostring(session_id))
+            end
+            context_id = knowledge.record_context(db_path, session_id, message_id, audit_prompt, model, reasoning_document_id, usage)
+            knowledge.record_chat_eval(db_path, session_id, context_id, message_id, agent_provider.name(), model, false, display_text)
+
+            tool_calls = all_tool_calls(content_blocks)
+            if #tool_calls == 0 then
+                -- A plain reply (stopReason "stop"/"length") is a PROPOSED
+                -- final answer -- the provider's own stopReason already
+                -- distinguishes "the model wants to call a tool" (toolUse)
+                -- from "the model is finished" (stop/length), but
+                -- "finished" isn't the same as "correct." run_self_check
+                -- gets one more real turn to verify it before it actually
+                -- goes out -- skipped only on the very last allowed turn,
+                -- where there's no budget left to act on a critique anyway,
+                -- so a real answer shouldn't be downgraded into a generic
+                -- turn-limit failure instead.
+                confirmed = true
+                if turn < max_turns then
+                    active_after_answer = agent.active_messages(db_path, session_id)
+                    confirmed = run_self_check(db_path, session_id, system_prompt, model, active_after_answer)
+                end
+                if confirmed == true then
+                    agent_tools.sync_session_document(db_path, login, session_id)
+                    return {status = "done", message = display_text}
+                end
+            else
+                -- Every non-destructive call in this turn runs now, in the
+                -- order proposed -- real parallel-tool-call support (see
+                -- all_tool_calls' own comment). At most one destructive call
+                -- can still pause for approval per turn: the pending-approval
+                -- state machine (agent_pending_action) only tracks one
+                -- outstanding action per session, so the first destructive
+                -- call found pauses the whole turn same as before; any
+                -- destructive call after it gets an explicit "skipped" result
+                -- instead of being silently dropped, so every call the model
+                -- made still gets a real, visible outcome to react to.
+                -- clarify.ask is handled the same "first one wins" way, but
+                -- checked ahead of pending_call below: asking the user
+                -- something is the safer default over auto-pausing a write
+                -- proposed in the same breath, on the rare turn that proposes
+                -- both.
+                pending_call = nil
+                clarify_call = nil
+                for _, tool_call in ipairs(tool_calls) do
+                    if tool_call.arguments == nil then
+                        tool_call.arguments = {}
+                    end
+                    tool_name, method_name = split_tool_name(tool_call.name)
+                    if tool_name == nil or not agent.is_known_tool(db_path, tool_name, method_name) then
                         agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name,
-                            "Waiting for the user's answer before continuing.", false)
+                            "ERROR: unknown tool " .. tostring(tool_call.name), true)
+                    elseif tool_name == "clarify" and method_name == "ask" then
+                        if clarify_call == nil then
+                            clarify_call = tool_call
+                            agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name,
+                                "Waiting for the user's answer before continuing.", false)
+                        else
+                            agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name,
+                                "ERROR: skipped -- only one clarifying question can be asked per turn", true)
+                        end
+                    elseif agent.is_destructive(db_path, tool_name, method_name) then
+                        if pending_call == nil then
+                            pending_call = {tool_call = tool_call, tool_name = tool_name, method_name = method_name}
+                        else
+                            agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name,
+                                "ERROR: skipped -- only one destructive action can be proposed per turn; resolve the pending one first, then ask for this one again", true)
+                        end
                     else
-                        agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name,
-                            "ERROR: skipped -- only one clarifying question can be asked per turn", true)
+                        tool_result, tool_err = agent.run_tool(db_path, login, session_id, tool_name, method_name, tool_call.arguments)
+                        summary = tostring(tool_result)
+                        is_error = false
+                        if tool_err != nil then
+                            summary = "ERROR: " .. tostring(tool_err)
+                            is_error = true
+                        end
+                        agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name, summary, is_error)
+                        agent.turn_heartbeat(db_path, session_id)
                     end
-                elseif agent.is_destructive(db_path, tool_name, method_name) then
-                    if pending_call == nil then
-                        pending_call = {tool_call = tool_call, tool_name = tool_name, method_name = method_name}
-                    else
-                        agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name,
-                            "ERROR: skipped -- only one destructive action can be proposed per turn; resolve the pending one first, then ask for this one again", true)
-                    end
-                else
-                    tool_result, tool_err = agent.run_tool(db_path, login, session_id, tool_name, method_name, tool_call.arguments)
-                    summary = tostring(tool_result)
-                    is_error = false
-                    if tool_err != nil then
-                        summary = "ERROR: " .. tostring(tool_err)
-                        is_error = true
-                    end
-                    agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name, summary, is_error)
                 end
-            end
 
-            if clarify_call != nil then
-                -- No self-check here (there's no answer yet to critique)
-                -- and no agent_pending_action row -- unlike a destructive
-                -- call, there's nothing to later approve/deny; the user's
-                -- own next chat message is the answer, and the ordinary
-                -- /chat-message flow already continues this same turn
-                -- loop from active_messages, no special resume path
-                -- needed.
-                question = nil
-                if clarify_call.arguments != nil then
-                    question = clarify_call.arguments.question
+                if clarify_call != nil then
+                    -- No self-check here (there's no answer yet to critique)
+                    -- and no agent_pending_action row -- unlike a destructive
+                    -- call, there's nothing to later approve/deny; the user's
+                    -- own next chat message is the answer, and the ordinary
+                    -- /chat-message flow already continues this same turn
+                    -- loop from active_messages, no special resume path
+                    -- needed.
+                    question = nil
+                    if clarify_call.arguments != nil then
+                        question = clarify_call.arguments.question
+                    end
+                    agent_tools.sync_session_document(db_path, login, session_id)
+                    return {status = "needs_clarification", message = question}
                 end
-                agent_tools.sync_session_document(db_path, login, session_id)
-                return {status = "needs_clarification", message = question}
-            end
 
-            if pending_call != nil then
-                pending_id = agent.create_pending_action(db_path, session_id, pending_call.tool_name, pending_call.method_name,
-                    pending_call.tool_call.arguments, pending_call.tool_call.id)
-                agent_tools.sync_session_document(db_path, login, session_id)
-                return {status = "pending_approval", pending_id = pending_id, tool = pending_call.tool_name,
-                    method = pending_call.method_name, args = pending_call.tool_call.arguments}
+                if pending_call != nil then
+                    pending_id = agent.create_pending_action(db_path, session_id, pending_call.tool_name, pending_call.method_name,
+                        pending_call.tool_call.arguments, pending_call.tool_call.id)
+                    agent_tools.sync_session_document(db_path, login, session_id)
+                    return {status = "pending_approval", pending_id = pending_id, tool = pending_call.tool_name,
+                        method = pending_call.method_name, args = pending_call.tool_call.arguments}
+                end
             end
         end
+        conf = config.platform_config()
+        if auto_continue == false or continuations >= conf.agent_auto_continue_max
+                or os.time() - turn_started_at >= conf.agent_auto_continue_minutes * 60 then
+            break
+        end
+        continuations = continuations + 1
+        run_turn_wrapup(db_path, session_id, login, system_prompt, model, PROGRESS_NOTE_PROMPT,
+            "Still working on this -- continuing with a fresh set of steps.", "progress")
     end
 
     -- Found live: /api/chat-widget-send calls agent.run_turn and discards
@@ -1847,8 +2040,10 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
 end
 
 -- Executes an approved pending action, records its result, and resumes
--- the turn loop from there.
-function agent.approve_pending(db_path, pending_id, login, system_prompt, model)
+-- the turn loop from there -- unless `resume` is false (a detached turn:
+-- the caller hands the rest to a worker), then returns
+-- {status = "resolved", session_id = ...}.
+function agent.approve_pending(db_path, pending_id, login, system_prompt, model, resume)
     agent_tools = require("agent_tools")
     pending = agent.get_pending_action(db_path, pending_id, login)
     if pending == nil then
@@ -1873,13 +2068,17 @@ function agent.approve_pending(db_path, pending_id, login, system_prompt, model)
     agent.add_tool_result_message(db_path, pending.session_id, pending.tool_call_id, pending.tool .. "." .. pending.method, summary, is_error)
     agent.resolve_pending_action(db_path, pending_id, "approved")
 
+    if resume == false then
+        return {status = "resolved", session_id = pending.session_id}
+    end
     return agent.run_turn(db_path, pending.session_id, login, system_prompt, model, nil)
 end
 
 -- Denies a pending action, records the denial as a tool_result (so the
 -- model sees it and can react), and resumes the turn loop -- a denial
 -- is just another outcome the model gets to respond to, not a dead end.
-function agent.deny_pending(db_path, pending_id, login, system_prompt, model)
+-- `resume` as for agent.approve_pending.
+function agent.deny_pending(db_path, pending_id, login, system_prompt, model, resume)
     pending = agent.get_pending_action(db_path, pending_id, login)
     if pending == nil then
         return nil, "no such pending action"
@@ -1891,6 +2090,9 @@ function agent.deny_pending(db_path, pending_id, login, system_prompt, model)
     agent.add_tool_result_message(db_path, pending.session_id, pending.tool_call_id, pending.tool .. "." .. pending.method, "User denied execution of this action.", true)
     agent.resolve_pending_action(db_path, pending_id, "denied")
 
+    if resume == false then
+        return {status = "resolved", session_id = pending.session_id}
+    end
     return agent.run_turn(db_path, pending.session_id, login, system_prompt, model, nil)
 end
 
