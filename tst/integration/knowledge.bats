@@ -609,6 +609,61 @@ search_for_bioreactor_extra() {
     [[ "$output" == "unverified|3|not in both documents: Bargmann, 2006 -- the startup protocol cites Bargmann et al. (2006) for the cleaning steps." ]]
 }
 
+@test "a YES with no sentence saying what both share writes no connection document (found live: celleste-lims, empty connection notes)" {
+    "$BIN" entity create document title="Bioreactor Cleaning" content="cleaning steps for the bioreactor procedure"
+    "$BIN" entity create document title="Bioreactor Startup" content="startup steps for the bioreactor procedure"
+
+    search_for_bioreactor_extra ""
+    search_for_bioreactor_extra ""
+    search_for_bioreactor_extra "YES: both are bioreactor notes."
+
+    run sqlite3 .store/store.db "SELECT COUNT(*) FROM document WHERE title = 'Bioreactor Cleaning ↔ Bioreactor Startup';"
+    [ "$output" -eq 0 ]
+    run sqlite3 .store/store.db "SELECT decision, last_co_count, reason FROM knowledge_link_review WHERE document_a_id = 1 AND document_b_id = 2;"
+    [[ "$output" == "thin|3|no sentence saying what both share: both are bioreactor notes." ]]
+}
+
+make_thin_connection() {
+    "$BIN" entity create document title="Bioreactor Cleaning" content="cleaning steps for the bioreactor procedure" >/dev/null
+    "$BIN" entity create document title="Bioreactor Startup" content="startup steps for the bioreactor procedure" >/dev/null
+    "$BIN" entity create document title="Bioreactor Cleaning ↔ Bioreactor Startup" content="[[Bioreactor Cleaning]] and [[Bioreactor Startup]]: " >/dev/null
+    # Already explained: a repair never touches it.
+    "$BIN" entity create document title="Feed ↔ Startup" content="[[Bioreactor Startup]] and [[Bioreactor Cleaning]]: the startup run reuses the cleaning step's sterile water flush." >/dev/null
+}
+
+@test "repair connections: a connection document with no reason is explained again when the agent can say what both share" {
+    make_thin_connection
+    run env AGENT_TEST_RESPONSES="YES: the startup and cleaning steps belong to the same bioreactor procedure." "$BIN" repair connections
+    [[ "$output" =~ "1 explained, 0 revoked, 1 already explained" ]]
+    run sqlite3 .store/store.db "SELECT content, archived_at IS NULL FROM document WHERE title = 'Bioreactor Cleaning ↔ Bioreactor Startup';"
+    [[ "$output" == "[[Bioreactor Cleaning]] and [[Bioreactor Startup]]: the startup and cleaning steps belong to the same bioreactor procedure.|1" ]]
+    run sqlite3 .store/store.db "SELECT content FROM document WHERE title = 'Feed ↔ Startup';"
+    [[ "$output" =~ "sterile water flush" ]]
+}
+
+@test "repair connections: a connection document the agent still can't explain is archived, taking its links with it" {
+    make_thin_connection
+    run env AGENT_TEST_RESPONSES="YES: both are bioreactor notes." "$BIN" repair connections
+    [[ "$output" =~ "0 explained, 1 revoked, 1 already explained" ]]
+    run sqlite3 .store/store.db "SELECT archived_at IS NOT NULL FROM document WHERE title = 'Bioreactor Cleaning ↔ Bioreactor Startup';"
+    [ "$output" = "1" ]
+    run sqlite3 .store/store.db "SELECT COUNT(*) FROM document_link WHERE from_document_id = 3 AND archived_at IS NULL;"
+    [ "$output" = "0" ]
+    run sqlite3 .store/store.db "SELECT decision FROM knowledge_link_review WHERE document_a_id = 1 AND document_b_id = 2;"
+    [ "$output" = "thin" ]
+    run sqlite3 .store/store.db "SELECT archived_at IS NULL FROM document WHERE title = 'Feed ↔ Startup';"
+    [ "$output" = "1" ]
+}
+
+@test "repair connections --dry-run lists the thin connection documents and changes nothing" {
+    make_thin_connection
+    run "$BIN" repair connections --dry-run
+    [[ "$output" =~ "would explain or revoke #3 Bioreactor Cleaning ↔ Bioreactor Startup" ]]
+    [[ ! "$output" =~ "Feed ↔ Startup" ]]
+    run sqlite3 .store/store.db "SELECT COUNT(*) FROM document WHERE title LIKE '%↔%' AND archived_at IS NULL;"
+    [ "$output" = "2" ]
+}
+
 @test "a co-retrieved pair the agent declines is remembered, not re-asked on the very next shared retrieval (task #109)" {
     "$BIN" entity create document title="Bioreactor Cleaning" content="cleaning steps for the bioreactor procedure"
     "$BIN" entity create document title="Bioreactor Startup" content="startup steps for the bioreactor procedure"

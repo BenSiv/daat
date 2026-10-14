@@ -1260,6 +1260,7 @@ end
 -- where other notes about the pool live. nil if either document can't
 -- be written as a link (document.link_ref).
 CONNECTION_TITLE_SEPARATOR = " ↔ "
+document.CONNECTION_TITLE_SEPARATOR = CONNECTION_TITLE_SEPARATOR
 
 -- Whether a title has a connection document's shape; tag.lua counts such
 -- a document as one edge between the two it links, not as two links.

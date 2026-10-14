@@ -120,6 +120,14 @@ function test_hand_rolled_sql_columns_text_covers_every_event_log_table()
     check(knowledge.hand_rolled_sql_columns_text("not_a_real_table") == nil, "expected nil for an unrecognized table name")
 end
 
+function test_link_reason_too_thin()
+    print("Testing link_reason_too_thin: a connection note needs a sentence saying what both share")
+    check(knowledge.link_reason_too_thin(nil) == true, "a bare YES (no reason) is too thin")
+    check(knowledge.link_reason_too_thin("both are meeting notes") == true, "a few generic words are too thin")
+    check(knowledge.link_reason_too_thin("both are steps of the same bioreactor procedure.") == false, "an eight-word sentence is enough")
+    check(knowledge.link_reason_too_thin("the subculture protocol calls for exactly this medium recipe.") == false, "a specific sentence is enough")
+end
+
 -- Run them
 test_reply_has_visible_reasoning_detects_markers()
 test_classify_reply_four_way_split()
@@ -127,6 +135,7 @@ test_co_retrieval_eligible_threshold_and_hub_ratio()
 test_due_for_link_review_first_time_and_reevaluation_step()
 test_due_for_tier_judgment_first_time_and_content_change()
 test_hand_rolled_sql_columns_text_covers_every_event_log_table()
+test_link_reason_too_thin()
 
 if FAILURES > 0 then
     print(FAILURES .. " test(s) failed")

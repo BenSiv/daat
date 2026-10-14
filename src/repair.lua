@@ -134,6 +134,13 @@ function repair_references(cmd_args, db_path)
     print(string.format("Indexed %d entity name(s); re-read references in %d document(s)", names, documents))
 end
 
+function repair_connections(cmd_args, db_path)
+    knowledge = require("knowledge")
+    for _, line in ipairs(knowledge.repair_connections(db_path, cmd_args[2] == "--dry-run")) do
+        print(line)
+    end
+end
+
 -- Ordered (a list, not a map) so `daat repair`'s listing is stable.
 REPAIRS = {
     {name = "links", usage = "links [document_id | --all]", run = repair_links,
@@ -150,6 +157,8 @@ REPAIRS = {
      description = "Re-index entity names, then re-read every document's references to them."},
     {name = "knowledge", usage = "knowledge [--dry-run]", run = repair_knowledge,
      description = "Remove rows derived from archived documents or tags (embeddings, references; links archived); counts embeddings from another model."},
+    {name = "connections", usage = "connections [--dry-run]", run = repair_connections,
+     description = "Ask the agent again why two documents are connected, for every connection document (A ↔ B) that doesn't say what both share: rewrite it with a real reason, or archive it (--dry-run: list them, no model calls)."},
     {name = "pool-count", usage = "pool-count", run = repair_pool_count,
      description = "Recount active documents into knowledge_pool_state.document_count."},
 }

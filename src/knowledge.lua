@@ -815,7 +815,7 @@ CO_RETRIEVAL_REEVALUATION_STEP = 3
 LINK_REINFORCEMENT_DELTA = 0.15
 
 LINK_EVALUATION_SYSTEM_PROMPT = """
-Two documents from the same knowledge pool have repeatedly been retrieved together in the same searches. Judge whether they describe a genuinely meaningful connection (the same topic, a real dependency, one explains or extends the other) as opposed to just coincidental overlap in unrelated searches. Reply on a single line: YES or NO, a colon, then one sentence. For YES, the sentence states the specific connection in terms of the documents' content (what one says about, uses from, or adds to the other) -- not merely that they are related or were retrieved together. For NO, the sentence says why the overlap is coincidental. A YES sentence is written into a note that links both documents right before it, so refer to them by what they are, never as "Document A" or "Document B". Example: "YES: the subculture protocol calls for exactly this medium recipe."
+Two documents from the same knowledge pool have repeatedly been retrieved together in the same searches. Judge whether they describe a genuinely meaningful connection (the same topic, a real dependency, one explains or extends the other) as opposed to just coincidental overlap in unrelated searches. Reply on a single line: YES or NO, a colon, then one sentence. For YES, the sentence states the specific connection in terms of the documents' content (what one says about, uses from, or adds to the other) and names the information both share (the experiment, sample, method, result or decision) -- not merely that they are related, of the same kind ("both are meeting notes") or were retrieved together; if you can't name what they share, answer NO. For NO, the sentence says why the overlap is coincidental. A YES sentence is written into a note that links both documents right before it, so refer to them by what they are, never as "Document A" or "Document B". Example: "YES: the subculture protocol calls for exactly this medium recipe."
 """
 
 
@@ -886,6 +886,21 @@ function knowledge.record_link_review(db_path, document_a_id, document_b_id, co_
         db.replace_into(db_path), tonumber(document_a_id), tonumber(document_b_id),
         tonumber(co_count), db.quote(decision), db.literal(document.clip_text(reason)), db.now_expr(db_path)
     ))
+end
+
+-- A connection document's whole content is its reason: fewer words
+-- than this can't say what the two documents share.
+LINK_REASON_MIN_WORDS = 8
+
+function knowledge.link_reason_too_thin(reason)
+    if reason == nil then
+        return true
+    end
+    words = 0
+    for _ in string.gmatch(reason, "%S+") do
+        words = words + 1
+    end
+    return words < LINK_REASON_MIN_WORDS
 end
 
 -- "YES: <sentence>" / "NO: <sentence>" -> "YES"/"NO", sentence. Lenient
@@ -1137,24 +1152,43 @@ end
 -- same as every other note the pool creates (see
 -- knowledge.create_document_note). The links come from its content like
 -- any document's; nothing marks it as the agent's.
-function knowledge.evaluate_co_retrieval_pair(db_path, author, doc_a, doc_b, co_count)
+-- The model's judgment of one pair, checked by rule: "linked" with a
+-- reason worth writing down, or why not -- "declined" (NO, or no
+-- verdict), "thin" (a YES that doesn't say what both share: the reason
+-- IS the note, and a bare YES or "both are meeting notes" made notes
+-- holding nothing -- found live on celleste-lims, a flood of them) or
+-- "unverified" (a YES naming things the documents don't both contain:
+-- an invented connection, not a found one). nil when the model call
+-- failed. -> decision, reason
+function knowledge.judge_link(doc_a, doc_b)
     agent_provider = require("agent_provider")
     answer, err = agent_provider.generate(nil, LINK_EVALUATION_SYSTEM_PROMPT, knowledge.link_pair_prompt(doc_a, doc_b))
     if answer == nil then
-        return
+        return nil, err
     end
     verdict, reason = knowledge.parse_link_judgment(answer)
     if verdict != "YES" then
-        knowledge.record_link_review(db_path, doc_a.id, doc_b.id, co_count, "declined", reason)
-        return
+        return "declined", reason
     end
-    -- A YES whose reason names things the documents don't both contain
-    -- is an invented connection, not a found one: nothing is written.
-    -- Recorded like a decline, so it's re-judged if co-retrieval grows.
+    if knowledge.link_reason_too_thin(reason) then
+        return "thin", "no sentence saying what both share: " .. tostring(reason)
+    end
     missing = knowledge.unverified_claims(reason, doc_a, doc_b)
     if #missing > 0 then
-        knowledge.record_link_review(db_path, doc_a.id, doc_b.id, co_count, "unverified",
-            "not in both documents: " .. table.concat(missing, ", ") .. " -- " .. tostring(reason))
+        return "unverified", "not in both documents: " .. table.concat(missing, ", ") .. " -- " .. tostring(reason)
+    end
+    return "linked", reason
+end
+
+function knowledge.evaluate_co_retrieval_pair(db_path, author, doc_a, doc_b, co_count)
+    decision, reason = knowledge.judge_link(doc_a, doc_b)
+    if decision == nil then
+        return
+    end
+    -- Anything but "linked" is recorded like a decline, so it's
+    -- re-judged if co-retrieval grows.
+    if decision != "linked" then
+        knowledge.record_link_review(db_path, doc_a.id, doc_b.id, co_count, decision, reason)
         return
     end
     draft = document.connection_draft(db_path, doc_a.id, doc_b.id, reason)
@@ -1164,6 +1198,101 @@ function knowledge.evaluate_co_retrieval_pair(db_path, author, doc_a, doc_b, co_
     end
     document.create_page(db_path, author, draft.title, draft.parent_id, draft.content, nil)
     knowledge.record_link_review(db_path, doc_a.id, doc_b.id, co_count, "linked", reason)
+end
+
+-- What a connection document says about why its two documents are
+-- connected: its content with the [[links]] and the "A and B:" lead-in
+-- taken out.
+function knowledge.connection_reason(content)
+    if content == nil then
+        return nil
+    end
+    reason = string.match(content, "^%s*%[%[.-%]%]%s+and%s+%[%[.-%]%]%s*:%s*(.-)%s*$")
+    if reason == nil then
+        reason = string.gsub(content, "%[%[.-%]%]", "")
+        reason = string.gsub(reason, "^%s*(.-)%s*$", "%1")
+    end
+    if reason == "" then
+        return nil
+    end
+    return reason
+end
+
+-- Archived like any document a person archives: the archive hook
+-- takes its links (and its heat, vector, tag places) with it.
+function revoke_connection(db_path, connection_id, why)
+    archived_id, _ = entity.archive(db_path, "document", tonumber(connection_id), "system", nil, "repair connections: " .. why)
+    if archived_id != nil then
+        document.on_entity_archived(db_path, "document", archived_id)
+    end
+end
+
+-- `daat repair connections`: every connection document ("A ↔ B") whose
+-- reason is too thin to say what the two share is explained again --
+-- the model is asked the same question co-retrieval asks; a reason that
+-- passes judge_link replaces the old one, anything else archives the
+-- connection document, which takes its links with it. One whose two
+-- ends aren't both still active is archived without asking. With
+-- dry_run, only lists what it would look at (no model calls).
+-- -> report lines
+function knowledge.repair_connections(db_path, dry_run)
+    rows = db.query(db_path, string.format(
+        "SELECT id FROM document WHERE title LIKE %s AND (archived_at IS NULL OR archived_at = '') ORDER BY id;",
+        db.quote("%" .. document.CONNECTION_TITLE_SEPARATOR .. "%")))
+    if rows == nil then
+        rows = {}
+    end
+    report = {}
+    counts = {explained = 0, revoked = 0, kept = 0, failed = 0}
+    for _, row in ipairs(rows) do
+        connection = entity.get(db_path, "document", tonumber(row.id))
+        old_reason = knowledge.connection_reason(connection.content)
+        if knowledge.link_reason_too_thin(old_reason) then
+            ends = db.query(db_path, string.format(
+                "SELECT DISTINCT l.to_document_id AS id FROM document_link l JOIN document d ON d.id = l.to_document_id " ..
+                "WHERE l.from_document_id = %d AND (l.archived_at IS NULL OR l.archived_at = '') " ..
+                "AND (d.archived_at IS NULL OR d.archived_at = '') ORDER BY l.to_document_id;", tonumber(connection.id)))
+            label = "#" .. tostring(connection.id) .. " " .. tostring(connection.title)
+            if dry_run then
+                table.insert(report, "would explain or revoke " .. label)
+            elseif ends == nil or #ends != 2 then
+                revoke_connection(db_path, connection.id, "its two documents aren't both active")
+                counts.revoked = counts.revoked + 1
+                table.insert(report, "revoked " .. label .. ": its two documents aren't both active")
+            else
+                doc_a = knowledge.get_document(db_path, tonumber(ends[1].id))
+                doc_b = knowledge.get_document(db_path, tonumber(ends[2].id))
+                review = knowledge.get_link_review(db_path, doc_a.id, doc_b.id)
+                co_count = 0
+                if review != nil then
+                    co_count = tonumber(review.last_co_count)
+                end
+                decision, reason = knowledge.judge_link(doc_a, doc_b)
+                if decision == nil then
+                    counts.failed = counts.failed + 1
+                    table.insert(report, "left " .. label .. ": model call failed: " .. tostring(reason))
+                elseif decision == "linked" and document.connection_draft(db_path, doc_a.id, doc_b.id, reason) != nil then
+                    draft = document.connection_draft(db_path, doc_a.id, doc_b.id, reason)
+                    document.update_page(db_path, "system", tonumber(connection.id), connection.title, connection.parent_id, draft.content, nil)
+                    knowledge.record_link_review(db_path, doc_a.id, doc_b.id, co_count, "linked", reason)
+                    counts.explained = counts.explained + 1
+                    table.insert(report, "explained " .. label .. ": " .. reason)
+                else
+                    revoke_connection(db_path, connection.id, decision .. " -- " .. tostring(reason))
+                    knowledge.record_link_review(db_path, doc_a.id, doc_b.id, co_count, decision, reason)
+                    counts.revoked = counts.revoked + 1
+                    table.insert(report, "revoked " .. label .. ": " .. decision .. " -- " .. tostring(reason))
+                end
+            end
+        else
+            counts.kept = counts.kept + 1
+        end
+    end
+    if not dry_run then
+        table.insert(report, string.format("%d explained, %d revoked, %d already explained, %d left (model call failed)",
+            counts.explained, counts.revoked, counts.kept, counts.failed))
+    end
+    return report
 end
 
 --------------------------------------------------------------------------
