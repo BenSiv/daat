@@ -48,6 +48,7 @@ function new_test_db(document_count)
     db.exec(db_path, "CREATE TABLE document_embedding (document_id INTEGER PRIMARY KEY);")
     db.exec(db_path, "CREATE TABLE document_embedding_due (document_id INTEGER PRIMARY KEY, queued_at TEXT);")
     db.exec(db_path, "CREATE TABLE document_reference (document_id INTEGER);")
+    db.exec(db_path, "CREATE TABLE document_link_sync (document_id INTEGER PRIMARY KEY, content_hash VARCHAR(64) NOT NULL);")
     -- Read by on_entity_archived's tag hook (src/tag.lua): no rows, so
     -- archiving touches no tag centre.
     db.exec(db_path, "CREATE TABLE document_tag (id INTEGER PRIMARY KEY, document INTEGER, tag INTEGER, decision TEXT, archived_at TEXT);")
