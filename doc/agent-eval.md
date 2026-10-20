@@ -1,6 +1,6 @@
 # Agent evaluation: scorecard and demo-lab test environment
 
-Status: steps 1-2 built (demo lab, loader, runner, report, 6 scenarios, test mode in `./bld/test.sh`). Live mode is wired but not yet run against a real model. Tracked in GitHub issue #4.
+Status: steps 1-2 built (demo lab, loader, runner, report, 6 scenarios, test mode in `./bld/test.sh`). Live mode runs against Vertex in an eval-only project; `--rescore` re-checks a finished run without new model calls; `tst/eval/score_chats.lua` scores stored chat history. Tracked in GitHub issue #4.
 
 ## Problem
 
@@ -141,6 +141,8 @@ The report shows one line per score:
 
 With `--compare` it adds a delta column. It also lists failing scenarios with links to their transcripts.
 
+`bld/eval.sh --rescore eval-out/runs/<run>` runs the checks again on that run's stored conversations. Use it after correcting a check: a check that was too strict must not count against the agent, and a fix must not mean paying for the model calls again. The first scoring is kept as `results.jsonl.before-rescore`.
+
 ### 4. Keeping up with change
 
 The scenario set is split in two:
@@ -151,12 +153,15 @@ Rule: a change that adds a tool or a new agent behaviour comes with at least one
 
 ### 5. The same scores on real use
 
-A deployment's own chat history is already in `agent_session`/`agent_message`. The conversation-level checks run on it read-only, with no change to the deployment: `cites`, `no_failed_lookup`, `finished`, `shows_method`. That gives the maintainer of a deployment the same numbers for real use after each rollout, and the conversations stay inside the deployment. The demo lab measures what changed; real-use scoring confirms it holds up.
+A deployment's own chat history is already in `agent_session`/`agent_message`. The conversation-level checks run on it read-only, with no change to the deployment: `cites`, `no_failed_lookup`, `finished`, `shows_method`.
+
+`tst/eval/score_chats.lua` reads rows as JSON lines on stdin (`{session_id, login, id, role, content, created_at}`), splits each session into exchanges at every user message, and prints only totals: no message content is written anywhere. `--exclude login,...` leaves out test accounts. A MariaDB deployment can stream the rows with `JSON_OBJECT(...)` from a read-only account straight into it. That gives the maintainer of a deployment the same numbers for real use after each rollout, and the conversations stay inside the deployment. The demo lab measures what changed; real-use scoring confirms it holds up.
 
 ### 6. Model access for live runs
 
 - Live runs use a model credential meant only for evaluation, in a cloud project that holds no production deployment or data, under a monthly budget.
-- For Vertex, a service account with only the Vertex AI user role is enough.
+- For Vertex, a service account with only the Vertex AI user role is enough. Off GCE, the provider falls back to the logged-in `gcloud` account for its token.
+- `bld/eval-env.sh --provider vertex` reads `DAAT_EVAL_VERTEX_PROJECT`, `DAAT_EVAL_VERTEX_REGION` (default `global`) and `DAAT_EVAL_MODEL`, never a deployment's own config. The loader refuses a lab whose documents didn't all get embedded.
 - `search_provider` and mail stay on their test stand-ins in every mode. A live run never reaches an external system other than the model API.
 
 ## How to add a scenario

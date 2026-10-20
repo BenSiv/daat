@@ -64,12 +64,12 @@
 -- or a final answer -- stopReason has to be derived from whether a
 -- functionCall part is actually present, not from finishReason alone.
 --
--- Requires `gcloud` on PATH, already authenticated (`gcloud auth
--- application-default login`), and two platform.lua settings of its
--- own, read through config.setting (core doesn't know them):
--- vertex_project (required, no default -- this is a real, potentially
--- billed GCP project, never hardcoded here) and vertex_region
--- (optional, defaults to DEFAULT_REGION below).
+-- Requires a GCE service account (the metadata server) or, off GCE, a
+-- logged-in `gcloud` on PATH (see vertex_gcloud_access_token), and two
+-- platform.lua settings of its own, read through config.setting (core
+-- doesn't know them): vertex_project (required, no default -- this is
+-- a real, potentially billed GCP project, never hardcoded here) and
+-- vertex_region (optional, defaults to DEFAULT_REGION below).
 
 json = require("dkjson")
 config = require("config")
@@ -181,6 +181,28 @@ end
 -- valid token -- worst case is one harmless extra metadata-server call,
 -- never incorrect data -- so this needs no locking, unlike a real
 -- shared-counter race elsewhere in this codebase.
+-- Off GCE (a developer machine, the agent scorecard in
+-- doc/agent-eval.md) there is no metadata server: fall back to the
+-- logged-in gcloud account, once per token lifetime. On a VM the
+-- metadata server answers first, so production never reaches this.
+GCLOUD_TOKEN_LIFETIME_SECONDS = 3000
+
+function vertex_gcloud_access_token(now)
+    if external_tool.available("gcloud") == false then
+        return nil, "cannot get an access token: no GCE metadata server and no gcloud on PATH"
+    end
+    token, _ = external_tool.capture("gcloud auth print-access-token 2>/dev/null")
+    if token == nil then
+        return nil, "cannot get an access token: no GCE metadata server and `gcloud auth print-access-token` failed"
+    end
+    token = string.gsub(token, "%s+$", "")
+    if token == "" then
+        return nil, "cannot get an access token: gcloud returned an empty token"
+    end
+    vertex_write_token_cache(token, now + GCLOUD_TOKEN_LIFETIME_SECONDS)
+    return token
+end
+
 function vertex_access_token()
     now = os.time()
     cache = vertex_read_token_cache()
@@ -194,7 +216,7 @@ function vertex_access_token()
         " " .. external_tool.shell_quote("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token")
     )
     if response_text == nil then
-        return nil, "cannot get GCE metadata-server access token (curl/network failure)"
+        return vertex_gcloud_access_token(now)
     end
     response, _, decode_err = json.decode(response_text)
     if response == nil or response.access_token == nil then

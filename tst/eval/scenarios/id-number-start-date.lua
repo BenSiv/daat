@@ -33,7 +33,7 @@ return function(f, s)
             s.final(e.lab_number .. " started on " .. e.started_on .. "."),
         },
         checks = {
-            {kind = "answer", expected = e.started_on},
+            {kind = "answer", date = e.started_on},
             {kind = "no_failed_lookup"},
             {kind = "finished"},
         },

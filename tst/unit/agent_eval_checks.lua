@@ -55,6 +55,17 @@ function test_answer_matches_text_lists_and_numbers()
     check(checks.answer(conv, {number = 3.5, tolerance = 0.05}, CTX).pass == false, "3.91 is not within 5% of 3.5")
 end
 
+function test_answer_accepts_any_common_spelling_of_a_date()
+    print("Testing a date answer matches ISO and written-out spellings, and only the right date")
+    for _, reply in ipairs({"It started on 2026-04-25.", "It started on **April 25, 2026**.",
+            "Started 25 April 2026.", "Started Apr 25, 2026."}) do
+        conv = checks.conversation({user("q"), said(reply)}, {})
+        check(checks.answer(conv, {date = "2026-04-25"}, CTX).pass == true, "should accept: " .. reply)
+    end
+    wrong = checks.conversation({user("q"), said("It started on April 24, 2026.")}, {})
+    check(checks.answer(wrong, {date = "2026-04-25"}, CTX).pass == false, "the day before must not match")
+end
+
 function test_cites_needs_a_link_to_the_right_record()
     print("Testing cites wants a link to the record, not just its number")
     linked = checks.conversation({user("q"), said("See [notes](/document?entity_id=212).")}, {})
@@ -106,6 +117,8 @@ function test_says_unknown_and_shows_method()
     check(checks.says_unknown(guess, {}, CTX).pass == false, "a made-up answer should fail says_unknown")
     honest = checks.conversation({user("q"), said("The supplier isn't recorded anywhere in the lab's data.")}, {})
     check(checks.says_unknown(honest, {}, CTX).pass == true, "saying it isn't recorded should pass")
+    worded = checks.conversation({user("q"), said("The records do not contain information about its supplier.")}, {})
+    check(checks.says_unknown(worded, {}, CTX).pass == true, "'do not contain information' should pass")
     bare = checks.conversation({user("q"), said("About 3.9 hours.")}, {})
     check(checks.shows_method(bare, {}, CTX).pass == false, "a bare number should fail shows_method")
     shown = checks.conversation({user("q"), said("About 3.9 hours, calculated from the slope of ln(OD600).")}, {})
@@ -114,6 +127,7 @@ end
 
 test_final_text_is_the_last_plain_reply_after_the_last_user_message()
 test_answer_matches_text_lists_and_numbers()
+test_answer_accepts_any_common_spelling_of_a_date()
 test_cites_needs_a_link_to_the_right_record()
 test_approval_fails_on_a_write_nobody_approved()
 test_no_failed_lookup_counts_guessed_schema_errors()

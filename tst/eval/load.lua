@@ -107,6 +107,13 @@ end
 document.embed_pending(db_path)
 embedded = db.query(db_path, "SELECT COUNT(*) AS n FROM document_embedding;")[1].n
 
+-- A document without an embedding is invisible to semantic search, so
+-- a half-embedded lab would quietly score retrieval wrong: refuse it.
+if tonumber(embedded) < #lab.documents then
+    error(string.format("only %d of %d documents were embedded -- check the provider's credentials",
+        tonumber(embedded), #lab.documents))
+end
+
 lab.facts.ids = ids
 lab.facts.user = EVAL_USER
 file = io.open("facts.json", "w")
