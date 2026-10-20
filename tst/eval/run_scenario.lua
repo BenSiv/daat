@@ -8,6 +8,9 @@
 --   luam run_scenario.lua run <scenario.lua> <mode> <repeat> <set>
 --       plays the conversation, runs its checks, prints one JSON line
 --       (nothing if the scenario isn't in <set>: core, growth or all)
+--   luam run_scenario.lua rescore <scenario.lua> <mode> <repeat> <set> <session_id> <status>
+--       runs the checks again on a conversation already played here, so
+--       a corrected check never needs the model calls paid twice
 --
 -- A scenario file returns function(facts, s) -> scenario table:
 --   name, set ("core" | "growth"), traps = {...}, turns = {"..."},
@@ -88,7 +91,7 @@ end
 command = arg[1]
 scenario_path = arg[2]
 if command == nil or scenario_path == nil then
-    print("Usage: luam run_scenario.lua script <scenario.lua> | run <scenario.lua> <mode> <repeat> <set>")
+    print("Usage: luam run_scenario.lua script <scenario.lua> | run|rescore <scenario.lua> <mode> <repeat> <set> [<session_id> <status>]")
     os.exit(2)
 end
 scenario = load_scenario(scenario_path)
@@ -114,10 +117,18 @@ login = facts.user
 model = agent.default_model()
 started = os.time()
 
-session_id = agent.create_session(db_path, login, scenario.name)
 status = nil
 run_error = nil
-for _, turn_text in ipairs(scenario.turns) do
+session_id = nil
+turns = scenario.turns
+if command == "rescore" then
+    session_id = arg[6]
+    status = arg[7]
+    turns = {}
+else
+    session_id = agent.create_session(db_path, login, scenario.name)
+end
+for _, turn_text in ipairs(turns) do
     result, err = agent.run_turn(db_path, session_id, login, nil, model, turn_text)
     -- Approvals resume the same turn; bounded so a scenario can never
     -- loop forever on a model that keeps proposing writes.

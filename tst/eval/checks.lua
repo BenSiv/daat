@@ -35,8 +35,31 @@ UNKNOWN_PATTERNS = {
     "no record", "no information", "not available", "couldn't find",
     "could not find", "can't find", "cannot find", "don't have", "do not have",
     "doesn't say", "does not say", "not mentioned", "isn't mentioned",
-    "no data", "unknown",
+    "no mention", "not contain", "doesn't contain", "don't contain",
+    "not include", "doesn't include", "not specified", "isn't specified",
+    "not listed", "isn't listed", "no data", "unknown",
 }
+
+MONTHS = {"january", "february", "march", "april", "may", "june", "july",
+    "august", "september", "october", "november", "december"}
+
+-- The ways a reply may write an ISO date: 2026-04-25, April 25, 2026,
+-- Apr 25 2026, 25 April 2026 (lowercased, to match lowered text).
+function date_forms(iso)
+    y, m, d = string.match(iso, "^(%d%d%d%d)%-(%d%d)%-(%d%d)$")
+    if y == nil then
+        return {string.lower(iso)}
+    end
+    month = MONTHS[tonumber(m)]
+    short = string.sub(month, 1, 3)
+    day = tostring(tonumber(d))
+    return {
+        iso,
+        month .. " " .. day .. ", " .. y, month .. " " .. day .. " " .. y,
+        short .. " " .. day .. ", " .. y, short .. " " .. day .. " " .. y,
+        day .. " " .. month .. " " .. y, day .. " " .. short .. " " .. y,
+    }
+end
 
 METHOD_PATTERNS = {"select ", "```", "calculated", "computed", "formula", "ln(", "log(", "slope", "regression"}
 
@@ -130,13 +153,26 @@ function numbers_in(text)
 end
 
 -- spec.expected: text that must appear (case-insensitive); spec.all: a
--- list of texts that must all appear; spec.number (+ spec.tolerance,
--- relative, default 0.05): a number that must appear within tolerance.
+-- list of texts that must all appear; spec.date: an ISO date, in any
+-- common spelling; spec.number (+ spec.tolerance, relative, default
+-- 0.05): a number that must appear within tolerance.
 function checks.answer(conv, spec, ctx)
     text = final_or_empty(conv)
-    lowered = string.lower(text)
+    -- Markdown emphasis is presentation, not content: "**April 25, 2026**".
+    lowered = string.lower(string.gsub(text, "[%*_]", ""))
     if text == "" then
         return {pass = false, detail = "no final answer"}
+    end
+    if spec.date != nil then
+        found = false
+        for _, form in ipairs(date_forms(spec.date)) do
+            if string.find(lowered, form, 1, true) != nil then
+                found = true
+            end
+        end
+        if found == false then
+            return {pass = false, detail = "missing date " .. spec.date}
+        end
     end
     if spec.expected != nil and string.find(lowered, string.lower(tostring(spec.expected)), 1, true) == nil then
         return {pass = false, detail = "missing '" .. tostring(spec.expected) .. "'"}
