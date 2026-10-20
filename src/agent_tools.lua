@@ -598,6 +598,41 @@ end
 -- can still distinguish *how* a change happened -- via this chat
 -- session, not the direct edit form -- without that ever affecting who
 -- it's attributed to.
+-- The field values an entity.update call sets: every argument except
+-- the row's address and `reason`, which is metadata about the change,
+-- not a field being changed -- never a literal column update.
+function entity_update_values(args)
+    values = {}
+    for k, v in pairs(args) do
+        if k != "entity_type" and k != "entity_id" and k != "reason" then
+            values[k] = v
+        end
+    end
+    return values
+end
+
+NOTHING_TO_UPDATE = "nothing to update: pass each field to change as its own argument, e.g. status = \"finished\""
+
+-- Refuses a destructive call that can't do anything, before it becomes
+-- a pending action: a person shouldn't be asked to approve a no-op, and
+-- an update that reports success while changing nothing kept the model
+-- re-proposing it (found by the agent scorecard, doc/agent-eval.md:
+-- ten approved entity.update calls with no field). Returns the error
+-- text, or nil when the call may go to approval.
+function agent_tools.reject_before_approval(tool_name, method_name, args)
+    if args == nil then
+        args = {}
+    end
+    if tool_name == "entity" and method_name == "update" and next(entity_update_values(args)) == nil then
+        return NOTHING_TO_UPDATE
+    end
+    if tool_name == "document" and method_name == "update"
+            and args.title == nil and args.content == nil and args.parent_id == nil then
+        return "nothing to update: pass title, content or parent_id"
+    end
+    return nil
+end
+
 function agent_tools.execute_tool(db_path, author, session_id, tool_name, method_name, args)
     source = {notebook_entry_id = "agent-session:" .. tostring(session_id)}
 
@@ -663,6 +698,10 @@ function agent_tools.execute_tool(db_path, author, session_id, tool_name, method
         target_id = tonumber(args.entity_id)
         if target_id == nil then
             return nil, "update requires entity_id"
+        end
+        nothing = agent_tools.reject_before_approval("document", "update", args)
+        if nothing != nil then
+            return nil, nothing
         end
         parent_id = tonumber(args.parent_id)
         updated_id, issues = document.update_page(db_path, author, target_id, args.title, parent_id, args.content, source)
@@ -1038,11 +1077,9 @@ function agent_tools.execute_tool(db_path, author, session_id, tool_name, method
         -- changed on the entity itself -- pulled out the same way
         -- entity_type/entity_id already are, so it never ends up as a
         -- literal column update.
-        values = {}
-        for k, v in pairs(args) do
-            if k != "entity_type" and k != "entity_id" and k != "reason" then
-                values[k] = v
-            end
+        values = entity_update_values(args)
+        if next(values) == nil then
+            return nil, NOTHING_TO_UPDATE
         end
         updated_id, issues = entity.update(db_path, args.entity_type, target_id, values, author, source, args.reason)
         if updated_id == nil then

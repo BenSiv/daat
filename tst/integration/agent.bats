@@ -727,6 +727,31 @@ EOF
     [ "$output" -eq 1 ]
 }
 
+@test "an entity.query naming a missing column points to the schema tools, not the SQL dialect (found by the agent scorecard)" {
+    write_task_schema
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(tool_call_response "entity.query" '{"sql":"SELECT owner_name FROM task"}')"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"who owns the tasks\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "entity.fields" ]]
+    [[ ! "$output" =~ "julianday" ]]
+}
+
+@test "an entity.query using a function the database lacks still names the SQL dialect" {
+    write_task_schema
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(tool_call_response "entity.query" '{"sql":"SELECT DATEDIFF(created_at, updated_at) FROM task"}')"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"how long did tasks take\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "SQLite dialect" ]]
+}
+
 @test "research.investigate runs its own isolated multi-step lookup and returns a synthesized finding" {
     write_task_schema
     write_task_note_schema
@@ -1082,6 +1107,24 @@ EOF
 
     run "$BIN" entity show task 1
     [[ "$output" =~ status[[:space:]]+done ]]
+}
+
+@test "an entity.update with no field to change is refused before approval, not reported as done (found by the agent scorecard)" {
+    write_task_schema
+    write_platform_config ', agent_max_turns = 2'
+    "$BIN" entity create task title="Old title" status=open >/dev/null
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(tool_call_response "entity.update" '{"entity_type":"task","entity_id":1,"reason":"it is done"}')"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"mark task 1 done\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "nothing to update" ]]
+
+    # No pending action was created: nobody is asked to approve a no-op.
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM agent_pending_action;"
+    [ "$output" -eq 0 ]
 }
 
 @test "one user cannot see, message, or approve/deny another user's session" {
