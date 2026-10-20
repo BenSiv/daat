@@ -12,3 +12,4 @@ obj/
 # Temporary files
 *.swp
 *~
+eval-out/

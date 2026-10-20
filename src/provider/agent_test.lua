@@ -38,6 +38,7 @@ agent_test.default_model = "test-model"
 agent_test.default_embedding_model = "test-embedding"
 
 TEST_RESPONSE_INDEX = 0
+TEST_GENERATE_INDEX = 0
 
 -- Same char/4 heuristic as agent.estimate_tokens (not cross-required
 -- here to avoid coupling this standalone test provider to agent.lua's
@@ -65,6 +66,30 @@ function agent_test.generate(model, system_prompt, prompt)
             io.write(capture_file, system_prompt)
             io.close(capture_file)
         end
+    end
+
+    -- AGENT_TEST_GENERATE_RESPONSES, when set, gives generate() its own
+    -- list and counter, so side-effect calls a turn may trigger
+    -- (distillation, tier or link judgment, tag upkeep) can't consume
+    -- the replies scripted for converse(). The agent scorecard
+    -- (doc/agent-eval.md) relies on this; unset, behaviour is unchanged.
+    own_raw = os.getenv("AGENT_TEST_GENERATE_RESPONSES")
+    if own_raw != nil and own_raw != "" then
+        TEST_GENERATE_INDEX = TEST_GENERATE_INDEX + 1
+        own = {}
+        for piece in string.gmatch(own_raw, "([^\1]+)") do
+            table.insert(own, piece)
+        end
+        result = own[#own]
+        if own[TEST_GENERATE_INDEX] != nil then
+            result = own[TEST_GENERATE_INDEX]
+        end
+        usage = {
+            prompt_tokens = estimate_tokens_for_test(system_prompt) + estimate_tokens_for_test(prompt),
+            completion_tokens = estimate_tokens_for_test(result),
+        }
+        usage.total_tokens = usage.prompt_tokens + usage.completion_tokens
+        return result, nil, usage
     end
 
     TEST_RESPONSE_INDEX = TEST_RESPONSE_INDEX + 1

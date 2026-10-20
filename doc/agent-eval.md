@@ -1,6 +1,6 @@
 # Agent evaluation: scorecard and demo-lab test environment
 
-Status: design, not yet implemented. Tracked in GitHub issue #4.
+Status: steps 1-2 built (demo lab, loader, runner, report, 6 scenarios, test mode in `./bld/test.sh`). Live mode is wired but not yet run against a real model. Tracked in GitHub issue #4.
 
 ## Problem
 
@@ -67,34 +67,41 @@ The agent also changes continuously: new tools, prompt changes, loop behaviour. 
 - Seeded and deterministic. From one parameter set it writes both the entity rows *and the expected answers*: counts, doubling times, which document holds which fact. No expected value is typed by hand, so data and answers can't drift apart.
 - `--docs N` scales the document set with the same seed. Retrieval and tiering are measured at 5,000-10,000 documents with the same tooling.
 
-**Documents (about 200):**
-- protocols, experiment notes, meeting notes, short literature summaries;
-- drafted once from an outline, reviewed, and committed as static markdown, so the corpus is a fixed input and not regenerated per run.
+**Documents:** today the generator writes them too: one lab-notes page per experiment, three meeting notes sharing a title, one long protocol (26 in all). The fuller corpus (about 200: protocols, notes, literature summaries) is to be drafted once from an outline, reviewed, and committed as static markdown, so it stays a fixed input.
 
-**Loader** `bld/eval-env.sh [--provider test|vertex] [--docs N] [--backend sqlite|mariadb]`:
+**Loader** `bld/eval-env.sh [--provider test|vertex] [--seed N]` (runs `tst/eval/load.lua`; `--docs N` and `--backend` are still to come):
 - builds a fresh deployment in a temp folder: init, schemas, rows, documents, embeddings;
-- caches the finished database keyed by a hash of (generator inputs, documents, embedding model). Live runs don't pay to embed the corpus again each time.
+- caches the finished deployment under `eval-out/env/`, keyed by a hash of (generator, schemas, loader, seed, platform settings). Live runs don't pay to embed the corpus again each time.
+- writes `facts.json`: the generator's facts with every record key resolved to the id the database gave it. Ids come from one global sequence, so they never line up with lab numbers.
 
 ### 2. Scenarios
 
-One file per scenario, `tst/eval/scenarios/<name>.lua`, returning a table:
+One file per scenario, `tst/eval/scenarios/<name>.lua`. It returns a function of the deployment's facts (`f`) and helpers (`s`), so every expected value comes from the generator:
 
 ```lua
-{
-  name = "doubling-time-by-lab-number",
-  set = "core",                         -- core | growth (see "Keeping up with change")
-  traps = {"id-number-name", "calculation"},
-  turns = {"What was the doubling time in EXP-012?"},
-  approval = "approve",                 -- approve | deny | leave, for any pending action
-  scripted = {...},                     -- test mode only: AGENT_TEST_RESPONSES entries
-  checks = {
-    {kind = "answer", expected = "doubling_time.EXP-012", tolerance = 0.05},  -- read from the generator's answers
-    {kind = "shows_method"},
-    {kind = "no_failed_lookup"},
-    {kind = "finished"},
-  },
-}
+return function(f, s)
+    e = f.experiments["EXP-027"]          -- or pick one by its facts, as the shipped scenarios do
+    return {
+        name = "calculation-doubling-time",
+        set = "core",                     -- core | growth (see "Keeping up with change")
+        traps = {"calculation"},
+        turns = {"What was the doubling time of " .. e.lab_number .. "?"},
+        approval = "leave",               -- approve | deny | leave, for any pending action
+        script = {                        -- test mode only: the model's replies, in order
+            s.tool("entity.query", {sql = "SELECT ..."}),
+            s.final("About 3.85 hours, calculated from ..."),   -- adds the self-check's CONFIRM
+        },
+        checks = {
+            {kind = "answer", number = e.doubling_time_hours, tolerance = 0.05},
+            {kind = "shows_method"},
+            {kind = "no_failed_lookup"},
+            {kind = "finished"},
+        },
+    }
+end
 ```
+
+`s.id(key)` gives a record's real id (for `cites` and `state` checks).
 
 **Checks** are rules, never a model's judgement:
 
@@ -107,17 +114,18 @@ One file per scenario, `tst/eval/scenarios/<name>.lua`, returning a table:
 | `finished` | The turn ended in an answer, not a stall or a "should I continue?" |
 | `says_unknown` | For a missing-information question, the reply says the data doesn't have it |
 | `shows_method` | A numeric answer shows how it was calculated (the query, or the steps) |
+| `state` | A field of a row ends with the expected value (scenario runs only; needs the database) |
 
-`cites`, `no_failed_lookup`, `finished` and `shows_method` are written as functions over stored `agent_message` rows, not over the live run (see section 5).
+The checks live in `tst/eval/checks.lua`. All but `approval` and `state` read only a conversation decoded from stored `agent_message` rows, so they apply to any stored chat (see section 5). `tst/unit/agent_eval_checks.lua` makes sure each check fails on the conversation it exists to catch.
 
 ### 3. Runner and report
 
 `bld/eval.sh --mode test|live [--repeat N] [--only name] [--set core|growth|all] [--compare old/results.json]`
 
-- Each scenario runs on a fresh copy of the cached demo lab and drives the real chat entry points, the same path the bats tests use.
-- **test mode:** the scripted provider. Free, and the same result every run. It checks the workflow around the model: approval, tool handling, finishing a turn. It says nothing about quality. It runs inside `./bld/test.sh`, so a broken workflow fails the build.
+- Each scenario runs in its own process (`tst/eval/run_scenario.lua`) on a fresh copy of the cached demo lab. It calls `agent.run_turn`, `agent.approve_pending` and `agent.deny_pending` directly: the same turn loop the web handlers run inline, without HTTP and login in between.
+- **test mode:** the scripted provider. Free, and the same result every run. It checks the workflow around the model: approval, tool handling, finishing a turn. It says nothing about quality. It runs inside `./bld/test.sh`, so a broken workflow fails the build. Side-effect model calls a turn can trigger (distillation, tier judgment, tag upkeep) read `AGENT_TEST_GENERATE_RESPONSES`, so they can't consume the scripted conversation.
 - **live mode:** the provider and model named in the eval `platform.lua`. Each scenario runs `--repeat` times (default 3). *Consistency* means all repeats give the same answer.
-- **Output:** `eval-out/<timestamp>/results.json` (one row per scenario per repeat, with token counts read from `knowledge_context`) and `report.md`.
+- **Output:** `eval-out/runs/<timestamp>-<mode>/`: `results.jsonl` (one row per scenario per repeat, with token counts read from `knowledge_context`), `results.json` (summary + rows), `report.md`, and `work/<scenario>-<repeat>/` with each run's database and `transcript.md`.
 
 The report shows one line per score:
 
@@ -151,10 +159,17 @@ A deployment's own chat history is already in `agent_session`/`agent_message`. T
 - For Vertex, a service account with only the Vertex AI user role is enough.
 - `search_provider` and mail stay on their test stand-ins in every mode. A live run never reaches an external system other than the model API.
 
+## How to add a scenario
+
+1. Pick the trap it tests (table above) and find the facts it needs in `facts.json` of a built demo lab (`bld/eval-env.sh` prints its directory). If the data doesn't set the trap up yet, extend `tst/eval/demo-lab/generate.lua` and record the answer in its facts.
+2. Copy the closest scenario in `tst/eval/scenarios/`, put it in the `growth` set, and write the question as a user would ask it.
+3. Write `script` as the replies a correct agent would give, using real tool calls, so test mode exercises real tools on the demo data.
+4. Run `bld/eval.sh --only <name>`; read `work/<name>-1/transcript.md` if a check fails.
+
 ## Implementation steps
 
-1. Write the demo-lab schemas, generator and loader, plus the first 20 documents. `bld/eval-env.sh --provider test` builds a working deployment.
-2. Add the runner in test mode with 5 scenarios (approval, schema discovery, citation, id/number/name, calculation). Wire it into `./bld/test.sh`.
+1. ~~Write the demo-lab schemas, generator and loader.~~ Done; the static ~200-document corpus is still to come (see "Documents").
+2. ~~Add the runner in test mode with starter scenarios and wire it into `./bld/test.sh`.~~ Done, with 6 scenarios: approval, schema discovery, citation, id/number/name, calculation, missing information.
 3. Complete the corpus (about 200 documents) and 25-30 scenarios covering every trap. Add live mode, repeats, the report and `--compare`.
 4. Take the first live baseline and freeze the core set.
 5. Add `--docs N` scaling and retrieval measurements: search latency p50/p95, model calls per search.
