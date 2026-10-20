@@ -35,5 +35,9 @@ for f in tst/unit/*.lua; do
 done
 
 echo
+echo "Running the agent scorecard in test mode (doc/agent-eval.md)"
+LUAM_DIR="$LUAM_DIR" ./bld/eval.sh --mode test
+
+echo
 echo "Running bats integration/CGI tests (tst/integration/)"
 bats tst/integration/*.bats

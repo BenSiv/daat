@@ -42,7 +42,8 @@ function is_sql_null(value)
 end
 
 -- The real document_link layout (src/document.lua's
--- DOCUMENT_LINK_TABLE_SQL) plus a minimal document table -- only
+-- DOCUMENT_LINK_TABLE_SQL) and document_link_sync table, plus a
+-- minimal document table -- only
 -- resolve_link and documents_connected read it. No entity/schema/ledger
 -- setup, same reasoning as document_pool.lua's own new_test_db.
 function new_test_db()
@@ -50,6 +51,8 @@ function new_test_db()
     db.exec(db_path, "CREATE TABLE document_link (id INTEGER PRIMARY KEY AUTOINCREMENT, from_document_id INTEGER NOT NULL, to_document_id INTEGER, link_text TEXT NOT NULL, link_hash CHAR(64) NOT NULL, raw_strength REAL NOT NULL DEFAULT 1.0, archived_at TEXT DEFAULT NULL, created_at TEXT DEFAULT NULL);")
     db.exec(db_path, "CREATE UNIQUE INDEX document_link_from_hash_idx ON document_link(from_document_id, link_hash);")
     db.exec(db_path, "CREATE TABLE document (id INTEGER PRIMARY KEY, title TEXT, parent_id INTEGER, archived_at TEXT DEFAULT NULL);")
+    -- sync_links records each document's synced content hash here.
+    db.exec(db_path, "CREATE TABLE document_link_sync (document_id INTEGER PRIMARY KEY, content_hash VARCHAR(64) NOT NULL);")
     return db_path
 end
 

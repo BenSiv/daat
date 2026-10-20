@@ -1,0 +1,280 @@
+-- Scenario checks for the agent scorecard (doc/agent-eval.md,
+-- "Scenarios"). Every check is a rule, never a model's judgement.
+--
+-- Checks read a *conversation*: a session's stored agent_message rows
+-- plus its agent_pending_action rows, decoded by checks.conversation.
+-- That keeps the conversation-level checks (cites, no_failed_lookup,
+-- finished, shows_method, says_unknown) usable on any stored chat, not
+-- only on a scenario run. `ctx` carries what only a run knows: the run's
+-- final status, and query/is_destructive callbacks into the deployment.
+--
+-- Each check returns {pass = true|false, detail = "..."}.
+
+json = require("dkjson")
+
+checks = {}
+
+-- Tool errors that mean the agent guessed where data lives, or used the
+-- other database's SQL, instead of looking it up first.
+FAILED_LOOKUP_PATTERNS = {
+    "no such column", "no such table", "unknown column", "unknown table",
+    "doesn't exist", "does not exist", "unknown entity type",
+    "not a registered entity type", "sqlite_master", "information_schema",
+    "no such function", "unknown field",
+}
+
+-- A reply that hands the work back instead of finishing it.
+STALL_PATTERNS = {
+    "should i continue", "shall i continue", "want me to continue",
+    "would you like me to continue", "should i proceed", "shall i proceed",
+    "would you like me to proceed", "want me to proceed",
+}
+
+UNKNOWN_PATTERNS = {
+    "not recorded", "isn't recorded", "is not recorded", "not in the data",
+    "no record", "no information", "not available", "couldn't find",
+    "could not find", "can't find", "cannot find", "don't have", "do not have",
+    "doesn't say", "does not say", "not mentioned", "isn't mentioned",
+    "no data", "unknown",
+}
+
+METHOD_PATTERNS = {"select ", "```", "calculated", "computed", "formula", "ln(", "log(", "slope", "regression"}
+
+function contains_any(text, patterns)
+    lowered = string.lower(text)
+    for _, pattern in ipairs(patterns) do
+        if string.find(lowered, pattern, 1, true) != nil then
+            return pattern
+        end
+    end
+    return nil
+end
+
+function decode_or_text(content)
+    decoded, _, _ = json.decode(content)
+    if type(decoded) == "table" then
+        return decoded
+    end
+    return nil
+end
+
+-- message_rows: {id, role, content} in id order. pending_rows: rows of
+-- agent_pending_action for the same session.
+function checks.conversation(message_rows, pending_rows)
+    conv = {messages = {}, pending = {}, final_text = nil}
+    if pending_rows != nil then
+        conv.pending = pending_rows
+    end
+    last_user = 0
+    for i, row in ipairs(message_rows) do
+        msg = {role = row.role, text = "", tool_calls = {}}
+        if row.role == "assistant" then
+            decoded = decode_or_text(row.content)
+            if decoded != nil and decoded.blocks != nil then
+                parts = {}
+                for _, block in ipairs(decoded.blocks) do
+                    if block.type == "text" and block.text != nil then
+                        table.insert(parts, block.text)
+                    elseif block.type == "toolCall" then
+                        table.insert(msg.tool_calls, {id = block.id, name = block.name, arguments = block.arguments})
+                    end
+                end
+                msg.text = table.concat(parts, "\n")
+            else
+                msg.text = tostring(row.content)
+            end
+        elseif row.role == "tool_result" then
+            decoded = decode_or_text(row.content)
+            if decoded != nil then
+                msg.tool_call_id = decoded.tool_call_id
+                msg.tool_name = decoded.tool_name
+                msg.text = tostring(decoded.text)
+                msg.is_error = decoded.is_error == true
+            end
+        else
+            msg.text = tostring(row.content)
+        end
+        table.insert(conv.messages, msg)
+        if row.role == "user" then
+            last_user = i
+        end
+    end
+    -- The final answer: the last assistant reply with text and no tool
+    -- call, after the last user message.
+    for i = #conv.messages, last_user + 1, -1 do
+        msg = conv.messages[i]
+        if msg.role == "assistant" and #msg.tool_calls == 0 and msg.text != "" then
+            conv.final_text = msg.text
+            break
+        end
+    end
+    return conv
+end
+
+function final_or_empty(conv)
+    if conv.final_text == nil then
+        return ""
+    end
+    return conv.final_text
+end
+
+function numbers_in(text)
+    found = {}
+    for raw in string.gmatch(text, "%-?%d+%.?%d*") do
+        n = tonumber(raw)
+        if n != nil then
+            table.insert(found, n)
+        end
+    end
+    return found
+end
+
+-- spec.expected: text that must appear (case-insensitive); spec.all: a
+-- list of texts that must all appear; spec.number (+ spec.tolerance,
+-- relative, default 0.05): a number that must appear within tolerance.
+function checks.answer(conv, spec, ctx)
+    text = final_or_empty(conv)
+    lowered = string.lower(text)
+    if text == "" then
+        return {pass = false, detail = "no final answer"}
+    end
+    if spec.expected != nil and string.find(lowered, string.lower(tostring(spec.expected)), 1, true) == nil then
+        return {pass = false, detail = "missing '" .. tostring(spec.expected) .. "'"}
+    end
+    if spec.all != nil then
+        missing = {}
+        for _, item in ipairs(spec.all) do
+            if string.find(lowered, string.lower(item), 1, true) == nil then
+                table.insert(missing, item)
+            end
+        end
+        if #missing > 0 then
+            return {pass = false, detail = "missing " .. table.concat(missing, ", ")}
+        end
+    end
+    if spec.number != nil then
+        tolerance = spec.tolerance
+        if tolerance == nil then
+            tolerance = 0.05
+        end
+        for _, n in ipairs(numbers_in(text)) do
+            if math.abs(n - spec.number) <= math.abs(spec.number) * tolerance then
+                return {pass = true, detail = "found " .. tostring(n)}
+            end
+        end
+        return {pass = false, detail = "no number within " .. tostring(tolerance * 100) .. "% of " .. tostring(spec.number)}
+    end
+    return {pass = true, detail = ""}
+end
+
+-- spec.ids: record ids, any of which counts. A link is the record's own
+-- page (/document?entity_id=N or /detail?type=T&entity_id=N).
+function checks.cites(conv, spec, ctx)
+    text = final_or_empty(conv)
+    for _, id in ipairs(spec.ids) do
+        if string.find(text, "entity_id=" .. tostring(id) .. "%f[^%d]") != nil then
+            return {pass = true, detail = "links " .. tostring(id)}
+        end
+    end
+    return {pass = false, detail = "no link to the record that holds the answer"}
+end
+
+-- Every destructive tool result must belong to a pending action that a
+-- person approved. ctx.is_destructive(tool_name) decides what counts.
+function checks.approval(conv, spec, ctx)
+    approved = {}
+    for _, p in ipairs(conv.pending) do
+        if p.status == "approved" and p.tool_call_id != nil then
+            approved[p.tool_call_id] = true
+        end
+    end
+    writes = 0
+    for _, msg in ipairs(conv.messages) do
+        if msg.role == "tool_result" and msg.tool_name != nil and ctx.is_destructive(msg.tool_name) == true
+                and string.find(msg.text, "User denied", 1, true) == nil
+                and string.find(msg.text, "ERROR: skipped", 1, true) == nil then
+            writes = writes + 1
+            if approved[msg.tool_call_id] != true then
+                return {pass = false, detail = msg.tool_name .. " ran without an approved pending action"}
+            end
+        end
+    end
+    if spec.expect_write == true and writes == 0 then
+        return {pass = false, detail = "no write was proposed"}
+    end
+    return {pass = true, detail = tostring(writes) .. " approved write(s)"}
+end
+
+function checks.no_failed_lookup(conv, spec, ctx)
+    failures = {}
+    for _, msg in ipairs(conv.messages) do
+        if msg.role == "tool_result" and msg.is_error == true then
+            hit = contains_any(msg.text, FAILED_LOOKUP_PATTERNS)
+            if hit != nil then
+                table.insert(failures, tostring(msg.tool_name) .. ": " .. hit)
+            end
+        end
+    end
+    if #failures > 0 then
+        return {pass = false, detail = table.concat(failures, "; "), count = #failures}
+    end
+    return {pass = true, detail = "", count = 0}
+end
+
+-- Finished: the turn ended in an answer, not a turn limit, error, or a
+-- reply that asks whether to keep going. ctx.status is the run's final
+-- status when known.
+function checks.finished(conv, spec, ctx)
+    if ctx != nil and ctx.status != nil and ctx.status != "done" then
+        return {pass = false, detail = "ended with status " .. tostring(ctx.status)}
+    end
+    text = final_or_empty(conv)
+    if text == "" then
+        return {pass = false, detail = "no final answer"}
+    end
+    stall = contains_any(text, STALL_PATTERNS)
+    if stall != nil then
+        return {pass = false, detail = "stalled: '" .. stall .. "'"}
+    end
+    return {pass = true, detail = ""}
+end
+
+function checks.says_unknown(conv, spec, ctx)
+    hit = contains_any(final_or_empty(conv), UNKNOWN_PATTERNS)
+    if hit == nil then
+        return {pass = false, detail = "does not say the data lacks the answer"}
+    end
+    return {pass = true, detail = "'" .. hit .. "'"}
+end
+
+function checks.shows_method(conv, spec, ctx)
+    hit = contains_any(final_or_empty(conv), METHOD_PATTERNS)
+    if hit == nil then
+        return {pass = false, detail = "no query, formula or steps shown"}
+    end
+    return {pass = true, detail = "'" .. hit .. "'"}
+end
+
+-- A field of a row ends up with an expected value. Needs ctx.query, so
+-- it only runs inside a scenario, not on a stored chat.
+function checks.state(conv, spec, ctx)
+    rows = ctx.query(string.format("SELECT %s AS v FROM %s WHERE id = %d;", spec.field, spec.type, spec.id))
+    if rows == nil or rows[1] == nil then
+        return {pass = false, detail = "row not found"}
+    end
+    actual = tostring(rows[1].v)
+    if actual != tostring(spec.value) then
+        return {pass = false, detail = spec.field .. " is '" .. actual .. "', expected '" .. tostring(spec.value) .. "'"}
+    end
+    return {pass = true, detail = ""}
+end
+
+function checks.run(name, conv, spec, ctx)
+    fn = checks[name]
+    if fn == nil or name == "run" or name == "conversation" then
+        return {pass = false, detail = "unknown check " .. tostring(name)}
+    end
+    return fn(conv, spec, ctx)
+end
+
+return checks
