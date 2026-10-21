@@ -752,6 +752,33 @@ EOF
     [[ "$output" =~ "SQLite dialect" ]]
 }
 
+@test "calc.evaluate computes a formula exactly and refuses anything that isn't arithmetic" {
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(tool_call_response "calc.evaluate" '{"expression":"12 * ln(2) / ln(0.8502 / 0.098)"}')"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"doubling time?\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "= 3.849919111" ]]
+
+    scripted="$(tool_call_response "calc.evaluate" '{"expression":"os.exit(1)"}')"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"again\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "cannot evaluate" ]]
+}
+
+@test "document.search gives each result a ready-made link to cite" {
+    "$BIN" document create-json <<< '[{"title":"Incubator log","content":"EXP-7 ran in Incubator B."}]' >/dev/null
+    doc_id=$(sqlite3 "$TEST_DIR/.store/store.db" "SELECT id FROM document WHERE title = 'Incubator log';")
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(tool_call_response "document.search" '{"query":"incubator"}')"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"which incubator\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "cite as: [Incubator log](/document?entity_id=${doc_id})" ]]
+}
+
 @test "research.investigate runs its own isolated multi-step lookup and returns a synthesized finding" {
     write_task_schema
     write_task_note_schema

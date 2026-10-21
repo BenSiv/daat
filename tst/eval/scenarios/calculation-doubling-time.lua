@@ -18,8 +18,9 @@ return function(f, s)
         approval = "leave",
         script = {
             s.tool("entity.query", {sql = sql}),
+            s.tool("calc.evaluate", {expression = string.format("12 * ln(2) / ln(%s / %s)", e.od_last, e.od_first)}),
             s.final(string.format("The doubling time of %s was about %.2f hours, calculated as " ..
-                "ln(2) divided by the slope of ln(OD600) against time, from this query: %s",
+                "12 * ln(2) / ln(OD600 at 12 h / OD600 at 0 h) from this query: %s",
                 e.lab_number, e.doubling_time_hours, sql)),
         },
         checks = {

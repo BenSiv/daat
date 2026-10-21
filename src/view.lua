@@ -845,7 +845,7 @@ function view.sql_dialect_name()
     if config.db_backend() == "mariadb" then
         return "MariaDB/MySQL dialect: use DATEDIFF/TIMESTAMPDIFF, LN, window functions; ONLY_FULL_GROUP_BY applies; no sqlite_master/julianday"
     end
-    return "SQLite dialect: use julianday()/strftime(), no DATEDIFF"
+    return "SQLite dialect: use julianday()/strftime(), no DATEDIFF; no LN/EXP/POWER (use calc.evaluate on the returned values)"
 end
 
 -- What to tell the model about a failed query. A missing table or
