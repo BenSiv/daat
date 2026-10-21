@@ -125,7 +125,16 @@ function test_says_unknown_and_shows_method()
     check(checks.shows_method(shown, {}, CTX).pass == true, "a stated method should pass")
 end
 
+function test_no_tool_names_catches_plumbing_but_not_links()
+    print("Testing no_tool_names catches tool names but not record links or sentence ends")
+    leaky = checks.conversation({user("q"), said("| S1 | calc.evaluate -> 4.31 days |")}, {})
+    check(checks.no_tool_names(leaky, {}, CTX).pass == false, "calc.evaluate in the answer should fail")
+    clean = checks.conversation({user("q"), said("See the [notes](/document?entity_id=4) and the entity. Done.")}, {})
+    check(checks.no_tool_names(clean, {}, CTX).pass == true, "links and ordinary words should pass")
+end
+
 test_final_text_is_the_last_plain_reply_after_the_last_user_message()
+test_no_tool_names_catches_plumbing_but_not_links()
 test_answer_matches_text_lists_and_numbers()
 test_answer_accepts_any_common_spelling_of_a_date()
 test_cites_needs_a_link_to_the_right_record()
