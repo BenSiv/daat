@@ -264,6 +264,9 @@ function generate(opts)
         project = "@project-1", medium = "@medium-1", owner = "@person-1",
         started_on = "2026-06-01", ended_on = "2026-06-02", status = "finished",
     })
+    -- A finished, live experiment in project 1 like any other: counts
+    -- of finished experiments must include it.
+    facts.projects[1].finished_count = facts.projects[1].finished_count + 1
     series = {lab_number = series_number, key = series_key, replicates = {}}
     total = 0
     for r, doubling in ipairs(replicate_doubling) do

@@ -37,7 +37,8 @@ UNKNOWN_PATTERNS = {
     "doesn't say", "does not say", "not mentioned", "isn't mentioned",
     "no mention", "not contain", "doesn't contain", "don't contain",
     "not include", "doesn't include", "not specified", "isn't specified",
-    "not listed", "isn't listed", "no data", "unknown",
+    "not listed", "isn't listed", "not record", "doesn't record", "don't record",
+    "no data", "unknown",
 }
 
 MONTHS = {"january", "february", "march", "april", "may", "june", "july",
