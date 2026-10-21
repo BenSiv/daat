@@ -40,15 +40,25 @@ function check_of(run, kind)
     return nil
 end
 
--- Share of runs whose `kind` check passed, among runs that have one.
+-- Share of runs whose `kind` checks all passed, among runs that have
+-- one (a scenario may check two parts of one answer).
 function rate(kind)
     have = 0
     passed = 0
     for _, run in ipairs(runs) do
-        c = check_of(run, kind)
-        if c != nil then
+        found = false
+        all_pass = true
+        for _, c in ipairs(run.checks) do
+            if c.kind == kind then
+                found = true
+                if c.pass != true then
+                    all_pass = false
+                end
+            end
+        end
+        if found == true then
             have = have + 1
-            if c.pass == true then
+            if all_pass == true then
                 passed = passed + 1
             end
         end
