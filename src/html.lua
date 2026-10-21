@@ -6255,7 +6255,11 @@ function html.render_document_tree(rows, can_create, nonce)
         // the query must appear in the title, in order (not
         // necessarily contiguous) -- consecutive matches score higher,
         // so "exp277" ranks "Experiment 277" above a title that merely
-        // contains the same letters scattered further apart.
+        // contains the same letters scattered further apart. A title
+        // that contains the query as typed ranks above every scattered
+        // match, and one that starts with it above that: "Chat: " lists
+        // the chat transcripts first, not "Characterisation: ..." titles
+        // that only share its letters.
         function fuzzyScore(query, title) {
             var qi = 0, score = 0, lastMatch = -2;
             var q = query.toLowerCase(), t = title.toLowerCase();
@@ -6266,8 +6270,15 @@ function html.render_document_tree(rows, can_create, nonce)
                     qi++;
                 }
             }
-            return (qi === q.length) ? score : -1;
+            if (qi < q.length) { return -1; }
+            var at = t.indexOf(q);
+            if (at === 0) { score += 2000; } else if (at > 0) { score += 1000; }
+            return score;
         }
+
+        // Enough to list a whole group ("Chat: ") in the scrolling
+        // dropdown; past it, say how many matched so nothing looks missing.
+        var MAX_RESULTS = 50;
 
         function renderResults(query) {
             if (!query) { results.classList.remove('platform-document-search-open'); results.innerHTML = ''; return; }
@@ -6276,8 +6287,9 @@ function html.render_document_tree(rows, can_create, nonce)
                 var score = fuzzyScore(query, item.title);
                 if (score >= 0) scored.push({item: item, score: score});
             });
-            scored.sort(function(a, b){ return b.score - a.score; });
-            scored = scored.slice(0, 15);
+            scored.sort(function(a, b){ return (b.score - a.score) || a.item.title.localeCompare(b.item.title); });
+            var total = scored.length;
+            scored = scored.slice(0, MAX_RESULTS);
             if (scored.length === 0) {
                 results.innerHTML = '<div class="platform-document-search-empty">No matching documents.</div>';
             } else {
@@ -6285,6 +6297,10 @@ function html.render_document_tree(rows, can_create, nonce)
                     var title = PlatformJS.escapeHtml(s.item.title);
                     return '<a href="document?entity_id=' + s.item.id + '">' + title + '</a>';
                 }).join('');
+                if (total > scored.length) {
+                    results.innerHTML += '<div class="platform-document-search-empty">Showing ' + scored.length +
+                        ' of ' + total + ' matches. Type more to narrow.</div>';
+                }
             }
             results.classList.add('platform-document-search-open');
         }
