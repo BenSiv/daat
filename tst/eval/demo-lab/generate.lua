@@ -226,6 +226,10 @@ function generate(opts)
             for j, h in ipairs(hours) do
                 od = round(od0 * 2 ^ (h / doubling), 4)
                 add(s1 .. "-m" .. j, "measurement", {sample = "@" .. s1, hours = h, od600 = od})
+                if j == 1 then
+                    fact.od_first = od
+                end
+                fact.od_last = od
             end
             fact.sample_label = lab_number .. "-A"
             fact.doubling_time_hours = doubling

@@ -14,6 +14,7 @@
 
 agent = require("agent")
 auth = require("auth")
+calc = require("calc")
 config = require("config")
 document = require("document")
 entity = require("entity")
@@ -253,6 +254,21 @@ agent_tools.AGENT_TOOLS = {
                     ylabel = {type = "string", description = "optional y-axis label"},
                 },
                 required = {"sql", "x_column", "y_column"},
+            },
+        },
+    },
+    -- Arithmetic on values a tool already returned (src/calc.lua), so
+    -- the model never computes logs, ratios or rates in its head.
+    calc = {
+        evaluate = {
+            destructive = false,
+            description = "Compute a number from a formula, exactly. Use it for every calculation beyond copying a value -- ratios, logarithms, rates, doubling times, unit conversions, averages of a few values -- with the exact numbers a tool returned. Supports + - * / ^, parentheses, ln, log10, log2, exp, sqrt, abs, round(x, digits), min, max, pi and e. Example: 12 * ln(2) / ln(0.8502 / 0.098). Returns the formula and its value; quote both in your reply.",
+            parameters = {
+                type = "object",
+                properties = {
+                    expression = {type = "string", description = "the formula, with the actual numbers written in"},
+                },
+                required = {"expression"},
             },
         },
     },
@@ -674,7 +690,11 @@ function agent_tools.execute_tool(db_path, author, session_id, tool_name, method
                 header = header .. " [one of " .. tostring(title_counts[r.title]) ..
                     " documents titled '" .. r.title .. "' -- distinguish by date/external_id/content above, never by asking the user for the id]"
             end
-            table.insert(lines, header .. "\n" .. document.search_snippet(r.content, args.query, config.platform_config().agent_search_excerpt_length))
+            -- A ready-made link to quote wherever the reply uses this
+            -- document, so citing it costs the model nothing.
+            link_title = string.gsub(r.title, "[%[%]]", "")
+            cite = "cite as: [" .. link_title .. "](/document?entity_id=" .. tostring(r.id) .. ")"
+            table.insert(lines, header .. "\n" .. cite .. "\n" .. document.search_snippet(r.content, args.query, config.platform_config().agent_search_excerpt_length))
         end
         return table.concat(lines, "\n\n")
     end
@@ -870,6 +890,14 @@ function agent_tools.execute_tool(db_path, author, session_id, tool_name, method
             result = result .. "\n\n" .. archived_note
         end
         return result
+    end
+
+    if tool_name == "calc" and method_name == "evaluate" then
+        value, calc_err = calc.evaluate(args.expression)
+        if value == nil then
+            return nil, "cannot evaluate '" .. tostring(args.expression) .. "': " .. tostring(calc_err)
+        end
+        return calc.format(args.expression, value)
     end
 
     if tool_name == "plot" and method_name == "from_query" then
@@ -1412,6 +1440,13 @@ You have room for several tool calls in a single turn -- use them when the
 question genuinely calls for it, rather than answering from a single
 attempt that came up empty or ambiguous.
 
+But don't search without end. If three differently-worded searches, plus a
+look at the records the question is about, still find nothing, the data
+most likely doesn't record it: say so plainly -- what you checked, and that
+it isn't recorded -- and stop. Don't hand an absence to research.investigate
+or background.start; those are for questions that need many steps over
+data that exists, not for confirming that something isn't there.
+
 Before you assert that a specific record matches something the user named
 (a lab name, a label, a description) or that a set of records is "the
 latest"/"most recent", make sure you actually ran a query that filters or
@@ -1483,6 +1518,15 @@ instead). Present that query as your final answer anyway, and say plainly
 you couldn't self-verify it through entity.query -- don't "fix" it into a
 different query just to dodge that one tool's own limit.
 
+Cite what you used. Whenever a reply states something you found in this
+platform's own documents or records, link the source right where you use
+it: a document as [its title](/document?entity_id=ID), any other record as
+[its name](/detail?type=TYPE&entity_id=ID). document.search gives each
+result's link ready to copy ("cite as: ..."). The link is how the user
+checks your answer, so an answer drawn from the data without one is
+incomplete. An id inside a link is fine -- it's only a raw id written out
+as text that the rule about ids below rules out.
+
 When you use internet_search results in a reply, always cite your sources:
 include the specific URL next to any fact, claim, or quote drawn from a
 result. Never present information from a web search as if it were your own
@@ -1532,6 +1576,12 @@ wrong values; let plot.from_query build the arrays from the real rows
 instead. Reach for a hand-written fence only when you already have a small
 number of values directly (e.g. numbers stated in the conversation, not
 pulled from a query result).
+
+Never do arithmetic in your head. For any number you compute rather than
+copy -- a ratio, a logarithm, a rate, a doubling time, a unit conversion,
+an average of a few values -- either compute it in SQL or call
+calc.evaluate with the formula and the exact values a tool returned, then
+show the formula next to the result in your reply.
 
 Queries (entity.query/plot.from_query) run in the """ .. view.sql_dialect_name() .. """.
 Every number you present -- a count, an average, a per-group value in a
