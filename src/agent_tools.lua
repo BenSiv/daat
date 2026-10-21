@@ -24,6 +24,7 @@ knowledge = require("knowledge")
 ledger = require("ledger")
 schema = require("schema")
 search_provider = require("search_provider")
+stats = require("stats")
 template = require("template")
 view = require("view")
 
@@ -269,6 +270,26 @@ agent_tools.AGENT_TOOLS = {
                     expression = {type = "string", description = "the formula, with the actual numbers written in"},
                 },
                 required = {"expression"},
+            },
+        },
+    },
+    -- Fits over query rows (src/stats.lua): a rate or doubling time
+    -- from every point, not two the model picked by hand.
+    stats = {
+        fit = {
+            destructive = false,
+            description = "Fit a line or an exponential to two numeric columns of a read-only SQL query (same rules as entity.query) and get the fitted rate with how well it fits. Use it for any growth rate, doubling time, decay or trend over a time series instead of picking two points yourself. model \"exponential\" fits ln(y) against x and reports the growth rate and doubling time; without x_min/x_max it finds the exponential phase from the data and leaves out a lag or plateau, and says which points it used. model \"linear\" fits y against x. Fit each series (e.g. each replicate) separately.",
+            parameters = {
+                type = "object",
+                properties = {
+                    sql = {type = "string", description = "a single SELECT returning the x_column and y_column for ONE series"},
+                    x_column = {type = "string", description = "result column for x (e.g. time) -- numeric"},
+                    y_column = {type = "string", description = "result column for y -- numeric, above 0 for an exponential fit"},
+                    model = {type = "string", description = "\"exponential\" or \"linear\""},
+                    x_min = {type = "number", description = "optional: fit only points with x >= this"},
+                    x_max = {type = "number", description = "optional: fit only points with x <= this"},
+                },
+                required = {"sql", "x_column", "y_column", "model"},
             },
         },
     },
@@ -649,6 +670,46 @@ function agent_tools.reject_before_approval(tool_name, method_name, args)
     return nil
 end
 
+-- Runs args.sql and returns its args.x_column/args.y_column as numbers:
+-- {x, y, rows, truncated, total_count}, or nil and an error the model
+-- can act on. Shared by plot.from_query and stats.fit; `purpose` ("to
+-- plot", "to fit") finishes their error messages.
+function numeric_series(db_path, args, purpose)
+    column_names, rows, err, truncated, total_count = view.run_agent_query(db_path, args.sql)
+    if column_names == nil then
+        return nil, tostring(err)
+    end
+    if #rows == 0 then
+        return nil, "query returned no rows -- nothing " .. purpose
+    end
+    has_x, has_y = false, false
+    for _, col in ipairs(column_names) do
+        if col == args.x_column then
+            has_x = true
+        end
+        if col == args.y_column then
+            has_y = true
+        end
+    end
+    if has_x == false or has_y == false then
+        return nil, "query result has no column named \"" .. tostring(args.x_column) .. "\" and/or \"" .. tostring(args.y_column) ..
+            "\" -- actual columns: " .. table.concat(column_names, ", ")
+    end
+    x_values, y_values = {}, {}
+    for i, row in ipairs(rows) do
+        x_num = tonumber(row[args.x_column])
+        y_num = tonumber(row[args.y_column])
+        if x_num == nil or y_num == nil then
+            return nil, "row " .. tostring(i) .. "'s \"" .. tostring(args.x_column) .. "\"/\"" .. tostring(args.y_column) ..
+                "\" value isn't numeric (got " .. tostring(row[args.x_column]) .. "/" .. tostring(row[args.y_column]) ..
+                ") -- both columns must be numeric " .. purpose
+        end
+        table.insert(x_values, x_num)
+        table.insert(y_values, y_num)
+    end
+    return {x = x_values, y = y_values, rows = rows, truncated = truncated, total_count = total_count}
+end
+
 function agent_tools.execute_tool(db_path, author, session_id, tool_name, method_name, args)
     source = {notebook_entry_id = "agent-session:" .. tostring(session_id)}
 
@@ -900,44 +961,61 @@ function agent_tools.execute_tool(db_path, author, session_id, tool_name, method
         return calc.format(args.expression, value)
     end
 
+    if tool_name == "stats" and method_name == "fit" then
+        if args.sql == nil or args.x_column == nil or args.y_column == nil then
+            return nil, "fit requires sql, x_column, y_column and model"
+        end
+        if args.model != "exponential" and args.model != "linear" then
+            return nil, "model must be \"exponential\" or \"linear\""
+        end
+        series, err = numeric_series(db_path, args, "to fit")
+        if series == nil then
+            return nil, err
+        end
+        if series.truncated == true then
+            return nil, "the query hit the row cap -- narrow it to one series (e.g. one sample) before fitting"
+        end
+        fit, fit_err = nil, nil
+        if args.model == "exponential" then
+            fit, fit_err = stats.exponential_fit(series.x, series.y, {x_min = tonumber(args.x_min), x_max = tonumber(args.x_max)})
+        else
+            fx, fy = {}, {}
+            for i, x in ipairs(series.x) do
+                inside = true
+                if tonumber(args.x_min) != nil and x < tonumber(args.x_min) then
+                    inside = false
+                end
+                if tonumber(args.x_max) != nil and x > tonumber(args.x_max) then
+                    inside = false
+                end
+                if inside == true then
+                    table.insert(fx, x)
+                    table.insert(fy, series.y[i])
+                end
+            end
+            slope, intercept, r2 = stats.linear_fit(fx, fy)
+            fit_err = intercept
+            if slope != nil then
+                table.sort(fx)
+                fit = {rate = slope, intercept = intercept, r2 = r2, n = #fx, x_from = fx[1], x_to = fx[#fx], phase = "all"}
+            end
+        end
+        if fit == nil then
+            return nil, "cannot fit: " .. tostring(fit_err)
+        end
+        return stats.describe(args.model, fit, args.x_column, args.y_column, #series.x)
+    end
+
     if tool_name == "plot" and method_name == "from_query" then
         if args.sql == nil or args.x_column == nil or args.y_column == nil then
             return nil, "from_query requires sql, x_column, and y_column"
         end
-        column_names, rows, err, truncated, total_count = view.run_agent_query(db_path, args.sql)
-        if column_names == nil then
-            return nil, tostring(err)
+        series, err = numeric_series(db_path, args, "to plot")
+        if series == nil then
+            return nil, err
         end
-        if #rows == 0 then
-            return nil, "query returned no rows -- nothing to plot"
-        end
-
-        has_x, has_y = false, false
-        for _, col in ipairs(column_names) do
-            if col == args.x_column then
-                has_x = true
-            end
-            if col == args.y_column then
-                has_y = true
-            end
-        end
-        if has_x == false or has_y == false then
-            return nil, "query result has no column named \"" .. tostring(args.x_column) .. "\" and/or \"" .. tostring(args.y_column) ..
-                "\" -- actual columns: " .. table.concat(column_names, ", ")
-        end
-
-        x_values, y_values = {}, {}
-        for i, row in ipairs(rows) do
-            x_num = tonumber(row[args.x_column])
-            y_num = tonumber(row[args.y_column])
-            if x_num == nil or y_num == nil then
-                return nil, "row " .. tostring(i) .. "'s \"" .. tostring(args.x_column) .. "\"/\"" .. tostring(args.y_column) ..
-                    "\" value isn't numeric (got " .. tostring(row[args.x_column]) .. "/" .. tostring(row[args.y_column]) ..
-                    ") -- both columns must be numeric to plot"
-            end
-            table.insert(x_values, x_num)
-            table.insert(y_values, y_num)
-        end
+        x_values, y_values, rows = series.x, series.y, series.rows
+        truncated, total_count = series.truncated, series.total_count
 
         series_name = args.series_name
         if series_name == nil then
@@ -1578,10 +1656,27 @@ number of values directly (e.g. numbers stated in the conversation, not
 pulled from a query result).
 
 Never do arithmetic in your head. For any number you compute rather than
-copy -- a ratio, a logarithm, a rate, a doubling time, a unit conversion,
-an average of a few values -- either compute it in SQL or call
-calc.evaluate with the formula and the exact values a tool returned, then
-show the formula next to the result in your reply.
+copy -- a ratio, a logarithm, a unit conversion -- either compute it in SQL
+or call calc.evaluate with the formula and the exact values a tool
+returned, then show the formula next to the result in your reply. That
+includes summaries: a mean, total or range across several values goes
+through calc.evaluate (or SQL) too, over exactly the values listed in your
+reply, and says how many went in -- the headline number must follow from
+the rows shown under it.
+
+For a rate over time -- growth, doubling time, decay, a trend -- call
+stats.fit on the time series (one series per call, e.g. one replicate)
+rather than picking two points: first-versus-last counts a lag or a
+plateau as slow growth. Say which points the fit used.
+
+Say where a method comes from. If a document or SOP states how something
+is calculated, follow it and link it. If not, the method is your own
+choice: say so in a few words ("my own method: a log-linear fit over the
+growth phase") instead of presenting it as the lab's procedure.
+
+Tool names and calls are plumbing: never write them into a reply (no
+"calc.evaluate -> 4.31" in a table cell). Show the formula or the method in
+plain words, and the result.
 
 Queries (entity.query/plot.from_query) run in the """ .. view.sql_dialect_name() .. """.
 Every number you present -- a count, an average, a per-group value in a

@@ -61,7 +61,8 @@ function date_forms(iso)
     }
 end
 
-METHOD_PATTERNS = {"select ", "```", "calculated", "computed", "formula", "ln(", "log(", "slope", "regression"}
+METHOD_PATTERNS = {"select ", "```", "calculated", "computed", "formula", "ln(", "log(", "slope", "regression",
+    "log-linear", "least squares", "least-squares", "fitted", "fit over"}
 
 function contains_any(text, patterns)
     lowered = string.lower(text)
@@ -289,6 +290,22 @@ function checks.shows_method(conv, spec, ctx)
         return {pass = false, detail = "no query, formula or steps shown"}
     end
     return {pass = true, detail = "'" .. hit .. "'"}
+end
+
+-- Tool plumbing ("calc.evaluate -> 4.31") belongs in tool calls, not
+-- in what the user reads.
+TOOL_GROUPS = {"document", "entity", "plot", "calc", "stats", "template", "knowledge",
+    "view", "research", "clarify", "background", "internet_search"}
+
+function checks.no_tool_names(conv, spec, ctx)
+    text = final_or_empty(conv)
+    for _, group in ipairs(TOOL_GROUPS) do
+        name = string.match(text, "%f[%w_]" .. group .. "%.[%a_]+")
+        if name != nil then
+            return {pass = false, detail = "mentions tool " .. name}
+        end
+    end
+    return {pass = true, detail = ""}
 end
 
 -- A field of a row ends up with an expected value. Needs ctx.query, so

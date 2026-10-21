@@ -249,6 +249,39 @@ function generate(opts)
         table.insert(facts.experiment_order, lab_number)
     end
 
+    -- A replicate series whose cultures level off (the growth-phase
+    -- trap): OD600 rises exponentially, then plateaus at PLATEAU_OD. The
+    -- doubling time is only right fitted over the growth phase; first-
+    -- vs-last over the whole run counts the plateau as slow growth. The
+    -- replicates' doubling times are far enough apart that no single
+    -- one is within 5% of their mean.
+    PLATEAU_OD = 0.8
+    replicate_doubling = {2.0, 2.8, 3.6, 4.6}
+    series_key = "exp-replicates"
+    series_number = "EXP-061"
+    add(series_key, "experiment", {
+        title = "Replicate growth series on YPD", lab_number = series_number,
+        project = "@project-1", medium = "@medium-1", owner = "@person-1",
+        started_on = "2026-06-01", ended_on = "2026-06-02", status = "finished",
+    })
+    series = {lab_number = series_number, key = series_key, replicates = {}}
+    total = 0
+    for r, doubling in ipairs(replicate_doubling) do
+        sample_key = series_key .. "-r" .. r
+        label = series_number .. "-R" .. r
+        add(sample_key, "sample", {label = label, experiment = "@" .. series_key,
+            source = {type = "experiment", ref = "@" .. series_key}})
+        for h = 0, 24, 2 do
+            od = round(math.min(0.05 * 2 ^ (h / doubling), PLATEAU_OD), 4)
+            add(sample_key .. "-h" .. h, "measurement", {sample = "@" .. sample_key, hours = h, od600 = od})
+        end
+        table.insert(series.replicates, {label = label, doubling_time_hours = doubling,
+            endpoint_estimate_hours = round(24 * math.log(2) / math.log(PLATEAU_OD / 0.05), 2)})
+        total = total + doubling
+    end
+    series.mean_doubling_time_hours = total / #replicate_doubling
+    facts.replicate_series = series
+
     -- Three weekly meeting notes share one title; only the middle one
     -- records the media decision (the duplicate-title trap).
     meetings = {"2026-02-02", "2026-02-09", "2026-02-16"}

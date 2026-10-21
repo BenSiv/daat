@@ -767,6 +767,28 @@ EOF
     [[ "$output" =~ "cannot evaluate" ]]
 }
 
+@test "stats.fit fits the growth phase of a series that levels off, and says which points it used" {
+    mkdir -p schemas
+    cat > schemas/reading.lua <<'SCHEMA'
+return {name = "reading", fields = {
+    {name = "hours", type = "number", required = true},
+    {name = "od", type = "number", required = true},
+}}
+SCHEMA
+    "$BIN" schema add schemas/reading.lua >/dev/null
+    for pair in 0:0.05 2:0.1 4:0.2 6:0.4 8:0.8 10:0.8 12:0.8; do
+        "$BIN" entity create reading hours="${pair%%:*}" od="${pair##*:}" >/dev/null
+    done
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(tool_call_response "stats.fit" '{"sql":"SELECT hours, od FROM reading ORDER BY hours","x_column":"hours","y_column":"od","model":"exponential"}')"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"doubling time?\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "doubling time 2 (in hours)" ]]
+    [[ "$output" =~ "fitted 5 of 7 points" ]]
+}
+
 @test "document.search gives each result a ready-made link to cite" {
     "$BIN" document create-json <<< '[{"title":"Incubator log","content":"EXP-7 ran in Incubator B."}]' >/dev/null
     doc_id=$(sqlite3 "$TEST_DIR/.store/store.db" "SELECT id FROM document WHERE title = 'Incubator log';")
