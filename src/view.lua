@@ -535,7 +535,7 @@ function view.run_adhoc(db_path, sql_text)
 
     ok, rows, column_names = pcall(db.query, db_path, query_text)
     if ok == false then
-        return nil, nil, "invalid sql (" .. view.sql_dialect_name() .. "): " .. tostring(rows)
+        return nil, nil, "invalid sql (" .. view.sql_error_hint(tostring(rows)) .. "): " .. tostring(rows)
     end
     if rows == nil then
         rows = {}
@@ -807,7 +807,7 @@ function view.run_agent_query(db_path, sql_text)
 
     ok, rows, column_names = pcall(db.query, db_path, query_text)
     if ok == false then
-        return nil, nil, "invalid sql (" .. view.sql_dialect_name() .. "): " .. tostring(rows)
+        return nil, nil, "invalid sql (" .. view.sql_error_hint(tostring(rows)) .. "): " .. tostring(rows)
     end
     if rows == nil then
         rows = {}
@@ -846,6 +846,25 @@ function view.sql_dialect_name()
         return "MariaDB/MySQL dialect: use DATEDIFF/TIMESTAMPDIFF, LN, window functions; ONLY_FULL_GROUP_BY applies; no sqlite_master/julianday"
     end
     return "SQLite dialect: use julianday()/strftime(), no DATEDIFF"
+end
+
+-- What to tell the model about a failed query. A missing table or
+-- column is a guessed name, not a dialect problem: naming the dialect
+-- there sent the agent after date functions instead of the schema
+-- (found by the agent scorecard, doc/agent-eval.md). Everything else
+-- keeps the dialect note, since a wrong function or syntax is the
+-- common other cause.
+SCHEMA_ERROR_PATTERNS = {"no such column", "no such table", "unknown column", "unknown table", "doesn't exist"}
+
+function view.sql_error_hint(err_text)
+    lowered = string.lower(tostring(err_text))
+    for _, pattern in ipairs(SCHEMA_ERROR_PATTERNS) do
+        if string.find(lowered, pattern, 1, true) != nil then
+            return "a table or column name doesn't exist: call entity.fields/entity.relationships for the real names; " ..
+                "a multi-value field is its own table <type>_<field> with columns <type>_id and <field>_id"
+        end
+    end
+    return view.sql_dialect_name()
 end
 
 -- CLI entry point: `daat view <list|show|approve|revoke> [args]`

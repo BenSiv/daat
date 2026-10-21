@@ -1974,6 +1974,10 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
                             agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name,
                                 "ERROR: skipped -- only one clarifying question can be asked per turn", true)
                         end
+                    elseif agent.is_destructive(db_path, tool_name, method_name)
+                            and agent_tools.reject_before_approval(tool_name, method_name, tool_call.arguments) != nil then
+                        agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name,
+                            "ERROR: " .. agent_tools.reject_before_approval(tool_name, method_name, tool_call.arguments), true)
                     elseif agent.is_destructive(db_path, tool_name, method_name) then
                         if pending_call == nil then
                             pending_call = {tool_call = tool_call, tool_name = tool_name, method_name = method_name}
