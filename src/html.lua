@@ -3670,6 +3670,57 @@ function html.render_reset_password(token, error_message, invalid, nonce)
 """, nonce)
 end
 
+-- /verify-email#token=...: confirms a new address for an account that
+-- already has a password (auth.send_setup_link's "verify" link). Same
+-- fragment handling as render_reset_password; the form asks for the
+-- account's current password, because the link alone only proves the
+-- mailbox, not that its reader owns the account.
+function html.render_verify_email(token, error_message, invalid, nonce)
+    if invalid == true then
+        return render_login_card("Confirm email", {
+            {
+                type = "form",
+                method = "GET",
+                action = "/login",
+                heading = "Confirm email",
+                message = "This confirmation link is invalid, has expired, or has already been used. Ask an administrator to send a new one.",
+                fields = {},
+                submit_label = "Back to log in",
+            },
+        }, "")
+    end
+    card = render_login_card("Confirm email", {
+        {
+            type = "form",
+            method = "POST",
+            action = "/verify-email",
+            heading = "Confirm your email",
+            message = error_message,
+            fields = {
+                {type = "hidden", name = "token", id = "verify-token", value = default_value_text(token)},
+                {type = "password", name = "password", label = "Your current password", autocomplete = "current-password", required = true},
+            },
+            submit_label = "Confirm email",
+        },
+    }, "<span id=\"verify-missing\" hidden>This link is incomplete. Open it straight from the email.</span>")
+    return card .. string.format("""
+<script nonce="%s">
+(function() {
+    var field = document.getElementById('verify-token');
+    var match = /(?:^#|&)token=([0-9a-f]+)/.exec(window.location.hash);
+    if (match) {
+        field.value = match[1];
+        history.replaceState(null, '', window.location.pathname);
+    }
+    if (!field.value) {
+        field.form.hidden = true;
+        document.getElementById('verify-missing').hidden = false;
+    }
+})();
+</script>
+""", nonce)
+end
+
 -- Self-service password change -- every capability level (baseline "i"
 -- included) can reach this via the "Change password" link in the nav
 -- user box. Deliberately narrow: cgi.lua's route always targets the
@@ -6567,6 +6618,11 @@ function html.render_document_edit(doc, parent_options_html, csrf_token, error_m
             height: '460px',
             initialEditType: 'markdown',
             previewStyle: 'vertical',
+            // Toast UI reports each page load to Google Analytics
+            // unless told not to -- the deployment's hostname and page
+            // URLs would leave for a third party. The CSP's connect-src
+            // blocks it too; this stops it being attempted at all.
+            usageStatistics: false,
             initialValue: "%s",
             placeholder: 'Write in Markdown. Link to other documents with [[title]] or [[folder/title]], or type @ to reference an entity.',
             // WYSIWYG mode has no built-in notion of this project's own

@@ -41,18 +41,25 @@ outbox_count() {
     wc -l < "$MAIL_TEST_OUTBOX" | tr -d ' '
 }
 
-# The token from the most recently sent reset link.
+# The token from the most recently sent link, whichever page it opens
+# (/reset-password for reset and setup links, /verify-email for verify).
 last_token() {
-    tail -1 "$MAIL_TEST_OUTBOX" | grep -o 'reset-password#token=[0-9a-f]*' | head -1 | sed 's/.*token=//'
+    tail -1 "$MAIL_TEST_OUTBOX" | grep -oE '(reset-password|verify-email)#token=[0-9a-f]*' | head -1 | sed 's/.*token=//'
 }
 
-# An account whose email is verified the only way there is: by using the
-# setup link `user email` sends. The outbox is cleared afterwards, so a
-# test's own outbox_count starts from zero.
+# Which page the most recently sent link opens.
+last_link_page() {
+    tail -1 "$MAIL_TEST_OUTBOX" | grep -oE '(reset-password|verify-email)#token=' | head -1 | sed 's/#token=//'
+}
+
+# An account whose email is verified the only way there is for an
+# account that has a password: the verify link `user email` sends, used
+# with that password. The outbox is cleared afterwards, so a test's own
+# outbox_count starts from zero.
 add_user_with_email() {
     "$BIN" user add "$1" oldpass123 i >/dev/null
     "$BIN" user email "$1" "$2" >/dev/null
-    raw_form_post "/reset-password" "token=$(last_token)&new_password=oldpass123&confirm_password=oldpass123" >/dev/null
+    raw_form_post "/verify-email" "token=$(last_token)&password=oldpass123" >/dev/null
     rm -f "$MAIL_TEST_OUTBOX"
 }
 
@@ -338,7 +345,7 @@ admin_cookie() {
     [ "$(outbox_count)" = "0" ]
 }
 
-@test "changing an email unverifies it and mails a setup link; resaving resends; an old link verifies nothing new" {
+@test "changing an email unverifies it and mails a verify link; resaving resends; an old link verifies nothing new" {
     read csrf cookie < <(admin_cookie)
     add_user_with_email hanne hanne@example.com
 
@@ -347,6 +354,7 @@ admin_cookie() {
     run "$BIN" user list
     [[ "$output" =~ "email=h.volpin@example.com (unverified)" ]]
     [ "$(outbox_count)" = "1" ]
+    [ "$(last_link_page)" = "verify-email" ]
     first=$(last_token)
 
     run raw_form_post "/admin-users-email" "csrf_token=${csrf}&login=hanne&email=h.volpin%40example.com" "$cookie"
@@ -354,7 +362,8 @@ admin_cookie() {
 
     # A link mailed to the previous address doesn't verify the new one.
     run raw_form_post "/admin-users-email" "csrf_token=${csrf}&login=hanne&email=hv%40example.com" "$cookie"
-    run raw_form_post "/reset-password" "token=${first}&new_password=pw999999&confirm_password=pw999999"
+    run raw_form_post "/verify-email" "token=${first}&password=oldpass123"
+    [[ "$output" =~ "invalid, has expired" ]]
     run "$BIN" user list
     [[ "$output" =~ "email=hv@example.com (unverified)" ]]
 
@@ -362,14 +371,18 @@ admin_cookie() {
     [[ "$output" =~ "403 Forbidden" ]]
 }
 
-@test "an admin's email is verified by its setup link, but admins still never get reset emails" {
+@test "an admin's email is verified by its verify link and password, but admins still never get reset emails" {
     "$BIN" user add boss bosspass i >/dev/null
     "$BIN" user capabilities boss ia >/dev/null
     run "$BIN" user email boss boss@example.com
-    [[ "$output" =~ "Setup link sent to boss@example.com" ]]
+    [[ "$output" =~ "Link sent to boss@example.com" ]]
     token=$(last_token)
+    # The link can't set the admin's password ...
     run raw_form_post "/reset-password" "token=${token}&new_password=bossnew1&confirm_password=bossnew1"
-    [[ "$output" =~ "Location: /login?reset=1" ]]
+    [[ "$output" =~ "invalid, has expired" ]]
+    # ... it only confirms the address, with the current password.
+    run raw_form_post "/verify-email" "token=${token}&password=bosspass"
+    [[ "$output" =~ "Location: /login?verified=1" ]]
     run "$BIN" user list
     [[ "$output" =~ "boss  cap=ia  email=boss@example.com  active" ]]
     rm -f "$MAIL_TEST_OUTBOX"
@@ -415,4 +428,114 @@ admin_cookie() {
     run raw_form_post "/account-email" "csrf_token=${csrf}&email=evil%40example.com&current_password=testpass123" "$cookie"
     run "$BIN" user list
     [[ "$output" =~ "email=alice@example.com" ]]
+}
+
+# --- Email-link hardening (doc/auth.md, "Emailed links") ---
+
+@test "an invited account has no password, so it can't log in with anything before setup" {
+    "$BIN" user invite radi radi@example.com i >/dev/null
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT password_hash FROM user WHERE login = 'radi';"
+    [ "$output" = "!no-password" ]
+    run raw_login radi '!no-password'
+    [[ "$output" =~ "401 Unauthorized" ]]
+}
+
+@test "fixing a mistyped address cuts off the link sent to the wrong one" {
+    read csrf cookie < <(admin_cookie)
+    run raw_form_post "/admin-users-create" "csrf_token=${csrf}&login=maya&email=maya%40typo.example.com&cap=i" "$cookie"
+    [ "$(last_link_page)" = "reset-password" ]
+    typo_token=$(last_token)
+
+    run raw_form_post "/admin-users-email" "csrf_token=${csrf}&login=maya&email=maya%40example.com" "$cookie"
+    [ "$(outbox_count)" = "2" ]
+
+    run raw_form_post "/reset-password" "token=${typo_token}&new_password=stolen123&confirm_password=stolen123"
+    [[ "$output" =~ "invalid, has expired" ]]
+    run raw_login maya stolen123
+    [[ "$output" =~ "401 Unauthorized" ]]
+
+    # The link to the corrected address works.
+    run raw_form_post "/reset-password" "token=$(last_token)&new_password=mine12345&confirm_password=mine12345"
+    [[ "$output" =~ "Location: /login?reset=1" ]]
+    run "$BIN" user list
+    [[ "$output" =~ "maya  cap=i  email=maya@example.com  active" ]]
+}
+
+@test "clearing an address voids its outstanding links" {
+    "$BIN" user invite radi radi@example.com i >/dev/null
+    token=$(last_token)
+    "$BIN" user email radi "" >/dev/null
+    run raw_form_post "/reset-password" "token=${token}&new_password=radipass1&confirm_password=radipass1"
+    [[ "$output" =~ "invalid, has expired" ]]
+}
+
+@test "setting an email on an account with a password sends a verify link, which can't set the password" {
+    "$BIN" user add hanne oldpass123 i >/dev/null
+    "$BIN" user email hanne hanne@example.com >/dev/null
+    [ "$(last_link_page)" = "verify-email" ]
+    run cat "$MAIL_TEST_OUTBOX"
+    [[ "$output" =~ "Confirm your email" ]]
+    token=$(last_token)
+
+    run raw_form_post "/reset-password" "token=${token}&new_password=taken999&confirm_password=taken999"
+    [[ "$output" =~ "invalid, has expired" ]]
+    run raw_login hanne taken999
+    [[ "$output" =~ "401 Unauthorized" ]]
+}
+
+@test "a verify link needs the account's current password, and then verifies the address" {
+    "$BIN" user add hanne oldpass123 i >/dev/null
+    "$BIN" user email hanne hanne@example.com >/dev/null
+    token=$(last_token)
+
+    run raw_get "/verify-email"
+    [[ "$output" =~ "Your current password" ]]
+    [[ "$output" =~ "Referrer-Policy: no-referrer" ]]
+
+    run raw_form_post "/verify-email" "token=${token}&password=wrongpass"
+    [[ "$output" =~ "isn&#39;t this account&#39;s password" || "$output" =~ "isn't this account's password" ]]
+    run "$BIN" user list
+    [[ "$output" =~ "(unverified)" ]]
+
+    run raw_form_post "/verify-email" "token=${token}&password=oldpass123"
+    [[ "$output" =~ "Location: /login?verified=1" ]]
+    run "$BIN" user list
+    [[ "$output" =~ "hanne  cap=i  email=hanne@example.com  active" ]]
+
+    # Used once only.
+    run raw_form_post "/verify-email" "token=${token}&password=oldpass123"
+    [[ "$output" =~ "invalid, has expired" ]]
+}
+
+@test "a setup or reset link can't be used on /verify-email" {
+    "$BIN" user invite radi radi@example.com i >/dev/null
+    run raw_form_post "/verify-email" "token=$(last_token)&password=anything"
+    [[ "$output" =~ "invalid, has expired" ]]
+}
+
+@test "admins can't be invited by email" {
+    run "$BIN" user invite boss boss@example.com ia
+    [[ "$output" =~ "Admin accounts can't be set up by email" ]]
+    run "$BIN" user list
+    [[ ! "$output" =~ "boss" ]]
+    [ "$(outbox_count)" = "0" ]
+}
+
+@test "a setup link stops working if the invited account is made an admin before using it" {
+    "$BIN" user invite radi radi@example.com i >/dev/null
+    token=$(last_token)
+    "$BIN" user capabilities radi ia >/dev/null
+    run raw_form_post "/reset-password" "token=${token}&new_password=radipass1&confirm_password=radipass1"
+    [[ "$output" =~ "invalid, has expired" ]]
+}
+
+@test "using a reset link ends the account's existing sessions" {
+    add_user_with_email hanne hanne@example.com
+    session=$(raw_login hanne oldpass123 | grep -o 'Set-Cookie: session=[^;]*' | sed 's/Set-Cookie: session=//')
+    run raw_get "/" "" "session=${session}"
+    [[ "$output" =~ "200 OK" ]]
+    raw_form_post "/forgot-password" "identifier=hanne" >/dev/null
+    raw_form_post "/reset-password" "token=$(last_token)&new_password=newpass456&confirm_password=newpass456" >/dev/null
+    run raw_get "/" "" "session=${session}"
+    [[ "$output" =~ "Location: /login" ]]
 }

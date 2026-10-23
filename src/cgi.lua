@@ -261,12 +261,86 @@ function source_from_params(params)
     return source
 end
 
+-- The current request's CSP nonce, set once by cgi.handle_request so
+-- every response's Content-Security-Policy can name it without
+-- threading it through each print_response call. nil before it's
+-- generated: those early error responses then allow no inline script.
+response_nonce = nil
+
+-- True when the browser reached us over TLS. The HTTPS env var is the
+-- standard CGI signal; behind a TLS-terminating load balancer the web
+-- server has to set it itself (the deployment's Apache config does,
+-- see doc/auth.md), or cookies go out without Secure.
+function request_is_https()
+    https = os.getenv("HTTPS")
+    return https != nil and https != "" and string.lower(https) != "off"
+end
+
+-- Headers every response carries. Why each one, and why these values,
+-- is in doc/auth.md ("Response headers"). In short: the CSP lets only
+-- this app's own scripts and nonce-tagged inline scripts run, so an
+-- escaping bug can't become running script; frame-ancestors stops
+-- other sites framing pages (clickjacking the admin forms); nosniff
+-- stops a served file being reinterpreted as script; HSTS makes the
+-- browser use HTTPS before it ever sends a cookie.
+function security_header_lines()
+    script_src = "'self'"
+    if response_nonce != nil then
+        script_src = script_src .. " 'nonce-" .. response_nonce .. "'"
+    end
+    csp = table.concat({
+        "default-src 'self'",
+        "script-src " .. script_src,
+        "style-src 'self' 'unsafe-inline'",
+        "img-src 'self' data: blob: https:",
+        "font-src 'self' data:",
+        -- The label printer's local Zebra Browser Print service.
+        "connect-src 'self' http://127.0.0.1:9100 https://127.0.0.1:9101",
+        "frame-src 'self'",
+        "frame-ancestors 'self'",
+        "form-action 'self'",
+        "base-uri 'self'",
+        "object-src 'none'",
+    }, "; ")
+    lines = {
+        "Content-Security-Policy: " .. csp,
+        "X-Frame-Options: SAMEORIGIN",
+        "X-Content-Type-Options: nosniff",
+        "Referrer-Policy: same-origin",
+    }
+    if request_is_https() then
+        table.insert(lines, "Strict-Transport-Security: max-age=31536000")
+    end
+    return lines
+end
+
+function header_name(header_line)
+    name = string.match(header_line, "^([^:]+):")
+    if name == nil then
+        return ""
+    end
+    return string.lower(name)
+end
+
 -- `extra_headers` is an optional list of raw "Name: value" header
 -- lines (used for Set-Cookie, which can't be folded into a single
--- header the way Content-Type/Content-Length are).
+-- header the way Content-Type/Content-Length are). A security header
+-- a route sets itself (e.g. /reset-password's stricter
+-- Referrer-Policy) replaces the default rather than duplicating it.
 function print_response(status, content_type, body, extra_headers)
     io.write("Status: " .. status .. "\r\n")
     io.write("Content-Type: " .. content_type .. "\r\n")
+    overridden = {}
+    if extra_headers != nil then
+        for _, header_line in ipairs(extra_headers) do
+            overridden[header_name(header_line)] = true
+        end
+    end
+    for _, header_line in ipairs(security_header_lines()) do
+        if overridden[header_name(header_line)] != true then
+            io.write(header_line .. "\r\n")
+        end
+    end
     if extra_headers != nil then
         for _, header_line in ipairs(extra_headers) do
             io.write(header_line .. "\r\n")
@@ -309,8 +383,7 @@ function set_cookie_header(name, value, max_age_seconds, http_only)
     if http_only == true then
         table.insert(parts, "HttpOnly")
     end
-    https = os.getenv("HTTPS")
-    if https != nil and https != "" then
+    if request_is_https() then
         table.insert(parts, "Secure")
     end
     return "Set-Cookie: " .. table.concat(parts, "; ")
@@ -318,6 +391,18 @@ end
 
 function clear_cookie_header(name)
     return "Set-Cookie: " .. name .. "=; Path=/; Max-Age=0"
+end
+
+-- A new session cookie for `login`, signed with the account's current
+-- session_version -- used right after the caller changed their own
+-- password (which ends every older session, theirs included) so they
+-- stay logged in in this browser. The CSRF cookie is unchanged.
+function fresh_session_cookie_headers(root, db_path, login)
+    session_cookie = auth.issue_session_cookie(root, db_path, login)
+    if session_cookie == nil then
+        return nil
+    end
+    return {set_cookie_header("session", session_cookie, auth.SESSION_TTL_SECONDS, true)}
 end
 
 -- Double-submit CSRF check for authenticated, state-changing POST
@@ -516,7 +601,7 @@ function handle_login(root, db_path, method, nonce, theme, params)
                 html.page_shell("Log in", "login", body_html, nonce, false, false, has_tasks_view, nav_extensions, theme, nil))
         end
 
-        session_cookie, cookie_err = auth.issue_session_cookie(root, form.login)
+        session_cookie, cookie_err = auth.issue_session_cookie(root, db_path, form.login)
         if session_cookie == nil then
             return print_response("500 Internal Server Error", "text/html", "<h3>Error: " .. tostring(cookie_err) .. "</h3>")
         end
@@ -527,7 +612,7 @@ function handle_login(root, db_path, method, nonce, theme, params)
 
         return print_response("302 Found", "text/plain", "", {
             "Location: /",
-            set_cookie_header("session", session_cookie, SESSION_TTL_SECONDS, true),
+            set_cookie_header("session", session_cookie, auth.SESSION_TTL_SECONDS, true),
             set_cookie_header("csrf", csrf_token, nil, false)
         })
     end
@@ -535,6 +620,8 @@ function handle_login(root, db_path, method, nonce, theme, params)
     notice = nil
     if params.reset == "1" then
         notice = "Password updated. Log in with your new password."
+    elseif params.verified == "1" then
+        notice = "Email confirmed."
     end
     body_html = html.render_login(nil, nonce, show_forgot_link, notice)
     return print_response("200 OK", "text/html",
@@ -603,6 +690,39 @@ function handle_reset_password(root, db_path, method, nonce, theme)
         html.page_shell("Reset password", "login", body_html, nonce, false, false, has_tasks_view, nav_extensions, theme, nil), headers)
 end
 
+-- `/verify-email` (the emailed link for an account that already has a
+-- password -- see auth.send_setup_link): the same fragment-token shape
+-- as /reset-password, but the form asks for the account's current
+-- password instead of a new one, and the link can never set one.
+function handle_verify_email(root, db_path, method, nonce, theme)
+    if not config.password_reset_enabled() then
+        return print_response("404 Not Found", "text/plain", "")
+    end
+    has_tasks_view = view.load(db_path, "prioritized_tasks", root) != nil
+    headers = {"Referrer-Policy: no-referrer", "Cache-Control: no-store"}
+
+    token = nil
+    error_message = nil
+    invalid = false
+    if method == "POST" then
+        form = parse_query(io.read("*all"))
+        token = form.token
+        if auth.check_email_verification(root, db_path, token) == nil then
+            invalid = true
+        else
+            login, err = auth.complete_email_verification(root, db_path, token, form.password)
+            if login != nil then
+                return print_response("302 Found", "text/plain", "", {"Location: /login?verified=1", "Referrer-Policy: no-referrer"})
+            end
+            error_message = err
+        end
+    end
+
+    body_html = html.render_verify_email(token, error_message, invalid, nonce)
+    return print_response("200 OK", "text/html",
+        html.page_shell("Confirm email", "login", body_html, nonce, false, false, has_tasks_view, nav_extensions, theme, nil), headers)
+end
+
 function cgi.handle_request()
     path_info = default_value(os.getenv("PATH_INFO"), "/register")
     query_string = default_value(os.getenv("QUERY_STRING"), "")
@@ -644,6 +764,7 @@ function cgi.handle_request()
     schema.sync_all(db_path, root)
 
     nonce = auth.generate_nonce()
+    response_nonce = nonce
 
     -- No auth required -- browsers request the favicon (and page_shell
     -- requests the sidebar logo) on every page load, including /login,
@@ -699,6 +820,9 @@ function cgi.handle_request()
     if path_info == "/reset-password" then
         return handle_reset_password(root, db_path, method, nonce, theme)
     end
+    if path_info == "/verify-email" then
+        return handle_verify_email(root, db_path, method, nonce, theme)
+    end
 
     -- API-key auth for external/programmatic clients, as an
     -- alternative to the session cookie below. A custom X-Api-Key
@@ -729,14 +853,7 @@ function cgi.handle_request()
     -- than trusted from the cookie itself -- see auth.lua's own header
     -- comment for why.
     if not via_api_key then
-        user = nil
-        session_login = auth.verify_session_cookie(root, cookies.session)
-        if session_login != nil then
-            candidate = auth.get_user(db_path, session_login)
-            if candidate != nil and (candidate.archived_at == nil or candidate.archived_at == "") then
-                user = candidate
-            end
-        end
+        user = auth.verify_session_cookie(root, db_path, cookies.session)
 
         if user == nil then
             return print_response("302 Found", "text/plain", "", {"Location: /login"})
@@ -809,9 +926,13 @@ function cgi.handle_request()
                 return print_response("200 OK", "text/html",
                     html.page_shell("Account", "", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
             end
-            body = html.render_account(author, account_user, default_value(cookies.csrf, ""), "Password changed.", false)
+            -- set_password ended every session for this account,
+            -- including this one; re-issue this browser's cookie so the
+            -- person who just changed it stays logged in here.
+            body = html.render_account(author, account_user, default_value(cookies.csrf, ""), "Password changed. Any other sessions for this account have been logged out.", false)
             return print_response("200 OK", "text/html",
-                html.page_shell("Account", "", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
+                html.page_shell("Account", "", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author),
+                fresh_session_cookie_headers(root, db_path, author))
         end
         body = html.render_account(author, account_user, default_value(cookies.csrf, ""), nil, false)
         return print_response("200 OK", "text/html",
@@ -1364,6 +1485,7 @@ function cgi.handle_request()
 
         ok = nil
         err = nil
+        self_cookie_headers = nil
 
         if path_info == "/admin-users-create" and config.password_reset_enabled() then
             -- No password field: the account gets a setup link instead,
@@ -1399,6 +1521,11 @@ function cgi.handle_request()
             ok, err = auth.set_capabilities(db_path, form.login, form.cap)
         elseif path_info == "/admin-users-password" then
             ok, err = auth.set_password(db_path, form.login, form.password)
+            -- An admin resetting their own password stays logged in
+            -- here, the same as /account; anyone else's sessions end.
+            if ok != nil and form.login == author then
+                self_cookie_headers = fresh_session_cookie_headers(root, db_path, author)
+            end
         elseif path_info == "/admin-users-archive" then
             ok, err = auth.archive_user(db_path, form.login)
         elseif path_info == "/admin-users-unarchive" then
@@ -1411,7 +1538,13 @@ function cgi.handle_request()
             return print_response("200 OK", "text/html",
                 html.page_shell("Users", "system", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
         end
-        return print_response("302 Found", "text/plain", "", {"Location: admin-users"})
+        redirect_headers = {"Location: admin-users"}
+        if self_cookie_headers != nil then
+            for _, header_line in ipairs(self_cookie_headers) do
+                table.insert(redirect_headers, header_line)
+            end
+        end
+        return print_response("302 Found", "text/plain", "", redirect_headers)
     end
 
     -- Admin UI for the api_key table, mirroring /admin-users above
