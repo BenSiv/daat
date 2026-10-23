@@ -413,12 +413,12 @@ EOF
     [[ "$output" =~ "created_at --" ]]
 }
 
-@test "entity.fields('knowledge_context') surfaces its real SQL columns, same pattern as agent_session" {
+@test "entity.fields('agent_model_call') surfaces its real SQL columns, same pattern as agent_session" {
     resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
     session_id=$(extract_query_param "$resp" "session_id")
 
-    scripted="$(tool_call_response "entity.fields" '{"entity_type":"knowledge_context"}')"$'\1'"$(done_response "Listed.")"
-    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"what columns does knowledge_context have\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+    scripted="$(tool_call_response "entity.fields" '{"entity_type":"agent_model_call"}')"$'\1'"$(done_response "Listed.")"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"what columns does agent_model_call have\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
     run latest_tool_result "$session_id"
     [[ "$output" =~ "hand-rolled rather than schema.register()'d" ]]
@@ -1555,7 +1555,7 @@ EOF
 
     raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"try again\"}" "$COOKIE" "$CSRF" "$(done_response "ok")" >/dev/null
 
-    run sqlite3 "$db" "SELECT prompt FROM knowledge_context WHERE session_id = '${session_id}' ORDER BY id ASC LIMIT 1;"
+    run sqlite3 "$db" "SELECT prompt FROM agent_model_call WHERE session_id = '${session_id}' ORDER BY id ASC LIMIT 1;"
     [[ "$output" =~ '"toolCallId":"call_1"' ]]
     [[ "$output" =~ '"toolCallId":"call_2"' ]]
     [[ "$output" =~ "no result was recorded for this call" ]]

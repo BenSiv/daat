@@ -1,5 +1,7 @@
 #!/usr/bin/env bats
-# task #87: full prompt/reasoning/token persistence and chat evaluation.
+# task #87: full prompt/reasoning/token persistence and chat evaluation,
+# all in agent_model_call (one row per model call; reply rows carry their
+# evaluation and feedback).
 # Note materialization/agent-driven review (originally covered here too)
 # were removed under task #106 -- knowledge_note no longer exists as a
 # separate table to materialize out of; every pool record already is a
@@ -50,24 +52,24 @@ send_message() {
     raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${chat_session_id}\",\"message\":\"${escaped}\"}" "$cookie" "$csrf" "$scripted"
 }
 
-@test "a real chat turn persists the exact prompt and real token counts in knowledge_context" {
+@test "a real chat turn persists the exact prompt and real token counts in agent_model_call" {
     read session csrf < <(session_for admin secret123)
     chat_session=$(start_chat "$session" "$csrf" "Test")
     send_message "$session" "$csrf" "$chat_session" "hello" "" > /dev/null
 
-    run sqlite3 .store/store.db "SELECT session_id, model_id, prompt_tokens, completion_tokens FROM knowledge_context;"
+    run sqlite3 .store/store.db "SELECT session_id, model_id, prompt_tokens, completion_tokens FROM agent_model_call;"
     [[ "$output" =~ "$chat_session" ]]
     [[ "$output" =~ "test-model" ]]
     # Real (estimated-under-test-provider) counts, not nil/empty.
     [[ ! "$output" =~ "||" ]]
 }
 
-@test "a real chat turn records a knowledge_chat_eval row classified as 'final'" {
+@test "a real chat turn records a reply evaluation classified as 'final'" {
     read session csrf < <(session_for admin secret123)
     chat_session=$(start_chat "$session" "$csrf" "Test")
     send_message "$session" "$csrf" "$chat_session" "hello" "$(done_response "A clean final answer.")" > /dev/null
 
-    run sqlite3 .store/store.db "SELECT session_id, provider, reply_kind, quality_status FROM knowledge_chat_eval;"
+    run sqlite3 .store/store.db "SELECT session_id, provider, reply_kind, quality_status FROM agent_model_call WHERE reply_kind IS NOT NULL;"
     [[ "$output" =~ "$chat_session" ]]
     [[ "$output" =~ "test|final|ok" ]]
 }
@@ -80,12 +82,12 @@ send_message() {
     run sqlite3 .store/store.db "SELECT tier, source_type FROM document WHERE source_type='reasoning';"
     [[ "$output" =~ "0|reasoning" ]]
 
-    run sqlite3 .store/store.db "SELECT reply_kind, reasoning_status FROM knowledge_chat_eval ORDER BY id DESC LIMIT 1;"
+    run sqlite3 .store/store.db "SELECT reply_kind, reasoning_status FROM agent_model_call WHERE reply_kind IS NOT NULL ORDER BY id DESC LIMIT 1;"
     [[ "$output" =~ "reasoning-visible|visible" ]]
 
-    # The reply's own row (step_kind 'chat') -- a later self-check row is
+    # The reply's own row (kind 'chat') -- a later self-check row is
     # its own model call and carries no reasoning link.
-    run sqlite3 .store/store.db "SELECT context.reasoning_document_id FROM knowledge_context context WHERE context.step_kind = 'chat' ORDER BY context.id DESC LIMIT 1;"
+    run sqlite3 .store/store.db "SELECT context.reasoning_document_id FROM agent_model_call context WHERE context.kind = 'chat' ORDER BY context.id DESC LIMIT 1;"
     [[ "$output" != "" ]]
 
     # Lands under the Knowledge Pool folder, not at the top level.
@@ -120,7 +122,7 @@ send_message() {
     [[ "$output" =~ "the user said hi" ]]
 }
 
-@test "a provider failure still records knowledge_context/knowledge_chat_eval as an error, never reaching a real model call" {
+@test "a provider failure still records agent_model_call as an error, never reaching a real model call" {
     read session csrf < <(session_for admin secret123)
     chat_session=$(start_chat "$session" "$csrf" "Test")
     cat > "${TEST_DIR}/platform.lua" <<'EOF'
@@ -130,7 +132,7 @@ EOF
         GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/chat-widget-send" QUERY_STRING="" \
         HTTP_COOKIE="session=${session}; csrf=${csrf}" HTTP_X_CSRF_TOKEN="${csrf}" "$BIN" > /dev/null
 
-    run sqlite3 .store/store.db "SELECT reply_kind, quality_status FROM knowledge_chat_eval ORDER BY id DESC LIMIT 1;"
+    run sqlite3 .store/store.db "SELECT reply_kind, quality_status FROM agent_model_call WHERE reply_kind IS NOT NULL ORDER BY id DESC LIMIT 1;"
     [[ "$output" =~ "error|error" ]]
 }
 
@@ -224,7 +226,7 @@ EOF
         GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/chat-widget-feedback" QUERY_STRING="" \
         HTTP_COOKIE="session=${session}; csrf=${csrf}" HTTP_X_CSRF_TOKEN="${csrf}" "$BIN")
     [[ "$output" =~ '"ok":true' ]]
-    run sqlite3 .store/store.db "SELECT user_feedback FROM knowledge_chat_eval WHERE message_id = ${message_id};"
+    run sqlite3 .store/store.db "SELECT user_feedback FROM agent_model_call WHERE message_id = ${message_id} AND reply_kind IS NOT NULL;"
     [[ "$output" == "up" ]]
 
     read alice_session alice_csrf < <(session_for alice secret123)
@@ -232,7 +234,7 @@ EOF
         GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/chat-widget-feedback" QUERY_STRING="" \
         HTTP_COOKIE="session=${alice_session}; csrf=${alice_csrf}" HTTP_X_CSRF_TOKEN="${alice_csrf}" "$BIN")
     [[ "$output" =~ "404 Not Found" ]]
-    run sqlite3 .store/store.db "SELECT user_feedback FROM knowledge_chat_eval WHERE message_id = ${message_id};"
+    run sqlite3 .store/store.db "SELECT user_feedback FROM agent_model_call WHERE message_id = ${message_id} AND reply_kind IS NOT NULL;"
     [[ "$output" == "up" ]]
 }
 
@@ -248,13 +250,13 @@ EOF
 
 # --- Per-step usage logging and the context report (doc/context-management-plan.md, Phase 0) ---
 
-@test "every step of a chat turn is recorded with step_kind 'chat' and its step number" {
+@test "every step of a chat turn is recorded with kind 'chat' and its step number" {
     read session csrf < <(session_for admin secret123)
     chat_session=$(start_chat "$session" "$csrf" "Steps")
     scripted="$(tool_call_response "entity.list_types" "{}")"$'\1'"$(done_response "There are some types.")"
     send_message "$session" "$csrf" "$chat_session" "what types exist" "$scripted" > /dev/null
 
-    run sqlite3 .store/store.db "SELECT step_kind || ':' || COALESCE(step, '') FROM knowledge_context WHERE session_id = '${chat_session}' ORDER BY id;"
+    run sqlite3 .store/store.db "SELECT kind || ':' || COALESCE(step, '') FROM agent_model_call WHERE session_id = '${chat_session}' ORDER BY id;"
     [[ "$output" =~ "chat:1" ]]
     [[ "$output" =~ "chat:2" ]]
     # The answer's self-check is a real model call too, so it's recorded,
@@ -268,23 +270,9 @@ EOF
     scripted="$(tool_call_response "research.investigate" '{"question":"what types exist"}')"$'\1'"$(tool_call_response "entity.list_types" "{}")"$'\1'"$(done_response "Found the types.")"$'\1'"$(done_response "Here are the types.")"
     send_message "$session" "$csrf" "$chat_session" "look into the types" "$scripted" > /dev/null
 
-    run sqlite3 .store/store.db "SELECT step || ':' || COALESCE(message_id, 'none') || ':' || (prompt IS NOT NULL) FROM knowledge_context WHERE session_id = '${chat_session}' AND step_kind = 'research' ORDER BY id;"
+    run sqlite3 .store/store.db "SELECT step || ':' || COALESCE(message_id, 'none') || ':' || (prompt IS NOT NULL) FROM agent_model_call WHERE session_id = '${chat_session}' AND kind = 'research' ORDER BY id;"
     [ "${lines[0]}" = "1:none:1" ]
     [ "${lines[1]}" = "2:none:1" ]
-}
-
-@test "the step columns are added to a knowledge_context table created before they existed" {
-    sqlite3 .store/store.db "CREATE TABLE kc_old AS SELECT id, session_id, message_id, prompt, model_id, reasoning_document_id, prompt_tokens, completion_tokens, total_tokens, created_at FROM knowledge_context; DROP TABLE knowledge_context; ALTER TABLE kc_old RENAME TO knowledge_context;"
-    run sqlite3 .store/store.db "SELECT COUNT(*) FROM pragma_table_info('knowledge_context') WHERE name IN ('step_kind', 'step');"
-    [ "$output" = "0" ]
-    # The read-only report works on a store from before the columns
-    # existed (production is read this way before an upgrade).
-    run "$BIN" agent context-report
-    [ "$status" -eq 0 ]
-    [[ "$output" =~ "## Model calls" ]]
-    run raw_get "/login"
-    run sqlite3 .store/store.db "SELECT COUNT(*) FROM pragma_table_info('knowledge_context') WHERE name IN ('step_kind', 'step');"
-    [ "$output" = "2" ]
 }
 
 @test "agent context-report summarizes calls, tool results, exact repeats and compaction" {

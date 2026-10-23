@@ -34,7 +34,7 @@ The agent also changes continuously: new tools, prompt changes, loop behaviour. 
   - `search_provider = "test"`;
   - `mail_test`.
   `tst/integration/test_helper.bash` already builds a fresh temp deployment per test on these.
-- **Model-call logging:** every real model call already persists its exact prompt, model id and token counts (`knowledge_context`), and every reply gets a `knowledge_chat_eval` row. The scorecard reads these and adds no tables of its own.
+- **Model-call logging:** every real model call already persists its exact prompt, model id and token counts (`agent_model_call`), and every reply gets a classification row. The scorecard reads these and adds no tables of its own.
 - **Live providers:**
   - Vertex (`agent_vertex.lua`): chat and embeddings, gcloud auth.
   - Claude (`agent_claude.lua`): chat only. With no embeddings, semantic search is off, so on its own it is not a faithful environment for retrieval questions.
@@ -125,7 +125,7 @@ The checks live in `tst/eval/checks.lua`. All but `approval` and `state` read on
 - Each scenario runs in its own process (`tst/eval/run_scenario.lua`) on a fresh copy of the cached demo lab. It calls `agent.run_turn`, `agent.approve_pending` and `agent.deny_pending` directly: the same turn loop the web handlers run inline, without HTTP and login in between.
 - **test mode:** the scripted provider. Free, and the same result every run. It checks the workflow around the model: approval, tool handling, finishing a turn. It says nothing about quality. It runs inside `./bld/test.sh`, so a broken workflow fails the build. Side-effect model calls a turn can trigger (distillation, tier judgment, tag upkeep) read `AGENT_TEST_GENERATE_RESPONSES`, so they can't consume the scripted conversation.
 - **live mode:** the provider and model named in the eval `platform.lua`. Each scenario runs `--repeat` times (default 3). *Consistency* means all repeats give the same answer.
-- **Output:** `eval-out/runs/<timestamp>-<mode>/`: `results.jsonl` (one row per scenario per repeat, with token counts read from `knowledge_context`), `results.json` (summary + rows), `report.md`, and `work/<scenario>-<repeat>/` with each run's database and `transcript.md`.
+- **Output:** `eval-out/runs/<timestamp>-<mode>/`: `results.jsonl` (one row per scenario per repeat, with token counts read from `agent_model_call`), `results.json` (summary + rows), `report.md`, and `work/<scenario>-<repeat>/` with each run's database and `transcript.md`.
 
 The report shows one line per score:
 

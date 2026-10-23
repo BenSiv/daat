@@ -604,8 +604,7 @@ HAND_ROLLED_DOCUMENTED_TABLES = {
     knowledge_retrieval = true,
     knowledge_retrieval_document = true,
     knowledge_review = true,
-    knowledge_context = true,
-    knowledge_chat_eval = true,
+    agent_model_call = true,
 }
 -- Attached to the module table too (not just left as the bare global
 -- run_agent_query itself uses below) -- a require()'d module's own

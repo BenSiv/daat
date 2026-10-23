@@ -1894,7 +1894,7 @@ function cgi.handle_request()
         if session_id == nil or agent.get_session(db_path, session_id, author) == nil then
             return print_response("404 Not Found", "application/json", json.encode({error = "no such message"}))
         end
-        ok = knowledge.record_chat_feedback(db_path, message_id, body_data.feedback)
+        ok = agent.record_reply_feedback(db_path, message_id, body_data.feedback)
         return print_response("200 OK", "application/json", json.encode({ok = ok}))
     end
 

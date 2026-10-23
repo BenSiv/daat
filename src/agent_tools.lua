@@ -528,8 +528,7 @@ HAND_ROLLED_ENTITY_FIELDS = {
     knowledge_retrieval = function() return knowledge.hand_rolled_sql_columns_text("knowledge_retrieval") end,
     knowledge_retrieval_document = function() return knowledge.hand_rolled_sql_columns_text("knowledge_retrieval_document") end,
     knowledge_review = function() return knowledge.hand_rolled_sql_columns_text("knowledge_review") end,
-    knowledge_context = function() return knowledge.hand_rolled_sql_columns_text("knowledge_context") end,
-    knowledge_chat_eval = function() return knowledge.hand_rolled_sql_columns_text("knowledge_chat_eval") end,
+    agent_model_call = function() return agent.model_call_sql_columns_text() end,
 }
 
 -- The security judgment call of which tables the model may know exist

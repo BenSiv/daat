@@ -114,7 +114,7 @@ function main()
         -- This can run before any web request after a deploy (it's on a
         -- timer), so it brings the tables it writes up to date itself
         -- rather than relying on cgi.handle_request having done it.
-        knowledge.init_schema(db_path)
+        agent.init_schema(db_path)
         result = agent.run_pending_background_tasks(db_path, agent.default_model())
         print(string.format("Ran %d, failed %d", result.ran, result.failed))
         return
@@ -155,7 +155,7 @@ function main()
             return
         end
         db_path = config.db_path(".")
-        knowledge.init_schema(db_path)
+        agent.init_schema(db_path)
         result, err = agent.continue_turn(db_path, arg[3], agent.default_model())
         if result == nil then
             print("Error: " .. tostring(err))

@@ -107,8 +107,6 @@ function test_hand_rolled_sql_columns_text_covers_every_event_log_table()
         knowledge_retrieval = {"id", "session_id", "query_text", "hit_count", "created_at"},
         knowledge_retrieval_document = {"retrieval_id", "document_id", "rank", "score", "tier_weight", "reinforcement_delta"},
         knowledge_review = {"atomicity_status", "connectivity_status", "duplication_status", "title_status"},
-        knowledge_context = {"prompt", "model_id", "reasoning_document_id", "prompt_tokens", "completion_tokens", "total_tokens"},
-        knowledge_chat_eval = {"provider", "model", "reply_kind", "quality_status", "user_feedback"},
     }
     for table_name, columns in pairs(cases) do
         text = knowledge.hand_rolled_sql_columns_text(table_name)

@@ -151,6 +151,47 @@ table.insert(MIGRATIONS, {version = 1, name = "checkpoints into system_state", r
     end
 end})
 
+-- 2. knowledge_context (one row per model call) and knowledge_chat_eval
+-- (one row per chat reply, keyed to its call) become agent_model_call.
+-- Row ids are kept, so a reply's evaluation lands on its own call.
+-- Older layouts have no step_kind/step; those rows get NULL kind.
+table.insert(MIGRATIONS, {version = 2, name = "agent_model_call", run = function(db_path)
+    if not exists(db_path, "knowledge_context") then
+        return
+    end
+    require("agent").ensure_model_call_table(db_path)
+    if row_count(db_path, "agent_model_call") > 0 then
+        error("agent_model_call already has rows; not copying knowledge_context over them")
+    end
+    have = columns_of(db_path, "knowledge_context")
+    kind_expr = "NULL"
+    if have["step_kind"] == true then
+        kind_expr = "step_kind"
+    end
+    step_expr = "NULL"
+    if have["step"] == true then
+        step_expr = "step"
+    end
+    db.exec(db_path, "INSERT INTO agent_model_call (id, session_id, message_id, kind, step, model_id, prompt, reasoning_document_id, " ..
+        "prompt_tokens, completion_tokens, total_tokens, created_at) " ..
+        "SELECT id, session_id, message_id, " .. kind_expr .. ", " .. step_expr .. ", model_id, prompt, reasoning_document_id, " ..
+        "prompt_tokens, completion_tokens, total_tokens, created_at FROM knowledge_context;")
+    if exists(db_path, "knowledge_chat_eval") then
+        -- One statement, correlated on the call id: thousands of
+        -- per-row UPDATEs would be thousands of round trips on MySQL.
+        sets = {}
+        for _, pair in ipairs({{"provider", "provider"}, {"reply_kind", "reply_kind"}, {"quality_status", "quality_status"},
+                {"reasoning_status", "reasoning_status"}, {"action_summary", "action_summary"},
+                {"user_feedback", "user_feedback"}, {"feedback_at", "feedback_at"}}) do
+            table.insert(sets, pair[1] .. " = (SELECT e." .. pair[2] .. " FROM knowledge_chat_eval e WHERE e.context_id = agent_model_call.id ORDER BY e.id DESC LIMIT 1)")
+        end
+        db.exec(db_path, "UPDATE agent_model_call SET " .. table.concat(sets, ", ") ..
+            " WHERE id IN (SELECT context_id FROM knowledge_chat_eval WHERE context_id IS NOT NULL);")
+        store.retire_table(db_path, "knowledge_chat_eval")
+    end
+    store.retire_table(db_path, "knowledge_context")
+end})
+
 function latest_version()
     latest = 0
     for _, m in ipairs(MIGRATIONS) do

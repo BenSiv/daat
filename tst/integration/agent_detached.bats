@@ -125,7 +125,7 @@ wait_idle() {
     [[ "$(json_body "$output" | jq -r '.messages[-1].content')" =~ "Recovered." ]]
     [ "$(store "SELECT COUNT(*) FROM agent_message WHERE session_id = '${sid}' AND role = 'error';")" = "0" ]
     # Both attempts were real calls, so both are recorded for step 1.
-    [ "$(store "SELECT COUNT(*) FROM knowledge_context WHERE session_id = '${sid}' AND step_kind = 'chat' AND step = 1;")" = "2" ]
+    [ "$(store "SELECT COUNT(*) FROM agent_model_call WHERE session_id = '${sid}' AND kind = 'chat' AND step = 1;")" = "2" ]
 }
 
 @test "agent continue with no session id prints its usage" {

@@ -32,7 +32,7 @@ A new shaping step, `agent.shape_context(messages, policy)`, runs on the canonic
 **Why first:** `knowledge_context` records every chat step, but nothing from the research sub-agent or background tasks (where masking will be tested first), and no row says which kind of call it was or which step of its turn. Every later phase is judged on tokens per completed task per loop, which needs both.
 
 **Changes:**
-- Add `step_kind` (`chat`, `research`, `background`, `compaction`, `wrapup`, `self_check`) and `step` (the step's number within its turn) to `knowledge_context`, set by every caller of `record_context`.
+- Add `kind` (originally `step_kind`; `chat`, `research`, `background`, `compaction`, `wrapup`, `self_check`) and `step` (the step's number within its turn) to `knowledge_context`, set by every caller of `record_context`.
 - Record every research and background step too, with its prompt, like chat steps already are: `doc/architecture.md` says every real model call is persisted.
 - `daat agent context-report [--since DATE]`: prints the baseline tables from the research doc (tokens per call and per turn by loop and login class, tool result sizes, exact-repeat counts, compactions per session). It is read-only SQL, so it can run against prod with the read-only user and be re-run after each phase.
 - Agent scorecard (`bld/eval.sh`): add `tokens_per_task`, `steps_per_task`, `exact_repeat_calls` and `compactions` to each scenario's result.

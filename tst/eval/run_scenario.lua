@@ -116,8 +116,8 @@ end
 db_path = config.db_path(".")
 -- The demo-lab copy is cached across code changes (bld/eval-env.sh), so
 -- bring its tables up to date the way a web request would.
-knowledge = require("knowledge")
-knowledge.init_schema(db_path)
+require("store").migrate(db_path)
+agent.init_schema(db_path)
 login = facts.user
 model = agent.default_model()
 started = os.time()
@@ -209,7 +209,7 @@ io.write(file, table.concat(lines, "\n"))
 io.close(file)
 
 usage = db.query(db_path, string.format(
-    "SELECT COALESCE(SUM(total_tokens), 0) AS tokens, COUNT(*) AS calls, COALESCE(MAX(prompt_tokens), 0) AS peak FROM knowledge_context WHERE session_id = %s;",
+    "SELECT COALESCE(SUM(total_tokens), 0) AS tokens, COUNT(*) AS calls, COALESCE(MAX(prompt_tokens), 0) AS peak FROM agent_model_call WHERE session_id = %s;",
     db.quote(session_id)))[1]
 
 -- Context cost beyond total tokens (doc/context-management-plan.md,

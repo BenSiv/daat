@@ -66,54 +66,6 @@ CREATE TABLE IF NOT EXISTS knowledge_review (
     created_at TEXT DEFAULT (%s)
 );
 
--- The actual prompt/reasoning/token record per chat turn (see
--- doc/architecture.md's "Knowledge pool" section, "Full prompt/
--- reasoning/token persistence"). Linked to `agent_message` (the
--- assistant response this context produced) -- daat's own
--- immutable, append-only chat log is the natural anchor here.
--- `reasoning_document_id` points at a document (source_type='reasoning')
--- rather than storing reasoning text inline -- reasoning goes through
--- the exact same tiering/retrieval/decay pipeline as everything else,
--- not a second parallel log.
-CREATE TABLE IF NOT EXISTS knowledge_context (
-    id INTEGER PRIMARY KEY %s,
-    session_id TEXT NOT NULL,
-    message_id INTEGER,
-    -- LONGTEXT, not TEXT -- this column stores the full JSON-encoded
-    -- message history sent to the model, which routinely exceeds
-    -- MariaDB's plain TEXT's 65,535-byte cap (same bug class as
-    -- document.content/entity_event.field_changes -- see schema.lua's
-    -- SQL_TYPE.text).
-    prompt LONGTEXT,
-    model_id TEXT,
-    reasoning_document_id INTEGER,
-    prompt_tokens INTEGER,
-    completion_tokens INTEGER,
-    total_tokens INTEGER,
-    created_at TEXT DEFAULT (%s)
-);
-
--- Per-reply classification + user feedback (see doc/architecture.md's
--- "Chat-reply evaluation + user feedback"). `message_id` is denormalized
--- here (also reachable via context_id -> knowledge_context.message_id)
--- so the feedback route can look a row up directly from what the chat
--- widget already has rendered, without a join.
-CREATE TABLE IF NOT EXISTS knowledge_chat_eval (
-    id INTEGER PRIMARY KEY %s,
-    session_id TEXT NOT NULL,
-    context_id INTEGER,
-    message_id INTEGER,
-    provider TEXT,
-    model TEXT,
-    reply_kind TEXT,
-    quality_status TEXT,
-    reasoning_status TEXT,
-    action_summary TEXT,
-    user_feedback TEXT,
-    feedback_at TEXT,
-    created_at TEXT DEFAULT (%s)
-);
-
 -- One row per *pair* of documents whose co-retrieval has been evaluated
 -- (linked or declined) -- document_a_id is always the smaller id, so
 -- (a,b) and (b,a) are always the same row. What makes "don't re-ask on
@@ -151,8 +103,6 @@ function knowledge_schema_sql(db_path)
     return string.format(KNOWLEDGE_SCHEMA,
         db.autoincrement_keyword(db_path), db.now_expr(db_path),
         db.autoincrement_keyword(db_path), db.now_expr(db_path),
-        db.autoincrement_keyword(db_path), db.now_expr(db_path),
-        db.autoincrement_keyword(db_path), db.now_expr(db_path),
         db.now_expr(db_path),
         db.now_expr(db_path)
     )
@@ -168,10 +118,6 @@ function ensure_knowledge_indexes(db_path)
     indexes = {
         {name = "knowledge_retrieval_document_document_idx", table = "knowledge_retrieval_document",
          sql = "CREATE INDEX knowledge_retrieval_document_document_idx ON knowledge_retrieval_document(document_id);"},
-        {name = "knowledge_context_message_idx", table = "knowledge_context",
-         sql = "CREATE INDEX knowledge_context_message_idx ON knowledge_context(message_id);"},
-        {name = "knowledge_chat_eval_message_idx", table = "knowledge_chat_eval",
-         sql = "CREATE INDEX knowledge_chat_eval_message_idx ON knowledge_chat_eval(message_id);"},
     }
     for _, idx in ipairs(indexes) do
         if db.index_exists(db_path, idx.table, idx.name) == false then
@@ -195,45 +141,10 @@ function ensure_link_review_reason_column(db_path)
     end
 end
 
--- knowledge_context.step_kind / step: which loop made the call ("chat",
--- "research", "background", "compaction", "wrapup", "self_check") and,
--- for loop steps, its number within the turn -- so usage can be read
--- per loop and per turn (doc/context-management-plan.md, Phase 0).
--- NULL on rows from before they existed. Every request runs
--- init_schema, so concurrent first requests after an upgrade can race
--- to add a column (real MySQL 8 then raises "Duplicate column name" for
--- the losers, see auth.lua's add_column_if_missing); a failed ALTER is
--- only an error if the column still doesn't exist afterwards.
-function ensure_context_step_columns(db_path)
-    for _, column in ipairs({{"step_kind", "VARCHAR(32) DEFAULT NULL"}, {"step", "INTEGER DEFAULT NULL"}}) do
-        have = false
-        for _, name in ipairs(db.get_columns(db_path, "knowledge_context")) do
-            if name == column[1] then
-                have = true
-            end
-        end
-        if not have then
-            ok, err = pcall(db.exec, db_path, "ALTER TABLE knowledge_context ADD COLUMN " .. column[1] .. " " .. column[2] .. ";")
-            if ok == false then
-                still_missing = true
-                for _, name in ipairs(db.get_columns(db_path, "knowledge_context")) do
-                    if name == column[1] then
-                        still_missing = false
-                    end
-                end
-                if still_missing then
-                    error(err)
-                end
-            end
-        end
-    end
-end
-
 function knowledge.init_schema(db_path)
     db.exec(db_path, knowledge_schema_sql(db_path))
     ensure_knowledge_indexes(db_path)
     ensure_link_review_reason_column(db_path)
-    ensure_context_step_columns(db_path)
 end
 
 -- Same treatment as document.lua's KNOWLEDGE_POOL_SQL_COLUMNS: these are
@@ -268,35 +179,6 @@ HAND_ROLLED_TABLE_COLUMNS = {
         {name = "title_status", note = "rule-based review outcome: is the title specific, not generic"},
         {name = "action_summary", note = "human-readable summary of what the review did, if anything"},
         {name = "created_at", note = "timestamp of the review"},
-    },
-    knowledge_context = {
-        {name = "id", note = "primary key"},
-        {name = "session_id", note = "agent_session.id this prompt was sent within"},
-        {name = "message_id", note = "FK to agent_message.id -- the reply this context produced"},
-        {name = "prompt", note = "the exact verbatim prompt/message-history JSON sent to the model (LONGTEXT -- routinely exceeds a plain TEXT column's cap)"},
-        {name = "model_id", note = "which model actually served this turn"},
-        {name = "reasoning_document_id", note = "FK to document.id (source_type='reasoning') -- reasoning text goes through the same pool as everything else, not a separate log"},
-        {name = "prompt_tokens", note = "real token count for the prompt"},
-        {name = "completion_tokens", note = "real token count for the completion"},
-        {name = "total_tokens", note = "prompt_tokens + completion_tokens"},
-        {name = "step_kind", note = "which loop made the call: 'chat', 'research', 'background', 'compaction', 'wrapup', 'self_check' (NULL on older rows)"},
-        {name = "step", note = "the call's step number within its turn, for loop steps (NULL otherwise)"},
-        {name = "created_at", note = "timestamp of the turn"},
-    },
-    knowledge_chat_eval = {
-        {name = "id", note = "primary key"},
-        {name = "session_id", note = "agent_session.id"},
-        {name = "context_id", note = "FK to knowledge_context.id"},
-        {name = "message_id", note = "FK to agent_message.id -- denormalized here too, so the chat widget's feedback route can look this up directly without a join"},
-        {name = "provider", note = "which model provider served this reply"},
-        {name = "model", note = "which model served this reply"},
-        {name = "reply_kind", note = "'final' | 'reasoning-visible' | 'error' | 'empty'"},
-        {name = "quality_status", note = "rule-based classification of the reply's quality"},
-        {name = "reasoning_status", note = "rule-based classification of the reply's reasoning"},
-        {name = "action_summary", note = "human-readable summary of what this reply did, if anything"},
-        {name = "user_feedback", note = "the chat widget's thumbs up/down, if given"},
-        {name = "feedback_at", note = "timestamp of the feedback, if given"},
-        {name = "created_at", note = "timestamp of the reply"},
     },
 }
 
@@ -653,71 +535,6 @@ function knowledge.classify_reply(is_error, text)
     return "empty", "empty", "none"
 end
 
--- Persists the exact prompt (system_prompt .. history, verbatim, not
--- reconstructed later from agent_message rows) plus real token counts
--- for one model call. `reasoning_document_id` is optional -- filled in
--- by the caller only when the reply's own reasoning was split out into
--- its own document (source_type='reasoning'), not every turn. `usage`
--- is the {prompt_tokens, completion_tokens, total_tokens} table
--- agent_provider.generate's third return value now carries (real
--- counts from Vertex, estimated-but-present under the test provider) --
--- every field is nil-safe since a provider without usage metadata at
--- all shouldn't fail this call over accounting.
--- `step` is optional: {kind = "chat"|"research"|..., number = N}.
-function knowledge.record_context(db_path, session_id, message_id, prompt, model_id, reasoning_document_id, usage, step)
-    if usage == nil then
-        usage = {}
-    end
-    if step == nil then
-        step = {}
-    end
-    _, context_id = db.exec(db_path, string.format(
-        "INSERT INTO knowledge_context (session_id, message_id, prompt, model_id, reasoning_document_id, prompt_tokens, completion_tokens, total_tokens, step_kind, step) " ..
-        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s);",
-        db.quote(session_id), db.literal(tonumber(message_id)), db.quote(prompt), db.quote(model_id),
-        db.literal(tonumber(reasoning_document_id)), db.literal(usage.prompt_tokens), db.literal(usage.completion_tokens),
-        db.literal(usage.total_tokens), db.literal(step.kind), db.literal(tonumber(step.number))
-    ))
-    return context_id
-end
-
--- Records one chat-reply evaluation row -- classification is rule-based
--- today (knowledge.classify_reply); nothing here requires an extra
--- model call.
-function knowledge.record_chat_eval(db_path, session_id, context_id, message_id, provider, model, is_error, reply_text)
-    reply_kind, quality_status, reasoning_status = knowledge.classify_reply(is_error, reply_text)
-    action_summary = string.format("reply_kind=%s; quality=%s; reasoning=%s", reply_kind, quality_status, reasoning_status)
-    _, eval_id = db.exec(db_path, string.format(
-        "INSERT INTO knowledge_chat_eval (session_id, context_id, message_id, provider, model, reply_kind, quality_status, reasoning_status, action_summary) " ..
-        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);",
-        db.quote(session_id), db.literal(tonumber(context_id)), db.literal(tonumber(message_id)),
-        db.quote(provider), db.quote(model), db.quote(reply_kind), db.quote(quality_status),
-        db.quote(reasoning_status), db.quote(action_summary)
-    ))
-    return eval_id
-end
-
--- The user-feedback half of chat evaluation -- looked up by message_id
--- (what the chat widget already has rendered for each reply), not an
--- eval id the frontend was never told about. Checks existence with a
--- real SELECT first, not db.exec's own return value -- sqlite_update
--- and mariadb_update disagree on what their first return value even
--- means (plain `true` vs. a real affected-row count), which is exactly
--- why every other UPDATE call site in this codebase already ignores it
--- too.
-function knowledge.record_chat_feedback(db_path, message_id, feedback)
-    rows = db.query(db_path, string.format(
-        "SELECT id FROM knowledge_chat_eval WHERE message_id = %d;", tonumber(message_id)
-    ))
-    if rows == nil or rows[1] == nil then
-        return false
-    end
-    db.exec(db_path, string.format(
-        "UPDATE knowledge_chat_eval SET user_feedback = %s, feedback_at = %s WHERE message_id = %d;",
-        db.quote(feedback), db.now_expr(db_path), tonumber(message_id)
-    ))
-    return true
-end
 
 --------------------------------------------------------------------------
 -- Reactive distillation, tied to real usage/review activity
