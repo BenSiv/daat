@@ -12,7 +12,7 @@ Scope: the **42 built-in tables** daat owns (37 core tables plus 5 entity types 
   - **Six one-to-one side tables,** each keyed by `document_id` or `tag_id` and holding one derived value: `document_embedding`, `document_embedding_due`, `document_link_sync` and `knowledge_tier_review` for documents; `tag_centre` and `tag_upkeep` for tags.
   - **Pairs that record the same thing at the same grain:** `knowledge_context` and `knowledge_chat_eval` (one row per chat reply each), `knowledge_retrieval_document` and `knowledge_review` (one row per retrieved document each), and `extension_approval` and `view_approval` (an admin approving one named thing).
 - **One registered but unused table:** `tag_relation`, with 0 rows. It's part of the tag ontology design, but no code reads or writes it yet.
-- **One live security problem:** the chat agent's query tool can read `knowledge_context` (every user's full conversations, in `prompt`), `knowledge_chat_eval` and `agent_session` (every user's chat titles). That is the same exposure `agent_message` was deliberately kept off the list to avoid.
+- **Checked, not a problem:** the chat agent's `entity.query` can only read registered entity tables, their multi-value tables, and `entity_source`, `document_link` and `entity_event` (`view.queryable_tables`), which is what any user already sees on detail pages. `knowledge_context`, `knowledge_chat_eval` and `agent_session` are on a separate list of tables whose *columns* the agent may describe for the `/sql` console; `entity.query` refuses them.
 - **Data that only grows:** `knowledge_context.prompt` stores the whole history again on every step (about 25 MB after 7 weeks with 6 users, mostly a copy of `agent_message`), and `knowledge_review` adds a row for every document every search returns. Nothing reads either beyond counts.
 - **A leftover:** `/data/.store/store.db` on the prod server is a SQLite store from first setup (2026-09-01), never written since. The deployment runs on MySQL only.
 
@@ -21,7 +21,7 @@ Scope: the **42 built-in tables** daat owns (37 core tables plus 5 entity types 
 1. **One table per concept, one place per fact.** Derived state about a document lives in one document side table, not four.
 2. **Settings and checkpoints that are a single value** live in one key/value table, not a table each.
 3. **Logs either earn their keep or expire.** Every log has a reader and a retention rule.
-4. **Nothing the chat agent can query holds another user's content.**
+4. **Nothing the chat agent can query holds another user's content** (true today; keep it that way when tables merge or move).
 5. **Names say the domain:** `user` / `api_key` / `password_reset` (accounts), `agent_*` (chat), `entity_*` (registry and ledger), `document_*`, `tag_*`, `knowledge_*` (the pool), `system_*`.
 
 ## Proposed changes
@@ -30,7 +30,6 @@ Ordered by value and risk. Each is its own migration, so each can ship and be ch
 
 | # | Change | Tables before → after | Risk |
 |---|---|---|---|
-| A | **Security:** take `knowledge_context`, `knowledge_chat_eval` and `agent_session` off the agent's queryable list | no table change | Low. The agent loses nothing it needs; its own session is already in its context |
 | B | **`knowledge_context` is the one record per model call:** keep the Phase 0 `step_kind` / `step`; fold `knowledge_chat_eval` into it as columns (`reply_kind`, `quality_status`, `reasoning_status`, `user_feedback`, `feedback_at`); clear `prompt` after the deployment's retention period, keeping the token rows. Chat history itself (`agent_message`, and the transcript documents in the knowledge pool) is not affected and is kept forever | 2 → 1 | Low–medium. The feedback route and evaluation queries move to the merged table |
 | C | **`system_state` key/value table** for single values: pool scale, schema signature, tag evidence fingerprint, tag upkeep settings | 4 → 1 | Low |
 | D | **`document_index`:** one row per document for everything derived from its content: embedding (vector, model, text hash, body size), when it's due for embedding, the hash its links were last synced from, its last tier judgment | 4 → 1 | Medium. Embedding search reads the vector here, so test search ranking before and after |
@@ -137,7 +136,7 @@ Table model_judgment {      // memoized model verdicts (H)
   - The same rule applies to every new threshold this work adds (masking window, caps, excerpt lengths): a `platform.lua` setting with a default, never a hard-coded value.
 - **Leftover SQLite store (K):** the prod server's `store.db` predates the switch to MySQL. daat never opens a SQLite file when `db_backend = "mariadb"`. A cleanup stage in the server startup script (`software/infra/gcp/lims/.../startup-platform.sh.tpl`) removes it, and any later stray copy, on every boot when the backend is MySQL. The script's comments that still describe `store.db` as live data get corrected in the same change.
 
-Suggested order: **A** now, as its own small fix; then **B** (merged with Phase 0, so `knowledge_context` changes once); then **C, E, G, I** (small, low risk, one branch); then **D** and **F, H** (more code touched); **J** and **K** whenever you decide.
+Suggested order: **B** (merged with Phase 0, so `knowledge_context` changes once); then **C, E, G, I** (small, low risk, one branch); then **D** and **F, H** (more code touched); **J** and **K** whenever you decide.
 
 ## Decisions for Ben
 
