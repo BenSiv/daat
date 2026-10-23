@@ -401,3 +401,98 @@ EOF
     [[ ! "$output" =~ 'href="account-password"' ]]
     [[ ! "$output" =~ "Log out</a>" ]]
 }
+
+# --- Session revocation, cookie and response-header hardening (doc/auth.md) ---
+
+session_from() {
+    printf '%s' "$1" | grep -o 'Set-Cookie: session=[^;]*' | head -1 | sed 's/Set-Cookie: session=//'
+}
+
+csrf_from() {
+    printf '%s' "$1" | grep -o 'Set-Cookie: csrf=[^;]*' | head -1 | sed 's/Set-Cookie: csrf=//'
+}
+
+@test "the session cookie lasts 7 days, and is Secure only when the request came over HTTPS" {
+    "$BIN" user add alice secret123 i
+    run raw_login alice secret123
+    [[ "$output" =~ "Set-Cookie: session=" ]]
+    [[ "$output" =~ "Max-Age=604800; HttpOnly" ]]
+    [[ ! "$output" =~ "Secure" ]]
+    [[ ! "$output" =~ "Strict-Transport-Security" ]]
+
+    output=$(printf 'login=alice&password=secret123' | HTTPS=on \
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/login" QUERY_STRING="" "$BIN")
+    [[ "$output" =~ "HttpOnly; Secure" ]]
+    [[ "$output" =~ "Strict-Transport-Security: max-age=31536000" ]]
+}
+
+@test "changing a password on /account ends other sessions but keeps this one" {
+    "$BIN" user add alice secret123 i
+    raw_a=$(raw_login alice secret123)
+    session_a=$(session_from "$raw_a"); csrf_a=$(csrf_from "$raw_a")
+    session_b=$(session_from "$(raw_login alice secret123)")
+
+    run raw_admin_action "/account" "session=${session_a}; csrf=${csrf_a}" \
+        "csrf_token=${csrf_a}&current_password=secret123&new_password=fresh4567"
+    [[ "$output" =~ "Password changed" ]]
+    new_session=$(session_from "$output")
+    [ -n "$new_session" ]
+
+    # The other browser's cookie no longer works ...
+    run raw_get "/" "" "session=${session_b}"
+    [[ "$output" =~ "Location: /login" ]]
+    # ... nor does this browser's old one ...
+    run raw_get "/" "" "session=${session_a}"
+    [[ "$output" =~ "Location: /login" ]]
+    # ... but the re-issued one does.
+    run raw_get "/" "" "session=${new_session}"
+    [[ "$output" =~ "200 OK" ]]
+}
+
+@test "an admin or CLI password reset ends the account's existing sessions" {
+    "$BIN" user add alice secret123 i
+    session=$(session_from "$(raw_login alice secret123)")
+    run raw_get "/" "" "session=${session}"
+    [[ "$output" =~ "200 OK" ]]
+    "$BIN" user passwd alice other4567
+    run raw_get "/" "" "session=${session}"
+    [[ "$output" =~ "Location: /login" ]]
+}
+
+@test "a session cookie for a differently-cased login is rejected" {
+    "$BIN" user add alice secret123 i
+    session=$(session_from "$(raw_login alice secret123)")
+    forged="ALICE${session#alice}"
+    run raw_get "/" "" "session=${forged}"
+    [[ "$output" =~ "Location: /login" ]]
+}
+
+@test "every response carries the CSP (with this request's nonce), frame and sniffing protections" {
+    run raw_get "/login"
+    [[ "$output" =~ "Content-Security-Policy: default-src 'self'; script-src 'self' 'nonce-" ]]
+    [[ "$output" =~ "frame-ancestors 'self'" ]]
+    [[ "$output" =~ "object-src 'none'" ]]
+    [[ "$output" =~ "X-Frame-Options: SAMEORIGIN" ]]
+    [[ "$output" =~ "X-Content-Type-Options: nosniff" ]]
+    [[ "$output" =~ "Referrer-Policy: same-origin" ]]
+
+    # The nonce in the header is the one the page's inline scripts carry.
+    nonce=$(printf '%s' "$output" | grep -o "'nonce-[0-9a-f]*'" | head -1 | sed "s/'nonce-//; s/'//")
+    [ -n "$nonce" ]
+    [[ "$output" =~ "<script nonce=\"${nonce}\">" ]]
+    # Only one CSP header, even on routes that set their own headers.
+    [ "$(printf '%s' "$output" | grep -c '^Content-Security-Policy:')" = "1" ]
+}
+
+@test "a route's own Referrer-Policy replaces the default instead of duplicating it" {
+    write_platform_config ', mail_provider = "test", mail_from = "noreply@example.com", public_url = "https://lims.example.com/"'
+    run raw_get "/reset-password"
+    [ "$(printf '%s' "$output" | grep -ci '^Referrer-Policy:')" = "1" ]
+    [[ "$output" =~ "Referrer-Policy: no-referrer" ]]
+}
+
+@test "an unknown login takes a bcrypt run too, and fails the same way" {
+    run raw_login nobody whatever
+    [[ "$output" =~ "401 Unauthorized" ]]
+    [[ "$output" =~ "Invalid login or password." ]]
+}

@@ -2,14 +2,18 @@
 -- AUTH_USER/AUTH_CAPABILITIES/AUTH_NONCE env-var stub.
 --
 -- Password storage: bcrypt (require("bcrypt"), luam/lib/bcrypt/bcrypt.c).
--- Session cookies: stateless, not server-side session rows -- the
--- cookie itself is "<login>.<expiry_unix>.<hmac_hex>", verified with
+-- Session cookies: no server-side session rows -- the cookie itself is
+-- "<login>.<expiry_unix>.<hmac_hex>", verified with
 -- require("hmac").sha256 keyed by a per-store secret generated once at
--- init (config.session_secret_path) and never transmitted. Capabilities
--- are deliberately NOT embedded in the cookie: they're looked up fresh
+-- init (config.session_secret_path) and never transmitted. The HMAC
+-- also covers the account's session_version, which lives only in the
+-- user row: bumping it (every password change does) voids every cookie
+-- issued before, without keeping a list of sessions. Capabilities are
+-- deliberately NOT embedded in the cookie: they're looked up fresh
 -- from the user table on every request, so a capability change or
 -- archive takes effect on the user's very next request rather than
--- only after their session cookie expires.
+-- only after their session cookie expires. See doc/auth.md for why
+-- each piece is built the way it is.
 -- CSRF: a separate, unsigned random token, double-submitted (cookie +
 -- request field/header must match) -- doesn't need HMAC signing since
 -- it's only ever compared to itself, not decoded or trusted alone.
@@ -27,6 +31,7 @@ auth = {}
 hex_encode = nil
 
 SESSION_TTL_SECONDS = 60 * 60 * 24 * 7 -- 7 days
+auth.SESSION_TTL_SECONDS = SESSION_TTL_SECONDS
 
 auth.SCHEMA = """
 -- VARCHAR(255), not TEXT -- MariaDB/InnoDB refuses a bare TEXT column
@@ -109,14 +114,20 @@ end
 -- address (find_reset_account), so a mistyped address never receives
 -- reset links.
 --
--- password_reset.purpose: "reset" (forgot-password) or "setup" (sent
--- when an account is created or its email is set -- choosing a password
--- through it is how the address gets verified). password_reset.email:
--- the address the link went to, so completing it verifies only that
--- address, not one set since.
+-- user.session_version: covered by every session cookie's signature
+-- (cookie_signature), and bumped by auth.set_password -- so changing a
+-- password, by any route, ends every session that existed before it.
+--
+-- password_reset.purpose: "reset" (forgot-password), "setup" (an
+-- account with no password yet chooses its first one -- that's also
+-- how its address gets verified) or "verify" (an account that already
+-- has a password confirms a new address by entering that password; it
+-- can't set one). password_reset.email: the address the link went to.
+-- A link only works while that is still the account's address.
 function ensure_auth_columns(db_path)
     add_column_if_missing(db_path, "user", "email", "VARCHAR(255) DEFAULT NULL")
     add_column_if_missing(db_path, "user", "email_verified_at", "INTEGER DEFAULT NULL")
+    add_column_if_missing(db_path, "user", "session_version", "INTEGER NOT NULL DEFAULT 0")
     add_column_if_missing(db_path, "password_reset", "purpose", "VARCHAR(16) NOT NULL DEFAULT 'reset'")
     add_column_if_missing(db_path, "password_reset", "email", "VARCHAR(255) DEFAULT NULL")
 end
@@ -265,16 +276,35 @@ function auth.list_users(db_path, include_archived)
     return rows
 end
 
+-- Also bumps session_version, which ends every existing session for
+-- the account: whoever changes a password (the user on /account, an
+-- admin, a reset link) wants the old one, and any session opened with
+-- it, to stop working. /account re-issues the caller's own cookie.
 function auth.set_password(db_path, login, password)
     user = auth.get_user(db_path, login)
     if user == nil then
         return nil, "no such user: " .. login
     end
+    if password == nil or password == "" then
+        return nil, "password is required"
+    end
     hash = bcrypt.hash(password, 12)
     db.exec(db_path, string.format(
-        "UPDATE user SET password_hash = %s WHERE login = %s;", db.quote(hash), db.quote(login)
+        "UPDATE user SET password_hash = %s, session_version = session_version + 1 WHERE login = %s;",
+        db.quote(hash), db.quote(login)
     ))
     return true
+end
+
+-- An invited account has no password until its setup link is used.
+-- Its password_hash holds this marker rather than a hash of some
+-- random string, so "has this account ever had a password?" is a
+-- fact the code can check (auth.has_password), not a guess. It can't
+-- match any password: bcrypt.verify rejects it as an invalid hash.
+NO_PASSWORD_HASH = "!no-password"
+
+function auth.has_password(user)
+    return user != nil and user.password_hash != nil and user.password_hash != NO_PASSWORD_HASH
 end
 
 -- Stored lowercased, and unique across accounts (checked here, not
@@ -282,7 +312,15 @@ end
 -- a migration), so the forgot-password form can accept an email and
 -- resolve it to exactly one account. "" clears it. A changed address
 -- starts unverified (email_verified_at NULL); setting the same address
--- again leaves its verification alone.
+-- again leaves its verification alone. A change or clear also voids
+-- every link already mailed for the account: fixing a mistyped address
+-- must cut off whoever received a link at the wrong one.
+function void_account_links(db_path, login)
+    db.exec(db_path, string.format(
+        "UPDATE password_reset SET used_at = %d WHERE login = %s AND used_at IS NULL;", os.time(), db.quote(login)
+    ))
+end
+
 function auth.set_email(db_path, login, email)
     user = auth.get_user(db_path, login)
     if user == nil then
@@ -290,6 +328,7 @@ function auth.set_email(db_path, login, email)
     end
     if email == nil or email == "" then
         db.exec(db_path, string.format("UPDATE user SET email = NULL, email_verified_at = NULL WHERE login = %s;", db.quote(login)))
+        void_account_links(db_path, login)
         return true
     end
     email = string.lower(email)
@@ -306,6 +345,7 @@ function auth.set_email(db_path, login, email)
     db.exec(db_path, string.format(
         "UPDATE user SET email = %s, email_verified_at = NULL WHERE login = %s;", db.quote(email), db.quote(login)
     ))
+    void_account_links(db_path, login)
     return true
 end
 
@@ -476,9 +516,15 @@ end
 --------------------------------------------------------------------------
 
 -- auth.login(db_path, login, password) -> cap_string | nil, err_string
+-- An unknown login still pays for one bcrypt run, so how long a failed
+-- login takes doesn't tell a caller whether the login exists.
 function auth.login(db_path, login, password)
+    if login == nil or password == nil then
+        return nil, "invalid login or password"
+    end
     user = auth.get_user(db_path, login)
-    if user == nil then
+    if user == nil or not auth.has_password(user) then
+        bcrypt.hash(password, 12)
         return nil, "invalid login or password"
     end
     if user.archived_at != nil and user.archived_at != "" then
@@ -490,23 +536,44 @@ function auth.login(db_path, login, password)
     return user.cap
 end
 
-function cookie_signature(secret, login, expiry)
-    return hmac.sha256(secret, login .. "." .. tostring(expiry))
+-- session_version is signed but not carried in the cookie: it's read
+-- from the user row at verify time, so a bumped version changes the
+-- expected signature and every older cookie stops matching.
+function cookie_signature(secret, login, expiry, session_version)
+    return hmac.sha256(secret, login .. "." .. tostring(expiry) .. "." .. tostring(session_version))
 end
 
--- auth.issue_session_cookie(root, login) -> cookie_value_string | nil, err
-function auth.issue_session_cookie(root, login)
+function user_session_version(user)
+    version = tonumber(user.session_version)
+    if version == nil then
+        return 0
+    end
+    return version
+end
+
+-- auth.issue_session_cookie(root, db_path, login) -> cookie_value_string | nil, err
+-- Signs the account's canonical login (as stored), not whatever spelling
+-- the caller typed -- MySQL's default collation matches logins
+-- case-insensitively.
+function auth.issue_session_cookie(root, db_path, login)
     secret, err = auth.session_secret(root)
     if secret == nil then
         return nil, err
     end
+    user = auth.get_user(db_path, login)
+    if user == nil then
+        return nil, "no such user: " .. tostring(login)
+    end
     expiry = os.time() + SESSION_TTL_SECONDS
-    sig = cookie_signature(secret, login, expiry)
-    return login .. "." .. tostring(expiry) .. "." .. sig
+    sig = cookie_signature(secret, user.login, expiry, user_session_version(user))
+    return user.login .. "." .. tostring(expiry) .. "." .. sig
 end
 
--- auth.verify_session_cookie(root, cookie_value) -> login_string | nil, err
-function auth.verify_session_cookie(root, cookie_value)
+-- auth.verify_session_cookie(root, db_path, cookie_value) -> user_row | nil, err
+-- Returns the account only if the signature, the expiry and the
+-- account's current session_version all check out and the account is
+-- active, so callers can't forget one of those checks.
+function auth.verify_session_cookie(root, db_path, cookie_value)
     if cookie_value == nil or cookie_value == "" then
         return nil, "no session cookie"
     end
@@ -524,11 +591,20 @@ function auth.verify_session_cookie(root, cookie_value)
         return nil, "expired session"
     end
 
-    expected_sig = cookie_signature(secret, login, expiry)
+    user = auth.get_user(db_path, login)
+    if user == nil or (user.archived_at != nil and user.archived_at != "") then
+        return nil, "no such active user"
+    end
+    -- Exact login, not the collation's case-insensitive match: the
+    -- signature covers the stored spelling.
+    if user.login != login then
+        return nil, "invalid session signature"
+    end
+    expected_sig = cookie_signature(secret, login, expiry, user_session_version(user))
     if not constant_time_equal(sig, expected_sig) then
         return nil, "invalid session signature"
     end
-    return login
+    return user
 end
 
 --------------------------------------------------------------------------
@@ -597,6 +673,10 @@ function default_cap(cap)
     return cap
 end
 
+function is_admin(user)
+    return string.find(default_cap(user.cap), "a", 1, true) != nil
+end
+
 function find_reset_account(db_path, identifier)
     if identifier == nil then
         return nil
@@ -617,7 +697,7 @@ function find_reset_account(db_path, identifier)
     if not auth.email_verified(user) then
         return nil
     end
-    if string.find(default_cap(user.cap), "a", 1, true) != nil then
+    if is_admin(user) then
         return nil
     end
     return user
@@ -642,7 +722,7 @@ function send_account_link(root, db_path, user, purpose, site_name)
     end
     now = os.time()
     ttl = RESET_TTL_SECONDS
-    if purpose == "setup" then
+    if purpose == "setup" or purpose == "verify" then
         ttl = SETUP_TTL_SECONDS
     end
     token_hash = reset_token_hash(secret, token)
@@ -668,7 +748,21 @@ function send_account_link(root, db_path, user, purpose, site_name)
         "The link works once. If you didn't ask for this, ignore this email -- your password stays the same.",
         "",
     }
-    if purpose == "setup" then
+    if purpose == "verify" then
+        link = base_url .. "/verify-email#token=" .. token
+        subject = "Confirm your email for " .. site_name
+        lines = {
+            "An administrator set this address as the email for the " .. site_name .. " account \"" .. user.login .. "\".",
+            "",
+            "To confirm it, open this link within the next 7 days and enter the account's current password:",
+            "",
+            link,
+            "",
+            "The link works once. Password reset emails will only be sent here once you've confirmed it.",
+            "If you weren't expecting this, ignore it -- nothing changes without the account's password.",
+            "",
+        }
+    elseif purpose == "setup" then
         subject = "Set up your " .. site_name .. " account"
         lines = {
             "An administrator set this address as the email for the " .. site_name .. " account \"" .. user.login .. "\".",
@@ -702,8 +796,14 @@ end
 
 -- auth.send_setup_link(root, db_path, login, site_name) -> true | nil, err
 -- Admin-triggered (account creation, setting an email), so no throttle.
--- Works for Admin accounts too: it's how any account's address is
--- verified -- Admins just never get the forgot-password kind.
+-- Which link goes out depends on the account, because the address is
+-- unverified and may be mistyped -- whoever reads it mustn't be able
+-- to take the account over:
+--   * no password yet (invited): a "setup" link that chooses one. Only
+--     for non-Admin accounts; Admins get a password from another Admin.
+--   * has a password: a "verify" link, which also asks for that
+--     password, so it proves the reader is the account's owner as well
+--     as the mailbox's. It can't change the password.
 function auth.send_setup_link(root, db_path, login, site_name)
     user = auth.get_user(db_path, login)
     if user == nil or (user.archived_at != nil and user.archived_at != "") then
@@ -711,6 +811,12 @@ function auth.send_setup_link(root, db_path, login, site_name)
     end
     if user.email == nil or user.email == "" then
         return nil, login .. " has no email on file"
+    end
+    if auth.has_password(user) then
+        return send_account_link(root, db_path, user, "verify", site_name)
+    end
+    if is_admin(user) then
+        return nil, login .. " is an Admin with no password -- set one on /admin-users instead of emailing a setup link"
     end
     return send_account_link(root, db_path, user, "setup", site_name)
 end
@@ -723,9 +829,17 @@ end
 -- email is required and checked before anything is created. If only
 -- the send fails, the account exists and the error says so --
 -- setting the email again resends the link.
+--
+-- Not for Admin accounts: a setup link is only as safe as the mailbox
+-- it lands in, and the address hasn't been verified yet. An Admin is
+-- created with a password (daat user add, or /admin-users without
+-- mail), or created without "a" and promoted once it has one.
 function auth.invite_user(root, db_path, login, email, cap, site_name)
     if email == nil or email == "" then
         return nil, "email is required"
+    end
+    if string.find(default_cap(cap), "a", 1, true) != nil then
+        return nil, "Admin accounts can't be set up by email -- invite without 'a', then grant it once the account has a password"
     end
     email = string.lower(email)
     if not mail_provider.valid_address(email) then
@@ -742,6 +856,9 @@ function auth.invite_user(root, db_path, login, email, cap, site_name)
     if ok == nil then
         return nil, err
     end
+    db.exec(db_path, string.format(
+        "UPDATE user SET password_hash = %s WHERE login = %s;", db.quote(NO_PASSWORD_HASH), db.quote(login)
+    ))
     auth.set_email(db_path, login, email)
     sent, send_err = auth.send_setup_link(root, db_path, login, site_name)
     if sent == nil then
@@ -778,11 +895,14 @@ function auth.request_password_reset(root, db_path, identifier, site_name)
     return true
 end
 
--- auth.check_password_reset(root, db_path, token) -> login, link | nil
--- Valid means: issued by this store, not yet used, not expired, and the
--- account is still active -- and, for a forgot-password link, not an
--- Admin. link is the password_reset row (purpose, email).
-function auth.check_password_reset(root, db_path, token)
+-- auth.check_account_link(root, db_path, token) -> login, link | nil
+-- Valid means: issued by this store, not yet used, not expired, the
+-- account is still active, and the address it was mailed to is still
+-- the account's address. A "reset" or "setup" link (both set a
+-- password) is also refused for an Admin -- checked again here, not
+-- only when the link was issued, so an account promoted after its link
+-- went out can't use it. link is the password_reset row (purpose, email).
+function check_account_link(root, db_path, token)
     if token == nil or string.match(token, "^%x+$") == nil or string.len(token) != 64 then
         return nil
     end
@@ -801,20 +921,55 @@ function auth.check_password_reset(root, db_path, token)
     if user == nil or (user.archived_at != nil and user.archived_at != "") then
         return nil
     end
-    -- Re-checked here, not only when the link was issued: an account
-    -- promoted to Admin after its link went out mustn't be able to use it.
-    if rows[1].purpose != "setup" and string.find(default_cap(user.cap), "a", 1, true) != nil then
+    -- Mailed to an address the account no longer has (or, for a row
+    -- from before addresses were recorded, to an unknown one): refused,
+    -- so correcting a mistyped address cuts off the wrong recipient
+    -- even if set_email's voiding were ever bypassed.
+    link = rows[1]
+    if link.email == nil or link.email == "" or link.email != user.email then
         return nil
     end
-    return user.login, rows[1]
+    if link.purpose != "verify" and is_admin(user) then
+        return nil
+    end
+    return user.login, link
+end
+
+-- auth.check_password_reset(root, db_path, token) -> login, link | nil
+-- A link that sets a password: "reset" or "setup", never "verify".
+function auth.check_password_reset(root, db_path, token)
+    login, link = check_account_link(root, db_path, token)
+    if login == nil or (link.purpose != "reset" and link.purpose != "setup") then
+        return nil
+    end
+    return login, link
+end
+
+-- auth.check_email_verification(root, db_path, token) -> login, link | nil
+function auth.check_email_verification(root, db_path, token)
+    login, link = check_account_link(root, db_path, token)
+    if login == nil or link.purpose != "verify" then
+        return nil
+    end
+    return login, link
+end
+
+-- Using any link voids every other outstanding link for the account,
+-- so an older email lying around can't be used afterwards, and marks
+-- the address the link went to as verified (check_account_link has
+-- already confirmed it's still the account's address).
+function finish_account_link(db_path, login, link)
+    void_account_links(db_path, login)
+    db.exec(db_path, string.format(
+        "UPDATE user SET email_verified_at = %d WHERE login = %s AND email = %s;",
+        os.time(), db.quote(login), db.quote(link.email)
+    ))
 end
 
 -- auth.complete_password_reset(root, db_path, token, new_password)
 --   -> login | nil, err
--- Using one link voids every other outstanding link for that account
--- too, so an older email lying around can't be used afterwards.
--- Existing sessions are NOT ended: session cookies are stateless (see
--- this file's header), the same limitation an admin reset has today.
+-- Setting the password also ends every existing session for the
+-- account (auth.set_password bumps session_version).
 function auth.complete_password_reset(root, db_path, token, new_password)
     login, link = auth.check_password_reset(root, db_path, token)
     if login == nil then
@@ -827,18 +982,24 @@ function auth.complete_password_reset(root, db_path, token, new_password)
     if ok == nil then
         return nil, err
     end
-    db.exec(db_path, string.format(
-        "UPDATE password_reset SET used_at = %d WHERE login = %s AND used_at IS NULL;", os.time(), db.quote(login)
-    ))
-    -- Opening a link that was mailed to the address still on file proves
-    -- the address works. A link sent before the email was changed proves
-    -- nothing about the new one.
-    if link.email != nil and link.email != "" then
-        db.exec(db_path, string.format(
-            "UPDATE user SET email_verified_at = %d WHERE login = %s AND email = %s;",
-            os.time(), db.quote(login), db.quote(link.email)
-        ))
+    finish_account_link(db_path, login, link)
+    return login
+end
+
+-- auth.complete_email_verification(root, db_path, token, password)
+--   -> login | nil, err
+-- The account's current password is required as well as the link:
+-- the link proves the mailbox, the password proves the account, and
+-- an address only becomes a reset destination with both.
+function auth.complete_email_verification(root, db_path, token, password)
+    login, link = auth.check_email_verification(root, db_path, token)
+    if login == nil then
+        return nil, "This confirmation link is invalid or has expired."
     end
+    if auth.login(db_path, login, password) == nil then
+        return nil, "That isn't this account's password."
+    end
+    finish_account_link(db_path, login, link)
     return login
 end
 
@@ -926,7 +1087,7 @@ function auth.do_user(cmd_args, db_path)
                 print("Error: setup link not sent: " .. tostring(send_err))
                 return
             end
-            print("Setup link sent to " .. user.email .. " -- the address is verified once it's used")
+            print("Link sent to " .. user.email .. " -- the address is verified once it's used")
         end
         return
     end
