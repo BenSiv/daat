@@ -90,6 +90,13 @@ function main()
         return
     end
 
+    -- Every command on an existing store brings its tables to the
+    -- current layout first (see store.lua's header); `init` does it
+    -- itself once the store exists.
+    if command != "init" and config.is_initialized(".") then
+        require("store").migrate(config.db_path("."))
+    end
+
     -- "agent" has no command_funcs entry of its own, so its
     -- subcommands are special-cased here,
     -- before the generic command_funcs lookup below, the same reason

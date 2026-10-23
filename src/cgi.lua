@@ -751,6 +751,8 @@ function cgi.handle_request()
         paths.create_dir_if_not_exists(config.templates_dir(root))
         paths.create_dir_if_not_exists(config.dropdowns_dir(root))
     end
+    -- Before any module creates its tables (see store.lua's header).
+    require("store").migrate(db_path)
     ledger.init_schema(db_path)
     schema.init_schema(db_path)
     auth.init_schema(db_path)

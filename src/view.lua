@@ -573,13 +573,13 @@ end
 -- by checking every table the query actually references against the
 -- registered entity type list, rejecting anything else (auth_user's
 -- password hashes, api_key secrets, agent_message/agent_pending_action,
--- schema_sync_state, or any other internal table entity.list/get
+-- system_state, or any other internal table entity.list/get
 -- could never expose either).
 
 -- The single source of truth for "this is a real, hand-rolled table the
 -- model is allowed to know exists and name" -- deliberately narrow, not
 -- "every hand-rolled table" (agent_message/agent_pending_action/
--- agent_background_task, schema_sync_state, auth_user/api_key with real
+-- agent_background_task, system_state, auth_user/api_key with real
 -- secrets, ...). Whether a table belongs here is a real per-table
 -- security judgment call, not a mechanical copy-paste -- the comment
 -- above run_agent_query names agent_message/agent_pending_action

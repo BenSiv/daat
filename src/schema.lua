@@ -88,14 +88,6 @@ CREATE TABLE IF NOT EXISTS dropdown_value (
     FOREIGN KEY (list_name) REFERENCES dropdown_list(name)
 );
 
--- Single-row table recording a cheap signature of the schemas/
--- dropdowns directories' content as of the last real schema.sync_all
--- pass -- see schema.content_signature's own comment for why this
--- exists at all.
-CREATE TABLE IF NOT EXISTS schema_sync_state (
-    id INTEGER PRIMARY KEY,
-    content_signature TEXT
-);
 """
 
 function schema.init_schema(db_path)
@@ -1007,19 +999,15 @@ function schema.definition_path(db_path, name, root)
     return nil
 end
 
+-- A cheap signature of the schemas/dropdowns directories' content as
+-- of the last real schema.sync_all pass (see schema.content_signature
+-- for why it exists), kept in system_state.
 function schema.stored_sync_signature(db_path)
-    rows = db.query(db_path, "SELECT content_signature FROM schema_sync_state WHERE id = 1;")
-    if rows == nil or rows[1] == nil then
-        return nil
-    end
-    return rows[1].content_signature
+    return require("store").get_text(db_path, "schema.sync_signature")
 end
 
 function schema.store_sync_signature(db_path, signature)
-    db.exec(db_path, string.format(
-        "%s schema_sync_state (id, content_signature) VALUES (1, %s);",
-        db.replace_into(db_path), db.quote(signature)
-    ))
+    require("store").set_text(db_path, "schema.sync_signature", signature)
 end
 
 -- Scans the schemas directory, registers any schema files found,
