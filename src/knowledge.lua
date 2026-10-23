@@ -195,10 +195,45 @@ function ensure_link_review_reason_column(db_path)
     end
 end
 
+-- knowledge_context.step_kind / step: which loop made the call ("chat",
+-- "research", "background", "compaction", "wrapup", "self_check") and,
+-- for loop steps, its number within the turn -- so usage can be read
+-- per loop and per turn (doc/context-management-plan.md, Phase 0).
+-- NULL on rows from before they existed. Every request runs
+-- init_schema, so concurrent first requests after an upgrade can race
+-- to add a column (real MySQL 8 then raises "Duplicate column name" for
+-- the losers, see auth.lua's add_column_if_missing); a failed ALTER is
+-- only an error if the column still doesn't exist afterwards.
+function ensure_context_step_columns(db_path)
+    for _, column in ipairs({{"step_kind", "VARCHAR(32) DEFAULT NULL"}, {"step", "INTEGER DEFAULT NULL"}}) do
+        have = false
+        for _, name in ipairs(db.get_columns(db_path, "knowledge_context")) do
+            if name == column[1] then
+                have = true
+            end
+        end
+        if not have then
+            ok, err = pcall(db.exec, db_path, "ALTER TABLE knowledge_context ADD COLUMN " .. column[1] .. " " .. column[2] .. ";")
+            if ok == false then
+                still_missing = true
+                for _, name in ipairs(db.get_columns(db_path, "knowledge_context")) do
+                    if name == column[1] then
+                        still_missing = false
+                    end
+                end
+                if still_missing then
+                    error(err)
+                end
+            end
+        end
+    end
+end
+
 function knowledge.init_schema(db_path)
     db.exec(db_path, knowledge_schema_sql(db_path))
     ensure_knowledge_indexes(db_path)
     ensure_link_review_reason_column(db_path)
+    ensure_context_step_columns(db_path)
 end
 
 -- Same treatment as document.lua's KNOWLEDGE_POOL_SQL_COLUMNS: these are
@@ -244,6 +279,8 @@ HAND_ROLLED_TABLE_COLUMNS = {
         {name = "prompt_tokens", note = "real token count for the prompt"},
         {name = "completion_tokens", note = "real token count for the completion"},
         {name = "total_tokens", note = "prompt_tokens + completion_tokens"},
+        {name = "step_kind", note = "which loop made the call: 'chat', 'research', 'background', 'compaction', 'wrapup', 'self_check' (NULL on older rows)"},
+        {name = "step", note = "the call's step number within its turn, for loop steps (NULL otherwise)"},
         {name = "created_at", note = "timestamp of the turn"},
     },
     knowledge_chat_eval = {
@@ -626,16 +663,20 @@ end
 -- counts from Vertex, estimated-but-present under the test provider) --
 -- every field is nil-safe since a provider without usage metadata at
 -- all shouldn't fail this call over accounting.
-function knowledge.record_context(db_path, session_id, message_id, prompt, model_id, reasoning_document_id, usage)
+-- `step` is optional: {kind = "chat"|"research"|..., number = N}.
+function knowledge.record_context(db_path, session_id, message_id, prompt, model_id, reasoning_document_id, usage, step)
     if usage == nil then
         usage = {}
     end
+    if step == nil then
+        step = {}
+    end
     _, context_id = db.exec(db_path, string.format(
-        "INSERT INTO knowledge_context (session_id, message_id, prompt, model_id, reasoning_document_id, prompt_tokens, completion_tokens, total_tokens) " ..
-        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s);",
+        "INSERT INTO knowledge_context (session_id, message_id, prompt, model_id, reasoning_document_id, prompt_tokens, completion_tokens, total_tokens, step_kind, step) " ..
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s);",
         db.quote(session_id), db.literal(tonumber(message_id)), db.quote(prompt), db.quote(model_id),
         db.literal(tonumber(reasoning_document_id)), db.literal(usage.prompt_tokens), db.literal(usage.completion_tokens),
-        db.literal(usage.total_tokens)
+        db.literal(usage.total_tokens), db.literal(step.kind), db.literal(tonumber(step.number))
     ))
     return context_id
 end

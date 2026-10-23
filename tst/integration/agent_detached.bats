@@ -124,6 +124,8 @@ wait_idle() {
     run raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${sid}\",\"message\":\"hi\"}" "$COOKIE" "$CSRF" "$scripted"
     [[ "$(json_body "$output" | jq -r '.messages[-1].content')" =~ "Recovered." ]]
     [ "$(store "SELECT COUNT(*) FROM agent_message WHERE session_id = '${sid}' AND role = 'error';")" = "0" ]
+    # Both attempts were real calls, so both are recorded for step 1.
+    [ "$(store "SELECT COUNT(*) FROM knowledge_context WHERE session_id = '${sid}' AND step_kind = 'chat' AND step = 1;")" = "2" ]
 }
 
 @test "agent continue with no session id prints its usage" {

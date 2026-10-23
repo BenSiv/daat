@@ -25,6 +25,7 @@ db = require("database")
 config = require("config")
 agent = require("agent")
 agent_tools = require("agent_tools")
+context_report = require("context_report")
 
 checks = dofile(string.match(arg[0], "^(.*)/[^/]*$") .. "/checks.lua")
 
@@ -113,6 +114,10 @@ if wanted_set != nil and wanted_set != "all" and wanted_set != scenario.set then
 end
 
 db_path = config.db_path(".")
+-- The demo-lab copy is cached across code changes (bld/eval-env.sh), so
+-- bring its tables up to date the way a web request would.
+knowledge = require("knowledge")
+knowledge.init_schema(db_path)
 login = facts.user
 model = agent.default_model()
 started = os.time()
@@ -204,8 +209,20 @@ io.write(file, table.concat(lines, "\n"))
 io.close(file)
 
 usage = db.query(db_path, string.format(
-    "SELECT COALESCE(SUM(total_tokens), 0) AS tokens, COUNT(*) AS calls FROM knowledge_context WHERE session_id = %s;",
+    "SELECT COALESCE(SUM(total_tokens), 0) AS tokens, COUNT(*) AS calls, COALESCE(MAX(prompt_tokens), 0) AS peak FROM knowledge_context WHERE session_id = %s;",
     db.quote(session_id)))[1]
+
+-- Context cost beyond total tokens (doc/context-management-plan.md,
+-- Phase 0): re-fetches of an identical call, and compactions.
+repeat_rows = {}
+compactions = 0
+for _, row in ipairs(message_rows) do
+    table.insert(repeat_rows, {session_id = session_id, role = row.role, content = row.content})
+    if row.role == "compaction_summary" then
+        compactions = compactions + 1
+    end
+end
+_, exact_repeats = context_report.count_exact_repeats(repeat_rows)
 
 print(json.encode({
     scenario = scenario.name,
@@ -220,6 +237,9 @@ print(json.encode({
     final_text = conv.final_text,
     tokens = tonumber(usage.tokens),
     model_calls = tonumber(usage.calls),
+    peak_prompt_tokens = tonumber(usage.peak),
+    exact_repeat_calls = exact_repeats,
+    compactions = compactions,
     seconds = os.time() - started,
     session_id = session_id,
 }))

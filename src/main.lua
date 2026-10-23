@@ -90,8 +90,8 @@ function main()
         return
     end
 
-    -- "agent" has no command_funcs entry of its own -- no other CLI
-    -- subcommands live under it yet -- so it's special-cased here,
+    -- "agent" has no command_funcs entry of its own, so its
+    -- subcommands are special-cased here,
     -- before the generic command_funcs lookup below, the same reason
     -- "knowledge distill" further down is dispatched outside of
     -- knowledge.do_knowledge instead of through it: see the
@@ -104,8 +104,35 @@ function main()
             return
         end
         db_path = config.db_path(".")
+        -- This can run before any web request after a deploy (it's on a
+        -- timer), so it brings the tables it writes up to date itself
+        -- rather than relying on cgi.handle_request having done it.
+        knowledge.init_schema(db_path)
         result = agent.run_pending_background_tasks(db_path, agent.default_model())
         print(string.format("Ran %d, failed %d", result.ran, result.failed))
+        return
+    end
+
+    -- Read-only usage report: how big the agent's context gets and what
+    -- fills it (src/context_report.lua, doc/context-management-plan.md).
+    if command == "agent" and arg[2] == "context-report" then
+        if config.is_initialized(".") == false then
+            print("Not initialized. Run 'daat init' first.")
+            return
+        end
+        since = nil
+        if arg[3] == "--since" then
+            since = arg[4]
+            if since == nil or string.match(since, "^%d%d%d%d%-%d%d%-%d%d$") == nil then
+                print("Usage: daat agent context-report [--since YYYY-MM-DD]")
+                return
+            end
+        elseif arg[3] != nil then
+            print("Usage: daat agent context-report [--since YYYY-MM-DD]")
+            return
+        end
+        context_report = require("context_report")
+        print(context_report.build(config.db_path("."), since))
         return
     end
 
@@ -121,6 +148,7 @@ function main()
             return
         end
         db_path = config.db_path(".")
+        knowledge.init_schema(db_path)
         result, err = agent.continue_turn(db_path, arg[3], agent.default_model())
         if result == nil then
             print("Error: " .. tostring(err))

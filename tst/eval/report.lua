@@ -106,7 +106,23 @@ end
 lookups = 0
 tokens = 0
 passed_runs = 0
+passed_tokens = 0
+peak_sum = 0
+repeats = 0
+compactions = 0
 for _, run in ipairs(runs) do
+    if tonumber(run.peak_prompt_tokens) != nil then
+        peak_sum = peak_sum + tonumber(run.peak_prompt_tokens)
+    end
+    if tonumber(run.exact_repeat_calls) != nil then
+        repeats = repeats + tonumber(run.exact_repeat_calls)
+    end
+    if tonumber(run.compactions) != nil then
+        compactions = compactions + tonumber(run.compactions)
+    end
+    if run.pass == true and tonumber(run.tokens) != nil then
+        passed_tokens = passed_tokens + tonumber(run.tokens)
+    end
     c = check_of(run, "no_failed_lookup")
     if c != nil and c.count != nil then
         lookups = lookups + c.count
@@ -132,11 +148,23 @@ summary = {
     consistency = nil,
     failed_lookups_per_run = nil,
     tokens_per_run = nil,
+    tokens_per_passed_run = nil,
+    peak_prompt_tokens = nil,
+    repeat_calls_per_run = nil,
+    compactions_per_run = nil,
 }
 if #runs > 0 then
     summary.all_checks_passed = passed_runs / #runs
     summary.failed_lookups_per_run = lookups / #runs
     summary.tokens_per_run = tokens / #runs
+    summary.peak_prompt_tokens = peak_sum / #runs
+    summary.repeat_calls_per_run = repeats / #runs
+    summary.compactions_per_run = compactions / #runs
+end
+-- Tokens per completed task: what a correct answer costs, so a change
+-- that saves tokens by failing more doesn't look like a win.
+if passed_runs > 0 then
+    summary.tokens_per_passed_run = passed_tokens / passed_runs
 end
 if repeated > 0 then
     summary.consistency = consistent / repeated
@@ -162,6 +190,10 @@ SCORES = {
     {"consistency", "Consistency across repeats", "pct"},
     {"failed_lookups_per_run", "Failed lookups per run", "num"},
     {"tokens_per_run", "Tokens per run", "int"},
+    {"tokens_per_passed_run", "Tokens per passed run", "int"},
+    {"peak_prompt_tokens", "Peak prompt tokens (avg per run)", "int"},
+    {"repeat_calls_per_run", "Exact repeat calls per run", "num"},
+    {"compactions_per_run", "Compactions per run", "num"},
 }
 
 function fmt(value, kind)
