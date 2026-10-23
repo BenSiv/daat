@@ -863,7 +863,7 @@ function agent.compact_if_needed(db_path, session_id, system_prompt, model)
     -- not a knowledge_chat_eval candidate, since that table classifies
     -- conversational *replies* the user actually sees, and a
     -- compaction summary is never shown as one.
-    knowledge.record_context(db_path, session_id, summary_message_id, summary_prompt, model, nil, usage)
+    knowledge.record_context(db_path, session_id, summary_message_id, summary_prompt, model, nil, usage, {kind = "compaction"})
 
     ids = {}
     for _, msg in ipairs(to_compact) do
@@ -1263,7 +1263,7 @@ function run_turn_wrapup(db_path, session_id, login, system_prompt, model, promp
     else
         message_id = agent.add_message(db_path, session_id, "assistant", json.encode({blocks = {{type = "text", text = message_text}}}), true)
     end
-    context_id = knowledge.record_context(db_path, session_id, message_id, wrapup_audit_prompt, model, nil, wrapup_usage)
+    context_id = knowledge.record_context(db_path, session_id, message_id, wrapup_audit_prompt, model, nil, wrapup_usage, {kind = "wrapup"})
     knowledge.record_chat_eval(db_path, session_id, context_id, message_id, agent_provider.name(), model, false, message_text)
     return message_text
 end
@@ -1322,19 +1322,16 @@ function run_self_check(db_path, session_id, system_prompt, model, active_messag
     trimmed = string.gsub(answer_text, "^%s+", "")
 
     if string.find(string.lower(trimmed), "^confirm") != nil then
-        -- Deliberately not audited via knowledge.record_context here --
-        -- a confirm produces no new message and changes nothing, so
-        -- there's no real event for an audit row to attach to; adding
-        -- one anyway would shift "the most recent context row" away
-        -- from the actual reply for any other code (or human) that
-        -- reasonably assumes that row explains the latest real turn.
-        -- A self-check that actually finds something to say (below)
-        -- creates a real message, and gets a real audit row tied to it.
+        -- A confirm produces no new message, so its audit row has no
+        -- message_id -- but it was a real model call and its tokens
+        -- count toward the turn's cost (doc/context-management-plan.md,
+        -- Phase 0). step_kind tells it apart from the reply it checked.
+        knowledge.record_context(db_path, session_id, nil, audit_prompt, model, nil, usage, {kind = "self_check"})
         return true
     end
 
     message_id = agent.add_message(db_path, session_id, "self_check", critique_text, true)
-    knowledge.record_context(db_path, session_id, message_id, audit_prompt, model, nil, usage)
+    knowledge.record_context(db_path, session_id, message_id, audit_prompt, model, nil, usage, {kind = "self_check"})
     return false
 end
 
@@ -1380,10 +1377,15 @@ that plainly along with what you tried, rather than guessing.
 -- reuses this same loop with a looser, separately-configurable
 -- agent_background_max_turns budget instead, since it isn't bound to
 -- one HTTP request's lifetime the way an inline tool call is.
-function agent.run_research_loop(db_path, author, session_id, model, question, max_turns)
+-- `step_kind` ("research" by default, "background" for a background
+-- task) labels each step's knowledge_context row.
+function agent.run_research_loop(db_path, author, session_id, model, question, max_turns, step_kind)
     agent_tools = require("agent_tools")
     if max_turns == nil then
         max_turns = config.platform_config().agent_research_max_turns
+    end
+    if step_kind == nil then
+        step_kind = "research"
     end
     messages = {{role = "user", content = question}}
     tools = agent_tools.research_tool_declarations(db_path)
@@ -1407,7 +1409,12 @@ function agent.run_research_loop(db_path, author, session_id, model, question, m
         -- celleste-lims, "summarize the latest R&D meetings"). A no-op
         -- for a background task, whose session isn't marked running.
         agent.turn_heartbeat(db_path, session_id)
+        research_prompt = json.encode(messages)
         response, err, usage = agent_provider.converse(model, RESEARCH_SYSTEM_PROMPT, messages, tools)
+        -- Every real model call is persisted (doc/architecture.md, "Full
+        -- prompt/reasoning/token persistence"), sub-agent steps too. No
+        -- message_id: a research step's messages live only in this loop.
+        knowledge.record_context(db_path, session_id, nil, research_prompt, model, nil, usage, {kind = step_kind, number = turn})
         if response == nil then
             if last_real_text != nil then
                 return "(research stopped early: " .. tostring(err) .. ") " .. last_real_text
@@ -1728,7 +1735,7 @@ function agent.run_pending_background_tasks(db_path, model, limit)
             failed = failed + 1
         else
             finding, err = agent.run_research_loop(db_path, login, task.session_id, model, task.question,
-                config.platform_config().agent_background_max_turns)
+                config.platform_config().agent_background_max_turns, "background")
             if finding == nil then
                 agent.mark_background_task_failed(db_path, task, tostring(err))
                 failed = failed + 1
@@ -1823,6 +1830,9 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
                 return {status = "stopped", message = stop_message}
             end
 
+            -- Counts on across automatic continuations, so a turn's
+            -- steps number 1..N however many budgets it used.
+            step_number = continuations * max_turns + turn
             active = agent.active_messages(db_path, session_id)
             history_messages = build_history_messages(active)
             audit_prompt = json.encode(history_messages)
@@ -1835,6 +1845,9 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
             if response != nil and response.stopReason == "error" and malformed_retried == false
                     and string.find(tostring(response.errorMessage), "MALFORMED_FUNCTION_CALL", 1, true) != nil then
                 malformed_retried = true
+                -- The failed attempt was a real, billed call: record it
+                -- before its usage is replaced by the retry's.
+                knowledge.record_context(db_path, session_id, nil, audit_prompt, model, nil, usage, {kind = "chat", number = step_number})
                 response, err, usage = agent_provider.converse(model, system_prompt, history_messages, agent.tool_declarations(db_path))
             end
             if response == nil then
@@ -1856,7 +1869,7 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
                 -- Still recorded even on failure -- what was actually sent
                 -- is exactly as much an audit fact as what came back, and
                 -- usage/reasoning simply don't apply here.
-                context_id = knowledge.record_context(db_path, session_id, error_message_id, audit_prompt, model, nil, nil)
+                context_id = knowledge.record_context(db_path, session_id, error_message_id, audit_prompt, model, nil, nil, {kind = "chat", number = step_number})
                 knowledge.record_chat_eval(db_path, session_id, context_id, error_message_id, agent_provider.name(), model, true, nil)
                 return {status = "error", message = tostring(err)}
             end
@@ -1878,7 +1891,7 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
                 -- role = "error" -- see the connectivity-failure branch
                 -- above for why this must not be "tool_result".
                 error_message_id = agent.add_message(db_path, session_id, "error", "ERROR: " .. tostring(error_message), true)
-                context_id = knowledge.record_context(db_path, session_id, error_message_id, audit_prompt, model, nil, usage)
+                context_id = knowledge.record_context(db_path, session_id, error_message_id, audit_prompt, model, nil, usage, {kind = "chat", number = step_number})
                 knowledge.record_chat_eval(db_path, session_id, context_id, error_message_id, agent_provider.name(), model, true, nil)
                 return {status = "error", message = tostring(error_message)}
             end
@@ -1915,7 +1928,7 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
                     "Chat reasoning (session " .. tostring(session_id) .. ")", display_text,
                     "reasoning", message_id, tostring(session_id))
             end
-            context_id = knowledge.record_context(db_path, session_id, message_id, audit_prompt, model, reasoning_document_id, usage)
+            context_id = knowledge.record_context(db_path, session_id, message_id, audit_prompt, model, reasoning_document_id, usage, {kind = "chat", number = step_number})
             knowledge.record_chat_eval(db_path, session_id, context_id, message_id, agent_provider.name(), model, false, display_text)
 
             tool_calls = all_tool_calls(content_blocks)

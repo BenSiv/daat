@@ -134,9 +134,9 @@ Gaps:
 
 ## Prod baseline (2026-10-23)
 
-Measured read-only on prod (`platform_readonly`, SELECT-only): 57 sessions from 6 logins, of which 35 sessions were admin testing, and 1,398 recorded model calls on `gemini-3.5-flash-lite` between 09-03 and 10-22. Aggregates only; no content was read.
+Measured read-only on prod (`platform_readonly`, SELECT-only); `daat agent context-report` reproduces these tables: 57 sessions from 6 logins, of which 35 sessions were admin testing, and 1,398 recorded model calls on `gemini-3.5-flash-lite` between 09-03 and 10-22. Aggregates only; no content was read.
 
-**How big context gets.** `knowledge_context` records a turn's final call (the largest step of the turn), compaction, wrap-ups and errors. It does not record intermediate tool-calling steps.
+**How big context gets.** `knowledge_context` records every chat model call: each step of a turn, compaction, wrap-ups, self-checks and errors. The research sub-agent's and background tasks' steps are not recorded, and rows don't say which kind of call they were.
 
 | | Calls | Avg prompt tokens | Max | Over 20k | Over 32k |
 |---|---|---|---|---|---|
@@ -170,13 +170,13 @@ A staff turn averages 6 tool results totalling about 11k characters (max 11 resu
 
 **Compaction fires often and repeatedly.** 26 sessions were compacted, 20 of them more than once, one 20 times.
 
-**The size estimate is off.** Prompt tokens are about 5k of fixed overhead (system prompt and tool definitions, which the characters ÷ 4 estimate never counts) plus roughly 1 token per 3.3 characters of history, not per 4.
+**The size estimate is off.** A least-squares fit over 1,397 chat calls gives about 3,900 tokens of fixed overhead plus 1 token per 2.8 characters of history. The characters ÷ 4 estimate counts the system prompt but not the tool definitions, and it assumes 4 characters per token, so it undercounts a 100k-character history by roughly a third.
 
 What this changes:
 - **The cheapest, clearest win is not losing what's already known.** Over half the schema lookups are re-fetches. That points to keeping confirmed schema (and other small, stable facts) through compaction and masking, rather than to shrinking context further.
 - **Size caps matter for a few tools, not across the board.** `knowledge.list` is the worst offender every time, then the long tail of `entity.query` and `entity.get` on documents. `document.search` is consistently ~6k characters and called often, so a more concise result shape there saves the most in total.
 - **Masking is less urgent for staff chat than expected,** at 6 tool results per turn on average. It matters more for the long loops: admin research turns (up to 36 results), `research.investigate`, background tasks and curation. That is where to test it.
-- **Measurement gap:** intermediate steps aren't logged, so the peak of a turn that dies mid-way is invisible. Record usage for every step (one row per model call, or at least the prompt token count) before A/B testing masking.
+- **Measurement gap:** `research.investigate` and background steps aren't logged at all (despite the rule in `doc/architecture.md` that every real model call is), and chat rows carry no step kind or step number, so per-turn and per-loop numbers need guesswork. Fix both before A/B testing masking.
 
 ## Recommendation
 

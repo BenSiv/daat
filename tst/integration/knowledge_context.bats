@@ -83,7 +83,9 @@ send_message() {
     run sqlite3 .store/store.db "SELECT reply_kind, reasoning_status FROM knowledge_chat_eval ORDER BY id DESC LIMIT 1;"
     [[ "$output" =~ "reasoning-visible|visible" ]]
 
-    run sqlite3 .store/store.db "SELECT context.reasoning_document_id FROM knowledge_context context ORDER BY context.id DESC LIMIT 1;"
+    # The reply's own row (step_kind 'chat') -- a later self-check row is
+    # its own model call and carries no reasoning link.
+    run sqlite3 .store/store.db "SELECT context.reasoning_document_id FROM knowledge_context context WHERE context.step_kind = 'chat' ORDER BY context.id DESC LIMIT 1;"
     [[ "$output" != "" ]]
 
     # Lands under the Knowledge Pool folder, not at the top level.
@@ -242,4 +244,72 @@ EOF
     [[ "$output" =~ "b.disabled = true" ]]
     [[ "$output" =~ "showFeedbackError" ]]
     [[ "$output" =~ "Couldn\\'t record feedback." ]]
+}
+
+# --- Per-step usage logging and the context report (doc/context-management-plan.md, Phase 0) ---
+
+@test "every step of a chat turn is recorded with step_kind 'chat' and its step number" {
+    read session csrf < <(session_for admin secret123)
+    chat_session=$(start_chat "$session" "$csrf" "Steps")
+    scripted="$(tool_call_response "entity.list_types" "{}")"$'\1'"$(done_response "There are some types.")"
+    send_message "$session" "$csrf" "$chat_session" "what types exist" "$scripted" > /dev/null
+
+    run sqlite3 .store/store.db "SELECT step_kind || ':' || COALESCE(step, '') FROM knowledge_context WHERE session_id = '${chat_session}' ORDER BY id;"
+    [[ "$output" =~ "chat:1" ]]
+    [[ "$output" =~ "chat:2" ]]
+    # The answer's self-check is a real model call too, so it's recorded,
+    # tagged apart from the reply.
+    [[ "$output" =~ "self_check:" ]]
+}
+
+@test "research.investigate's own steps are recorded, tagged 'research', with no message" {
+    read session csrf < <(session_for admin secret123)
+    chat_session=$(start_chat "$session" "$csrf" "Research")
+    scripted="$(tool_call_response "research.investigate" '{"question":"what types exist"}')"$'\1'"$(tool_call_response "entity.list_types" "{}")"$'\1'"$(done_response "Found the types.")"$'\1'"$(done_response "Here are the types.")"
+    send_message "$session" "$csrf" "$chat_session" "look into the types" "$scripted" > /dev/null
+
+    run sqlite3 .store/store.db "SELECT step || ':' || COALESCE(message_id, 'none') || ':' || (prompt IS NOT NULL) FROM knowledge_context WHERE session_id = '${chat_session}' AND step_kind = 'research' ORDER BY id;"
+    [ "${lines[0]}" = "1:none:1" ]
+    [ "${lines[1]}" = "2:none:1" ]
+}
+
+@test "the step columns are added to a knowledge_context table created before they existed" {
+    sqlite3 .store/store.db "CREATE TABLE kc_old AS SELECT id, session_id, message_id, prompt, model_id, reasoning_document_id, prompt_tokens, completion_tokens, total_tokens, created_at FROM knowledge_context; DROP TABLE knowledge_context; ALTER TABLE kc_old RENAME TO knowledge_context;"
+    run sqlite3 .store/store.db "SELECT COUNT(*) FROM pragma_table_info('knowledge_context') WHERE name IN ('step_kind', 'step');"
+    [ "$output" = "0" ]
+    # The read-only report works on a store from before the columns
+    # existed (production is read this way before an upgrade).
+    run "$BIN" agent context-report
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "## Model calls" ]]
+    run raw_get "/login"
+    run sqlite3 .store/store.db "SELECT COUNT(*) FROM pragma_table_info('knowledge_context') WHERE name IN ('step_kind', 'step');"
+    [ "$output" = "2" ]
+}
+
+@test "agent context-report summarizes calls, tool results, exact repeats and compaction" {
+    read session csrf < <(session_for admin secret123)
+    chat_session=$(start_chat "$session" "$csrf" "Report")
+    scripted="$(tool_call_response "entity.list_types" "{}")"$'\1'"$(tool_call_response "entity.list_types" "{}")"$'\1'"$(done_response "Types listed twice.")"
+    send_message "$session" "$csrf" "$chat_session" "list the types" "$scripted" > /dev/null
+
+    run "$BIN" agent context-report
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "## Model calls" ]]
+    [[ "$output" =~ "chat / admin accounts" ]]
+    [[ "$output" =~ "## Chat turns" ]]
+    [[ "$output" =~ "## Tool results" ]]
+    [[ "$output" =~ "entity.list_types" ]]
+    [[ "$output" =~ "## Exact repeat calls" ]]
+    [[ "$output" =~ "1 of 2 tool calls repeat an earlier one." ]]
+    [[ "$output" =~ "## Compaction" ]]
+}
+
+@test "agent context-report --since filters by date and rejects a malformed one" {
+    run "$BIN" agent context-report --since 2999-01-01
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "Since 2999-01-01." ]]
+    [[ "$output" =~ "0 of 0 tool calls" ]]
+    run "$BIN" agent context-report --since yesterday
+    [[ "$output" =~ "Usage: daat agent context-report" ]]
 }
