@@ -16,37 +16,10 @@ json = require("dkjson")
 
 context_report = {}
 
--- Tool calls whose same-arguments repeat within a session is counted
--- as a re-fetch. Arguments are compared as canonical JSON (keys
--- sorted), since a Lua table's own key order isn't stable.
-canonical_json = nil
-
-function canonical_json(value)
-    if type(value) != "table" then
-        encoded = json.encode(value)
-        if encoded == nil then
-            return "null"
-        end
-        return encoded
-    end
-    if #value > 0 then
-        parts = {}
-        for _, item in ipairs(value) do
-            table.insert(parts, canonical_json(item))
-        end
-        return "[" .. table.concat(parts, ",") .. "]"
-    end
-    keys = {}
-    for k, _ in pairs(value) do
-        table.insert(keys, tostring(k))
-    end
-    table.sort(keys)
-    parts = {}
-    for _, k in ipairs(keys) do
-        table.insert(parts, json.encode(k) .. ":" .. canonical_json(value[k]))
-    end
-    return "{" .. table.concat(parts, ",") .. "}"
-end
+-- Arguments compared as canonical JSON (keys sorted), since a Lua
+-- table's own key order isn't stable -- the same function the agent's
+-- own repeat check uses (agent.canonical_json).
+canonical_json = require("agent").canonical_json
 
 -- The tool calls in one stored assistant message: {{name, args_key}, ...}.
 function assistant_tool_calls(content)

@@ -62,7 +62,13 @@ A new shaping step, `agent.shape_context(messages, policy)`, runs on the canonic
 - A repeat after a write tool reruns.
 - A repeat after compaction reruns unless the result is pinned.
 
-**Measure:** exact-repeat rate (prod and scorecard) should fall from 53% toward the share that is legitimate (after writes); correctness unchanged or better; fewer schema-guess errors.
+**Status:** built (`feature/context-keep-known`).
+- `agent.find_repeat` / `REPEAT_SAFE_TOOLS` and `pinned_schema_block` in `src/agent.lua`, settings `agent_dedupe_repeat_calls`, `agent_pin_schema`, `agent_pinned_schema_chars`.
+- Both loops pass their current message list to `agent.run_tool`.
+- A destructive call anywhere after the earlier one counts as a write, even if it was only proposed or denied, which errs on the side of running again.
+- The pinned block is skipped when a previous summary is re-summarized, and carried by code instead.
+
+**Measure:** the model may still *make* repeat calls (the context report counts calls), but a repeat now costs a one-line note instead of a second copy. What should fall is re-fetches after compaction, and with them tokens per task and schema-guess errors; correctness should stay the same or improve.
 
 ## Phase 2: concise defaults and size caps
 

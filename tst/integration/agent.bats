@@ -579,12 +579,12 @@ SELECT * FROM task
     resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
     session_id=$(extract_query_param "$resp" "session_id")
 
-    scripted="$(tool_call_response "entity.fields" '{"entity_type":"entity_event"}')"
+    scripted="$(tool_call_response "entity.fields" '{"entity_type":"entity_event"}')"$'\1'"$(done_response "Listed.")"
     raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"what is in the history\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
     run latest_tool_result "$session_id"
     [[ "$output" =~ "field_changes" ]]
 
-    scripted="$(tool_call_response "entity.fields" '{"entity_type":"document_link"}')"
+    scripted="$(tool_call_response "entity.fields" '{"entity_type":"document_link"}')"$'\1'"$(done_response "Listed.")"
     raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"what is in links\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
     run latest_tool_result "$session_id"
     [[ "$output" =~ "from_document_id" ]]
@@ -795,7 +795,7 @@ SCHEMA
     resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
     session_id=$(extract_query_param "$resp" "session_id")
 
-    scripted="$(tool_call_response "document.search" '{"query":"incubator"}')"
+    scripted="$(tool_call_response "document.search" '{"query":"incubator"}')"$'\1'"$(done_response "Incubator B.")"
     raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"which incubator\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
     run latest_tool_result "$session_id"
     [[ "$output" =~ "cite as: [Incubator log](/document?entity_id=${doc_id})" ]]

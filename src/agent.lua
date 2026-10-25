@@ -933,6 +933,155 @@ function compaction_content(msg)
     return agent.display_content(msg.content, msg.role)
 end
 
+-- Arguments as canonical JSON (object keys sorted, recursively), so two
+-- calls with the same arguments compare equal whatever order a model or
+-- a Lua table produced the keys in.
+canonical_json = nil
+function canonical_json(value)
+    if type(value) != "table" then
+        encoded = json.encode(value)
+        if encoded == nil then
+            return "null"
+        end
+        return encoded
+    end
+    if #value > 0 then
+        parts = {}
+        for _, item in ipairs(value) do
+            table.insert(parts, canonical_json(item))
+        end
+        return "[" .. table.concat(parts, ",") .. "]"
+    end
+    keys = {}
+    for k, _ in pairs(value) do
+        table.insert(keys, tostring(k))
+    end
+    table.sort(keys)
+    parts = {}
+    for _, k in ipairs(keys) do
+        table.insert(parts, json.encode(k) .. ":" .. canonical_json(value[k]))
+    end
+    return "{" .. table.concat(parts, ",") .. "}"
+end
+agent.canonical_json = canonical_json
+
+-- Schema lookups survive compaction verbatim (doc/context-management-
+-- plan.md, Phase 1): in prod, 53% of these calls repeated one already
+-- made in the same session, mostly after compaction had summarized the
+-- answer away. They're small and don't change within a session, so
+-- they're carried as a block code appends to the summary -- not left
+-- to the summarizer -- latest result per (tool, arguments) first, within
+-- agent_pinned_schema_chars. One that doesn't fit is still named.
+PINNED_SCHEMA_TOOLS = {["entity.list_types"] = true, ["entity.fields"] = true, ["entity.relationships"] = true}
+PINNED_SCHEMA_HEADER = "**Confirmed schema (exact earlier tool results, still current -- no need to look these up again):**"
+
+-- Splits a summary into its prose and its pinned entries ({key, text}).
+function split_pinned_schema(text)
+    start = string.find(text, PINNED_SCHEMA_HEADER, 1, true)
+    if start == nil then
+        return text, {}
+    end
+    body = string.gsub(string.sub(text, 1, start - 1), "%s+$", "")
+    rest = string.sub(text, start + string.len(PINNED_SCHEMA_HEADER))
+    entries = {}
+    pos = string.find(rest, "\n### ", 1, true)
+    while pos != nil do
+        next_pos = string.find(rest, "\n### ", pos + 1, true)
+        chunk = nil
+        if next_pos == nil then
+            chunk = string.sub(rest, pos + 5)
+        else
+            chunk = string.sub(rest, pos + 5, next_pos - 1)
+        end
+        nl = string.find(chunk, "\n", 1, true)
+        if nl != nil then
+            table.insert(entries, {key = string.sub(chunk, 1, nl - 1), text = string.sub(chunk, nl + 1)})
+        end
+        pos = next_pos
+    end
+    return body, entries
+end
+
+agent.split_pinned_schema = split_pinned_schema
+
+-- The pinned block for a compaction: entries from the summary being
+-- folded in (older), then this compaction's own schema results (newer,
+-- winning on the same key), newest first within the size budget.
+function pinned_schema_block(to_compact, budget)
+    ordered = {}
+    by_key = {}
+    function remember(key, text)
+        if by_key[key] == nil then
+            table.insert(ordered, key)
+        else
+            for i, k in ipairs(ordered) do
+                if k == key then
+                    table.remove(ordered, i)
+                    break
+                end
+            end
+            table.insert(ordered, key)
+        end
+        by_key[key] = text
+    end
+    calls = {}
+    for _, msg in ipairs(to_compact) do
+        if msg.role == "compaction_summary" then
+            _, entries = split_pinned_schema(msg.content)
+            for _, e in ipairs(entries) do
+                -- "(not kept ...)" lists names, not results: dropped.
+                if string.sub(e.key, 1, 1) != "(" then
+                    remember(e.key, e.text)
+                end
+            end
+        elseif msg.role == "assistant" then
+            decoded, _, _ = json.decode(msg.content)
+            if decoded != nil and type(decoded.blocks) == "table" then
+                for _, block in ipairs(decoded.blocks) do
+                    if block.type == "toolCall" and PINNED_SCHEMA_TOOLS[tostring(block.name)] == true then
+                        args = block.arguments
+                        if args == nil then
+                            args = {}
+                        end
+                        calls[tostring(block.id)] = tostring(block.name) .. " " .. canonical_json(args)
+                    end
+                end
+            end
+        elseif msg.role == "tool_result" then
+            decoded, _, _ = json.decode(msg.content)
+            if decoded != nil and decoded.is_error != true and calls[tostring(decoded.tool_call_id)] != nil and decoded.text != nil then
+                remember(calls[tostring(decoded.tool_call_id)], decoded.text)
+            end
+        end
+    end
+    if #ordered == 0 then
+        return nil
+    end
+    kept = {}
+    left_out = {}
+    used = 0
+    for i = #ordered, 1, -1 do
+        key = ordered[i]
+        entry = "### " .. key .. "\n" .. by_key[key]
+        if used + string.len(entry) <= budget then
+            table.insert(kept, entry)
+            used = used + string.len(entry)
+        else
+            table.insert(left_out, key)
+        end
+    end
+    block = PINNED_SCHEMA_HEADER
+    if #kept > 0 then
+        block = block .. "\n" .. table.concat(kept, "\n")
+    end
+    if #left_out > 0 then
+        block = block .. "\n### (not kept, over the size limit -- look up again if needed)\n" .. table.concat(left_out, "\n")
+    end
+    return block
+end
+
+agent.pinned_schema_block = pinned_schema_block
+
 -- Summarizes everything except the last `keep_last` active messages
 -- into one new 'compaction_summary' message once the active window's
 -- estimated token count crosses the threshold, then marks the
@@ -1001,7 +1150,12 @@ function agent.compact_if_needed(db_path, session_id, system_prompt, model)
         "they refer to. Only state what the conversation actually shows -- do not infer field " ..
         "names or results that never appeared. Keep the summary under 400 words.\n\nConversation to summarize:\n"
     for _, msg in ipairs(to_compact) do
-        summary_prompt = summary_prompt .. string.upper(msg.role) .. ": " .. compaction_content(msg) .. "\n"
+        content = compaction_content(msg)
+        -- The pinned block is carried by code below, not re-summarized.
+        if msg.role == "compaction_summary" then
+            content = split_pinned_schema(content)
+        end
+        summary_prompt = summary_prompt .. string.upper(msg.role) .. ": " .. content .. "\n"
     end
 
     summary, err, usage = agent_provider.generate(model, "You are a concise summarizer.", summary_prompt)
@@ -1011,6 +1165,12 @@ function agent.compact_if_needed(db_path, session_id, system_prompt, model)
 
     if #compacted_user_requests > 0 then
         summary = summary .. "\n\n**Earlier user messages (verbatim, most recent last):**\n" .. table.concat(compacted_user_requests, "\n")
+    end
+    if config.platform_config().agent_pin_schema == true then
+        pinned = pinned_schema_block(to_compact, config.platform_config().agent_pinned_schema_chars)
+        if pinned != nil then
+            summary = summary .. "\n\n" .. pinned
+        end
     end
 
     summary_message_id = agent.add_message(db_path, session_id, "compaction_summary", summary, true)
@@ -1617,7 +1777,7 @@ function agent.run_research_loop(db_path, author, session_id, model, question, m
                 result_text = "ERROR: research is read-only and can't ask the user directly or hand off further -- cannot perform destructive actions, delegate further, ask a clarifying question, or start a background task; report what you've found (including any real ambiguity) instead"
                 is_error = true
             else
-                tool_result, tool_err = agent.run_tool(db_path, author, session_id, tool_name, method_name, tool_call.arguments)
+                tool_result, tool_err = agent.run_tool(db_path, author, session_id, tool_name, method_name, tool_call.arguments, messages)
                 result_text = tostring(tool_result)
                 if tool_err != nil then
                     result_text = "ERROR: " .. tostring(tool_err)
@@ -1912,8 +2072,76 @@ end
 -- turn died with no tool result and nothing for the model or the user
 -- to see. Now it's an ordinary error result, recorded like any other,
 -- and logged to stderr (the web server's error log).
-function agent.run_tool(db_path, author, session_id, tool_name, method_name, args)
+-- Read-only tools whose result can't change within a session unless
+-- something is written (or, for schema, a deployment reloads its
+-- schema files, which also starts a new request). An exact repeat of one
+-- of these, while the earlier result is still in context and no write
+-- has been proposed since, is answered with REPEAT_CALL_NOTE instead of
+-- a second copy (doc/context-management-plan.md, Phase 1).
+REPEAT_SAFE_TOOLS = {
+    ["entity.list_types"] = true, ["entity.fields"] = true, ["entity.relationships"] = true,
+    ["entity.get"] = true, ["document.search"] = true, ["document.children"] = true,
+}
+REPEAT_CALL_NOTE = "Same call as one earlier in this conversation (same tool, same arguments), and nothing has been written since: its result is above and unchanged. Use that result instead of calling again."
+
+-- agent.find_repeat(messages, full_name, args, is_write) -> earlier call id | nil
+-- `messages` is the canonical history the model sees right now;
+-- `is_write(full_name)` says whether a call can change data (a
+-- destructive tool). Pure, so it's unit-tested on its own.
+function agent.find_repeat(messages, full_name, args, is_write)
+    if REPEAT_SAFE_TOOLS[full_name] != true or messages == nil then
+        return nil
+    end
+    if args == nil then
+        args = {}
+    end
+    key = canonical_json(args)
+    answered = {}
+    for _, msg in ipairs(messages) do
+        if msg.role == "toolResult" and msg.isError != true and msg.toolCallId != nil then
+            answered[tostring(msg.toolCallId)] = true
+        end
+    end
+    found = nil
+    for _, msg in ipairs(messages) do
+        if msg.role == "assistant" and type(msg.content) == "table" then
+            for _, block in ipairs(msg.content) do
+                if type(block) == "table" and block.type == "toolCall" then
+                    name = tostring(block.name)
+                    if is_write(name) then
+                        found = nil
+                    elseif name == full_name and answered[tostring(block.id)] == true then
+                        block_args = block.arguments
+                        if block_args == nil then
+                            block_args = {}
+                        end
+                        if canonical_json(block_args) == key then
+                            found = tostring(block.id)
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return found
+end
+
+-- `context_messages` (optional): the canonical history the model saw
+-- when it made this call, for the repeat check above.
+function agent.run_tool(db_path, author, session_id, tool_name, method_name, args, context_messages)
     agent_tools = require("agent_tools")
+    if context_messages != nil and config.platform_config().agent_dedupe_repeat_calls == true then
+        earlier = agent.find_repeat(context_messages, tostring(tool_name) .. "." .. tostring(method_name), args, function(name)
+            dot = string.find(name, ".", 1, true)
+            if dot == nil then
+                return false
+            end
+            return agent.is_destructive(db_path, string.sub(name, 1, dot - 1), string.sub(name, dot + 1))
+        end)
+        if earlier != nil then
+            return REPEAT_CALL_NOTE
+        end
+    end
     call_ok, result, err = pcall(agent_tools.execute_tool, db_path, author, session_id, tool_name, method_name, args)
     if call_ok == false then
         io.write(io.stderr, "agent tool " .. tostring(tool_name) .. "." .. tostring(method_name) .. " crashed: " .. tostring(result) .. "\n")
@@ -2154,7 +2382,7 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
                                 "ERROR: skipped -- only one destructive action can be proposed per turn; resolve the pending one first, then ask for this one again", true)
                         end
                     else
-                        tool_result, tool_err = agent.run_tool(db_path, login, session_id, tool_name, method_name, tool_call.arguments)
+                        tool_result, tool_err = agent.run_tool(db_path, login, session_id, tool_name, method_name, tool_call.arguments, history_messages)
                         summary = tostring(tool_result)
                         is_error = false
                         if tool_err != nil then
