@@ -325,6 +325,13 @@ function config.platform_config()
         -- by `daat agent prune-prompts` (0: keep forever). Chat history
         -- itself (agent_message, transcript documents) is never pruned.
         prompt_retention_days = 90,
+        -- Keep what's already known (doc/context-management-plan.md,
+        -- Phase 1): schema lookups carried verbatim through compaction
+        -- (within this many characters), and an exact repeat of a
+        -- read-only call answered with a pointer to the earlier result.
+        agent_pin_schema = true,
+        agent_pinned_schema_chars = 6000,
+        agent_dedupe_repeat_calls = true,
         platform_adhoc_row_cap = 1000,
         extension_max_job_attempts = 5,
         -- Tag upkeep (tag.lua): vectors are the cached embeddings cut to
@@ -463,6 +470,15 @@ function config.platform_config()
     end
     if type(parsed.prompt_retention_days) == "number" then
         conf.prompt_retention_days = parsed.prompt_retention_days
+    end
+    if parsed.agent_pin_schema == true or parsed.agent_pin_schema == false then
+        conf.agent_pin_schema = parsed.agent_pin_schema
+    end
+    if type(parsed.agent_pinned_schema_chars) == "number" and parsed.agent_pinned_schema_chars >= 0 then
+        conf.agent_pinned_schema_chars = parsed.agent_pinned_schema_chars
+    end
+    if parsed.agent_dedupe_repeat_calls == true or parsed.agent_dedupe_repeat_calls == false then
+        conf.agent_dedupe_repeat_calls = parsed.agent_dedupe_repeat_calls
     end
     if type(parsed.platform_adhoc_row_cap) == "number" then
         conf.platform_adhoc_row_cap = parsed.platform_adhoc_row_cap
