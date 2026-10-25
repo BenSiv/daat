@@ -25,14 +25,7 @@ extension.SCHEMA = """
 -- VARCHAR(255), not TEXT -- MariaDB/InnoDB refuses a bare TEXT column
 -- as a key without an explicit length; see ledger.lua's own SCHEMA
 -- comment for the full reasoning.
-CREATE TABLE IF NOT EXISTS extension_approval (
-    name VARCHAR(255) PRIMARY KEY,
-    capabilities_json TEXT NOT NULL,
-    approved_by TEXT,
-    approved_at TEXT DEFAULT (%s)
-);
-
-CREATE TABLE IF NOT EXISTS extension_job (
+CREATE TABLE IF NOT EXISTS system_job (
     job_id INTEGER PRIMARY KEY %s,
     extension_name TEXT NOT NULL,
     event_name TEXT NOT NULL,
@@ -56,12 +49,14 @@ CREATE TABLE IF NOT EXISTS extension_job (
 
 function extension_schema_sql(db_path)
     return string.format(extension.SCHEMA,
-        db.now_expr(db_path), db.autoincrement_keyword(db_path),
+        db.autoincrement_keyword(db_path),
         db.now_expr(db_path), db.now_expr(db_path)
     )
 end
 
+-- Approvals live in system_approval (store.lua), kind 'extension'.
 function extension.init_schema(db_path)
+    require("store").ensure_system_tables(db_path)
     return db.exec(db_path, extension_schema_sql(db_path))
 end
 
@@ -560,11 +555,11 @@ end
 
 function extension.approved_capabilities(db_path, name)
     extension.init_schema(db_path)
-    rows = db.query(db_path, "SELECT capabilities_json FROM extension_approval WHERE name = " .. db.quote(name) .. ";")
-    if rows == nil or #rows == 0 then
+    approved = require("store").approved_content(db_path, "extension", name)
+    if approved == nil then
         return nil
     end
-    return json.decode(rows[1].capabilities_json)
+    return json.decode(approved)
 end
 
 function extension.is_approved(db_path, manifest)
@@ -580,16 +575,12 @@ function extension.approve(db_path, manifest, approved_by)
     caps = manifest.capabilities
     if caps == nil then caps = {} end
     caps_json = json.encode(caps)
-    db.exec(db_path, string.format(
-        "%s extension_approval (name, capabilities_json, approved_by, approved_at) VALUES (%s, %s, %s, %s);",
-        db.replace_into(db_path),
-        db.quote(manifest.name), db.quote(caps_json), db.literal(approved_by), db.now_expr(db_path)
-    ))
+    require("store").approve(db_path, "extension", manifest.name, caps_json, approved_by)
 end
 
 function extension.revoke(db_path, name)
     extension.init_schema(db_path)
-    db.exec(db_path, "DELETE FROM extension_approval WHERE name = " .. db.quote(name) .. ";")
+    require("store").revoke(db_path, "extension", name)
 end
 
 -- ---- Sandboxed invocation ----
@@ -667,7 +658,7 @@ function extension.enqueue_after_hooks(db_path, ext_dir, event_name, entity_type
                 old_json = json.encode(old_values)
             end
             db.exec(db_path, string.format(
-                "INSERT INTO extension_job (extension_name, event_name, entity_type, entity_id, new_values_json, old_values_json) VALUES (%s, %s, %s, %d, %s, %s);",
+                "INSERT INTO system_job (extension_name, event_name, entity_type, entity_id, new_values_json, old_values_json) VALUES (%s, %s, %s, %d, %s, %s);",
                 db.quote(entry.name), db.quote(event_name), db.quote(entity_type), entity_id,
                 db.literal(new_json), db.literal(old_json)
             ))
@@ -679,7 +670,7 @@ function extension.pending_jobs(db_path, limit)
     extension.init_schema(db_path)
     if limit == nil then limit = 50 end
     rows = db.query(db_path, string.format(
-        "SELECT * FROM extension_job WHERE status = 'pending' AND attempts < %d ORDER BY job_id ASC LIMIT %d;",
+        "SELECT * FROM system_job WHERE status = 'pending' AND attempts < %d ORDER BY job_id ASC LIMIT %d;",
         config.platform_config().extension_max_job_attempts, limit
     ))
     if rows == nil then
@@ -690,7 +681,7 @@ end
 
 function extension.mark_job_done(db_path, job)
     db.exec(db_path, string.format(
-        "UPDATE extension_job SET status = 'done', updated_at = %s WHERE job_id = %d;",
+        "UPDATE system_job SET status = 'done', updated_at = %s WHERE job_id = %d;",
         db.now_expr(db_path), tonumber(job.job_id)
     ))
 end
@@ -706,7 +697,7 @@ function extension.mark_job_failed(db_path, job, message)
         status = "failed"
     end
     db.exec(db_path, string.format(
-        "UPDATE extension_job SET status = %s, attempts = %d, last_error = %s, updated_at = %s WHERE job_id = %d;",
+        "UPDATE system_job SET status = %s, attempts = %d, last_error = %s, updated_at = %s WHERE job_id = %d;",
         db.quote(status), attempts, db.quote(message), db.now_expr(db_path), tonumber(job.job_id)
     ))
 end

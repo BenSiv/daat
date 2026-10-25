@@ -301,3 +301,21 @@ EOF
     run "$BIN" agent context-report --since yesterday
     [[ "$output" =~ "Usage: daat agent context-report" ]]
 }
+
+@test "agent prune-prompts clears prompts past prompt_retention_days and keeps the rest of the row" {
+    read session csrf < <(session_for admin secret123)
+    chat_session=$(start_chat "$session" "$csrf" "Old")
+    send_message "$session" "$csrf" "$chat_session" "hello" "$(done_response "Hi.")" > /dev/null
+    sqlite3 .store/store.db "UPDATE agent_model_call SET created_at = '2020-01-01 00:00:00' WHERE id = (SELECT MIN(id) FROM agent_model_call);"
+
+    run "$BIN" agent prune-prompts
+    [[ "$output" =~ "Cleared 1 stored prompts older than 90 days" ]]
+    [ "$(sqlite3 .store/store.db "SELECT (prompt IS NULL) || '|' || (prompt_tokens IS NOT NULL) || '|' || COALESCE(reply_kind, '') FROM agent_model_call ORDER BY id LIMIT 1;")" = "1|1|final" ]
+    # Newer prompts stay.
+    [ "$(sqlite3 .store/store.db "SELECT COUNT(*) FROM agent_model_call WHERE prompt IS NOT NULL;")" -ge 1 ]
+
+    write_platform_config ", prompt_retention_days = 0"
+    sqlite3 .store/store.db "UPDATE agent_model_call SET created_at = '2020-01-01 00:00:00';"
+    run "$BIN" agent prune-prompts
+    [[ "$output" =~ "Cleared 0 stored prompts" ]]
+}

@@ -1987,7 +1987,7 @@ function document.drop_derived(db_path, document_id)
     document_id = tonumber(document_id)
     db.exec(db_path, string.format("DELETE FROM document_embedding WHERE document_id = %d;", document_id))
     db.exec(db_path, string.format("DELETE FROM document_embedding_due WHERE document_id = %d;", document_id))
-    db.exec(db_path, string.format("DELETE FROM document_reference WHERE document_id = %d;", document_id))
+    db.exec(db_path, string.format("DELETE FROM document_mention WHERE document_id = %d;", document_id))
     db.exec(db_path, string.format("DELETE FROM document_link_sync WHERE document_id = %d;", document_id))
     db.exec(db_path, string.format(
         "UPDATE document_link SET archived_at = %s WHERE from_document_id = %d AND (archived_at IS NULL OR archived_at = '');",
@@ -3117,7 +3117,7 @@ function document.prune_derived(db_path, dry_run)
         {label = "queued embeddings of archived or missing documents", action = "deleted",
          tbl = "document_embedding_due", where = "document_id NOT IN (" .. ACTIVE_DOCUMENT_IDS .. ")"},
         {label = "references from archived or missing documents", action = "deleted",
-         tbl = "document_reference", where = "document_id NOT IN (" .. ACTIVE_DOCUMENT_IDS .. ")"},
+         tbl = "document_mention", where = "document_id NOT IN (" .. ACTIVE_DOCUMENT_IDS .. ")"},
         {label = "live links from archived or missing documents", action = "archived",
          tbl = "document_link", where = "(archived_at IS NULL OR archived_at = '') AND from_document_id NOT IN (" .. ACTIVE_DOCUMENT_IDS .. ")"},
         {label = "link sync records of archived or missing documents", action = "deleted",

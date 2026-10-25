@@ -19,10 +19,10 @@
 -- ...) live in document.lua now, alongside the columns they score --
 -- this file depends on document.lua, never the reverse.
 --
--- Retrieval/review bookkeeping (knowledge_retrieval, knowledge_
--- retrieval_document, knowledge_review) stays in its own hand-rolled
--- tables here -- these are event logs (one row per retrieval/review
--- event), not pool content, so they don't belong on `document` itself.
+-- Retrieval/review bookkeeping (knowledge_retrieval, and one
+-- knowledge_retrieval_hit per document it returned, which also carries
+-- that hit's review) stays in its own hand-rolled tables here -- these
+-- are event logs, not pool content, so they don't belong on `document`.
 
 db = require("database")
 document = require("document")
@@ -44,26 +44,22 @@ CREATE TABLE IF NOT EXISTS knowledge_retrieval (
 -- doc/mariadb-migration.md). Backtick quoting is valid MySQL/MariaDB
 -- syntax and SQLite's own MySQL-compatibility extension, so this is a
 -- single, unified fix needing no per-backend branch.
-CREATE TABLE IF NOT EXISTS knowledge_retrieval_document (
+-- One row per document a retrieval returned: its rank and score, the
+-- heat reinforcement it got, and -- once knowledge.review_retrieval has
+-- looked at it -- the rule-based review outcome (reviewed_at set).
+CREATE TABLE IF NOT EXISTS knowledge_retrieval_hit (
     retrieval_id INTEGER NOT NULL,
     document_id INTEGER NOT NULL,
     `rank` INTEGER,
     score REAL,
     tier_weight REAL,
     reinforcement_delta REAL,
+    atomicity_status VARCHAR(32),
+    connectivity_status VARCHAR(32),
+    duplication_status VARCHAR(32),
+    title_status VARCHAR(32),
+    reviewed_at TEXT,
     PRIMARY KEY (retrieval_id, document_id)
-);
-
-CREATE TABLE IF NOT EXISTS knowledge_review (
-    id INTEGER PRIMARY KEY %s,
-    retrieval_id INTEGER NOT NULL,
-    document_id INTEGER NOT NULL,
-    atomicity_status TEXT,
-    connectivity_status TEXT,
-    duplication_status TEXT,
-    title_status TEXT,
-    action_summary TEXT,
-    created_at TEXT DEFAULT (%s)
 );
 
 -- One row per *pair* of documents whose co-retrieval has been evaluated
@@ -90,7 +86,7 @@ CREATE TABLE IF NOT EXISTS knowledge_link_review (
 -- when nothing has changed since the last judgment, the same
 -- "don't re-run the same model call over and over" reasoning as
 -- knowledge_link_review's own last_co_count column.
-CREATE TABLE IF NOT EXISTS knowledge_tier_review (
+CREATE TABLE IF NOT EXISTS document_tier_judgment (
     document_id INTEGER PRIMARY KEY,
     judged_hash TEXT NOT NULL,
     judged_tier INTEGER NOT NULL,
@@ -101,7 +97,6 @@ CREATE TABLE IF NOT EXISTS knowledge_tier_review (
 
 function knowledge_schema_sql(db_path)
     return string.format(KNOWLEDGE_SCHEMA,
-        db.autoincrement_keyword(db_path), db.now_expr(db_path),
         db.autoincrement_keyword(db_path), db.now_expr(db_path),
         db.now_expr(db_path),
         db.now_expr(db_path)
@@ -116,8 +111,8 @@ end
 -- statement fails the whole batch on MySQL, not just that one statement.
 function ensure_knowledge_indexes(db_path)
     indexes = {
-        {name = "knowledge_retrieval_document_document_idx", table = "knowledge_retrieval_document",
-         sql = "CREATE INDEX knowledge_retrieval_document_document_idx ON knowledge_retrieval_document(document_id);"},
+        {name = "knowledge_retrieval_document_document_idx", table = "knowledge_retrieval_hit",
+         sql = "CREATE INDEX knowledge_retrieval_document_document_idx ON knowledge_retrieval_hit(document_id);"},
     }
     for _, idx in ipairs(indexes) do
         if db.index_exists(db_path, idx.table, idx.name) == false then
@@ -161,24 +156,18 @@ HAND_ROLLED_TABLE_COLUMNS = {
         {name = "hit_count", note = "number of documents this retrieval matched"},
         {name = "created_at", note = "timestamp of the retrieval event"},
     },
-    knowledge_retrieval_document = {
+    knowledge_retrieval_hit = {
         {name = "retrieval_id", note = "FK to knowledge_retrieval.id"},
         {name = "document_id", note = "FK to document.id"},
         {name = "rank", note = "position of this document in the retrieval's results (backtick-quoted in SQL -- a reserved word in MySQL 8.0)"},
         {name = "score", note = "raw retrieval score for this hit"},
         {name = "tier_weight", note = "weight applied for the document's tier at retrieval time"},
         {name = "reinforcement_delta", note = "heat/tier reinforcement this hit produced"},
-    },
-    knowledge_review = {
-        {name = "id", note = "primary key"},
-        {name = "retrieval_id", note = "FK to knowledge_retrieval.id"},
-        {name = "document_id", note = "FK to document.id"},
         {name = "atomicity_status", note = "rule-based review outcome: is this document one coherent idea"},
         {name = "connectivity_status", note = "rule-based review outcome: is this document linked to related documents"},
         {name = "duplication_status", note = "rule-based review outcome: does this document duplicate another"},
         {name = "title_status", note = "rule-based review outcome: is the title specific, not generic"},
-        {name = "action_summary", note = "human-readable summary of what the review did, if anything"},
-        {name = "created_at", note = "timestamp of the review"},
+        {name = "reviewed_at", note = "when the hit was reviewed (NULL: not reviewed)"},
     },
 }
 
@@ -341,7 +330,7 @@ function knowledge.record_retrieval_hit(db_path, retrieval_id, document_id, tier
     -- `last_retrieved_at` wall-clock columns are no longer written.
     document.reinforce_pool_heat(db_path, document_id, delta)
     db.exec(db_path, string.format(
-        "%s knowledge_retrieval_document (retrieval_id, document_id, `rank`, score, tier_weight, reinforcement_delta) " ..
+        "%s knowledge_retrieval_hit (retrieval_id, document_id, `rank`, score, tier_weight, reinforcement_delta) " ..
         "VALUES (%d, %d, %d, %.17g, %.17g, %.17g);",
         db.replace_into(db_path),
         tonumber(retrieval_id), tonumber(document_id), tonumber(rank), tonumber(score), tier_weight, delta
@@ -389,7 +378,7 @@ end
 -- Runs once per retrieval, after all hits are logged: for every
 -- document this retrieval touched, computes the review gates, applies
 -- any resulting mutation (retitle, dedup, tier promotion), and records
--- one knowledge_review row per document for audit. Retitling only ever
+-- its review outcome on that document's knowledge_retrieval_hit row. Retitling only ever
 -- applies to system/agent-derived documents (source_type set) -- a
 -- real user-authored document's title is never rewritten out from under
 -- them, even if it happens to look generic ("note", "untitled", ...).
@@ -398,7 +387,7 @@ end
 -- -- reactive, tied to real usage, not a synthetic actor.
 function knowledge.review_retrieval(db_path, retrieval_id, author)
     rows = db.query(db_path, string.format(
-        "SELECT document_id FROM knowledge_retrieval_document WHERE retrieval_id = %d;", tonumber(retrieval_id)
+        "SELECT document_id FROM knowledge_retrieval_hit WHERE retrieval_id = %d;", tonumber(retrieval_id)
     ))
     if rows == nil then
         return
@@ -463,9 +452,10 @@ function knowledge.review_retrieval(db_path, retrieval_id, author)
                 target_tier, db.literal(new_title), db.now_expr(db_path), doc.id
             ))
             db.exec(db_path, string.format(
-                "INSERT INTO knowledge_review (retrieval_id, document_id, atomicity_status, connectivity_status, duplication_status, title_status) " ..
-                "VALUES (%d, %d, %s, %s, %s, %s);",
-                tonumber(retrieval_id), doc.id, db.quote(content_shape), db.quote(connectivity), db.quote(duplication), db.quote(title_status)
+                "UPDATE knowledge_retrieval_hit SET atomicity_status = %s, connectivity_status = %s, duplication_status = %s, title_status = %s, reviewed_at = %s " ..
+                "WHERE retrieval_id = %d AND document_id = %d;",
+                db.quote(content_shape), db.quote(connectivity), db.quote(duplication), db.quote(title_status), db.now_expr(db_path),
+                tonumber(retrieval_id), doc.id
             ))
 
             -- Reactive distillation -- decoupled from target_tier and
@@ -716,8 +706,8 @@ function knowledge.co_retrieval_pairs(db_path, document_ids)
 
     rows = db.query(db_path, string.format("""
         SELECT a.document_id AS doc_a, b.document_id AS doc_b, COUNT(DISTINCT a.retrieval_id) AS co_count
-        FROM knowledge_retrieval_document a
-        JOIN knowledge_retrieval_document b ON a.retrieval_id = b.retrieval_id AND a.document_id < b.document_id
+        FROM knowledge_retrieval_hit a
+        JOIN knowledge_retrieval_hit b ON a.retrieval_id = b.retrieval_id AND a.document_id < b.document_id
         WHERE a.document_id IN (%s) AND b.document_id IN (%s)
         GROUP BY a.document_id, b.document_id;
     """, id_list_sql, id_list_sql))
@@ -1238,7 +1228,7 @@ You are judging how far a document in a knowledge pool has matured through real 
 
 function knowledge.get_tier_review(db_path, document_id)
     rows = db.query(db_path, string.format(
-        "SELECT * FROM knowledge_tier_review WHERE document_id = %d;", tonumber(document_id)
+        "SELECT * FROM document_tier_judgment WHERE document_id = %d;", tonumber(document_id)
     ))
     if rows == nil or rows[1] == nil then
         return nil
@@ -1248,7 +1238,7 @@ end
 
 function knowledge.record_tier_review(db_path, document_id, content_hash, tier)
     db.exec(db_path, string.format(
-        "%s knowledge_tier_review (document_id, judged_hash, judged_tier, evaluated_at) VALUES (%d, %s, %d, %s);",
+        "%s document_tier_judgment (document_id, judged_hash, judged_tier, evaluated_at) VALUES (%d, %s, %d, %s);",
         db.replace_into(db_path), tonumber(document_id), db.quote(content_hash), tonumber(tier), db.now_expr(db_path)
     ))
 end
@@ -1338,7 +1328,7 @@ end
 -- the document that actually matched the query. Skips any neighbor that
 -- was ALSO a direct hit this retrieval -- it already got the full
 -- direct-hit treatment via record_retrieval_hit, and the two writes
--- would otherwise fight over the same knowledge_retrieval_document audit
+-- would otherwise fight over the same knowledge_retrieval_hit audit
 -- row (PRIMARY KEY (retrieval_id, document_id)) for no benefit.
 -- retrieval_count is deliberately NOT bumped for a spread neighbor -- it
 -- measures direct retrieval hits specifically (promotion_target_tier's
@@ -1378,7 +1368,7 @@ function knowledge.spread_activation(db_path, retrieval_id, document_id, base_de
                 -- written.
                 document.reinforce_pool_heat(db_path, neighbor_id, delta)
                 db.exec(db_path, string.format(
-                    "%s knowledge_retrieval_document (retrieval_id, document_id, `rank`, score, tier_weight, reinforcement_delta) " ..
+                    "%s knowledge_retrieval_hit (retrieval_id, document_id, `rank`, score, tier_weight, reinforcement_delta) " ..
                     "VALUES (%d, %d, NULL, NULL, %.17g, %.17g);",
                     db.replace_into(db_path), tonumber(retrieval_id), neighbor_id, tier_weight, delta
                 ))
@@ -1449,7 +1439,7 @@ function knowledge.stats(db_path)
             "SELECT COUNT(*) AS n FROM document WHERE %s AND (archived_at IS NULL OR archived_at = '');", KNOWLEDGE_MEMBER_WHERE
         )),
         retrieval_count = count_rows(db_path, "SELECT COUNT(*) AS n FROM knowledge_retrieval;"),
-        reviewed_note_count = count_rows(db_path, "SELECT COUNT(DISTINCT document_id) AS n FROM knowledge_review;"),
+        reviewed_note_count = count_rows(db_path, "SELECT COUNT(DISTINCT document_id) AS n FROM knowledge_retrieval_hit WHERE reviewed_at IS NOT NULL;"),
         session_count = session_count,
     }
 end
@@ -1513,14 +1503,14 @@ function knowledge.list_documents(db_path, tier)
     return attach_and_sort_by_pool_heat(db_path, rows)
 end
 
--- Documents with at least one review recorded against them (distinct
--- document_id in knowledge_review) -- backs /knowledge's "reviewed
+-- Documents with at least one review recorded against them (a reviewed
+-- knowledge_retrieval_hit) -- backs /knowledge's "reviewed
 -- notes" stat, same reused table view as tier documents
 -- (html.render_knowledge_documents).
 function knowledge.reviewed_documents(db_path)
     rows = db.query(db_path, """
         SELECT * FROM document
-        WHERE id IN (SELECT DISTINCT document_id FROM knowledge_review)
+        WHERE id IN (SELECT DISTINCT document_id FROM knowledge_retrieval_hit WHERE reviewed_at IS NOT NULL)
           AND (archived_at IS NULL OR archived_at = '')
         ORDER BY retrieval_count DESC;
     """)

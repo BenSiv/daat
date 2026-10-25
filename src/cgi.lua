@@ -1549,7 +1549,7 @@ function cgi.handle_request()
         return print_response("302 Found", "text/plain", "", redirect_headers)
     end
 
-    -- Admin UI for the api_key table, mirroring /admin-users above
+    -- Admin UI for the auth_api_key table, mirroring /admin-users above
     -- exactly, with one difference -- a successful create renders
     -- the list directly (not a redirect) so the one-time raw key can be
     -- shown; a redirect would lose it, since it's never stored anywhere
@@ -2333,7 +2333,7 @@ function cgi.handle_request()
     -- unlike /ext/<name>/action which any logged-in user can reach.
     --
     -- Runs synchronously, like a UI action, not queued like an
-    -- after-hook's own extension_job -- a trigger whose real work is
+    -- after-hook's own system_job -- a trigger whose real work is
     -- slow is expected to kick that work off elsewhere (an outbound
     -- net.capability call to a job runner, a queue write) and return
     -- quickly, the same way this handler itself must, rather than the

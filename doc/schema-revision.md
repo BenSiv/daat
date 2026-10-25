@@ -4,7 +4,16 @@ Proposal, 2026-10-23. Goal: a schema that is clean, logical and compact, with no
 
 Scope: the **42 built-in tables** daat owns (37 core tables plus 5 entity types daat registers itself). The 32 user-defined tables (from `~/lims/schemas`) and the one extension table (`task`) are the deployment's design; observations on them are at the end.
 
-## What the map shows
+## Status (2026-10-25)
+
+Built on `feature/schema-revision`, as store migrations 1-6 (`src/store.lua`), with these changes to the plan below:
+- **Done:** B (`agent_model_call`), C (`system_state`, without `knowledge_pool_state`), F (`knowledge_retrieval_hit`), G (`system_approval`), I (`entity_dropdown_value`), the domain renames, prompt retention (`prompt_retention_days`, `daat agent prune-prompts`), and K (the deploy pipeline's Step 9b, in `~/software`).
+- **Not done, on purpose: D, E and H.** Each would merge tables written by different modules. With one shared row per document or tag, every write becomes a dialect-specific partial upsert, and every delete becomes "null out my columns". That's harder to keep correct than one small table per owner. Instead, `knowledge_tier_review` is renamed to `document_tier_judgment`. `document_embedding`, `document_embedding_due`, `document_link_sync`, `tag_centre`, `tag_upkeep`, `knowledge_link_review` and `tag_judgment` stay as they are.
+- **Retrieval-hit retention dropped:** old hits feed the co-retrieval link logic (pairs of documents returned by the same search), so deleting them would change link decisions. With the review folded in they're small.
+
+Result: **42 built-in tables → 36**: `tag_relation` kept, `knowledge_pool_state` kept, D/E/H not merged.
+
+
 
 - **Why so many tables look unconnected.** Many links in daat are generic pairs, `(entity_type, entity_id)` or `login` / `session_id` stored as text, which no diagram can draw as a foreign key. `entity_event`, `entity_source`, `document_reference`, `reference_name` and `extension_job` all point at entities this way. So part of the clutter is a drawing limit, not real islands.
 - **The real clutter is small tables for one piece of state each:**

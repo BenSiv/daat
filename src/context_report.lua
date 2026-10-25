@@ -122,7 +122,7 @@ end
 -- their sessions look nothing like day-to-day use.
 function account_classes(db_path)
     classes = {}
-    for _, row in ipairs(rows_or_empty(db.query(db_path, "SELECT login, cap FROM user;"))) do
+    for _, row in ipairs(rows_or_empty(db.query(db_path, "SELECT login, cap FROM auth_user;"))) do
         cap = row.cap
         if cap == nil then
             cap = ""

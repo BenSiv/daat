@@ -1487,10 +1487,10 @@ EOF
     raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"fields\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
     run latest_tool_result "$session_id"
     [[ "$output" =~ "junction table sample_tags(sample_id, value)" ]]
-    [[ "$output" =~ "stored in entity_source(from_type, from_id, field_name, to_type, to_id)" ]]
+    [[ "$output" =~ "stored in entity_ref(from_type, from_id, field_name, to_type, to_id)" ]]
     [[ "$output" =~ "System columns on every row" ]]
 
-    sql="SELECT s.label, es.to_type, es.to_id FROM sample s JOIN entity_source es ON es.from_type = 'sample' AND es.field_name = 'source' AND es.from_id = s.id"
+    sql="SELECT s.label, es.to_type, es.to_id FROM sample s JOIN entity_ref es ON es.from_type = 'sample' AND es.field_name = 'source' AND es.from_id = s.id"
     scripted="$(tool_call_response "entity.query" "{\"sql\":\"${sql}\"}")"$'\1'"$(done_response "Here.")"
     raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"lineage\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
     run latest_tool_result "$session_id"

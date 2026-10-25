@@ -210,7 +210,7 @@ search_for_bioreactor_extra() {
     [[ ! "$output" =~ "Bioreactor Notes" ]]
 
     content_hash=$(sqlite3 .store/store.db "SELECT content_hash FROM document WHERE id = 1;")
-    run sqlite3 .store/store.db "SELECT judged_tier, judged_hash FROM knowledge_tier_review WHERE document_id = 1;"
+    run sqlite3 .store/store.db "SELECT judged_tier, judged_hash FROM document_tier_judgment WHERE document_id = 1;"
     [[ "$output" =~ "3|${content_hash}" ]]
 }
 
@@ -307,7 +307,7 @@ search_for_bioreactor_extra() {
     # computed and applied -- is the real signal, same as the sibling
     # Phase 3 test right below already checks.
     reinforcement_delta=$(sqlite3 .store/store.db "
-        SELECT krd.reinforcement_delta FROM knowledge_retrieval_document krd
+        SELECT krd.reinforcement_delta FROM knowledge_retrieval_hit krd
         JOIN document d ON d.id = krd.document_id
         WHERE d.title = 'Cleaning Checklist' ORDER BY krd.retrieval_id DESC LIMIT 1;
     ")
@@ -336,12 +336,12 @@ search_for_bioreactor_extra() {
     raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"find bioreactor pages\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
     reinforced_delta=$(sqlite3 .store/store.db "
-        SELECT krd.reinforcement_delta FROM knowledge_retrieval_document krd
+        SELECT krd.reinforcement_delta FROM knowledge_retrieval_hit krd
         JOIN document d ON d.id = krd.document_id
         WHERE d.title = 'Cleaning Checklist' ORDER BY krd.retrieval_id DESC LIMIT 1;
     ")
     unreinforced_delta=$(sqlite3 .store/store.db "
-        SELECT krd.reinforcement_delta FROM knowledge_retrieval_document krd
+        SELECT krd.reinforcement_delta FROM knowledge_retrieval_hit krd
         JOIN document d ON d.id = krd.document_id
         WHERE d.title = 'Calibration Log' ORDER BY krd.retrieval_id DESC LIMIT 1;
     ")

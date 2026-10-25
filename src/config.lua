@@ -320,6 +320,11 @@ function config.platform_config()
         agent_search_excerpt_length = 1200,
         agent_query_row_cap = 200,
         agent_compaction_threshold = 32000,
+        -- agent_model_call.prompt (the exact history sent on each model
+        -- call) is operational audit data: cleared after this many days
+        -- by `daat agent prune-prompts` (0: keep forever). Chat history
+        -- itself (agent_message, transcript documents) is never pruned.
+        prompt_retention_days = 90,
         platform_adhoc_row_cap = 1000,
         extension_max_job_attempts = 5,
         -- Tag upkeep (tag.lua): vectors are the cached embeddings cut to
@@ -455,6 +460,9 @@ function config.platform_config()
     end
     if type(parsed.agent_compaction_threshold) == "number" then
         conf.agent_compaction_threshold = parsed.agent_compaction_threshold
+    end
+    if type(parsed.prompt_retention_days) == "number" then
+        conf.prompt_retention_days = parsed.prompt_retention_days
     end
     if type(parsed.platform_adhoc_row_cap) == "number" then
         conf.platform_adhoc_row_cap = parsed.platform_adhoc_row_cap

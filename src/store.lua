@@ -34,8 +34,48 @@ CREATE TABLE IF NOT EXISTS system_state (
 );
 """
 
+-- An admin's approval of one named thing whose exact content was
+-- reviewed: an extension's capabilities (JSON), a saved view's SQL
+-- text. Approval holds only while the current content still matches
+-- (extension.is_approved, view.is_approved), so an edit after approval
+-- needs approving again.
+SYSTEM_APPROVAL_SCHEMA = """
+CREATE TABLE IF NOT EXISTS system_approval (
+    kind VARCHAR(16) NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    approved_content LONGTEXT NOT NULL,
+    approved_by TEXT,
+    approved_at TEXT DEFAULT (%s),
+    PRIMARY KEY (kind, name)
+);
+"""
+
 function ensure_system_state(db_path)
     db.exec(db_path, string.format(SYSTEM_STATE_SCHEMA, db.now_expr(db_path)))
+end
+
+function store.ensure_system_tables(db_path)
+    ensure_system_state(db_path)
+    db.exec(db_path, string.format(SYSTEM_APPROVAL_SCHEMA, db.now_expr(db_path)))
+end
+
+-- store.approved_content(db_path, kind, name) -> content | nil
+function store.approved_content(db_path, kind, name)
+    rows = db.query(db_path, string.format("SELECT approved_content FROM system_approval WHERE kind = %s AND name = %s;",
+        db.quote(kind), db.quote(name)))
+    if rows == nil or rows[1] == nil then
+        return nil
+    end
+    return rows[1].approved_content
+end
+
+function store.approve(db_path, kind, name, content, approved_by)
+    db.exec(db_path, string.format("%s system_approval (kind, name, approved_content, approved_by, approved_at) VALUES (%s, %s, %s, %s, %s);",
+        db.replace_into(db_path), db.quote(kind), db.quote(name), db.quote(content), db.literal(approved_by), db.now_expr(db_path)))
+end
+
+function store.revoke(db_path, kind, name)
+    db.exec(db_path, string.format("DELETE FROM system_approval WHERE kind = %s AND name = %s;", db.quote(kind), db.quote(name)))
 end
 
 -- store.get_text / store.get_number(db_path, name) -> value | nil
@@ -192,6 +232,89 @@ table.insert(MIGRATIONS, {version = 2, name = "agent_model_call", run = function
     store.retire_table(db_path, "knowledge_context")
 end})
 
+-- 3. extension_approval and view_approval become system_approval rows.
+table.insert(MIGRATIONS, {version = 3, name = "system_approval", run = function(db_path)
+    store.ensure_system_tables(db_path)
+    for _, old in ipairs({{"extension_approval", "extension", "capabilities_json"}, {"view_approval", "view", "sql_text"}}) do
+        if exists(db_path, old[1]) then
+            db.exec(db_path, "INSERT INTO system_approval (kind, name, approved_content, approved_by, approved_at) SELECT " ..
+                db.quote(old[2]) .. ", name, " .. old[3] .. ", approved_by, approved_at FROM " .. old[1] .. ";")
+            store.retire_table(db_path, old[1])
+        end
+    end
+end})
+
+-- 4. dropdown_list (names only) and dropdown_value become
+-- entity_dropdown_value. A new table, not a rename: in MySQL
+-- dropdown_value's foreign key would keep pointing at the retired
+-- list table and refuse new lists.
+table.insert(MIGRATIONS, {version = 4, name = "entity_dropdown_value", run = function(db_path)
+    require("schema").init_schema(db_path)
+    if exists(db_path, "dropdown_value") then
+        db.exec(db_path, "INSERT INTO entity_dropdown_value (list_name, value, value_order) SELECT list_name, value, value_order FROM dropdown_value;")
+        store.retire_table(db_path, "dropdown_value")
+    end
+    store.retire_table(db_path, "dropdown_list")
+end})
+
+-- 5. One prefix per domain (doc/schema-revision.md, "Naming proposal").
+-- Plain renames: same columns, same rows, same index names.
+STORE_RENAMES = {
+    {"user", "auth_user"},
+    {"api_key", "auth_api_key"},
+    {"password_reset", "auth_email_link"},
+    {"entity_source", "entity_ref"},
+    {"reference_name", "entity_name_index"},
+    {"reference_prefix", "entity_name_prefix"},
+    {"document_reference", "document_mention"},
+    {"extension_job", "system_job"},
+    {"knowledge_tier_review", "document_tier_judgment"},
+}
+store.RENAMED_TABLES = {}
+for _, pair in ipairs(STORE_RENAMES) do
+    store.RENAMED_TABLES[pair[1]] = pair[2]
+end
+table.insert(MIGRATIONS, {version = 5, name = "domain table names", run = function(db_path)
+    for _, pair in ipairs(STORE_RENAMES) do
+        store.rename_table(db_path, pair[1], pair[2])
+    end
+end})
+
+-- 6. knowledge_retrieval_document (one row per document a retrieval
+-- returned) becomes knowledge_retrieval_hit and takes in
+-- knowledge_review's outcome for the same (retrieval, document); the
+-- review's unused action_summary isn't carried over.
+table.insert(MIGRATIONS, {version = 6, name = "knowledge_retrieval_hit", run = function(db_path)
+    if exists(db_path, "knowledge_retrieval_document") then
+        store.rename_table(db_path, "knowledge_retrieval_document", "knowledge_retrieval_hit")
+    end
+    if not exists(db_path, "knowledge_retrieval_hit") then
+        return
+    end
+    have = columns_of(db_path, "knowledge_retrieval_hit")
+    for _, column in ipairs({"atomicity_status", "connectivity_status", "duplication_status", "title_status"}) do
+        if have[column] != true then
+            db.exec(db_path, "ALTER TABLE knowledge_retrieval_hit ADD COLUMN " .. column .. " VARCHAR(32) DEFAULT NULL;")
+        end
+    end
+    if have["reviewed_at"] != true then
+        db.exec(db_path, "ALTER TABLE knowledge_retrieval_hit ADD COLUMN reviewed_at TEXT DEFAULT NULL;")
+    end
+    if exists(db_path, "knowledge_review") then
+        -- The latest review per (retrieval, document), in one statement.
+        latest = "(SELECT %s FROM knowledge_review r WHERE r.retrieval_id = knowledge_retrieval_hit.retrieval_id " ..
+            "AND r.document_id = knowledge_retrieval_hit.document_id ORDER BY r.id DESC LIMIT 1)"
+        sets = {}
+        for _, pair in ipairs({{"atomicity_status", "r.atomicity_status"}, {"connectivity_status", "r.connectivity_status"},
+                {"duplication_status", "r.duplication_status"}, {"title_status", "r.title_status"}, {"reviewed_at", "r.created_at"}}) do
+            table.insert(sets, pair[1] .. " = " .. string.format(latest, pair[2]))
+        end
+        db.exec(db_path, "UPDATE knowledge_retrieval_hit SET " .. table.concat(sets, ", ") ..
+            " WHERE EXISTS (SELECT 1 FROM knowledge_review r WHERE r.retrieval_id = knowledge_retrieval_hit.retrieval_id AND r.document_id = knowledge_retrieval_hit.document_id);")
+        store.retire_table(db_path, "knowledge_review")
+    end
+end})
+
 function latest_version()
     latest = 0
     for _, m in ipairs(MIGRATIONS) do
@@ -213,7 +336,7 @@ end
 -- store.migrate(db_path): brings the store's tables to the current
 -- layout. Cheap when already current: one query.
 function store.migrate(db_path)
-    ensure_system_state(db_path)
+    store.ensure_system_tables(db_path)
     target = latest_version()
     if current_version(db_path) >= target then
         return

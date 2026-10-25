@@ -20,7 +20,7 @@
 -- Evidence between tags (tag_evidence, "Evidence between tags" in the
 -- doc): core's own kinds -- `link`, `connection`, `shared_link` and
 -- `reference:<entity type>` -- are recomputed from document_link,
--- document_reference and document_tag when read and their inputs
+-- document_mention and document_tag when read and their inputs
 -- changed, not on every write -- one outside job's apply writes thousands of
 -- memberships, and nothing reads evidence until judgment or display.
 
@@ -430,8 +430,8 @@ function tag_evidence_fingerprint(db_path)
                (SELECT COUNT(*) FROM document_tag WHERE %s) AS memberships,
                (SELECT COALESCE(MAX(last_event_id), 0) FROM document_tag) AS last_membership,
                (SELECT COUNT(*) FROM document WHERE %s) AS documents,
-               (SELECT COUNT(*) FROM document_reference) AS refs,
-               (SELECT COALESCE(SUM(entity_id), 0) FROM document_reference) AS ref_sum;""", ACTIVE, ACTIVE, ACTIVE))
+               (SELECT COUNT(*) FROM document_mention) AS refs,
+               (SELECT COALESCE(SUM(entity_id), 0) FROM document_mention) AS ref_sum;""", ACTIVE, ACTIVE, ACTIVE))
     r = rows[1]
     return string.format("%s/%s/%s/%s/%s/%s/%s", tostring(r.links), tostring(r.last_link),
         tostring(r.memberships), tostring(r.last_membership), tostring(r.documents),
@@ -588,7 +588,7 @@ function tag_core_evidence(db_path)
     end
     computed = {link = links, connection = connections, shared_link = tag_shared_targets(linked_pages)}
     refs = db.query(db_path, """
-        SELECT r.document_id, r.entity_type, r.entity_id FROM document_reference r
+        SELECT r.document_id, r.entity_type, r.entity_id FROM document_mention r
         JOIN document d ON d.id = r.document_id AND (d.archived_at IS NULL OR d.archived_at = '');""")
     if refs == nil then
         refs = {}

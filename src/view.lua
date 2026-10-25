@@ -17,20 +17,9 @@ schema = require("schema")
 
 view = {}
 
-view.SCHEMA = """
--- VARCHAR(255), not TEXT -- MariaDB/InnoDB refuses a bare TEXT column
--- as a key without an explicit length; see ledger.lua's own SCHEMA
--- comment for the full reasoning.
-CREATE TABLE IF NOT EXISTS view_approval (
-    name VARCHAR(255) PRIMARY KEY,
-    sql_text TEXT NOT NULL,
-    approved_by TEXT,
-    approved_at TEXT DEFAULT (%s)
-);
-"""
-
+-- Approvals live in system_approval (store.lua), kind 'view'.
 function view.init_schema(db_path)
-    return db.exec(db_path, string.format(view.SCHEMA, db.now_expr(db_path)))
+    require("store").ensure_system_tables(db_path)
 end
 
 -- Rejects anything but a single, plain SELECT statement: no stacked
@@ -258,11 +247,7 @@ end
 
 function view.approved_sql(db_path, name)
     view.init_schema(db_path)
-    rows = db.query(db_path, "SELECT sql_text FROM view_approval WHERE name = " .. db.quote(name) .. ";")
-    if rows == nil or #rows == 0 then
-        return nil
-    end
-    return rows[1].sql_text
+    return require("store").approved_content(db_path, "view", name)
 end
 
 function view.is_approved(db_path, def)
@@ -275,16 +260,12 @@ end
 
 function view.approve(db_path, def, approved_by)
     view.init_schema(db_path)
-    db.exec(db_path, string.format(
-        "%s view_approval (name, sql_text, approved_by, approved_at) VALUES (%s, %s, %s, %s);",
-        db.replace_into(db_path),
-        db.quote(def.name), db.quote(view.approval_identity(def)), db.literal(approved_by), db.now_expr(db_path)
-    ))
+    require("store").approve(db_path, "view", def.name, view.approval_identity(def), approved_by)
 end
 
 function view.revoke(db_path, name)
     view.init_schema(db_path)
-    db.exec(db_path, "DELETE FROM view_approval WHERE name = " .. db.quote(name) .. ";")
+    require("store").revoke(db_path, "view", name)
 end
 
 -- Runs an approved view's query. `param_value` is required iff the
@@ -572,14 +553,14 @@ end
 -- abstraction) -- this tool has to enforce that same boundary itself,
 -- by checking every table the query actually references against the
 -- registered entity type list, rejecting anything else (auth_user's
--- password hashes, api_key secrets, agent_message/agent_pending_action,
+-- password hashes, auth_api_key secrets, agent_message/agent_pending_action,
 -- system_state, or any other internal table entity.list/get
 -- could never expose either).
 
 -- The single source of truth for "this is a real, hand-rolled table the
 -- model is allowed to know exists and name" -- deliberately narrow, not
 -- "every hand-rolled table" (agent_message/agent_pending_action/
--- agent_background_task, system_state, auth_user/api_key with real
+-- agent_background_task, system_state, auth_user/auth_api_key with real
 -- secrets, ...). Whether a table belongs here is a real per-table
 -- security judgment call, not a mechanical copy-paste -- the comment
 -- above run_agent_query names agent_message/agent_pending_action
@@ -602,8 +583,7 @@ HAND_ROLLED_DOCUMENTED_TABLES = {
     agent_session = true,
     document_embedding = true,
     knowledge_retrieval = true,
-    knowledge_retrieval_document = true,
-    knowledge_review = true,
+    knowledge_retrieval_hit = true,
     agent_model_call = true,
 }
 -- Attached to the module table too (not just left as the bare global
@@ -682,7 +662,7 @@ end
 -- already read one row at a time via entity.get, just not joinable in
 -- SQL without these. Seen in prod: "Unknown column 'cm.usage'" (a
 -- multi_select lives in its junction table) and sample lineage walked
--- ~25 entity.get calls deep because entity_source was refused. None of
+-- ~25 entity.get calls deep because entity_ref was refused. None of
 -- these hold anything beyond entity ids/types/values.
 --
 -- document_link and entity_event follow the same rule from the other
@@ -691,7 +671,7 @@ end
 -- read neither across rows (document.links is one document at a time,
 -- entity.get returns current values only).
 function view.queryable_tables(db_path)
-    allowed = {entity_source = true, document_link = true, entity_event = true}
+    allowed = {entity_ref = true, document_link = true, entity_event = true}
     for _, t in ipairs(schema.list(db_path)) do
         allowed[t.name] = true
         for _, f in ipairs(schema.fields(db_path, t.name)) do
@@ -781,6 +761,12 @@ function view.run_agent_query(db_path, sql_text)
                 return nil, nil, "refusing to run: '" .. name .. "' is a real table, but intentionally excluded from entity.query (a hand-rolled system/derived log, not a registered entity type) -- this isn't a typo or a broken query, just not self-verifiable through this tool; it's still valid SQL for the admin /sql console"
             end
             message = "refusing to run: '" .. name .. "' is not a registered entity type -- only registered entity tables can be queried this way"
+            -- SQL written before daat's schema revision (in chat history
+            -- or a compaction summary) can still use an old table name.
+            renamed = require("store").RENAMED_TABLES[name]
+            if renamed != nil then
+                message = message .. " ('" .. name .. "' was renamed to '" .. renamed .. "')"
+            end
             if name == "sqlite_master" or name == "information_schema" or name == "sqlite_schema" then
                 message = message .. " (to inspect the schema, call entity.list_types/entity.fields/entity.relationships instead; queries run in " .. view.sql_dialect_name() .. ")"
             end

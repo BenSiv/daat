@@ -50,7 +50,7 @@ Double-submit token: at login the server sets a random `csrf` cookie (readable b
 
 ## Emailed links: reset, setup, verify
 
-All three are one-time links to a page, stored in `password_reset`:
+All three are one-time links to a page, stored in `auth_email_link`:
 
 | Purpose | Who gets it | What it does | Lifetime |
 |---|---|---|---|
@@ -83,7 +83,7 @@ An Admin (`a`) can manage every other account, so its recovery must not depend o
 
 Short letter strings on the account, checked per route: `i` baseline (everything a normal user does), `s` setup (`/sql`, `/system`), `a` admin (users, API keys, settings, triggers, `admin_write_only` types). See `doc/glossary.md`.
 
-`/sql` needs `s` even though it only runs `SELECT`s. It can read every table, including `user` (password hashes, emails), `api_key`, `password_reset` and other people's chat history. The chat agent's query tool is limited to registered entity tables (`view.run_agent_query`) because a model's SQL can be steered by prompt injection. The `/sql` console instead relies on who is allowed to open it.
+`/sql` needs `s` even though it only runs `SELECT`s. It can read every table, including `auth_user` (password hashes, emails), `auth_api_key`, `auth_email_link` and other people's chat history. The chat agent's query tool is limited to registered entity tables (`view.run_agent_query`) because a model's SQL can be steered by prompt injection. The `/sql` console instead relies on who is allowed to open it.
 
 ## API keys
 

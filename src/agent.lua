@@ -76,7 +76,7 @@ CREATE TABLE IF NOT EXISTS agent_pending_action (
     tool TEXT NOT NULL,
     method TEXT NOT NULL,
     args_json TEXT NOT NULL,
-    -- VARCHAR(32), not TEXT -- see extension.lua's extension_job.status
+    -- VARCHAR(32), not TEXT -- see extension.lua's system_job.status
     -- for why: real MySQL 8.0 rejects a literal DEFAULT on TEXT columns.
     status VARCHAR(32) NOT NULL DEFAULT 'pending',
     created_at TEXT DEFAULT (%s),
@@ -84,12 +84,12 @@ CREATE TABLE IF NOT EXISTS agent_pending_action (
 );
 
 -- A background.start request (see AGENT_TOOLS.background below) --
--- mirrors extension_job's own queue shape (status/attempts/last_error),
+-- mirrors system_job's own queue shape (status/attempts/last_error),
 -- not agent_pending_action's: there's nothing here for a human to
 -- approve/deny, just a question that needs more turns than one HTTP
 -- request affords. Drained by a real, separate process (the CLI's
 -- "daat agent run-pending-background", meant to be invoked
--- periodically the same way extension_job's own "daat extension
+-- periodically the same way system_job's own "daat extension
 -- run-pending" already is), never inline in a chat turn.
 CREATE TABLE IF NOT EXISTS agent_background_task (
     id INTEGER PRIMARY KEY %s,
@@ -175,6 +175,29 @@ function agent.record_model_call(db_path, session_id, message_id, prompt, model_
         db.literal(tonumber(usage.prompt_tokens)), db.literal(tonumber(usage.completion_tokens)), db.literal(tonumber(usage.total_tokens))
     ))
     return call_id
+end
+
+-- agent.prune_prompts(db_path, days) -> rows cleared
+-- Clears the stored prompt of model calls older than `days` days
+-- (prompt_retention_days); tokens, evaluation and feedback stay. Times
+-- are compared as UTC 'YYYY-MM-DD HH:MM:SS' text, the form both
+-- backends' now() writes. `days` <= 0 keeps everything.
+function agent.prune_prompts(db_path, days)
+    if days == nil or days <= 0 then
+        return 0
+    end
+    cutoff = os.date("!%Y-%m-%d %H:%M:%S", os.time() - math.floor(days * 86400))
+    rows = db.query(db_path, string.format(
+        "SELECT COUNT(*) AS n FROM agent_model_call WHERE prompt IS NOT NULL AND created_at < %s;", db.quote(cutoff)))
+    count = 0
+    if rows != nil and rows[1] != nil then
+        count = tonumber(rows[1].n)
+    end
+    if count > 0 then
+        db.exec(db_path, string.format(
+            "UPDATE agent_model_call SET prompt = NULL WHERE prompt IS NOT NULL AND created_at < %s;", db.quote(cutoff)))
+    end
+    return count
 end
 
 -- agent.record_reply_eval(db_path, call_id, provider, is_error, reply_text)
@@ -1619,7 +1642,7 @@ end
 -- Background tasks (background.start / background.status)
 --------------------------------------------------------------------------
 --
--- A real async job queue, same shape as extension_job (status/attempts/
+-- A real async job queue, same shape as system_job (status/attempts/
 -- last_error, drained by a separate periodically-invoked process) --
 -- not agent_pending_action's approve/deny shape, since there's nothing
 -- for a human to approve here, just a question that needs more turns

@@ -35,7 +35,7 @@ end
 -- its own closed `allowed_entity_types` list, validated the same
 -- strictness as a plain `select` field's declared value list.
 --
--- Stored in ONE shared table (entity_source, see schema.
+-- Stored in ONE shared table (entity_ref, see schema.
 -- ensure_entity_source_table) rather than a table per (entity_type,
 -- field_name) the way multi_reference's own junction tables work --
 -- schema.ensure_multi_field_table's per-type table can't represent
@@ -75,23 +75,19 @@ DROPDOWN_SCHEMA = """
 -- VARCHAR(255), not TEXT -- same MariaDB/InnoDB key-length reasoning as
 -- ledger.lua's own entity_type/entity_field (a bare TEXT/BLOB column
 -- can't be part of a key without an explicit bounded length).
-CREATE TABLE IF NOT EXISTS dropdown_list (
-    name VARCHAR(255) PRIMARY KEY,
-    created_at TEXT DEFAULT (%s)
-);
-
-CREATE TABLE IF NOT EXISTS dropdown_value (
+-- One row per value of a named dropdown list; a list exists exactly
+-- when it has values (schema.validate_dropdown requires at least one).
+CREATE TABLE IF NOT EXISTS entity_dropdown_value (
     list_name VARCHAR(255) NOT NULL,
     value VARCHAR(255) NOT NULL,
     value_order INTEGER NOT NULL,
-    PRIMARY KEY (list_name, value),
-    FOREIGN KEY (list_name) REFERENCES dropdown_list(name)
+    PRIMARY KEY (list_name, value)
 );
 
 """
 
 function schema.init_schema(db_path)
-    db.exec(db_path, string.format(DROPDOWN_SCHEMA, db.now_expr(db_path)))
+    db.exec(db_path, DROPDOWN_SCHEMA)
 end
 
 -- Structural validation for a dropdowns/*.lua file -- same shape/rigor
@@ -146,17 +142,14 @@ end
 -- so the #def.values == 0 guard here is just defensive, not a real
 -- case for a well-formed file.
 function schema.register_dropdown(db_path, def)
-    db.exec(db_path, string.format(
-        "%s dropdown_list (name) VALUES (%s);", db.insert_ignore(db_path), db.quote(def.name)
-    ))
-    db.exec(db_path, string.format("DELETE FROM dropdown_value WHERE list_name = %s;", db.quote(def.name)))
+    db.exec(db_path, string.format("DELETE FROM entity_dropdown_value WHERE list_name = %s;", db.quote(def.name)))
     if #def.values > 0 then
         value_tuples = {}
         for i, value in ipairs(def.values) do
             table.insert(value_tuples, string.format("(%s, %s, %d)", db.quote(def.name), db.quote(value), i))
         end
         db.exec(db_path, string.format(
-            "%s dropdown_value (list_name, value, value_order) VALUES %s;",
+            "%s entity_dropdown_value (list_name, value, value_order) VALUES %s;",
             db.insert_ignore(db_path), table.concat(value_tuples, ", ")
         ))
     end
@@ -170,7 +163,7 @@ end
 -- not with a confusing crash.
 function schema.dropdown_values(db_path, name)
     rows = db.query(db_path, string.format(
-        "SELECT value FROM dropdown_value WHERE list_name = %s ORDER BY value_order ASC;", db.quote(name)
+        "SELECT value FROM entity_dropdown_value WHERE list_name = %s ORDER BY value_order ASC;", db.quote(name)
     ))
     if rows == nil then
         return {}
@@ -183,7 +176,7 @@ function schema.dropdown_values(db_path, name)
 end
 
 function schema.is_dropdown_registered(db_path, name)
-    rows = db.query(db_path, string.format("SELECT 1 FROM dropdown_list WHERE name = %s;", db.quote(name)))
+    rows = db.query(db_path, string.format("SELECT 1 FROM entity_dropdown_value WHERE list_name = %s LIMIT 1;", db.quote(name)))
     return rows != nil and #rows > 0
 end
 
@@ -730,10 +723,10 @@ end
 -- boundary reference/multi_reference already put on entity.lua rather
 -- than the database for their own existence checks.
 function schema.ensure_entity_source_table(db_path)
-    if db.table_exists(db_path, "entity_source") then
+    if db.table_exists(db_path, "entity_ref") then
         return
     end
-    db.exec(db_path, "CREATE TABLE entity_source (" ..
+    db.exec(db_path, "CREATE TABLE entity_ref (" ..
         "id INTEGER PRIMARY KEY " .. db.autoincrement_keyword(db_path) .. ", " ..
         "from_type VARCHAR(255) NOT NULL, " ..
         "from_id INTEGER NOT NULL, " ..
@@ -742,7 +735,7 @@ function schema.ensure_entity_source_table(db_path)
         "to_id INTEGER NOT NULL, " ..
         "created_at TEXT DEFAULT (" .. db.now_expr(db_path) .. ")" ..
         ");")
-    db.exec(db_path, "CREATE INDEX idx_entity_source_from ON entity_source (from_type, from_id, field_name);")
+    db.exec(db_path, "CREATE INDEX idx_entity_source_from ON entity_ref (from_type, from_id, field_name);")
 end
 
 -- A single polymorphic item, in whichever shape the caller handed it:
@@ -805,12 +798,12 @@ end
 function schema.write_polymorphic_field(db_path, entity_type, entity_id, field, value)
     schema.ensure_entity_source_table(db_path)
     db.exec(db_path, string.format(
-        "DELETE FROM entity_source WHERE from_type = %s AND from_id = %d AND field_name = %s;",
+        "DELETE FROM entity_ref WHERE from_type = %s AND from_id = %d AND field_name = %s;",
         db.quote(entity_type), tonumber(entity_id), db.quote(field.name)
     ))
     for _, item in ipairs(schema.normalize_polymorphic_value(value)) do
         db.exec(db_path, string.format(
-            "INSERT INTO entity_source (from_type, from_id, field_name, to_type, to_id) VALUES (%s, %d, %s, %s, %d);",
+            "INSERT INTO entity_ref (from_type, from_id, field_name, to_type, to_id) VALUES (%s, %d, %s, %s, %d);",
             db.quote(entity_type), tonumber(entity_id), db.quote(field.name), db.quote(item.type), tonumber(item.id)
         ))
     end
@@ -819,11 +812,11 @@ end
 -- The current set for one entity's polymorphic field, as a plain array
 -- of {type=, id=} tables (schema.read_multi_field's own counterpart).
 function schema.read_polymorphic_field(db_path, entity_type, entity_id, field)
-    if db.table_exists(db_path, "entity_source") == false then
+    if db.table_exists(db_path, "entity_ref") == false then
         return {}
     end
     rows = db.query(db_path, string.format(
-        "SELECT to_type, to_id FROM entity_source WHERE from_type = %s AND from_id = %d AND field_name = %s;",
+        "SELECT to_type, to_id FROM entity_ref WHERE from_type = %s AND from_id = %d AND field_name = %s;",
         db.quote(entity_type), tonumber(entity_id), db.quote(field.name)
     ))
     if rows == nil then

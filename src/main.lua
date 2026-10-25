@@ -103,7 +103,7 @@ function main()
     -- "knowledge distill" further down is dispatched outside of
     -- knowledge.do_knowledge instead of through it: see the
     -- require("agent") comment above main(). Meant to be invoked
-    -- periodically (cron/systemd timer), the same way extension_job's
+    -- periodically (cron/systemd timer), the same way system_job's
     -- own "daat extension run-pending" already is.
     if command == "agent" and arg[2] == "run-pending-background" then
         if config.is_initialized(".") == false then
@@ -117,6 +117,22 @@ function main()
         agent.init_schema(db_path)
         result = agent.run_pending_background_tasks(db_path, agent.default_model())
         print(string.format("Ran %d, failed %d", result.ran, result.failed))
+        return
+    end
+
+    -- Clears stored prompts past the deployment's retention period
+    -- (prompt_retention_days); meant for the same jobs timer as
+    -- run-pending-background.
+    if command == "agent" and arg[2] == "prune-prompts" then
+        if config.is_initialized(".") == false then
+            print("Not initialized. Run 'daat init' first.")
+            return
+        end
+        db_path = config.db_path(".")
+        agent.init_schema(db_path)
+        days = config.platform_config().prompt_retention_days
+        cleared = agent.prune_prompts(db_path, days)
+        print(string.format("Cleared %d stored prompts older than %s days", cleared, tostring(days)))
         return
     end
 

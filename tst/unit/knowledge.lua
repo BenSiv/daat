@@ -105,8 +105,8 @@ function test_hand_rolled_sql_columns_text_covers_every_event_log_table()
     print("Testing hand_rolled_sql_columns_text names the real columns for each knowledge event-log table")
     cases = {
         knowledge_retrieval = {"id", "session_id", "query_text", "hit_count", "created_at"},
-        knowledge_retrieval_document = {"retrieval_id", "document_id", "rank", "score", "tier_weight", "reinforcement_delta"},
-        knowledge_review = {"atomicity_status", "connectivity_status", "duplication_status", "title_status"},
+        knowledge_retrieval_hit = {"retrieval_id", "document_id", "rank", "score", "tier_weight", "reinforcement_delta",
+            "atomicity_status", "connectivity_status", "duplication_status", "title_status", "reviewed_at"},
     }
     for table_name, columns in pairs(cases) do
         text = knowledge.hand_rolled_sql_columns_text(table_name)

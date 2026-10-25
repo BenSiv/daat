@@ -198,7 +198,7 @@ add_user_with_email() {
     raw_form_post "/forgot-password" "identifier=hanne" >/dev/null
     first=$(last_token)
     # Step past the throttle window without waiting 5 minutes.
-    sqlite3 "$TEST_DIR/.store/store.db" "UPDATE password_reset SET issued_at = issued_at - 600;"
+    sqlite3 "$TEST_DIR/.store/store.db" "UPDATE auth_email_link SET issued_at = issued_at - 600;"
     raw_form_post "/forgot-password" "identifier=hanne" >/dev/null
     second=$(last_token)
     [ "$first" != "$second" ]
@@ -212,7 +212,7 @@ add_user_with_email() {
     add_user_with_email hanne hanne@example.com
     raw_form_post "/forgot-password" "identifier=hanne" >/dev/null
     token=$(last_token)
-    sqlite3 "$TEST_DIR/.store/store.db" "UPDATE password_reset SET expires_at = issued_at - 1;"
+    sqlite3 "$TEST_DIR/.store/store.db" "UPDATE auth_email_link SET expires_at = issued_at - 1;"
     run raw_form_post "/reset-password" "token=${token}&new_password=newpass456&confirm_password=newpass456"
     [[ ! "$output" =~ "302 Found" ]]
     [[ "$output" =~ "has expired" ]]
@@ -245,7 +245,7 @@ add_user_with_email() {
     add_user_with_email hanne hanne@example.com
     raw_form_post "/forgot-password" "identifier=hanne" >/dev/null
     token=$(last_token)
-    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT token_hash FROM password_reset;"
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT token_hash FROM auth_email_link;"
     [ -n "$output" ]
     [ "$output" != "$token" ]
 }
@@ -284,7 +284,9 @@ add_user_with_email() {
 }
 
 @test "the email column is added to a user table created before it existed" {
-    sqlite3 "$TEST_DIR/.store/store.db" "CREATE TABLE user_old AS SELECT login, password_hash, cap, created_at, archived_at FROM user; DROP TABLE user; ALTER TABLE user_old RENAME TO user;"
+    sqlite3 "$TEST_DIR/.store/store.db" "CREATE TABLE user_old AS SELECT login, password_hash, cap, created_at, archived_at FROM auth_user; DROP TABLE auth_user; ALTER TABLE user_old RENAME TO user;"
+    # A store whose accounts table is still named `user` predates migration 5.
+    sqlite3 "$TEST_DIR/.store/store.db" "UPDATE system_state SET number_value = 4 WHERE name = 'store.schema_version';"
     "$BIN" user add alice pass123 i >/dev/null
     run raw_get "/login"
     run "$BIN" user email alice alice@example.com
@@ -434,7 +436,7 @@ admin_cookie() {
 
 @test "an invited account has no password, so it can't log in with anything before setup" {
     "$BIN" user invite radi radi@example.com i >/dev/null
-    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT password_hash FROM user WHERE login = 'radi';"
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT password_hash FROM auth_user WHERE login = 'radi';"
     [ "$output" = "!no-password" ]
     run raw_login radi '!no-password'
     [[ "$output" =~ "401 Unauthorized" ]]

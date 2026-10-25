@@ -124,3 +124,98 @@ old_context_tables() {
     raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${chat}\",\"message\":\"hi\"}" "$cookie" "$csrf" "$(done_response "Hello.")" >/dev/null
     [ "$(store "SELECT MIN(id) > 8 FROM agent_model_call WHERE session_id = '${chat}';")" = "1" ]
 }
+
+@test "migration 3 moves extension and view approvals into system_approval" {
+    store "CREATE TABLE extension_approval (name VARCHAR(255) PRIMARY KEY, capabilities_json TEXT NOT NULL, approved_by TEXT, approved_at TEXT);"
+    store "CREATE TABLE view_approval (name VARCHAR(255) PRIMARY KEY, sql_text TEXT NOT NULL, approved_by TEXT, approved_at TEXT);"
+    store "INSERT INTO extension_approval VALUES ('task', '{\"ui\":true}', 'admin', '2026-09-01 00:00:00');"
+    store "INSERT INTO view_approval VALUES ('stock', 'SELECT 1', 'admin', '2026-09-02 00:00:00');"
+    rewind_to 2
+    run "$BIN" user list
+    [ "$status" -eq 0 ]
+    [ "$(store "SELECT kind || '|' || name || '|' || approved_content || '|' || approved_by FROM system_approval ORDER BY kind;")" = "extension|task|{\"ui\":true}|admin
+view|stock|SELECT 1|admin" ]
+    lacks_table extension_approval
+    lacks_table view_approval
+    has_table extension_approval_legacy
+}
+
+@test "migration 4 moves dropdown values into entity_dropdown_value and new lists still register" {
+    store "DROP TABLE IF EXISTS entity_dropdown_value;"
+    store "CREATE TABLE dropdown_list (name VARCHAR(255) PRIMARY KEY, created_at TEXT);"
+    store "CREATE TABLE dropdown_value (list_name VARCHAR(255) NOT NULL, value VARCHAR(255) NOT NULL, value_order INTEGER NOT NULL, PRIMARY KEY (list_name, value), FOREIGN KEY (list_name) REFERENCES dropdown_list(name));"
+    store "INSERT INTO dropdown_list (name) VALUES ('colour'); INSERT INTO dropdown_value VALUES ('colour', 'red', 1), ('colour', 'green', 2);"
+    rewind_to 3
+    run "$BIN" user list
+    [ "$status" -eq 0 ]
+    [ "$(store "SELECT group_concat(value, ',') FROM (SELECT value FROM entity_dropdown_value WHERE list_name = 'colour' ORDER BY value_order);")" = "red,green" ]
+    lacks_table dropdown_list
+    lacks_table dropdown_value
+    has_table dropdown_list_legacy
+
+    mkdir -p dropdowns
+    printf 'return {name = "texture", values = {"soft", "hard"}}\n' > dropdowns/texture.lua
+    run raw_get "/login"
+    [ "$(store "SELECT COUNT(*) FROM entity_dropdown_value WHERE list_name = 'texture';")" = "2" ]
+}
+
+@test "migration 5 renames tables to their domain names, keeping their rows" {
+    "$BIN" user add olduser secret123 i >/dev/null
+    # Put the auth tables back under their old names, as an old store has them.
+    store "ALTER TABLE auth_user RENAME TO user; ALTER TABLE auth_api_key RENAME TO api_key; ALTER TABLE auth_email_link RENAME TO password_reset;"
+    rewind_to 4
+    run "$BIN" user list
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "olduser" ]]
+    has_table auth_user
+    has_table auth_api_key
+    has_table auth_email_link
+    lacks_table user
+    lacks_table password_reset
+    # And the renamed table is the live one: login works.
+    run login_test_user "newone" "i"
+    [ "$(store "SELECT COUNT(*) FROM auth_user WHERE login IN ('olduser', 'newone');")" = "2" ]
+}
+
+@test "a rename that finds an empty new table from a failed run replaces it; one with rows stops" {
+    store "ALTER TABLE entity_ref RENAME TO entity_source;" 2>/dev/null || store "CREATE TABLE entity_source (id INTEGER PRIMARY KEY, from_type TEXT);"
+    store "CREATE TABLE IF NOT EXISTS entity_ref (id INTEGER PRIMARY KEY, from_type TEXT);"
+    rewind_to 4
+    run "$BIN" user list
+    [ "$status" -eq 0 ]
+    lacks_table entity_source
+    has_table entity_ref
+
+    store "CREATE TABLE system_job_x (id INTEGER);"
+    store "ALTER TABLE system_job RENAME TO extension_job; CREATE TABLE system_job (job_id INTEGER PRIMARY KEY); INSERT INTO system_job VALUES (1);"
+    rewind_to 4
+    run "$BIN" user list
+    [[ "$output" =~ "both exist and system_job has rows" ]]
+}
+
+@test "migration 6 renames the retrieval hit table and folds each hit's review into it" {
+    store "DROP TABLE IF EXISTS knowledge_retrieval_hit;"
+    store "CREATE TABLE knowledge_retrieval_document (retrieval_id INTEGER NOT NULL, document_id INTEGER NOT NULL, \`rank\` INTEGER, score REAL, tier_weight REAL, reinforcement_delta REAL, PRIMARY KEY (retrieval_id, document_id));"
+    store "CREATE TABLE knowledge_review (id INTEGER PRIMARY KEY AUTOINCREMENT, retrieval_id INTEGER NOT NULL, document_id INTEGER NOT NULL, atomicity_status TEXT, connectivity_status TEXT, duplication_status TEXT, title_status TEXT, action_summary TEXT, created_at TEXT);"
+    store "INSERT INTO knowledge_retrieval_document VALUES (1, 10, 1, 0.9, 1.0, 0.5), (1, 11, 2, 0.4, 1.0, 0.2);"
+    store "INSERT INTO knowledge_review (retrieval_id, document_id, atomicity_status, connectivity_status, duplication_status, title_status, created_at) VALUES (1, 10, 'atomic', 'linked', 'unique', 'ok', '2026-10-01 12:00:00');"
+    rewind_to 5
+    run "$BIN" user list
+    [ "$status" -eq 0 ]
+    [ "$(store "SELECT atomicity_status || '|' || title_status || '|' || reviewed_at FROM knowledge_retrieval_hit WHERE document_id = 10;")" = "atomic|ok|2026-10-01 12:00:00" ]
+    [ "$(store "SELECT COALESCE(reviewed_at, 'none') || '|' || score FROM knowledge_retrieval_hit WHERE document_id = 11;")" = "none|0.4" ]
+    lacks_table knowledge_retrieval_document
+    lacks_table knowledge_review
+    has_table knowledge_review_legacy
+}
+
+@test "SQL written with an old table name is refused with its new name" {
+    "$BIN" user add admin secret123 ia >/dev/null
+    read session csrf < <(login_test_user "dora" "i")
+    cookie="session=${session}; csrf=${csrf}"
+    chat=$(json_body "$(raw_post_json "/api/chat-widget-start" '{"title":"x"}' "$cookie" "$csrf" "")" | jq -r '.session_id')
+    scripted="$(tool_call_response "entity.query" '{"sql":"SELECT * FROM entity_source"}')"$'\1'"$(done_response "Done.")"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${chat}\",\"message\":\"lineage\"}" "$cookie" "$csrf" "$scripted" >/dev/null
+    run latest_tool_result "$chat"
+    [[ "$output" =~ "'entity_source' was renamed to 'entity_ref'" ]]
+}

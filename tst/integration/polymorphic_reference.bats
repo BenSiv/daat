@@ -72,7 +72,7 @@ setup_full_schema() {
     [[ ! "$output" =~ "source" ]]
 
     run sqlite3 .store/store.db ".tables"
-    [[ "$output" =~ "entity_source" ]]
+    [[ "$output" =~ "entity_ref" ]]
     # Not a per-(entity_type, field_name) table the way multi_reference
     # gets one -- the whole point of this mechanism.
     [[ ! "$output" =~ "sample_source" ]]
@@ -85,9 +85,9 @@ setup_full_schema() {
     "$BIN" entity create sample label="S1" source="plant:1" >/dev/null
     "$BIN" entity create product label="P1" source="plant:1,sample:2" >/dev/null
 
-    run sqlite3 .store/store.db "SELECT COUNT(*) FROM entity_source;"
+    run sqlite3 .store/store.db "SELECT COUNT(*) FROM entity_ref;"
     [ "$output" -eq 3 ]
-    run sqlite3 .store/store.db "SELECT DISTINCT from_type FROM entity_source ORDER BY from_type;"
+    run sqlite3 .store/store.db "SELECT DISTINCT from_type FROM entity_ref ORDER BY from_type;"
     [[ "$output" =~ "product" ]]
     [[ "$output" =~ "sample" ]]
 }
@@ -194,7 +194,7 @@ EOF
     "$BIN" entity create plant label="Vanilla" >/dev/null
     "$BIN" entity create sample label="S1" source="plant:1" >/dev/null
     "$BIN" entity update sample 3 source="plant:2" >/dev/null
-    run sqlite3 .store/store.db "SELECT COUNT(*) FROM entity_source WHERE from_type='sample' AND from_id=3;"
+    run sqlite3 .store/store.db "SELECT COUNT(*) FROM entity_ref WHERE from_type='sample' AND from_id=3;"
     [ "$output" -eq 1 ]
     run "$BIN" entity show sample 3
     [[ "$output" =~ "source               [plant:2]" ]]
@@ -214,7 +214,7 @@ EOF
 @test "schema.relationships emits one edge per allowed_entity_types entry, discoverable the same way a plain reference is" {
     setup_full_schema
     "$BIN" entity create plant label="Cocoa" >/dev/null
-    run sqlite3 .store/store.db "SELECT to_type FROM entity_source LIMIT 0;"
+    run sqlite3 .store/store.db "SELECT to_type FROM entity_ref LIMIT 0;"
     # Exercised indirectly via /data's relation diagram in cgi.bats --
     # here just confirm schema.relationships (entity.relationships'
     # own backing query) actually lists both allowed target types for

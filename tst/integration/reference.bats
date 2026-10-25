@@ -36,7 +36,7 @@ new_document() {
 }
 
 refs_of() {
-    db "SELECT entity_type || ':' || entity_id FROM document_reference WHERE document_id = $1 ORDER BY entity_type, entity_id;" | tr '\n' ' '
+    db "SELECT entity_type || ':' || entity_id FROM document_mention WHERE document_id = $1 ORDER BY entity_type, entity_id;" | tr '\n' ' '
 }
 
 @test "a document references entities named in its text: spacing ignored, a sample yields its experiment too, vague names never" {
@@ -57,16 +57,16 @@ refs_of() {
 @test "the name index follows renames and archives; repair references re-reads every document" {
     exp=$(new_entity experiment "Exp185")
     "$BIN" entity update experiment "$exp" label="Exp186" >/dev/null
-    [ "$(db "SELECT name_key FROM reference_name WHERE entity_id = $exp;")" = "exp186" ]
+    [ "$(db "SELECT name_key FROM entity_name_index WHERE entity_id = $exp;")" = "exp186" ]
     "$BIN" entity archive experiment "$exp" >/dev/null
-    [ "$(db "SELECT COUNT(*) FROM reference_name WHERE entity_id = $exp;")" = "0" ]
+    [ "$(db "SELECT COUNT(*) FROM entity_name_index WHERE entity_id = $exp;")" = "0" ]
     "$BIN" entity unarchive experiment "$exp" >/dev/null
 
     # Written before the entity existed: picked up by the repair.
     d=$(new_document "Plan" "Next: Exp300.")
     later=$(new_entity experiment "Exp300")
     [ "$(refs_of "$d")" = "" ]
-    db "DELETE FROM reference_name;"
+    db "DELETE FROM entity_name_index;"
     run "$BIN" repair references
     [[ "$output" =~ "Indexed 2 entity name(s)" ]]
     [ "$(refs_of "$d")" = "experiment:${later} " ]
