@@ -20,7 +20,7 @@
 -- Evidence between tags (tag_evidence, "Evidence between tags" in the
 -- doc): core's own kinds -- `link`, `connection`, `shared_link` and
 -- `reference:<entity type>` -- are recomputed from document_link,
--- document_reference and document_tag when read and their inputs
+-- document_mention and document_tag when read and their inputs
 -- changed, not on every write -- one outside job's apply writes thousands of
 -- memberships, and nothing reads evidence until judgment or display.
 
@@ -40,13 +40,6 @@ CREATE TABLE IF NOT EXISTS tag_centre (
 );
 """
 
--- The fingerprint of core evidence's inputs when it was last computed.
-TAG_EVIDENCE_STATE_SCHEMA = """
-CREATE TABLE IF NOT EXISTS tag_evidence_state (
-    id INTEGER PRIMARY KEY,
-    fingerprint TEXT NOT NULL
-);
-"""
 
 ACTIVE = "(archived_at IS NULL OR archived_at = '')"
 
@@ -57,7 +50,6 @@ TAG_EVIDENCE_PRIOR = 2.0
 
 function tag.init_schema(db_path)
     db.exec(db_path, string.format(TAG_CENTRE_SCHEMA, db.now_expr(db_path)))
-    db.exec(db_path, TAG_EVIDENCE_STATE_SCHEMA)
 end
 
 function tag_unit(v, dims)
@@ -438,8 +430,8 @@ function tag_evidence_fingerprint(db_path)
                (SELECT COUNT(*) FROM document_tag WHERE %s) AS memberships,
                (SELECT COALESCE(MAX(last_event_id), 0) FROM document_tag) AS last_membership,
                (SELECT COUNT(*) FROM document WHERE %s) AS documents,
-               (SELECT COUNT(*) FROM document_reference) AS refs,
-               (SELECT COALESCE(SUM(entity_id), 0) FROM document_reference) AS ref_sum;""", ACTIVE, ACTIVE, ACTIVE))
+               (SELECT COUNT(*) FROM document_mention) AS refs,
+               (SELECT COALESCE(SUM(entity_id), 0) FROM document_mention) AS ref_sum;""", ACTIVE, ACTIVE, ACTIVE))
     r = rows[1]
     return string.format("%s/%s/%s/%s/%s/%s/%s", tostring(r.links), tostring(r.last_link),
         tostring(r.memberships), tostring(r.last_membership), tostring(r.documents),
@@ -596,7 +588,7 @@ function tag_core_evidence(db_path)
     end
     computed = {link = links, connection = connections, shared_link = tag_shared_targets(linked_pages)}
     refs = db.query(db_path, """
-        SELECT r.document_id, r.entity_type, r.entity_id FROM document_reference r
+        SELECT r.document_id, r.entity_type, r.entity_id FROM document_mention r
         JOIN document d ON d.id = r.document_id AND (d.archived_at IS NULL OR d.archived_at = '');""")
     if refs == nil then
         refs = {}
@@ -672,8 +664,8 @@ function tag.refresh_evidence(db_path)
             end
         end
     end
-    db.exec(db_path, string.format("%s tag_evidence_state (id, fingerprint) VALUES (1, %s);",
-        db.replace_into(db_path), db.quote(tag_evidence_fingerprint(db_path))))
+    -- The fingerprint of core evidence's inputs when it was last computed.
+    require("store").set_text(db_path, "tag.evidence_fingerprint", tag_evidence_fingerprint(db_path))
     return written
 end
 
@@ -751,8 +743,7 @@ end
 -- Every active evidence row with its lift, core's own rows refreshed
 -- first if their inputs changed since they were computed.
 function tag.evidence(db_path)
-    state = db.query(db_path, "SELECT fingerprint FROM tag_evidence_state WHERE id = 1;")
-    if state == nil or #state == 0 or state[1].fingerprint != tag_evidence_fingerprint(db_path) then
+    if require("store").get_text(db_path, "tag.evidence_fingerprint") != tag_evidence_fingerprint(db_path) then
         tag.refresh_evidence(db_path)
     end
     rows = db.query(db_path, string.format(

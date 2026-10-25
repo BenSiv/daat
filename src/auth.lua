@@ -37,10 +37,10 @@ auth.SCHEMA = """
 -- VARCHAR(255), not TEXT -- MariaDB/InnoDB refuses a bare TEXT column
 -- as a key without an explicit length; see ledger.lua's own SCHEMA
 -- comment for the full reasoning.
-CREATE TABLE IF NOT EXISTS user (
+CREATE TABLE IF NOT EXISTS auth_user (
     login VARCHAR(255) PRIMARY KEY,
     password_hash TEXT NOT NULL,
-    -- VARCHAR(32), not TEXT -- see extension.lua's extension_job.status
+    -- VARCHAR(32), not TEXT -- see extension.lua's system_job.status
     -- for why: real MySQL 8.0 rejects a literal DEFAULT on TEXT columns.
     cap VARCHAR(32) NOT NULL DEFAULT '',
     created_at TEXT DEFAULT (%s),
@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS user (
 -- unix seconds (INTEGER), not the TEXT now() timestamps used elsewhere,
 -- because they're compared against os.time() directly -- the same
 -- reason the session cookie's own expiry is a unix integer.
-CREATE TABLE IF NOT EXISTS password_reset (
+CREATE TABLE IF NOT EXISTS auth_email_link (
     token_hash VARCHAR(64) PRIMARY KEY,
     login VARCHAR(255) NOT NULL,
     issued_at INTEGER NOT NULL,
@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS password_reset (
 -- doc/architecture.md's "Auth" section). `label` (not a synthetic id)
 -- is the primary key, same convention as user.login -- an
 -- operator-chosen, human-meaningful, unique name.
-CREATE TABLE IF NOT EXISTS api_key (
+CREATE TABLE IF NOT EXISTS auth_api_key (
     label VARCHAR(255) PRIMARY KEY,
     key_hash TEXT NOT NULL,
     cap VARCHAR(32) NOT NULL DEFAULT '',
@@ -110,7 +110,7 @@ end
 -- user.email_verified_at: when the account's current email was last
 -- proven reachable -- set by completing a link emailed to that exact
 -- address, cleared whenever the address changes. Unix seconds, like
--- password_reset's own times. Forgot-password only mails a verified
+-- auth_email_link's own times. Forgot-password only mails a verified
 -- address (find_reset_account), so a mistyped address never receives
 -- reset links.
 --
@@ -118,18 +118,18 @@ end
 -- (cookie_signature), and bumped by auth.set_password -- so changing a
 -- password, by any route, ends every session that existed before it.
 --
--- password_reset.purpose: "reset" (forgot-password), "setup" (an
+-- auth_email_link.purpose: "reset" (forgot-password), "setup" (an
 -- account with no password yet chooses its first one -- that's also
 -- how its address gets verified) or "verify" (an account that already
 -- has a password confirms a new address by entering that password; it
--- can't set one). password_reset.email: the address the link went to.
+-- can't set one). auth_email_link.email: the address the link went to.
 -- A link only works while that is still the account's address.
 function ensure_auth_columns(db_path)
-    add_column_if_missing(db_path, "user", "email", "VARCHAR(255) DEFAULT NULL")
-    add_column_if_missing(db_path, "user", "email_verified_at", "INTEGER DEFAULT NULL")
-    add_column_if_missing(db_path, "user", "session_version", "INTEGER NOT NULL DEFAULT 0")
-    add_column_if_missing(db_path, "password_reset", "purpose", "VARCHAR(16) NOT NULL DEFAULT 'reset'")
-    add_column_if_missing(db_path, "password_reset", "email", "VARCHAR(255) DEFAULT NULL")
+    add_column_if_missing(db_path, "auth_user", "email", "VARCHAR(255) DEFAULT NULL")
+    add_column_if_missing(db_path, "auth_user", "email_verified_at", "INTEGER DEFAULT NULL")
+    add_column_if_missing(db_path, "auth_user", "session_version", "INTEGER NOT NULL DEFAULT 0")
+    add_column_if_missing(db_path, "auth_email_link", "purpose", "VARCHAR(16) NOT NULL DEFAULT 'reset'")
+    add_column_if_missing(db_path, "auth_email_link", "email", "VARCHAR(255) DEFAULT NULL")
 end
 
 function auth.init_schema(db_path)
@@ -247,7 +247,7 @@ function auth.create_user(db_path, login, password, cap)
 
     hash = bcrypt.hash(password, 12)
     db.exec(db_path, string.format(
-        "INSERT INTO user (login, password_hash, cap) VALUES (%s, %s, %s);",
+        "INSERT INTO auth_user (login, password_hash, cap) VALUES (%s, %s, %s);",
         db.quote(login), db.quote(hash), db.quote(cap)
     ))
     return login
@@ -255,7 +255,7 @@ end
 
 function auth.get_user(db_path, login)
     rows = db.query(db_path, string.format(
-        "SELECT * FROM user WHERE login = %s;", db.quote(login)
+        "SELECT * FROM auth_user WHERE login = %s;", db.quote(login)
     ))
     if rows == nil or rows[1] == nil then
         return nil
@@ -264,7 +264,7 @@ function auth.get_user(db_path, login)
 end
 
 function auth.list_users(db_path, include_archived)
-    q = "SELECT login, cap, email, email_verified_at, created_at, archived_at FROM user"
+    q = "SELECT login, cap, email, email_verified_at, created_at, archived_at FROM auth_user"
     if include_archived != true then
         q = q .. " WHERE archived_at IS NULL"
     end
@@ -290,7 +290,7 @@ function auth.set_password(db_path, login, password)
     end
     hash = bcrypt.hash(password, 12)
     db.exec(db_path, string.format(
-        "UPDATE user SET password_hash = %s, session_version = session_version + 1 WHERE login = %s;",
+        "UPDATE auth_user SET password_hash = %s, session_version = session_version + 1 WHERE login = %s;",
         db.quote(hash), db.quote(login)
     ))
     return true
@@ -317,7 +317,7 @@ end
 -- must cut off whoever received a link at the wrong one.
 function void_account_links(db_path, login)
     db.exec(db_path, string.format(
-        "UPDATE password_reset SET used_at = %d WHERE login = %s AND used_at IS NULL;", os.time(), db.quote(login)
+        "UPDATE auth_email_link SET used_at = %d WHERE login = %s AND used_at IS NULL;", os.time(), db.quote(login)
     ))
 end
 
@@ -327,7 +327,7 @@ function auth.set_email(db_path, login, email)
         return nil, "no such user: " .. tostring(login)
     end
     if email == nil or email == "" then
-        db.exec(db_path, string.format("UPDATE user SET email = NULL, email_verified_at = NULL WHERE login = %s;", db.quote(login)))
+        db.exec(db_path, string.format("UPDATE auth_user SET email = NULL, email_verified_at = NULL WHERE login = %s;", db.quote(login)))
         void_account_links(db_path, login)
         return true
     end
@@ -343,7 +343,7 @@ function auth.set_email(db_path, login, email)
         return true
     end
     db.exec(db_path, string.format(
-        "UPDATE user SET email = %s, email_verified_at = NULL WHERE login = %s;", db.quote(email), db.quote(login)
+        "UPDATE auth_user SET email = %s, email_verified_at = NULL WHERE login = %s;", db.quote(email), db.quote(login)
     ))
     void_account_links(db_path, login)
     return true
@@ -356,7 +356,7 @@ end
 
 function auth.get_user_by_email(db_path, email)
     rows = db.query(db_path, string.format(
-        "SELECT * FROM user WHERE email = %s;", db.quote(string.lower(email))
+        "SELECT * FROM auth_user WHERE email = %s;", db.quote(string.lower(email))
     ))
     if rows == nil or rows[1] == nil then
         return nil
@@ -370,7 +370,7 @@ function auth.set_capabilities(db_path, login, cap)
         return nil, "no such user: " .. login
     end
     db.exec(db_path, string.format(
-        "UPDATE user SET cap = %s WHERE login = %s;", db.quote(cap), db.quote(login)
+        "UPDATE auth_user SET cap = %s WHERE login = %s;", db.quote(cap), db.quote(login)
     ))
     return true
 end
@@ -384,7 +384,7 @@ function auth.archive_user(db_path, login)
         return nil, "no such user: " .. login
     end
     db.exec(db_path, string.format(
-        "UPDATE user SET archived_at = %s WHERE login = %s;", db.now_expr(db_path), db.quote(login)
+        "UPDATE auth_user SET archived_at = %s WHERE login = %s;", db.now_expr(db_path), db.quote(login)
     ))
     return true
 end
@@ -395,7 +395,7 @@ function auth.unarchive_user(db_path, login)
         return nil, "no such user: " .. login
     end
     db.exec(db_path, string.format(
-        "UPDATE user SET archived_at = NULL WHERE login = %s;", db.quote(login)
+        "UPDATE auth_user SET archived_at = NULL WHERE login = %s;", db.quote(login)
     ))
     return true
 end
@@ -426,7 +426,7 @@ function auth.create_api_key(db_path, label, cap)
     end
     hash = bcrypt.hash(raw_key, 12)
     db.exec(db_path, string.format(
-        "INSERT INTO api_key (label, key_hash, cap) VALUES (%s, %s, %s);",
+        "INSERT INTO auth_api_key (label, key_hash, cap) VALUES (%s, %s, %s);",
         db.quote(label), db.quote(hash), db.quote(cap)
     ))
     return raw_key
@@ -434,7 +434,7 @@ end
 
 function auth.get_api_key(db_path, label)
     rows = db.query(db_path, string.format(
-        "SELECT * FROM api_key WHERE label = %s;", db.quote(label)
+        "SELECT * FROM auth_api_key WHERE label = %s;", db.quote(label)
     ))
     if rows == nil or rows[1] == nil then
         return nil
@@ -443,7 +443,7 @@ function auth.get_api_key(db_path, label)
 end
 
 function auth.list_api_keys(db_path, include_archived)
-    q = "SELECT label, cap, created_at, archived_at FROM api_key"
+    q = "SELECT label, cap, created_at, archived_at FROM auth_api_key"
     if include_archived != true then
         q = q .. " WHERE archived_at IS NULL"
     end
@@ -461,7 +461,7 @@ function auth.set_api_key_capabilities(db_path, label, cap)
         return nil, "no such api key: " .. label
     end
     db.exec(db_path, string.format(
-        "UPDATE api_key SET cap = %s WHERE label = %s;", db.quote(cap), db.quote(label)
+        "UPDATE auth_api_key SET cap = %s WHERE label = %s;", db.quote(cap), db.quote(label)
     ))
     return true
 end
@@ -474,7 +474,7 @@ function auth.archive_api_key(db_path, label)
         return nil, "no such api key: " .. label
     end
     db.exec(db_path, string.format(
-        "UPDATE api_key SET archived_at = %s WHERE label = %s;", db.now_expr(db_path), db.quote(label)
+        "UPDATE auth_api_key SET archived_at = %s WHERE label = %s;", db.now_expr(db_path), db.quote(label)
     ))
     return true
 end
@@ -485,7 +485,7 @@ function auth.unarchive_api_key(db_path, label)
         return nil, "no such api key: " .. label
     end
     db.exec(db_path, string.format(
-        "UPDATE api_key SET archived_at = NULL WHERE label = %s;", db.quote(label)
+        "UPDATE auth_api_key SET archived_at = NULL WHERE label = %s;", db.quote(label)
     ))
     return true
 end
@@ -499,7 +499,7 @@ function auth.verify_api_key(db_path, raw_key)
     if raw_key == nil or raw_key == "" then
         return nil
     end
-    rows = db.query(db_path, "SELECT * FROM api_key WHERE archived_at IS NULL;")
+    rows = db.query(db_path, "SELECT * FROM auth_api_key WHERE archived_at IS NULL;")
     if rows == nil then
         return nil
     end
@@ -727,7 +727,7 @@ function send_account_link(root, db_path, user, purpose, site_name)
     end
     token_hash = reset_token_hash(secret, token)
     db.exec(db_path, string.format(
-        "INSERT INTO password_reset (token_hash, login, issued_at, expires_at, purpose, email) VALUES (%s, %s, %d, %d, %s, %s);",
+        "INSERT INTO auth_email_link (token_hash, login, issued_at, expires_at, purpose, email) VALUES (%s, %s, %d, %d, %s, %s);",
         db.quote(token_hash), db.quote(user.login), now, now + ttl, db.quote(purpose), db.quote(user.email)
     ))
 
@@ -787,7 +787,7 @@ function send_account_link(root, db_path, user, purpose, site_name)
         -- deleted -- see doc/architecture.md), and so it doesn't count
         -- against the throttle: the user can retry straight away.
         db.exec(db_path, string.format(
-            "UPDATE password_reset SET used_at = %d WHERE token_hash = %s;", now, db.quote(token_hash)
+            "UPDATE auth_email_link SET used_at = %d WHERE token_hash = %s;", now, db.quote(token_hash)
         ))
         return nil, send_err
     end
@@ -857,7 +857,7 @@ function auth.invite_user(root, db_path, login, email, cap, site_name)
         return nil, err
     end
     db.exec(db_path, string.format(
-        "UPDATE user SET password_hash = %s WHERE login = %s;", db.quote(NO_PASSWORD_HASH), db.quote(login)
+        "UPDATE auth_user SET password_hash = %s WHERE login = %s;", db.quote(NO_PASSWORD_HASH), db.quote(login)
     ))
     auth.set_email(db_path, login, email)
     sent, send_err = auth.send_setup_link(root, db_path, login, site_name)
@@ -881,7 +881,7 @@ function auth.request_password_reset(root, db_path, identifier, site_name)
 
     now = os.time()
     recent = db.query(db_path, string.format(
-        "SELECT COUNT(*) AS n FROM password_reset WHERE login = %s AND purpose = 'reset' AND used_at IS NULL AND issued_at > %d;",
+        "SELECT COUNT(*) AS n FROM auth_email_link WHERE login = %s AND purpose = 'reset' AND used_at IS NULL AND issued_at > %d;",
         db.quote(user.login), now - RESET_THROTTLE_SECONDS
     ))
     if recent != nil and recent[1] != nil and tonumber(recent[1].n) > 0 then
@@ -901,7 +901,7 @@ end
 -- the account's address. A "reset" or "setup" link (both set a
 -- password) is also refused for an Admin -- checked again here, not
 -- only when the link was issued, so an account promoted after its link
--- went out can't use it. link is the password_reset row (purpose, email).
+-- went out can't use it. link is the auth_email_link row (purpose, email).
 function check_account_link(root, db_path, token)
     if token == nil or string.match(token, "^%x+$") == nil or string.len(token) != 64 then
         return nil
@@ -911,7 +911,7 @@ function check_account_link(root, db_path, token)
         return nil
     end
     rows = db.query(db_path, string.format(
-        "SELECT login, purpose, email FROM password_reset WHERE token_hash = %s AND used_at IS NULL AND expires_at > %d;",
+        "SELECT login, purpose, email FROM auth_email_link WHERE token_hash = %s AND used_at IS NULL AND expires_at > %d;",
         db.quote(reset_token_hash(secret, token)), os.time()
     ))
     if rows == nil or rows[1] == nil then
@@ -961,7 +961,7 @@ end
 function finish_account_link(db_path, login, link)
     void_account_links(db_path, login)
     db.exec(db_path, string.format(
-        "UPDATE user SET email_verified_at = %d WHERE login = %s AND email = %s;",
+        "UPDATE auth_user SET email_verified_at = %d WHERE login = %s AND email = %s;",
         os.time(), db.quote(login), db.quote(link.email)
     ))
 end

@@ -526,10 +526,8 @@ HAND_ROLLED_ENTITY_FIELDS = {
     agent_session = function() return agent.session_sql_columns_text() end,
     document_embedding = function() return document.embedding_sql_columns_text() end,
     knowledge_retrieval = function() return knowledge.hand_rolled_sql_columns_text("knowledge_retrieval") end,
-    knowledge_retrieval_document = function() return knowledge.hand_rolled_sql_columns_text("knowledge_retrieval_document") end,
-    knowledge_review = function() return knowledge.hand_rolled_sql_columns_text("knowledge_review") end,
-    knowledge_context = function() return knowledge.hand_rolled_sql_columns_text("knowledge_context") end,
-    knowledge_chat_eval = function() return knowledge.hand_rolled_sql_columns_text("knowledge_chat_eval") end,
+    knowledge_retrieval_hit = function() return knowledge.hand_rolled_sql_columns_text("knowledge_retrieval_hit") end,
+    agent_model_call = function() return agent.model_call_sql_columns_text() end,
 }
 
 -- The security judgment call of which tables the model may know exist
@@ -883,7 +881,7 @@ function agent_tools.execute_tool(db_path, author, session_id, tool_name, method
                 line = line .. " -- not a column on " .. args.entity_type .. ": stored in junction table " ..
                     schema.multi_field_table_name(args.entity_type, f.name) .. "(" .. args.entity_type .. "_id, " .. value_col .. ")"
             elseif f.type == "polymorphic_reference" or f.type == "multi_polymorphic_reference" then
-                line = line .. " -- not a column on " .. args.entity_type .. ": stored in entity_source(from_type, from_id, field_name, to_type, to_id); join with from_type = '" ..
+                line = line .. " -- not a column on " .. args.entity_type .. ": stored in entity_ref(from_type, from_id, field_name, to_type, to_id); join with from_type = '" ..
                     args.entity_type .. "' AND field_name = '" .. f.name .. "' AND from_id = " .. args.entity_type .. ".id"
             end
             table.insert(lines, line)

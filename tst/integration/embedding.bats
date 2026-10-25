@@ -76,12 +76,12 @@ backdate_queue() {
 @test "archiving drops a document's embedding and references and archives its links; unarchiving rebuilds them" {
     target=$(new_document "Media protocol" "how to make the medium")
     id=$(new_document "Run notes" "followed [[Media protocol]]")
-    db "INSERT INTO document_reference (document_id, entity_type, entity_id) VALUES ($id, 'sample', 1);"
+    db "INSERT INTO document_mention (document_id, entity_type, entity_id) VALUES ($id, 'sample', 1);"
     [ "$(db "SELECT COUNT(*) FROM document_embedding WHERE document_id = $id;")" = "1" ]
 
     "$BIN" entity archive document "$id" >/dev/null
     [ "$(db "SELECT COUNT(*) FROM document_embedding WHERE document_id = $id;")" = "0" ]
-    [ "$(db "SELECT COUNT(*) FROM document_reference WHERE document_id = $id;")" = "0" ]
+    [ "$(db "SELECT COUNT(*) FROM document_mention WHERE document_id = $id;")" = "0" ]
     [ "$(db "SELECT COUNT(*) FROM document_link WHERE from_document_id = $id AND (archived_at IS NULL OR archived_at = '');")" = "0" ]
 
     "$BIN" entity unarchive document "$id" >/dev/null
@@ -94,7 +94,7 @@ backdate_queue() {
     gone=$(new_document "Gone" "archived before drop_derived existed")
     db "UPDATE document SET archived_at = '2026-01-01 00:00:00' WHERE id = $gone;"
     db "INSERT INTO document_embedding (document_id, model, vector_json) VALUES (999, 'test-embedding', '[1]');"
-    db "INSERT INTO document_reference (document_id, entity_type, entity_id) VALUES (999, 'sample', 1);"
+    db "INSERT INTO document_mention (document_id, entity_type, entity_id) VALUES (999, 'sample', 1);"
     db "INSERT INTO document_link (from_document_id, to_document_id, link_text, link_hash) VALUES ($gone, $id, 'Kept', 'h1');"
     db "INSERT INTO tag_centre (tag_id, members, sum_json) VALUES (999, 1, '[1]');"
 
@@ -108,7 +108,7 @@ backdate_queue() {
     run "$BIN" repair knowledge
     [[ "$output" =~ "2 embeddings of archived or missing documents: deleted" ]]
     [ "$(db "SELECT COUNT(*) FROM document_embedding;")" = "1" ]
-    [ "$(db "SELECT COUNT(*) FROM document_reference;")" = "0" ]
+    [ "$(db "SELECT COUNT(*) FROM document_mention;")" = "0" ]
     [ "$(db "SELECT COUNT(*) FROM tag_centre;")" = "0" ]
     [ "$(db "SELECT COUNT(*) FROM document_link WHERE from_document_id = $gone AND (archived_at IS NULL OR archived_at = '');")" = "0" ]
 

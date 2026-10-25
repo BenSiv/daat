@@ -3977,7 +3977,7 @@ function html.render_admin_users(users, invite_mode, csrf_token, message, is_err
 """, platform_container_css(), platform_button_css(), platform_page_header_css() .. platform_admin_message_css(), render_page_header("Manage users", nil, nil), page_lib.render(sections))
 end
 
--- Admin UI for the api_key table, mirroring render_admin_users
+-- Admin UI for the auth_api_key table, mirroring render_admin_users
 -- exactly. `new_raw_key` is only ever set immediately after a
 -- successful create -- the raw key is never stored, so this is the one
 -- and only time it can be shown; it's rendered in its own prominent,

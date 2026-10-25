@@ -55,8 +55,8 @@ function entity.build_ctx(db_path, manifest)
             error("Extension '" .. tostring(manifest.name) .. "' does not have read.entity capability")
         end
         -- read.entity means registered entity types, not any table: a
-        -- plain table_exists check let an extension read user (password
-        -- hashes), api_key, document_embedding, ... (brex 456424482).
+        -- plain table_exists check let an extension read auth_user (password
+        -- hashes), auth_api_key, document_embedding, ... (brex 456424482).
         if schema.is_registered(db_path, target_type) == false then
             error("ctx.query: '" .. tostring(target_type) .. "' is not a registered entity type")
         end
@@ -639,7 +639,7 @@ end
 
 -- Overrides a multi_reference/polymorphic_reference field's raw column
 -- value with its real value, read from the companion multi_value/
--- entity_source table instead -- every raw "SELECT * FROM <entity_type>"
+-- entity_ref table instead -- every raw "SELECT * FROM <entity_type>"
 -- reader needs this, not just entity.get. multi_reference fields never
 -- have a column at all, so a raw row simply lacks the key (harmless);
 -- polymorphic_reference fields are different when a field *converts* to

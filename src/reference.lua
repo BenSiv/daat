@@ -1,6 +1,6 @@
 -- References (doc/tag-ontology.md, "Evidence between tags"): an
 -- implicit link from a document to an entity -- the entity's name in
--- running text. Recognised on save into document_reference, derived
+-- running text. Recognised on save into document_mention, derived
 -- from content alone exactly like document_link is from [[links]], so
 -- dropping it and running `daat repair references` loses nothing.
 --
@@ -16,9 +16,9 @@
 -- deployment adds aliases for how its people write names
 -- (platform.lua's reference_aliases).
 --
--- reference_name is the lookup index (name key -> entity), kept by the
+-- entity_name_index is the lookup index (name key -> entity), kept by the
 -- entity hooks so a save never loads every name; documents and the tag
--- types themselves are never reference targets. reference_prefix holds
+-- types themselves are never reference targets. entity_name_prefix holds
 -- the first REFERENCE_PREFIX_LENGTH characters of every key -- 207 of
 -- them for 54,504 celleste-lims names -- so a save only looks up runs
 -- that could start a name: ~490 keys for a 30 KB document instead of
@@ -34,7 +34,7 @@ config = require("config")
 reference = {}
 
 REFERENCE_NAME_SCHEMA = """
-CREATE TABLE IF NOT EXISTS reference_name (
+CREATE TABLE IF NOT EXISTS entity_name_index (
     name_key VARCHAR(255) NOT NULL,
     entity_type VARCHAR(64) NOT NULL,
     entity_id INTEGER NOT NULL
@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS reference_name (
 """
 
 DOCUMENT_REFERENCE_SCHEMA = """
-CREATE TABLE IF NOT EXISTS document_reference (
+CREATE TABLE IF NOT EXISTS document_mention (
     document_id INTEGER NOT NULL,
     entity_type VARCHAR(64) NOT NULL,
     entity_id INTEGER NOT NULL
@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS document_reference (
 """
 
 REFERENCE_PREFIX_SCHEMA = """
-CREATE TABLE IF NOT EXISTS reference_prefix (
+CREATE TABLE IF NOT EXISTS entity_name_prefix (
     prefix VARCHAR(8) NOT NULL PRIMARY KEY
 );
 """
@@ -58,10 +58,10 @@ CREATE TABLE IF NOT EXISTS reference_prefix (
 REFERENCE_PREFIX_LENGTH = 4
 
 REFERENCE_INDEXES = {
-    {table = "reference_name", name = "idx_reference_name_key", columns = "name_key"},
-    {table = "reference_name", name = "idx_reference_name_entity", columns = "entity_type, entity_id"},
-    {table = "document_reference", name = "idx_document_reference_document", columns = "document_id"},
-    {table = "document_reference", name = "idx_document_reference_entity", columns = "entity_type, entity_id"},
+    {table = "entity_name_index", name = "idx_reference_name_key", columns = "name_key"},
+    {table = "entity_name_index", name = "idx_reference_name_entity", columns = "entity_type, entity_id"},
+    {table = "document_mention", name = "idx_document_reference_document", columns = "document_id"},
+    {table = "document_mention", name = "idx_document_reference_entity", columns = "entity_type, entity_id"},
 }
 
 -- Never targets: documents are linked, not referenced, and the tag
@@ -198,21 +198,21 @@ end
 -- wasted lookups until the next `daat repair references`, never a miss.
 function reference_add_prefix(db_path, key)
     prefix = string.sub(key, 1, REFERENCE_PREFIX_LENGTH)
-    rows = db.query(db_path, string.format("SELECT prefix FROM reference_prefix WHERE prefix = %s;", db.quote(prefix)))
+    rows = db.query(db_path, string.format("SELECT prefix FROM entity_name_prefix WHERE prefix = %s;", db.quote(prefix)))
     if rows == nil or #rows == 0 then
         -- Two saves adding the same new prefix at once: the loser's insert fails, harmlessly.
-        pcall(db.exec, db_path, string.format("INSERT INTO reference_prefix (prefix) VALUES (%s);", db.quote(prefix)))
+        pcall(db.exec, db_path, string.format("INSERT INTO entity_name_prefix (prefix) VALUES (%s);", db.quote(prefix)))
     end
 end
 
--- Keeps reference_name in step with one entity (create, update,
+-- Keeps entity_name_index in step with one entity (create, update,
 -- archive, unarchive all land here): its row is replaced, or dropped
 -- when it's archived, gone, or its name isn't distinctive.
 function reference.index_entity(db_path, entity_type, entity_id)
     if REFERENCE_SKIPPED_TYPES[entity_type] != nil then
         return
     end
-    db.exec(db_path, string.format("DELETE FROM reference_name WHERE entity_type = %s AND entity_id = %d;",
+    db.exec(db_path, string.format("DELETE FROM entity_name_index WHERE entity_type = %s AND entity_id = %d;",
         db.quote(entity_type), tonumber(entity_id)))
     row = entity.get(db_path, entity_type, entity_id)
     if row == nil or (row.archived_at != nil and row.archived_at != "") then
@@ -220,7 +220,7 @@ function reference.index_entity(db_path, entity_type, entity_id)
     end
     key = reference.name_key(reference_label(db_path, entity_type, row))
     if key != nil then
-        db.exec(db_path, string.format("INSERT INTO reference_name (name_key, entity_type, entity_id) VALUES (%s, %s, %d);",
+        db.exec(db_path, string.format("INSERT INTO entity_name_index (name_key, entity_type, entity_id) VALUES (%s, %s, %d);",
             db.quote(key), db.quote(entity_type), tonumber(entity_id)))
         reference_add_prefix(db_path, key)
     end
@@ -228,8 +228,8 @@ end
 
 -- `daat repair references` (first half): every entity's name re-indexed.
 function reference.rebuild_names(db_path)
-    db.exec(db_path, "DELETE FROM reference_name;")
-    db.exec(db_path, "DELETE FROM reference_prefix;")
+    db.exec(db_path, "DELETE FROM entity_name_index;")
+    db.exec(db_path, "DELETE FROM entity_name_prefix;")
     prefixes = {}
     indexed = 0
     for _, type_row in ipairs(schema.list(db_path)) do
@@ -242,7 +242,7 @@ function reference.rebuild_names(db_path)
                     key = reference.name_key(reference_label(db_path, entity_type, row))
                     if key != nil then
                         db.exec(db_path, string.format(
-                            "INSERT INTO reference_name (name_key, entity_type, entity_id) VALUES (%s, %s, %d);",
+                            "INSERT INTO entity_name_index (name_key, entity_type, entity_id) VALUES (%s, %s, %d);",
                             db.quote(key), db.quote(entity_type), tonumber(row.id)))
                         indexed = indexed + 1
                         prefixes[string.sub(key, 1, REFERENCE_PREFIX_LENGTH)] = true
@@ -252,7 +252,7 @@ function reference.rebuild_names(db_path)
         end
     end
     for prefix, _ in pairs(prefixes) do
-        db.exec(db_path, string.format("INSERT INTO reference_prefix (prefix) VALUES (%s);", db.quote(prefix)))
+        db.exec(db_path, string.format("INSERT INTO entity_name_prefix (prefix) VALUES (%s);", db.quote(prefix)))
     end
     return indexed
 end
@@ -264,7 +264,7 @@ function reference.find(db_path, text)
     if text == nil or text == "" then
         return found
     end
-    prefix_rows = db.query(db_path, "SELECT prefix FROM reference_prefix;")
+    prefix_rows = db.query(db_path, "SELECT prefix FROM entity_name_prefix;")
     if prefix_rows == nil or #prefix_rows == 0 then
         return found
     end
@@ -284,7 +284,7 @@ function reference.find(db_path, text)
             table.insert(quoted, db.quote(keys[i]))
         end
         rows = db.query(db_path, string.format(
-            "SELECT name_key, entity_type, entity_id FROM reference_name WHERE name_key IN (%s);", table.concat(quoted, ", ")))
+            "SELECT name_key, entity_type, entity_id FROM entity_name_index WHERE name_key IN (%s);", table.concat(quoted, ", ")))
         if rows != nil then
             for _, row in ipairs(rows) do
                 if targets[row.name_key] == nil then
@@ -318,9 +318,9 @@ function reference.sync_document(db_path, document_id, title, content)
         text = text .. "\n" .. tostring(content)
     end
     found = reference.find(db_path, text)
-    db.exec(db_path, string.format("DELETE FROM document_reference WHERE document_id = %d;", tonumber(document_id)))
+    db.exec(db_path, string.format("DELETE FROM document_mention WHERE document_id = %d;", tonumber(document_id)))
     for _, hit in ipairs(found) do
-        db.exec(db_path, string.format("INSERT INTO document_reference (document_id, entity_type, entity_id) VALUES (%d, %s, %d);",
+        db.exec(db_path, string.format("INSERT INTO document_mention (document_id, entity_type, entity_id) VALUES (%d, %s, %d);",
             tonumber(document_id), db.quote(hit.entity_type), hit.entity_id))
     end
     return #found

@@ -751,6 +751,8 @@ function cgi.handle_request()
         paths.create_dir_if_not_exists(config.templates_dir(root))
         paths.create_dir_if_not_exists(config.dropdowns_dir(root))
     end
+    -- Before any module creates its tables (see store.lua's header).
+    require("store").migrate(db_path)
     ledger.init_schema(db_path)
     schema.init_schema(db_path)
     auth.init_schema(db_path)
@@ -1547,7 +1549,7 @@ function cgi.handle_request()
         return print_response("302 Found", "text/plain", "", redirect_headers)
     end
 
-    -- Admin UI for the api_key table, mirroring /admin-users above
+    -- Admin UI for the auth_api_key table, mirroring /admin-users above
     -- exactly, with one difference -- a successful create renders
     -- the list directly (not a redirect) so the one-time raw key can be
     -- shown; a redirect would lose it, since it's never stored anywhere
@@ -1892,7 +1894,7 @@ function cgi.handle_request()
         if session_id == nil or agent.get_session(db_path, session_id, author) == nil then
             return print_response("404 Not Found", "application/json", json.encode({error = "no such message"}))
         end
-        ok = knowledge.record_chat_feedback(db_path, message_id, body_data.feedback)
+        ok = agent.record_reply_feedback(db_path, message_id, body_data.feedback)
         return print_response("200 OK", "application/json", json.encode({ok = ok}))
     end
 
@@ -2331,7 +2333,7 @@ function cgi.handle_request()
     -- unlike /ext/<name>/action which any logged-in user can reach.
     --
     -- Runs synchronously, like a UI action, not queued like an
-    -- after-hook's own extension_job -- a trigger whose real work is
+    -- after-hook's own system_job -- a trigger whose real work is
     -- slow is expected to kick that work off elsewhere (an outbound
     -- net.capability call to a job runner, a queue write) and return
     -- quickly, the same way this handler itself must, rather than the

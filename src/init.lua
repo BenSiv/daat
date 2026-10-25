@@ -78,6 +78,8 @@ function init.do_init(cmd_args, root)
     paths.create_dir_if_not_exists(config.dropdowns_dir(root))
 
     db_path = config.db_path(root)
+    -- A fresh store has nothing to migrate; this records it as current.
+    require("store").migrate(db_path)
     ledger.init_schema(db_path)
     schema.init_schema(db_path)
     extension.init_schema(db_path)

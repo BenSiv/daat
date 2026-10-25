@@ -76,7 +76,7 @@ CREATE TABLE IF NOT EXISTS agent_pending_action (
     tool TEXT NOT NULL,
     method TEXT NOT NULL,
     args_json TEXT NOT NULL,
-    -- VARCHAR(32), not TEXT -- see extension.lua's extension_job.status
+    -- VARCHAR(32), not TEXT -- see extension.lua's system_job.status
     -- for why: real MySQL 8.0 rejects a literal DEFAULT on TEXT columns.
     status VARCHAR(32) NOT NULL DEFAULT 'pending',
     created_at TEXT DEFAULT (%s),
@@ -84,12 +84,12 @@ CREATE TABLE IF NOT EXISTS agent_pending_action (
 );
 
 -- A background.start request (see AGENT_TOOLS.background below) --
--- mirrors extension_job's own queue shape (status/attempts/last_error),
+-- mirrors system_job's own queue shape (status/attempts/last_error),
 -- not agent_pending_action's: there's nothing here for a human to
 -- approve/deny, just a question that needs more turns than one HTTP
 -- request affords. Drained by a real, separate process (the CLI's
 -- "daat agent run-pending-background", meant to be invoked
--- periodically the same way extension_job's own "daat extension
+-- periodically the same way system_job's own "daat extension
 -- run-pending" already is), never inline in a chat turn.
 CREATE TABLE IF NOT EXISTS agent_background_task (
     id INTEGER PRIMARY KEY %s,
@@ -102,6 +102,37 @@ CREATE TABLE IF NOT EXISTS agent_background_task (
     created_at TEXT DEFAULT (%s),
     updated_at TEXT DEFAULT (%s)
 );
+
+-- One row per real model call, whatever made it: what was sent (the
+-- exact message history, doc/architecture.md's "Full prompt/reasoning/
+-- token persistence"), which model, real token counts, and -- on rows
+-- that produced a chat reply -- that reply's rule-based evaluation and
+-- the user's thumbs up/down. `kind` is the loop that made the call
+-- ('chat', 'research', 'background', 'compaction', 'wrapup',
+-- 'self_check'; NULL on rows from before it was recorded) and `step`
+-- its number within the turn. `prompt` is cleared after the
+-- deployment's prompt_retention_days; the rest is kept.
+CREATE TABLE IF NOT EXISTS agent_model_call (
+    id INTEGER PRIMARY KEY %s,
+    session_id VARCHAR(255) NOT NULL,
+    message_id INTEGER,
+    kind VARCHAR(32),
+    step INTEGER,
+    provider VARCHAR(64),
+    model_id TEXT,
+    prompt LONGTEXT,
+    reasoning_document_id INTEGER,
+    prompt_tokens INTEGER,
+    completion_tokens INTEGER,
+    total_tokens INTEGER,
+    reply_kind VARCHAR(32),
+    quality_status VARCHAR(32),
+    reasoning_status VARCHAR(32),
+    action_summary TEXT,
+    user_feedback VARCHAR(16),
+    feedback_at TEXT,
+    created_at TEXT DEFAULT (%s)
+);
 """
 
 function agent_schema_sql(db_path)
@@ -109,8 +140,99 @@ function agent_schema_sql(db_path)
         db.now_expr(db_path), db.now_expr(db_path),
         db.autoincrement_keyword(db_path), db.now_expr(db_path),
         db.autoincrement_keyword(db_path), db.now_expr(db_path),
-        db.autoincrement_keyword(db_path), db.now_expr(db_path), db.now_expr(db_path)
+        db.autoincrement_keyword(db_path), db.now_expr(db_path), db.now_expr(db_path),
+        db.autoincrement_keyword(db_path), db.now_expr(db_path)
     )
+end
+
+-- agent.ensure_model_call_table(db_path): the table and its message_id
+-- index. Also called by store.lua's migration that creates it from
+-- knowledge_context.
+function agent.ensure_model_call_table(db_path)
+    db.exec(db_path, agent_schema_sql(db_path))
+    if db.index_exists(db_path, "agent_model_call", "agent_model_call_message_idx") == false then
+        pcall(db.exec, db_path, "CREATE INDEX agent_model_call_message_idx ON agent_model_call(message_id);")
+    end
+end
+
+-- agent.record_model_call(db_path, session_id, message_id, prompt, model_id, reasoning_document_id, usage, step)
+--   -> call id
+-- `usage` is {prompt_tokens, completion_tokens, total_tokens} (every
+-- field nil-safe: a provider without usage metadata shouldn't fail the
+-- call over accounting); `step` is {kind = ..., number = N}.
+function agent.record_model_call(db_path, session_id, message_id, prompt, model_id, reasoning_document_id, usage, step)
+    if usage == nil then
+        usage = {}
+    end
+    if step == nil then
+        step = {}
+    end
+    _, call_id = db.exec(db_path, string.format(
+        "INSERT INTO agent_model_call (session_id, message_id, kind, step, model_id, prompt, reasoning_document_id, prompt_tokens, completion_tokens, total_tokens) " ..
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s);",
+        db.quote(session_id), db.literal(tonumber(message_id)), db.literal(step.kind), db.literal(tonumber(step.number)),
+        db.literal(model_id), db.literal(prompt), db.literal(tonumber(reasoning_document_id)),
+        db.literal(tonumber(usage.prompt_tokens)), db.literal(tonumber(usage.completion_tokens)), db.literal(tonumber(usage.total_tokens))
+    ))
+    return call_id
+end
+
+-- agent.prune_prompts(db_path, days) -> rows cleared
+-- Clears the stored prompt of model calls older than `days` days
+-- (prompt_retention_days); tokens, evaluation and feedback stay. Times
+-- are compared as UTC 'YYYY-MM-DD HH:MM:SS' text, the form both
+-- backends' now() writes. `days` <= 0 keeps everything.
+function agent.prune_prompts(db_path, days)
+    if days == nil or days <= 0 then
+        return 0
+    end
+    cutoff = os.date("!%Y-%m-%d %H:%M:%S", os.time() - math.floor(days * 86400))
+    rows = db.query(db_path, string.format(
+        "SELECT COUNT(*) AS n FROM agent_model_call WHERE prompt IS NOT NULL AND created_at < %s;", db.quote(cutoff)))
+    count = 0
+    if rows != nil and rows[1] != nil then
+        count = tonumber(rows[1].n)
+    end
+    if count > 0 then
+        db.exec(db_path, string.format(
+            "UPDATE agent_model_call SET prompt = NULL WHERE prompt IS NOT NULL AND created_at < %s;", db.quote(cutoff)))
+    end
+    return count
+end
+
+-- agent.record_reply_eval(db_path, call_id, provider, is_error, reply_text)
+-- The call's rule-based reply evaluation (knowledge.classify_reply; no
+-- extra model call), on the row of the call that produced the reply.
+function agent.record_reply_eval(db_path, call_id, provider, is_error, reply_text)
+    if tonumber(call_id) == nil then
+        return
+    end
+    reply_kind, quality_status, reasoning_status = knowledge.classify_reply(is_error, reply_text)
+    action_summary = string.format("reply_kind=%s; quality=%s; reasoning=%s", reply_kind, quality_status, reasoning_status)
+    db.exec(db_path, string.format(
+        "UPDATE agent_model_call SET provider = %s, reply_kind = %s, quality_status = %s, reasoning_status = %s, action_summary = %s WHERE id = %d;",
+        db.literal(provider), db.quote(reply_kind), db.quote(quality_status), db.quote(reasoning_status), db.quote(action_summary),
+        tonumber(call_id)
+    ))
+end
+
+-- agent.record_reply_feedback(db_path, message_id, feedback) -> true | false
+-- The user's thumbs up/down, found by the reply's message_id (what the
+-- chat widget has rendered). Checks with a SELECT first, not db.exec's
+-- return value: sqlite_update and mariadb_update disagree on what it
+-- means.
+function agent.record_reply_feedback(db_path, message_id, feedback)
+    rows = db.query(db_path, string.format(
+        "SELECT id FROM agent_model_call WHERE message_id = %d AND reply_kind IS NOT NULL;", tonumber(message_id)
+    ))
+    if rows == nil or rows[1] == nil then
+        return false
+    end
+    db.exec(db_path, string.format(
+        "UPDATE agent_model_call SET user_feedback = %s, feedback_at = %s WHERE message_id = %d AND reply_kind IS NOT NULL;",
+        db.quote(feedback), db.now_expr(db_path), tonumber(message_id)
+    ))
+    return true
 end
 
 -- Same treatment as document.lua's KNOWLEDGE_POOL_SQL_COLUMNS:
@@ -135,6 +257,38 @@ AGENT_SESSION_SQL_COLUMNS = {
 function agent.session_sql_columns_text()
     lines = {}
     for _, col in ipairs(AGENT_SESSION_SQL_COLUMNS) do
+        table.insert(lines, string.format("%s -- %s", col.name, col.note))
+    end
+    return table.concat(lines, "\n")
+end
+
+-- Same treatment for agent_model_call: described for the /sql console,
+-- not queryable through entity.query (view.queryable_tables).
+AGENT_MODEL_CALL_SQL_COLUMNS = {
+    {name = "id", note = "primary key"},
+    {name = "session_id", note = "agent_session.id the call was made within"},
+    {name = "message_id", note = "FK to agent_message.id -- the message this call produced, if any"},
+    {name = "kind", note = "'chat', 'research', 'background', 'compaction', 'wrapup', 'self_check' (NULL on older rows)"},
+    {name = "step", note = "the call's step number within its turn, for loop steps"},
+    {name = "provider", note = "model provider, on reply rows"},
+    {name = "model_id", note = "which model served the call"},
+    {name = "prompt", note = "the exact message history sent (LONGTEXT; cleared after the deployment's retention period)"},
+    {name = "reasoning_document_id", note = "FK to document.id (source_type='reasoning')"},
+    {name = "prompt_tokens", note = "real token count for the prompt"},
+    {name = "completion_tokens", note = "real token count for the completion"},
+    {name = "total_tokens", note = "prompt_tokens + completion_tokens"},
+    {name = "reply_kind", note = "on reply rows: 'final' | 'reasoning-visible' | 'error' | 'empty'"},
+    {name = "quality_status", note = "rule-based classification of the reply's quality"},
+    {name = "reasoning_status", note = "rule-based classification of the reply's reasoning"},
+    {name = "action_summary", note = "human-readable summary of the evaluation"},
+    {name = "user_feedback", note = "the chat widget's thumbs up/down, if given"},
+    {name = "feedback_at", note = "when the feedback was given"},
+    {name = "created_at", note = "timestamp of the call"},
+}
+
+function agent.model_call_sql_columns_text()
+    lines = {}
+    for _, col in ipairs(AGENT_MODEL_CALL_SQL_COLUMNS) do
         table.insert(lines, string.format("%s -- %s", col.name, col.note))
     end
     return table.concat(lines, "\n")
@@ -185,6 +339,7 @@ end
 
 function agent.init_schema(db_path)
     ok, err = db.exec(db_path, agent_schema_sql(db_path))
+    agent.ensure_model_call_table(db_path)
     ensure_agent_pending_action_columns(db_path)
     ensure_agent_session_columns(db_path)
     return ok, err
@@ -863,7 +1018,7 @@ function agent.compact_if_needed(db_path, session_id, system_prompt, model)
     -- not a knowledge_chat_eval candidate, since that table classifies
     -- conversational *replies* the user actually sees, and a
     -- compaction summary is never shown as one.
-    knowledge.record_context(db_path, session_id, summary_message_id, summary_prompt, model, nil, usage, {kind = "compaction"})
+    agent.record_model_call(db_path, session_id, summary_message_id, summary_prompt, model, nil, usage, {kind = "compaction"})
 
     ids = {}
     for _, msg in ipairs(to_compact) do
@@ -1263,8 +1418,8 @@ function run_turn_wrapup(db_path, session_id, login, system_prompt, model, promp
     else
         message_id = agent.add_message(db_path, session_id, "assistant", json.encode({blocks = {{type = "text", text = message_text}}}), true)
     end
-    context_id = knowledge.record_context(db_path, session_id, message_id, wrapup_audit_prompt, model, nil, wrapup_usage, {kind = "wrapup"})
-    knowledge.record_chat_eval(db_path, session_id, context_id, message_id, agent_provider.name(), model, false, message_text)
+    context_id = agent.record_model_call(db_path, session_id, message_id, wrapup_audit_prompt, model, nil, wrapup_usage, {kind = "wrapup"})
+    agent.record_reply_eval(db_path, context_id, agent_provider.name(), false, message_text)
     return message_text
 end
 
@@ -1325,13 +1480,13 @@ function run_self_check(db_path, session_id, system_prompt, model, active_messag
         -- A confirm produces no new message, so its audit row has no
         -- message_id -- but it was a real model call and its tokens
         -- count toward the turn's cost (doc/context-management-plan.md,
-        -- Phase 0). step_kind tells it apart from the reply it checked.
-        knowledge.record_context(db_path, session_id, nil, audit_prompt, model, nil, usage, {kind = "self_check"})
+        -- Phase 0). Its kind tells it apart from the reply it checked.
+        agent.record_model_call(db_path, session_id, nil, audit_prompt, model, nil, usage, {kind = "self_check"})
         return true
     end
 
     message_id = agent.add_message(db_path, session_id, "self_check", critique_text, true)
-    knowledge.record_context(db_path, session_id, message_id, audit_prompt, model, nil, usage, {kind = "self_check"})
+    agent.record_model_call(db_path, session_id, message_id, audit_prompt, model, nil, usage, {kind = "self_check"})
     return false
 end
 
@@ -1378,7 +1533,7 @@ that plainly along with what you tried, rather than guessing.
 -- agent_background_max_turns budget instead, since it isn't bound to
 -- one HTTP request's lifetime the way an inline tool call is.
 -- `step_kind` ("research" by default, "background" for a background
--- task) labels each step's knowledge_context row.
+-- task) labels each step's agent_model_call row.
 function agent.run_research_loop(db_path, author, session_id, model, question, max_turns, step_kind)
     agent_tools = require("agent_tools")
     if max_turns == nil then
@@ -1414,7 +1569,7 @@ function agent.run_research_loop(db_path, author, session_id, model, question, m
         -- Every real model call is persisted (doc/architecture.md, "Full
         -- prompt/reasoning/token persistence"), sub-agent steps too. No
         -- message_id: a research step's messages live only in this loop.
-        knowledge.record_context(db_path, session_id, nil, research_prompt, model, nil, usage, {kind = step_kind, number = turn})
+        agent.record_model_call(db_path, session_id, nil, research_prompt, model, nil, usage, {kind = step_kind, number = turn})
         if response == nil then
             if last_real_text != nil then
                 return "(research stopped early: " .. tostring(err) .. ") " .. last_real_text
@@ -1487,7 +1642,7 @@ end
 -- Background tasks (background.start / background.status)
 --------------------------------------------------------------------------
 --
--- A real async job queue, same shape as extension_job (status/attempts/
+-- A real async job queue, same shape as system_job (status/attempts/
 -- last_error, drained by a separate periodically-invoked process) --
 -- not agent_pending_action's approve/deny shape, since there's nothing
 -- for a human to approve here, just a question that needs more turns
@@ -1847,7 +2002,7 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
                 malformed_retried = true
                 -- The failed attempt was a real, billed call: record it
                 -- before its usage is replaced by the retry's.
-                knowledge.record_context(db_path, session_id, nil, audit_prompt, model, nil, usage, {kind = "chat", number = step_number})
+                agent.record_model_call(db_path, session_id, nil, audit_prompt, model, nil, usage, {kind = "chat", number = step_number})
                 response, err, usage = agent_provider.converse(model, system_prompt, history_messages, agent.tool_declarations(db_path))
             end
             if response == nil then
@@ -1869,8 +2024,8 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
                 -- Still recorded even on failure -- what was actually sent
                 -- is exactly as much an audit fact as what came back, and
                 -- usage/reasoning simply don't apply here.
-                context_id = knowledge.record_context(db_path, session_id, error_message_id, audit_prompt, model, nil, nil, {kind = "chat", number = step_number})
-                knowledge.record_chat_eval(db_path, session_id, context_id, error_message_id, agent_provider.name(), model, true, nil)
+                context_id = agent.record_model_call(db_path, session_id, error_message_id, audit_prompt, model, nil, nil, {kind = "chat", number = step_number})
+                agent.record_reply_eval(db_path, context_id, agent_provider.name(), true, nil)
                 return {status = "error", message = tostring(err)}
             end
 
@@ -1891,8 +2046,8 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
                 -- role = "error" -- see the connectivity-failure branch
                 -- above for why this must not be "tool_result".
                 error_message_id = agent.add_message(db_path, session_id, "error", "ERROR: " .. tostring(error_message), true)
-                context_id = knowledge.record_context(db_path, session_id, error_message_id, audit_prompt, model, nil, usage, {kind = "chat", number = step_number})
-                knowledge.record_chat_eval(db_path, session_id, context_id, error_message_id, agent_provider.name(), model, true, nil)
+                context_id = agent.record_model_call(db_path, session_id, error_message_id, audit_prompt, model, nil, usage, {kind = "chat", number = step_number})
+                agent.record_reply_eval(db_path, context_id, agent_provider.name(), true, nil)
                 return {status = "error", message = tostring(error_message)}
             end
 
@@ -1928,8 +2083,8 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
                     "Chat reasoning (session " .. tostring(session_id) .. ")", display_text,
                     "reasoning", message_id, tostring(session_id))
             end
-            context_id = knowledge.record_context(db_path, session_id, message_id, audit_prompt, model, reasoning_document_id, usage, {kind = "chat", number = step_number})
-            knowledge.record_chat_eval(db_path, session_id, context_id, message_id, agent_provider.name(), model, false, display_text)
+            context_id = agent.record_model_call(db_path, session_id, message_id, audit_prompt, model, reasoning_document_id, usage, {kind = "chat", number = step_number})
+            agent.record_reply_eval(db_path, context_id, agent_provider.name(), false, display_text)
 
             tool_calls = all_tool_calls(content_blocks)
             if #tool_calls == 0 then

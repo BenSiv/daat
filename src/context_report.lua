@@ -1,6 +1,6 @@
 -- `daat agent context-report [--since YYYY-MM-DD]`: how big the agent's
 -- context gets and what fills it, from what's already stored
--- (knowledge_context's per-call token counts, agent_message's history).
+-- (agent_model_call's per-call token counts, agent_message's history).
 -- Read-only, so it can be run against production. It is the baseline
 -- every step of doc/context-management-plan.md is measured against;
 -- the 2026-10-23 numbers in doc/context-management-research.md are
@@ -122,7 +122,7 @@ end
 -- their sessions look nothing like day-to-day use.
 function account_classes(db_path)
     classes = {}
-    for _, row in ipairs(rows_or_empty(db.query(db_path, "SELECT login, cap FROM user;"))) do
+    for _, row in ipairs(rows_or_empty(db.query(db_path, "SELECT login, cap FROM auth_user;"))) do
         cap = row.cap
         if cap == nil then
             cap = ""
@@ -183,17 +183,24 @@ function call_sections(db_path, since, out)
     if db.is_mariadb(db_path) then
         length_fn = "CHAR_LENGTH"
     end
-    -- A store not yet upgraded (e.g. production read before a deploy)
-    -- has no step_kind column; its rows all report as "unlabelled".
-    step_kind_expr = "NULL AS step_kind"
-    for _, name in ipairs(db.get_columns(db_path, "knowledge_context")) do
-        if name == "step_kind" then
-            step_kind_expr = "k.step_kind"
+    -- The model-call log is agent_model_call. A store not yet migrated
+    -- (e.g. production read before a deploy) still has it as
+    -- knowledge_context, without a kind column on older layouts; those
+    -- rows report as "unlabelled".
+    source = "agent_model_call"
+    kind_expr = "k.kind AS step_kind"
+    if not db.table_exists(db_path, "agent_model_call") then
+        source = "knowledge_context"
+        kind_expr = "NULL AS step_kind"
+        for _, name in ipairs(db.get_columns(db_path, "knowledge_context")) do
+            if name == "step_kind" then
+                kind_expr = "k.step_kind"
+            end
         end
     end
     rows = rows_or_empty(db.query(db_path,
-        "SELECT k.session_id, k.message_id, " .. step_kind_expr .. ", k.prompt_tokens, " .. length_fn .. "(k.prompt) AS prompt_chars, s.login " ..
-        "FROM knowledge_context k LEFT JOIN agent_session s ON s.id = k.session_id WHERE 1 = 1" ..
+        "SELECT k.session_id, k.message_id, " .. kind_expr .. ", k.prompt_tokens, " .. length_fn .. "(k.prompt) AS prompt_chars, s.login " ..
+        "FROM " .. source .. " k LEFT JOIN agent_session s ON s.id = k.session_id WHERE 1 = 1" ..
         since_clause("k.created_at", since) .. " ORDER BY k.id;"))
 
     groups = {}

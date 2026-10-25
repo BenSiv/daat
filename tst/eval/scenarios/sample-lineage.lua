@@ -1,4 +1,4 @@
--- A polymorphic reference lives in entity_source, not a column.
+-- A polymorphic reference lives in entity_ref, not a column.
 return function(f, s)
     e = nil
     for _, n in ipairs(f.experiment_order) do
@@ -7,7 +7,7 @@ return function(f, s)
         end
     end
     child = e.lab_number .. "-B"
-    sql = "SELECT parent.label FROM sample child JOIN entity_source src ON src.from_type = 'sample' " ..
+    sql = "SELECT parent.label FROM sample child JOIN entity_ref src ON src.from_type = 'sample' " ..
         "AND src.field_name = 'source' AND src.from_id = child.id " ..
         "JOIN sample parent ON parent.id = src.to_id AND src.to_type = 'sample' " ..
         "WHERE child.label = '" .. child .. "'"

@@ -67,13 +67,6 @@ CREATE TABLE IF NOT EXISTS tag_upkeep (
 );
 """
 
--- The pool's closest pair of centres when the tags were built.
-TAG_UPKEEP_STATE_SCHEMA = """
-CREATE TABLE IF NOT EXISTS tag_upkeep_state (
-    id INTEGER PRIMARY KEY,
-    merge_cosine REAL NOT NULL
-);
-"""
 
 -- Every verdict, with the member counts it was given at -- the memory
 -- that keeps a declined split or merge from being asked again.
@@ -117,7 +110,6 @@ ACTIVE_ROW = "(archived_at IS NULL OR archived_at = '')"
 
 function tag_upkeep.init_schema(db_path)
     db.exec(db_path, TAG_UPKEEP_SCHEMA)
-    db.exec(db_path, TAG_UPKEEP_STATE_SCHEMA)
     db.exec(db_path, string.format(TAG_JUDGMENT_SCHEMA, db.autoincrement_keyword(db_path), db.now_expr(db_path)))
 end
 
@@ -167,8 +159,8 @@ end
 function upkeep_save_merge_cosine(db_path, merge_cosine)
     -- Full precision: the closest pair at build must not compare as
     -- closer than itself once read back.
-    db.exec(db_path, string.format("%s tag_upkeep_state (id, merge_cosine) VALUES (1, %.17g);",
-        db.replace_into(db_path), merge_cosine))
+    -- The pool's closest pair of centres when the tags were built.
+    require("store").set_number(db_path, "tag.upkeep_merge_cosine", merge_cosine)
 end
 
 -- How close two tags are: the cosine of their centred centres (nil when
@@ -278,11 +270,8 @@ function upkeep_baselines(db_path, tags, dry_run)
             end
         end
     end
-    merge_cosine = nil
-    state = db.query(db_path, "SELECT merge_cosine FROM tag_upkeep_state WHERE id = 1;")
-    if state != nil and state[1] != nil then
-        merge_cosine = tonumber(state[1].merge_cosine)
-    else
+    merge_cosine = require("store").get_number(db_path, "tag.upkeep_merge_cosine")
+    if merge_cosine == nil then
         merge_cosine = upkeep_closest_pair(tags)
         if not dry_run then
             upkeep_save_merge_cosine(db_path, merge_cosine)

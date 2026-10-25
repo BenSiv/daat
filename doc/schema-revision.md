@@ -4,7 +4,16 @@ Proposal, 2026-10-23. Goal: a schema that is clean, logical and compact, with no
 
 Scope: the **42 built-in tables** daat owns (37 core tables plus 5 entity types daat registers itself). The 32 user-defined tables (from `~/lims/schemas`) and the one extension table (`task`) are the deployment's design; observations on them are at the end.
 
-## What the map shows
+## Status (2026-10-25)
+
+Built on `feature/schema-revision`, as store migrations 1-6 (`src/store.lua`), with these changes to the plan below:
+- **Done:** B (`agent_model_call`), C (`system_state`, without `knowledge_pool_state`), F (`knowledge_retrieval_hit`), G (`system_approval`), I (`entity_dropdown_value`), the domain renames, prompt retention (`prompt_retention_days`, `daat agent prune-prompts`), and K (the deploy pipeline's Step 9b, in `~/software`).
+- **Not done, on purpose: D, E and H.** Each would merge tables written by different modules. With one shared row per document or tag, every write becomes a dialect-specific partial upsert, and every delete becomes "null out my columns". That's harder to keep correct than one small table per owner. Instead, `knowledge_tier_review` is renamed to `document_tier_judgment`. `document_embedding`, `document_embedding_due`, `document_link_sync`, `tag_centre`, `tag_upkeep`, `knowledge_link_review` and `tag_judgment` stay as they are.
+- **Retrieval-hit retention dropped:** old hits feed the co-retrieval link logic (pairs of documents returned by the same search), so deleting them would change link decisions. With the review folded in they're small.
+
+Result: **42 built-in tables → 36**: `tag_relation` kept, `knowledge_pool_state` kept, D/E/H not merged.
+
+
 
 - **Why so many tables look unconnected.** Many links in daat are generic pairs, `(entity_type, entity_id)` or `login` / `session_id` stored as text, which no diagram can draw as a foreign key. `entity_event`, `entity_source`, `document_reference`, `reference_name` and `extension_job` all point at entities this way. So part of the clutter is a drawing limit, not real islands.
 - **The real clutter is small tables for one piece of state each:**
@@ -31,7 +40,7 @@ Ordered by value and risk. Each is its own migration, so each can ship and be ch
 | # | Change | Tables before → after | Risk |
 |---|---|---|---|
 | B | **`knowledge_context` is the one record per model call:** keep the Phase 0 `step_kind` / `step`; fold `knowledge_chat_eval` into it as columns (`reply_kind`, `quality_status`, `reasoning_status`, `user_feedback`, `feedback_at`); clear `prompt` after the deployment's retention period, keeping the token rows. Chat history itself (`agent_message`, and the transcript documents in the knowledge pool) is not affected and is kept forever | 2 → 1 | Low–medium. The feedback route and evaluation queries move to the merged table |
-| C | **`system_state` key/value table** for single values: pool scale, schema signature, tag evidence fingerprint, tag upkeep settings | 4 → 1 | Low |
+| C | **`system_state` key/value table** for checkpoint values: schema signature, tag evidence fingerprint, tag upkeep's merge cosine. `knowledge_pool_state` stays its own table: it's the pool's live totals, updated in one atomic statement on the hot path (scale and document count together), which key/value rows can't do as cleanly | 3 → 1 | Low |
 | D | **`document_index`:** one row per document for everything derived from its content: embedding (vector, model, text hash, body size), when it's due for embedding, the hash its links were last synced from, its last tier judgment | 4 → 1 | Medium. Embedding search reads the vector here, so test search ranking before and after |
 | E | **`tag_index`:** merge `tag_centre` and `tag_upkeep`, both one row per tag of derived state | 2 → 1 | Low |
 | F | **`knowledge_retrieval_document` carries its review:** fold `knowledge_review`'s four rule-based statuses into it (same grain), and apply the same retention as other logs | 2 → 1 | Low |
@@ -41,13 +50,13 @@ Ordered by value and risk. Each is its own migration, so each can ship and be ch
 | J | **`tag_relation`:** kept. It is part of the ontology project integration (`doc/tag-ontology.md`); nothing writes it yet | 1 → 1 | — |
 | K | **Prod leftover:** remove `/data/.store/store.db`, as a cleanup stage in the deployment pipeline (see below) | — | Low |
 
-**Result:** 42 built-in tables → **30**. The groups become:
+**Result:** 42 built-in tables → **31**. The groups become:
 - **Accounts:** `user`, `api_key`, `password_reset`
 - **Chat:** `agent_session`, `agent_message`, `agent_pending_action`, `agent_background_task`, `knowledge_context`
 - **Entities:** `entity_type`, `entity_field`, `entity_event`, `entity_source`, `dropdown_value`
 - **Documents:** `document`, `document_index`, `document_link`, `document_reference`, `document_tag`
 - **Tags:** `tag`, `tag_index`, `tag_evidence`, `tag_relation`
-- **Knowledge pool:** `knowledge_retrieval`, `knowledge_retrieval_document`, `model_judgment`, plus `reference_name` and `reference_prefix`
+- **Knowledge pool:** `knowledge_pool_state`, `knowledge_retrieval`, `knowledge_retrieval_document`, `model_judgment`, plus `reference_name` and `reference_prefix`
 - **System:** `system_state`, `approval`, `extension_job`
 
 Deliberately **not** merged:
@@ -78,9 +87,10 @@ Table knowledge_context {   // one row per model call (B)
   created_at text
 }
 
-Table system_state {        // single values (C)
-  name varchar(64) [pk]      // e.g. 'knowledge.pool_scale', 'schema.signature'
-  value text
+Table system_state {        // checkpoint values (C), and the store's schema version
+  name varchar(64) [pk]      // e.g. 'schema.sync_signature', 'store.schema_version'
+  text_value longtext
+  number_value double
   updated_at text
 }
 

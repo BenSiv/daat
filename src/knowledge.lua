@@ -19,10 +19,10 @@
 -- ...) live in document.lua now, alongside the columns they score --
 -- this file depends on document.lua, never the reverse.
 --
--- Retrieval/review bookkeeping (knowledge_retrieval, knowledge_
--- retrieval_document, knowledge_review) stays in its own hand-rolled
--- tables here -- these are event logs (one row per retrieval/review
--- event), not pool content, so they don't belong on `document` itself.
+-- Retrieval/review bookkeeping (knowledge_retrieval, and one
+-- knowledge_retrieval_hit per document it returned, which also carries
+-- that hit's review) stays in its own hand-rolled tables here -- these
+-- are event logs, not pool content, so they don't belong on `document`.
 
 db = require("database")
 document = require("document")
@@ -44,74 +44,22 @@ CREATE TABLE IF NOT EXISTS knowledge_retrieval (
 -- doc/mariadb-migration.md). Backtick quoting is valid MySQL/MariaDB
 -- syntax and SQLite's own MySQL-compatibility extension, so this is a
 -- single, unified fix needing no per-backend branch.
-CREATE TABLE IF NOT EXISTS knowledge_retrieval_document (
+-- One row per document a retrieval returned: its rank and score, the
+-- heat reinforcement it got, and -- once knowledge.review_retrieval has
+-- looked at it -- the rule-based review outcome (reviewed_at set).
+CREATE TABLE IF NOT EXISTS knowledge_retrieval_hit (
     retrieval_id INTEGER NOT NULL,
     document_id INTEGER NOT NULL,
     `rank` INTEGER,
     score REAL,
     tier_weight REAL,
     reinforcement_delta REAL,
+    atomicity_status VARCHAR(32),
+    connectivity_status VARCHAR(32),
+    duplication_status VARCHAR(32),
+    title_status VARCHAR(32),
+    reviewed_at TEXT,
     PRIMARY KEY (retrieval_id, document_id)
-);
-
-CREATE TABLE IF NOT EXISTS knowledge_review (
-    id INTEGER PRIMARY KEY %s,
-    retrieval_id INTEGER NOT NULL,
-    document_id INTEGER NOT NULL,
-    atomicity_status TEXT,
-    connectivity_status TEXT,
-    duplication_status TEXT,
-    title_status TEXT,
-    action_summary TEXT,
-    created_at TEXT DEFAULT (%s)
-);
-
--- The actual prompt/reasoning/token record per chat turn (see
--- doc/architecture.md's "Knowledge pool" section, "Full prompt/
--- reasoning/token persistence"). Linked to `agent_message` (the
--- assistant response this context produced) -- daat's own
--- immutable, append-only chat log is the natural anchor here.
--- `reasoning_document_id` points at a document (source_type='reasoning')
--- rather than storing reasoning text inline -- reasoning goes through
--- the exact same tiering/retrieval/decay pipeline as everything else,
--- not a second parallel log.
-CREATE TABLE IF NOT EXISTS knowledge_context (
-    id INTEGER PRIMARY KEY %s,
-    session_id TEXT NOT NULL,
-    message_id INTEGER,
-    -- LONGTEXT, not TEXT -- this column stores the full JSON-encoded
-    -- message history sent to the model, which routinely exceeds
-    -- MariaDB's plain TEXT's 65,535-byte cap (same bug class as
-    -- document.content/entity_event.field_changes -- see schema.lua's
-    -- SQL_TYPE.text).
-    prompt LONGTEXT,
-    model_id TEXT,
-    reasoning_document_id INTEGER,
-    prompt_tokens INTEGER,
-    completion_tokens INTEGER,
-    total_tokens INTEGER,
-    created_at TEXT DEFAULT (%s)
-);
-
--- Per-reply classification + user feedback (see doc/architecture.md's
--- "Chat-reply evaluation + user feedback"). `message_id` is denormalized
--- here (also reachable via context_id -> knowledge_context.message_id)
--- so the feedback route can look a row up directly from what the chat
--- widget already has rendered, without a join.
-CREATE TABLE IF NOT EXISTS knowledge_chat_eval (
-    id INTEGER PRIMARY KEY %s,
-    session_id TEXT NOT NULL,
-    context_id INTEGER,
-    message_id INTEGER,
-    provider TEXT,
-    model TEXT,
-    reply_kind TEXT,
-    quality_status TEXT,
-    reasoning_status TEXT,
-    action_summary TEXT,
-    user_feedback TEXT,
-    feedback_at TEXT,
-    created_at TEXT DEFAULT (%s)
 );
 
 -- One row per *pair* of documents whose co-retrieval has been evaluated
@@ -138,7 +86,7 @@ CREATE TABLE IF NOT EXISTS knowledge_link_review (
 -- when nothing has changed since the last judgment, the same
 -- "don't re-run the same model call over and over" reasoning as
 -- knowledge_link_review's own last_co_count column.
-CREATE TABLE IF NOT EXISTS knowledge_tier_review (
+CREATE TABLE IF NOT EXISTS document_tier_judgment (
     document_id INTEGER PRIMARY KEY,
     judged_hash TEXT NOT NULL,
     judged_tier INTEGER NOT NULL,
@@ -149,9 +97,6 @@ CREATE TABLE IF NOT EXISTS knowledge_tier_review (
 
 function knowledge_schema_sql(db_path)
     return string.format(KNOWLEDGE_SCHEMA,
-        db.autoincrement_keyword(db_path), db.now_expr(db_path),
-        db.autoincrement_keyword(db_path), db.now_expr(db_path),
-        db.autoincrement_keyword(db_path), db.now_expr(db_path),
         db.autoincrement_keyword(db_path), db.now_expr(db_path),
         db.now_expr(db_path),
         db.now_expr(db_path)
@@ -166,12 +111,8 @@ end
 -- statement fails the whole batch on MySQL, not just that one statement.
 function ensure_knowledge_indexes(db_path)
     indexes = {
-        {name = "knowledge_retrieval_document_document_idx", table = "knowledge_retrieval_document",
-         sql = "CREATE INDEX knowledge_retrieval_document_document_idx ON knowledge_retrieval_document(document_id);"},
-        {name = "knowledge_context_message_idx", table = "knowledge_context",
-         sql = "CREATE INDEX knowledge_context_message_idx ON knowledge_context(message_id);"},
-        {name = "knowledge_chat_eval_message_idx", table = "knowledge_chat_eval",
-         sql = "CREATE INDEX knowledge_chat_eval_message_idx ON knowledge_chat_eval(message_id);"},
+        {name = "knowledge_retrieval_document_document_idx", table = "knowledge_retrieval_hit",
+         sql = "CREATE INDEX knowledge_retrieval_document_document_idx ON knowledge_retrieval_hit(document_id);"},
     }
     for _, idx in ipairs(indexes) do
         if db.index_exists(db_path, idx.table, idx.name) == false then
@@ -195,45 +136,10 @@ function ensure_link_review_reason_column(db_path)
     end
 end
 
--- knowledge_context.step_kind / step: which loop made the call ("chat",
--- "research", "background", "compaction", "wrapup", "self_check") and,
--- for loop steps, its number within the turn -- so usage can be read
--- per loop and per turn (doc/context-management-plan.md, Phase 0).
--- NULL on rows from before they existed. Every request runs
--- init_schema, so concurrent first requests after an upgrade can race
--- to add a column (real MySQL 8 then raises "Duplicate column name" for
--- the losers, see auth.lua's add_column_if_missing); a failed ALTER is
--- only an error if the column still doesn't exist afterwards.
-function ensure_context_step_columns(db_path)
-    for _, column in ipairs({{"step_kind", "VARCHAR(32) DEFAULT NULL"}, {"step", "INTEGER DEFAULT NULL"}}) do
-        have = false
-        for _, name in ipairs(db.get_columns(db_path, "knowledge_context")) do
-            if name == column[1] then
-                have = true
-            end
-        end
-        if not have then
-            ok, err = pcall(db.exec, db_path, "ALTER TABLE knowledge_context ADD COLUMN " .. column[1] .. " " .. column[2] .. ";")
-            if ok == false then
-                still_missing = true
-                for _, name in ipairs(db.get_columns(db_path, "knowledge_context")) do
-                    if name == column[1] then
-                        still_missing = false
-                    end
-                end
-                if still_missing then
-                    error(err)
-                end
-            end
-        end
-    end
-end
-
 function knowledge.init_schema(db_path)
     db.exec(db_path, knowledge_schema_sql(db_path))
     ensure_knowledge_indexes(db_path)
     ensure_link_review_reason_column(db_path)
-    ensure_context_step_columns(db_path)
 end
 
 -- Same treatment as document.lua's KNOWLEDGE_POOL_SQL_COLUMNS: these are
@@ -250,53 +156,18 @@ HAND_ROLLED_TABLE_COLUMNS = {
         {name = "hit_count", note = "number of documents this retrieval matched"},
         {name = "created_at", note = "timestamp of the retrieval event"},
     },
-    knowledge_retrieval_document = {
+    knowledge_retrieval_hit = {
         {name = "retrieval_id", note = "FK to knowledge_retrieval.id"},
         {name = "document_id", note = "FK to document.id"},
         {name = "rank", note = "position of this document in the retrieval's results (backtick-quoted in SQL -- a reserved word in MySQL 8.0)"},
         {name = "score", note = "raw retrieval score for this hit"},
         {name = "tier_weight", note = "weight applied for the document's tier at retrieval time"},
         {name = "reinforcement_delta", note = "heat/tier reinforcement this hit produced"},
-    },
-    knowledge_review = {
-        {name = "id", note = "primary key"},
-        {name = "retrieval_id", note = "FK to knowledge_retrieval.id"},
-        {name = "document_id", note = "FK to document.id"},
         {name = "atomicity_status", note = "rule-based review outcome: is this document one coherent idea"},
         {name = "connectivity_status", note = "rule-based review outcome: is this document linked to related documents"},
         {name = "duplication_status", note = "rule-based review outcome: does this document duplicate another"},
         {name = "title_status", note = "rule-based review outcome: is the title specific, not generic"},
-        {name = "action_summary", note = "human-readable summary of what the review did, if anything"},
-        {name = "created_at", note = "timestamp of the review"},
-    },
-    knowledge_context = {
-        {name = "id", note = "primary key"},
-        {name = "session_id", note = "agent_session.id this prompt was sent within"},
-        {name = "message_id", note = "FK to agent_message.id -- the reply this context produced"},
-        {name = "prompt", note = "the exact verbatim prompt/message-history JSON sent to the model (LONGTEXT -- routinely exceeds a plain TEXT column's cap)"},
-        {name = "model_id", note = "which model actually served this turn"},
-        {name = "reasoning_document_id", note = "FK to document.id (source_type='reasoning') -- reasoning text goes through the same pool as everything else, not a separate log"},
-        {name = "prompt_tokens", note = "real token count for the prompt"},
-        {name = "completion_tokens", note = "real token count for the completion"},
-        {name = "total_tokens", note = "prompt_tokens + completion_tokens"},
-        {name = "step_kind", note = "which loop made the call: 'chat', 'research', 'background', 'compaction', 'wrapup', 'self_check' (NULL on older rows)"},
-        {name = "step", note = "the call's step number within its turn, for loop steps (NULL otherwise)"},
-        {name = "created_at", note = "timestamp of the turn"},
-    },
-    knowledge_chat_eval = {
-        {name = "id", note = "primary key"},
-        {name = "session_id", note = "agent_session.id"},
-        {name = "context_id", note = "FK to knowledge_context.id"},
-        {name = "message_id", note = "FK to agent_message.id -- denormalized here too, so the chat widget's feedback route can look this up directly without a join"},
-        {name = "provider", note = "which model provider served this reply"},
-        {name = "model", note = "which model served this reply"},
-        {name = "reply_kind", note = "'final' | 'reasoning-visible' | 'error' | 'empty'"},
-        {name = "quality_status", note = "rule-based classification of the reply's quality"},
-        {name = "reasoning_status", note = "rule-based classification of the reply's reasoning"},
-        {name = "action_summary", note = "human-readable summary of what this reply did, if anything"},
-        {name = "user_feedback", note = "the chat widget's thumbs up/down, if given"},
-        {name = "feedback_at", note = "timestamp of the feedback, if given"},
-        {name = "created_at", note = "timestamp of the reply"},
+        {name = "reviewed_at", note = "when the hit was reviewed (NULL: not reviewed)"},
     },
 }
 
@@ -459,7 +330,7 @@ function knowledge.record_retrieval_hit(db_path, retrieval_id, document_id, tier
     -- `last_retrieved_at` wall-clock columns are no longer written.
     document.reinforce_pool_heat(db_path, document_id, delta)
     db.exec(db_path, string.format(
-        "%s knowledge_retrieval_document (retrieval_id, document_id, `rank`, score, tier_weight, reinforcement_delta) " ..
+        "%s knowledge_retrieval_hit (retrieval_id, document_id, `rank`, score, tier_weight, reinforcement_delta) " ..
         "VALUES (%d, %d, %d, %.17g, %.17g, %.17g);",
         db.replace_into(db_path),
         tonumber(retrieval_id), tonumber(document_id), tonumber(rank), tonumber(score), tier_weight, delta
@@ -507,7 +378,7 @@ end
 -- Runs once per retrieval, after all hits are logged: for every
 -- document this retrieval touched, computes the review gates, applies
 -- any resulting mutation (retitle, dedup, tier promotion), and records
--- one knowledge_review row per document for audit. Retitling only ever
+-- its review outcome on that document's knowledge_retrieval_hit row. Retitling only ever
 -- applies to system/agent-derived documents (source_type set) -- a
 -- real user-authored document's title is never rewritten out from under
 -- them, even if it happens to look generic ("note", "untitled", ...).
@@ -516,7 +387,7 @@ end
 -- -- reactive, tied to real usage, not a synthetic actor.
 function knowledge.review_retrieval(db_path, retrieval_id, author)
     rows = db.query(db_path, string.format(
-        "SELECT document_id FROM knowledge_retrieval_document WHERE retrieval_id = %d;", tonumber(retrieval_id)
+        "SELECT document_id FROM knowledge_retrieval_hit WHERE retrieval_id = %d;", tonumber(retrieval_id)
     ))
     if rows == nil then
         return
@@ -581,9 +452,10 @@ function knowledge.review_retrieval(db_path, retrieval_id, author)
                 target_tier, db.literal(new_title), db.now_expr(db_path), doc.id
             ))
             db.exec(db_path, string.format(
-                "INSERT INTO knowledge_review (retrieval_id, document_id, atomicity_status, connectivity_status, duplication_status, title_status) " ..
-                "VALUES (%d, %d, %s, %s, %s, %s);",
-                tonumber(retrieval_id), doc.id, db.quote(content_shape), db.quote(connectivity), db.quote(duplication), db.quote(title_status)
+                "UPDATE knowledge_retrieval_hit SET atomicity_status = %s, connectivity_status = %s, duplication_status = %s, title_status = %s, reviewed_at = %s " ..
+                "WHERE retrieval_id = %d AND document_id = %d;",
+                db.quote(content_shape), db.quote(connectivity), db.quote(duplication), db.quote(title_status), db.now_expr(db_path),
+                tonumber(retrieval_id), doc.id
             ))
 
             -- Reactive distillation -- decoupled from target_tier and
@@ -653,71 +525,6 @@ function knowledge.classify_reply(is_error, text)
     return "empty", "empty", "none"
 end
 
--- Persists the exact prompt (system_prompt .. history, verbatim, not
--- reconstructed later from agent_message rows) plus real token counts
--- for one model call. `reasoning_document_id` is optional -- filled in
--- by the caller only when the reply's own reasoning was split out into
--- its own document (source_type='reasoning'), not every turn. `usage`
--- is the {prompt_tokens, completion_tokens, total_tokens} table
--- agent_provider.generate's third return value now carries (real
--- counts from Vertex, estimated-but-present under the test provider) --
--- every field is nil-safe since a provider without usage metadata at
--- all shouldn't fail this call over accounting.
--- `step` is optional: {kind = "chat"|"research"|..., number = N}.
-function knowledge.record_context(db_path, session_id, message_id, prompt, model_id, reasoning_document_id, usage, step)
-    if usage == nil then
-        usage = {}
-    end
-    if step == nil then
-        step = {}
-    end
-    _, context_id = db.exec(db_path, string.format(
-        "INSERT INTO knowledge_context (session_id, message_id, prompt, model_id, reasoning_document_id, prompt_tokens, completion_tokens, total_tokens, step_kind, step) " ..
-        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s);",
-        db.quote(session_id), db.literal(tonumber(message_id)), db.quote(prompt), db.quote(model_id),
-        db.literal(tonumber(reasoning_document_id)), db.literal(usage.prompt_tokens), db.literal(usage.completion_tokens),
-        db.literal(usage.total_tokens), db.literal(step.kind), db.literal(tonumber(step.number))
-    ))
-    return context_id
-end
-
--- Records one chat-reply evaluation row -- classification is rule-based
--- today (knowledge.classify_reply); nothing here requires an extra
--- model call.
-function knowledge.record_chat_eval(db_path, session_id, context_id, message_id, provider, model, is_error, reply_text)
-    reply_kind, quality_status, reasoning_status = knowledge.classify_reply(is_error, reply_text)
-    action_summary = string.format("reply_kind=%s; quality=%s; reasoning=%s", reply_kind, quality_status, reasoning_status)
-    _, eval_id = db.exec(db_path, string.format(
-        "INSERT INTO knowledge_chat_eval (session_id, context_id, message_id, provider, model, reply_kind, quality_status, reasoning_status, action_summary) " ..
-        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);",
-        db.quote(session_id), db.literal(tonumber(context_id)), db.literal(tonumber(message_id)),
-        db.quote(provider), db.quote(model), db.quote(reply_kind), db.quote(quality_status),
-        db.quote(reasoning_status), db.quote(action_summary)
-    ))
-    return eval_id
-end
-
--- The user-feedback half of chat evaluation -- looked up by message_id
--- (what the chat widget already has rendered for each reply), not an
--- eval id the frontend was never told about. Checks existence with a
--- real SELECT first, not db.exec's own return value -- sqlite_update
--- and mariadb_update disagree on what their first return value even
--- means (plain `true` vs. a real affected-row count), which is exactly
--- why every other UPDATE call site in this codebase already ignores it
--- too.
-function knowledge.record_chat_feedback(db_path, message_id, feedback)
-    rows = db.query(db_path, string.format(
-        "SELECT id FROM knowledge_chat_eval WHERE message_id = %d;", tonumber(message_id)
-    ))
-    if rows == nil or rows[1] == nil then
-        return false
-    end
-    db.exec(db_path, string.format(
-        "UPDATE knowledge_chat_eval SET user_feedback = %s, feedback_at = %s WHERE message_id = %d;",
-        db.quote(feedback), db.now_expr(db_path), tonumber(message_id)
-    ))
-    return true
-end
 
 --------------------------------------------------------------------------
 -- Reactive distillation, tied to real usage/review activity
@@ -899,8 +706,8 @@ function knowledge.co_retrieval_pairs(db_path, document_ids)
 
     rows = db.query(db_path, string.format("""
         SELECT a.document_id AS doc_a, b.document_id AS doc_b, COUNT(DISTINCT a.retrieval_id) AS co_count
-        FROM knowledge_retrieval_document a
-        JOIN knowledge_retrieval_document b ON a.retrieval_id = b.retrieval_id AND a.document_id < b.document_id
+        FROM knowledge_retrieval_hit a
+        JOIN knowledge_retrieval_hit b ON a.retrieval_id = b.retrieval_id AND a.document_id < b.document_id
         WHERE a.document_id IN (%s) AND b.document_id IN (%s)
         GROUP BY a.document_id, b.document_id;
     """, id_list_sql, id_list_sql))
@@ -1421,7 +1228,7 @@ You are judging how far a document in a knowledge pool has matured through real 
 
 function knowledge.get_tier_review(db_path, document_id)
     rows = db.query(db_path, string.format(
-        "SELECT * FROM knowledge_tier_review WHERE document_id = %d;", tonumber(document_id)
+        "SELECT * FROM document_tier_judgment WHERE document_id = %d;", tonumber(document_id)
     ))
     if rows == nil or rows[1] == nil then
         return nil
@@ -1431,7 +1238,7 @@ end
 
 function knowledge.record_tier_review(db_path, document_id, content_hash, tier)
     db.exec(db_path, string.format(
-        "%s knowledge_tier_review (document_id, judged_hash, judged_tier, evaluated_at) VALUES (%d, %s, %d, %s);",
+        "%s document_tier_judgment (document_id, judged_hash, judged_tier, evaluated_at) VALUES (%d, %s, %d, %s);",
         db.replace_into(db_path), tonumber(document_id), db.quote(content_hash), tonumber(tier), db.now_expr(db_path)
     ))
 end
@@ -1521,7 +1328,7 @@ end
 -- the document that actually matched the query. Skips any neighbor that
 -- was ALSO a direct hit this retrieval -- it already got the full
 -- direct-hit treatment via record_retrieval_hit, and the two writes
--- would otherwise fight over the same knowledge_retrieval_document audit
+-- would otherwise fight over the same knowledge_retrieval_hit audit
 -- row (PRIMARY KEY (retrieval_id, document_id)) for no benefit.
 -- retrieval_count is deliberately NOT bumped for a spread neighbor -- it
 -- measures direct retrieval hits specifically (promotion_target_tier's
@@ -1561,7 +1368,7 @@ function knowledge.spread_activation(db_path, retrieval_id, document_id, base_de
                 -- written.
                 document.reinforce_pool_heat(db_path, neighbor_id, delta)
                 db.exec(db_path, string.format(
-                    "%s knowledge_retrieval_document (retrieval_id, document_id, `rank`, score, tier_weight, reinforcement_delta) " ..
+                    "%s knowledge_retrieval_hit (retrieval_id, document_id, `rank`, score, tier_weight, reinforcement_delta) " ..
                     "VALUES (%d, %d, NULL, NULL, %.17g, %.17g);",
                     db.replace_into(db_path), tonumber(retrieval_id), neighbor_id, tier_weight, delta
                 ))
@@ -1632,7 +1439,7 @@ function knowledge.stats(db_path)
             "SELECT COUNT(*) AS n FROM document WHERE %s AND (archived_at IS NULL OR archived_at = '');", KNOWLEDGE_MEMBER_WHERE
         )),
         retrieval_count = count_rows(db_path, "SELECT COUNT(*) AS n FROM knowledge_retrieval;"),
-        reviewed_note_count = count_rows(db_path, "SELECT COUNT(DISTINCT document_id) AS n FROM knowledge_review;"),
+        reviewed_note_count = count_rows(db_path, "SELECT COUNT(DISTINCT document_id) AS n FROM knowledge_retrieval_hit WHERE reviewed_at IS NOT NULL;"),
         session_count = session_count,
     }
 end
@@ -1696,14 +1503,14 @@ function knowledge.list_documents(db_path, tier)
     return attach_and_sort_by_pool_heat(db_path, rows)
 end
 
--- Documents with at least one review recorded against them (distinct
--- document_id in knowledge_review) -- backs /knowledge's "reviewed
+-- Documents with at least one review recorded against them (a reviewed
+-- knowledge_retrieval_hit) -- backs /knowledge's "reviewed
 -- notes" stat, same reused table view as tier documents
 -- (html.render_knowledge_documents).
 function knowledge.reviewed_documents(db_path)
     rows = db.query(db_path, """
         SELECT * FROM document
-        WHERE id IN (SELECT DISTINCT document_id FROM knowledge_review)
+        WHERE id IN (SELECT DISTINCT document_id FROM knowledge_retrieval_hit WHERE reviewed_at IS NOT NULL)
           AND (archived_at IS NULL OR archived_at = '')
         ORDER BY retrieval_count DESC;
     """)

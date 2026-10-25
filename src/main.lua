@@ -90,13 +90,20 @@ function main()
         return
     end
 
+    -- Every command on an existing store brings its tables to the
+    -- current layout first (see store.lua's header); `init` does it
+    -- itself once the store exists.
+    if command != "init" and config.is_initialized(".") then
+        require("store").migrate(config.db_path("."))
+    end
+
     -- "agent" has no command_funcs entry of its own, so its
     -- subcommands are special-cased here,
     -- before the generic command_funcs lookup below, the same reason
     -- "knowledge distill" further down is dispatched outside of
     -- knowledge.do_knowledge instead of through it: see the
     -- require("agent") comment above main(). Meant to be invoked
-    -- periodically (cron/systemd timer), the same way extension_job's
+    -- periodically (cron/systemd timer), the same way system_job's
     -- own "daat extension run-pending" already is.
     if command == "agent" and arg[2] == "run-pending-background" then
         if config.is_initialized(".") == false then
@@ -107,9 +114,25 @@ function main()
         -- This can run before any web request after a deploy (it's on a
         -- timer), so it brings the tables it writes up to date itself
         -- rather than relying on cgi.handle_request having done it.
-        knowledge.init_schema(db_path)
+        agent.init_schema(db_path)
         result = agent.run_pending_background_tasks(db_path, agent.default_model())
         print(string.format("Ran %d, failed %d", result.ran, result.failed))
+        return
+    end
+
+    -- Clears stored prompts past the deployment's retention period
+    -- (prompt_retention_days); meant for the same jobs timer as
+    -- run-pending-background.
+    if command == "agent" and arg[2] == "prune-prompts" then
+        if config.is_initialized(".") == false then
+            print("Not initialized. Run 'daat init' first.")
+            return
+        end
+        db_path = config.db_path(".")
+        agent.init_schema(db_path)
+        days = config.platform_config().prompt_retention_days
+        cleared = agent.prune_prompts(db_path, days)
+        print(string.format("Cleared %d stored prompts older than %s days", cleared, tostring(days)))
         return
     end
 
@@ -148,7 +171,7 @@ function main()
             return
         end
         db_path = config.db_path(".")
-        knowledge.init_schema(db_path)
+        agent.init_schema(db_path)
         result, err = agent.continue_turn(db_path, arg[3], agent.default_model())
         if result == nil then
             print("Error: " .. tostring(err))
