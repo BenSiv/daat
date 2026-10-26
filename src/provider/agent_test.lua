@@ -210,6 +210,12 @@ function agent_test.converse(model, system_prompt, messages, tools)
         prompt_tokens = math.ceil(prompt_text_length / 4),
         completion_tokens = estimate_tokens_for_test(scripted),
     }
+    -- AGENT_TEST_PROMPT_TOKENS: report this many prompt tokens instead,
+    -- standing in for a real provider's count (compaction trigger tests).
+    forced_prompt_tokens = tonumber(os.getenv("AGENT_TEST_PROMPT_TOKENS"))
+    if forced_prompt_tokens != nil then
+        usage.prompt_tokens = forced_prompt_tokens
+    end
     usage.total_tokens = usage.prompt_tokens + usage.completion_tokens
     return response, nil, usage
 end

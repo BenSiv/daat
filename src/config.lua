@@ -319,7 +319,16 @@ function config.platform_config()
         agent_background_max_attempts = 3,
         agent_search_excerpt_length = 1200,
         agent_query_row_cap = 200,
-        agent_compaction_threshold = 32000,
+        -- Compaction (doc/context-management-plan.md, Phase 3): the
+        -- threshold is in real tokens, sized from the last call's
+        -- recorded prompt_tokens; without one, from the fixed overhead
+        -- (system prompt + tool definitions) plus history characters
+        -- per token, both fitted on prod chat calls. Mid-turn: check
+        -- before every step, not only when a turn starts.
+        agent_compaction_threshold = 48000,
+        agent_context_fixed_tokens = 3900,
+        agent_chars_per_token = 2.8,
+        agent_compaction_mid_turn = true,
         -- agent_model_call.prompt (the exact history sent on each model
         -- call) is operational audit data: cleared after this many days
         -- by `daat agent prune-prompts` (0: keep forever). Chat history
@@ -494,6 +503,15 @@ function config.platform_config()
     end
     if type(parsed.agent_compaction_threshold) == "number" then
         conf.agent_compaction_threshold = parsed.agent_compaction_threshold
+    end
+    if type(parsed.agent_context_fixed_tokens) == "number" then
+        conf.agent_context_fixed_tokens = parsed.agent_context_fixed_tokens
+    end
+    if type(parsed.agent_chars_per_token) == "number" and parsed.agent_chars_per_token > 0 then
+        conf.agent_chars_per_token = parsed.agent_chars_per_token
+    end
+    if parsed.agent_compaction_mid_turn == true or parsed.agent_compaction_mid_turn == false then
+        conf.agent_compaction_mid_turn = parsed.agent_compaction_mid_turn
     end
     if type(parsed.prompt_retention_days) == "number" then
         conf.prompt_retention_days = parsed.prompt_retention_days

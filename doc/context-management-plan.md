@@ -108,6 +108,14 @@ Item 1 became passage retrieval (`doc/passage-retrieval.md`, plan in `doc/passag
 
 **Tests:** the trigger uses recorded usage when present and the estimate otherwise; a mid-turn compaction keeps tool calls paired with their results (the existing cut rule); a second compaction keeps the first's facts.
 
+**Status (2026-10-27): done, on `feature/context-compaction`.**
+- `agent.context_tokens`: the last chat call's `prompt_tokens` when it still describes the history (its reply is in context and no compaction since), plus newer messages rendered as sent, at `agent_chars_per_token` (2.8). Otherwise `agent_context_fixed_tokens` (3,900) plus the whole rendered history at that ratio.
+- `agent_compaction_threshold` is now in real tokens: 48,000, about where the old chars/4 check fired on prod-sized histories.
+- `agent_compaction_mid_turn` (on): checked before every step after the first. The research loop isn't compacted: its history is in memory and bounded by its step budget; Phase 4's masking is the tool for it.
+- Anchored summary: the summarizer writes three fixed sections (established facts, decisions, open questions and next step); code appends the last 3 user requests verbatim and the pinned schema. A later compaction sends the previous summary's prose as "Summary so far" with only the newly dropped messages, and carries its requests and pinned schema on by code.
+- Found while testing: a summary has a newer id than the tail it keeps, so it sorted *after* that tail. The model read it out of order, and the next compaction often didn't fold it in, so summaries piled up. `active_messages` now puts the summary first, and every active summary is folded into the next one, so one stays in context. Sessions that already hold several merge at their next compaction.
+- Tests: `tst/integration/agent_compaction.bats` (recorded vs estimated trigger, mid-turn with tool-call pairing, the off switch, the update of a previous summary, the summary first), `tst/unit/agent_compaction.lua` (verbatim requests round trip).
+
 **Measure:** compactions per session; facts lost across compaction (scorecard probes that ask about something established before it, like Factory's probe method); exact repeats after compaction.
 
 ## Phase 4: observation masking (soft compaction)

@@ -520,7 +520,8 @@ end
 
 function agent.active_messages(db_path, session_id)
     rows = db.query(db_path, string.format(
-        "SELECT * FROM agent_message WHERE session_id = %s AND in_context = 1 ORDER BY id ASC;",
+        "SELECT * FROM agent_message WHERE session_id = %s AND in_context = 1 " ..
+        "ORDER BY CASE WHEN role = 'compaction_summary' THEN 0 ELSE 1 END, id ASC;",
         db.quote(session_id)
     ))
     if rows == nil then
@@ -1082,11 +1083,110 @@ end
 
 agent.pinned_schema_block = pinned_schema_block
 
+-- Defined with the turn loop below; declared here so the size
+-- estimate can render history exactly as a model call would.
+build_history_messages = nil
+
+-- How many tokens the next chat call would send, in real tokens
+-- (doc/context-management-plan.md, Phase 3). The chars/4 estimate left
+-- out the tool definitions and undercounted prod histories by about a
+-- third. When the session's last chat call recorded its prompt_tokens
+-- and nothing has been compacted since, that number is the base, plus
+-- the messages added after it at agent_chars_per_token. Otherwise:
+-- agent_context_fixed_tokens (system prompt and tool definitions) plus
+-- the whole rendered history at that ratio. Both values are a least-
+-- squares fit over prod chat calls (doc/context-management-research.md).
+-- Returns the count and which way it was made ("recorded" or
+-- "estimated").
+function agent.context_tokens(db_path, session_id, active)
+    conf = config.platform_config()
+    per_token = conf.agent_chars_per_token
+    rows = db.query(db_path, string.format(
+        "SELECT message_id, prompt_tokens FROM agent_model_call WHERE session_id = %s AND kind = 'chat' " ..
+        "AND message_id IS NOT NULL AND prompt_tokens IS NOT NULL ORDER BY id DESC LIMIT 1;",
+        db.quote(session_id)))
+    if rows != nil and #rows > 0 then
+        base_id = tonumber(rows[1].message_id)
+        base_tokens = tonumber(rows[1].prompt_tokens)
+        -- The recorded count still describes the history only while the
+        -- message that call produced is in context and no compaction
+        -- has replaced the messages before it.
+        usable = false
+        newer = {}
+        for _, msg in ipairs(active) do
+            id = tonumber(msg.id)
+            if id == base_id then
+                usable = true
+            end
+            if id > base_id and msg.role == "compaction_summary" then
+                usable = false
+                break
+            end
+            if id >= base_id then
+                table.insert(newer, msg)
+            end
+        end
+        if usable == true and base_tokens != nil and base_tokens > 0 then
+            return base_tokens + math.ceil(string.len(json.encode(build_history_messages(newer))) / per_token), "recorded"
+        end
+    end
+    return conf.agent_context_fixed_tokens + math.ceil(string.len(json.encode(build_history_messages(active))) / per_token), "estimated"
+end
+
+-- Section headings the summarizer writes and later updates in place
+-- (an "anchored" summary: Factory's probe-based evaluation found fixed
+-- sections updated with only the newly dropped messages keep more than
+-- re-summarizing a summary). The user's requests and the confirmed
+-- schema are appended by code, after these.
+COMPACTION_SECTIONS = "## Established facts\n" ..
+    "(entity ids and what each one is; table and field names confirmed by a tool; query text that worked, verbatim; numbers and results found)\n" ..
+    "## Decisions\n" ..
+    "(what the user chose or agreed to, and what was ruled out)\n" ..
+    "## Open questions and next step\n" ..
+    "(what is still unanswered, and what was about to happen next)"
+COMPACTION_USER_REQUESTS_HEADER = "**Earlier user messages (verbatim, most recent last):**"
+
+-- One verbatim user message as a list entry. Continuation lines are
+-- indented, so a message that itself holds a "- " list still reads
+-- back as one entry (parse_user_requests).
+function format_user_request(text)
+    return "- " .. string.gsub(text, "\n", "\n  ")
+end
+
+-- Splits a previous summary's prose from its verbatim user requests.
+function parse_user_requests(text)
+    start = string.find(text, COMPACTION_USER_REQUESTS_HEADER, 1, true)
+    if start == nil then
+        return text, {}
+    end
+    body = string.gsub(string.sub(text, 1, start - 1), "%s+$", "")
+    rest = string.sub(text, start + string.len(COMPACTION_USER_REQUESTS_HEADER))
+    entries = {}
+    for line in string.gmatch(rest .. "\n", "([^\n]*)\n") do
+        if string.sub(line, 1, 2) == "- " then
+            table.insert(entries, string.sub(line, 3))
+        elseif #entries > 0 and string.sub(line, 1, 2) == "  " then
+            entries[#entries] = entries[#entries] .. "\n" .. string.sub(line, 3)
+        end
+    end
+    return body, entries
+end
+
+agent.parse_user_requests = parse_user_requests
+agent.format_user_request = format_user_request
+agent.COMPACTION_USER_REQUESTS_HEADER = COMPACTION_USER_REQUESTS_HEADER
+
 -- Summarizes everything except the last `keep_last` active messages
--- into one new 'compaction_summary' message once the active window's
--- estimated token count crosses the threshold, then marks the
--- summarized originals in_context = 0. Never deletes anything; the
--- summary is itself just another additive message.
+-- into one new 'compaction_summary' message once the context's size in
+-- real tokens (agent.context_tokens) crosses agent_compaction_threshold,
+-- then marks the summarized originals in_context = 0. Never deletes
+-- anything; the summary is itself just another additive message. Runs
+-- at the start of a turn and, with agent_compaction_mid_turn, before
+-- every later step of it too.
+--
+-- The summary is anchored: fixed sections (COMPACTION_SECTIONS), and a
+-- later compaction updates the previous summary with only the newly
+-- dropped messages rather than summarizing a summary.
 --
 -- The user's own most recent compacted messages are appended to the
 -- summary verbatim by code, not left to the summarizer: a free-form
@@ -1097,16 +1197,25 @@ function agent.compact_if_needed(db_path, session_id, system_prompt, model)
 
     threshold = config.platform_config().agent_compaction_threshold
 
+    -- The previous summary stands for everything before the kept tail
+    -- (active_messages puts it first), so it's always folded into the
+    -- next one, and the cut counts conversation messages only.
+    summaries = {}
+    conversation = {}
+    for _, msg in ipairs(active) do
+        if msg.role == "compaction_summary" then
+            table.insert(summaries, msg)
+        else
+            table.insert(conversation, msg)
+        end
+    end
+
     keep_last = 4
-    if #active <= keep_last then
+    if #conversation <= keep_last then
         return false
     end
 
-    total_tokens = agent.estimate_tokens(system_prompt)
-    for _, msg in ipairs(active) do
-        total_tokens = total_tokens + agent.estimate_tokens(msg.content)
-    end
-
+    total_tokens, _ = agent.context_tokens(db_path, session_id, active)
     if total_tokens <= threshold then
         return false
     end
@@ -1115,47 +1224,87 @@ function agent.compact_if_needed(db_path, session_id, system_prompt, model)
     -- tail starting on tool_result rows sends results for calls the
     -- model can no longer see, which Vertex rejects outright (see
     -- pair_tool_results). Move the cut back to that assistant turn.
-    cut = #active - keep_last
-    while cut > 0 and active[cut + 1].role == "tool_result" do
+    cut = #conversation - keep_last
+    while cut > 0 and conversation[cut + 1].role == "tool_result" do
         cut = cut - 1
     end
     if cut == 0 then
         return false
     end
 
-    to_compact = {}
+    dropped = {}
     for i = 1, cut do
-        table.insert(to_compact, active[i])
+        table.insert(dropped, conversation[i])
+    end
+    to_compact = {}
+    for _, msg in ipairs(summaries) do
+        table.insert(to_compact, msg)
+    end
+    for _, msg in ipairs(dropped) do
+        table.insert(to_compact, msg)
+    end
+
+    -- The previous summary is updated, not summarized again: its prose
+    -- goes to the summarizer as the summary so far, its verbatim user
+    -- requests and pinned schema are carried on by code. (Sessions
+    -- compacted before summaries were folded in can hold several; they
+    -- merge, oldest first.)
+    previous_summary = nil
+    earlier_requests = {}
+    for _, msg in ipairs(summaries) do
+        prose, _ = split_pinned_schema(msg.content)
+        body, requests_in = parse_user_requests(prose)
+        if previous_summary == nil then
+            previous_summary = body
+        else
+            previous_summary = previous_summary .. "\n\n" .. body
+        end
+        for _, text in ipairs(requests_in) do
+            table.insert(earlier_requests, text)
+        end
     end
 
     -- Compaction runs right after a new user message is added, so that
     -- message is always in the kept tail -- but it's often just "yes" /
     -- "continue" / "I asked for a list", with the real request among
     -- the compacted messages. Carry the most recent user messages being
-    -- compacted verbatim, most recent last.
-    compacted_user_requests = {}
-    for i = #to_compact, 1, -1 do
-        if to_compact[i].role == "user" and #compacted_user_requests < COMPACTION_USER_REQUESTS_KEPT then
-            table.insert(compacted_user_requests, 1,
-                "- " .. cap_text(agent.display_content(to_compact[i].content, "user"), COMPACTION_ARGS_CAP))
+    -- compacted verbatim (the previous summary's first), most recent
+    -- last.
+    requests = {}
+    for _, text in ipairs(earlier_requests) do
+        table.insert(requests, text)
+    end
+    for _, msg in ipairs(dropped) do
+        if msg.role == "user" then
+            table.insert(requests, cap_text(agent.display_content(msg.content, "user"), COMPACTION_ARGS_CAP))
         end
     end
+    compacted_user_requests = {}
+    for i = math.max(1, #requests - COMPACTION_USER_REQUESTS_KEPT + 1), #requests do
+        table.insert(compacted_user_requests, format_user_request(requests[i]))
+    end
 
-    summary_prompt = "You are a context compaction engine. Please summarize the following " ..
-        "conversation history into a concise, structured Markdown summary of goals, key " ..
-        "information established, and progress. Focus on preserving factual details and " ..
-        "state, so that a future model invocation has all the necessary context. In particular, " ..
-        "keep verbatim: the user's own requests (never reinterpret them as a different task), " ..
+    rules = "Keep verbatim: the user's own requests (never reinterpret them as a different task), " ..
         "any query text that succeeded, confirmed table/field names, and entity ids with what " ..
         "they refer to. Only state what the conversation actually shows -- do not infer field " ..
-        "names or results that never appeared. Keep the summary under 400 words.\n\nConversation to summarize:\n"
-    for _, msg in ipairs(to_compact) do
-        content = compaction_content(msg)
-        -- The pinned block is carried by code below, not re-summarized.
-        if msg.role == "compaction_summary" then
-            content = split_pinned_schema(content)
-        end
-        summary_prompt = summary_prompt .. string.upper(msg.role) .. ": " .. content .. "\n"
+        "names or results that never appeared. Use exactly these sections, in this order, and " ..
+        "write \"none\" under one with nothing to say:\n\n" .. COMPACTION_SECTIONS ..
+        "\n\nKeep the summary under 500 words.\n\n"
+    summary_prompt = nil
+    if previous_summary == nil then
+        summary_prompt = "You are a context compaction engine. Summarize the following conversation " ..
+            "history into a structured Markdown summary, so that a future model invocation has all " ..
+            "the facts and state it needs. " .. rules .. "Conversation to summarize:\n"
+    else
+        summary_prompt = "You are a context compaction engine. Below is the summary of this " ..
+            "conversation so far, then the messages that are now being dropped from the context " ..
+            "after it. Update the summary with them: keep every fact, id, query and decision it " ..
+            "holds unless a newer message corrects it, add what the new messages establish, and " ..
+            "rewrite the open questions and next step to where things stand now. " .. rules ..
+            "Summary so far:\n" .. previous_summary .. "\n\nMessages now being dropped:\n"
+    end
+    for _, msg in ipairs(dropped) do
+        summary_prompt = summary_prompt .. string.upper(msg.role) .. ": " .. compaction_content(msg) .. "\n"
     end
 
     summary, err, usage = agent_provider.generate(model, "You are a concise summarizer.", summary_prompt)
@@ -1164,7 +1313,7 @@ function agent.compact_if_needed(db_path, session_id, system_prompt, model)
     end
 
     if #compacted_user_requests > 0 then
-        summary = summary .. "\n\n**Earlier user messages (verbatim, most recent last):**\n" .. table.concat(compacted_user_requests, "\n")
+        summary = summary .. "\n\n" .. COMPACTION_USER_REQUESTS_HEADER .. "\n" .. table.concat(compacted_user_requests, "\n")
     end
     if config.platform_config().agent_pin_schema == true then
         pinned = pinned_schema_block(to_compact, config.platform_config().agent_pinned_schema_chars)
@@ -2235,6 +2384,12 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
             -- Counts on across automatic continuations, so a turn's
             -- steps number 1..N however many budgets it used.
             step_number = continuations * max_turns + turn
+            -- A long turn can outgrow the window between steps: check
+            -- again before every step after the first (the first was
+            -- checked above, before the loop).
+            if step_number > 1 and config.platform_config().agent_compaction_mid_turn == true then
+                agent.compact_if_needed(db_path, session_id, system_prompt, model)
+            end
             active = agent.active_messages(db_path, session_id)
             history_messages = build_history_messages(active)
             audit_prompt = json.encode(history_messages)

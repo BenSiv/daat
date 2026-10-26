@@ -237,7 +237,10 @@ A built-in assistant, not a bolted-on integration: real per-user conversation se
   | `agent_background_max_attempts` | 3 | Retries before a background task is marked permanently `failed` |
   | `agent_search_excerpt_length` | 1200 | Per-result excerpt length `document.search`'s tool result feeds into the model's own prompt |
   | `agent_query_row_cap` | 200 | Row cap on `entity.query` results (goes straight into the model's prompt/context, so much lower than the admin console's own cap) |
-  | `agent_compaction_threshold` | 32000 | Estimated-token threshold that triggers context-window compaction |
+  | `agent_compaction_threshold` | 48000 | Real-token size of the context that triggers compaction: the last chat call's recorded `prompt_tokens` plus newer messages, or the estimate below (doc/context-management-plan.md, Phase 3) |
+  | `agent_context_fixed_tokens` | 3900 | Estimate without a recorded count: tokens for the system prompt and tool definitions |
+  | `agent_chars_per_token` | 2.8 | Estimate: characters of rendered history per token |
+  | `agent_compaction_mid_turn` | `true` | Check for compaction before every step of a turn, not only when it starts |
   | `platform_adhoc_row_cap` | 1000 | Row cap on the admin-only `/sql` ad-hoc console (a human reading an HTML table, not a model's context budget) |
   | `extension_max_job_attempts` | 5 | Retries before an `system_job` (after-hook write queue) is marked permanently `failed` |
   | `db_backend` | `"sqlite"` | `"sqlite"` or `"mariadb"` -- see doc/mariadb-migration.md |
