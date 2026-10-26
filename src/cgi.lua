@@ -1275,7 +1275,14 @@ function cgi.handle_request()
     -- somewhere to plug in without changing html.lua at all.
     if path_info == "/documents" then
         rows = document.all_active(db_path)
-        body = html.render_document_tree(rows, true, nonce)
+        -- A content search (the box's Enter) runs the same search the
+        -- agent's document.search does, logged as this user's.
+        query = params.q
+        search_results = nil
+        if query != nil and query != "" then
+            search_results = knowledge.search_for_display(db_path, query, 10, nil, author, false)
+        end
+        body = html.render_document_tree(rows, true, nonce, query, search_results)
         return print_response("200 OK", "text/html",
             html.page_shell("Pages", "documents", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
     end

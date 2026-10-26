@@ -766,29 +766,11 @@ function agent_tools.execute_tool(db_path, author, session_id, tool_name, method
     source = {notebook_entry_id = "agent-session:" .. tostring(session_id)}
 
     if tool_name == "document" and method_name == "search" then
-        excerpt_length = config.platform_config().agent_search_excerpt_length
-        if args.detail == "full" then
-            excerpt_length = config.platform_config().agent_search_excerpt_full_length
-        end
-        results = knowledge.search_and_log(db_path, args.query, 5, true, session_id, author)
+        -- The same search the /documents search box runs
+        -- (knowledge.search_for_display): same documents, same excerpts.
+        results = knowledge.search_for_display(db_path, args.query, 5, session_id, author, args.detail == "full")
         if #results == 0 then
             return "No matching documents found."
-        end
-        -- Structural, not just a prompt reminder: multiple documents
-        -- genuinely sharing a title is real and common here (293
-        -- duplicate titles in production, mostly repeated Benchling
-        -- resyncs) -- rather than relying on the model to notice and
-        -- remember not to ask the human for a raw id every time, the
-        -- tool result itself surfaces the distinguishing fields
-        -- (creation date, external_id) and calls out the collision
-        -- explicitly whenever this batch of results actually has one.
-        title_counts = {}
-        for _, r in ipairs(results) do
-            current_count = title_counts[r.title]
-            if current_count == nil then
-                current_count = 0
-            end
-            title_counts[r.title] = current_count + 1
         end
         lines = {}
         for _, r in ipairs(results) do
@@ -803,15 +785,21 @@ function agent_tools.execute_tool(db_path, author, session_id, tool_name, method
             if #detail_bits > 0 then
                 header = header .. " (" .. table.concat(detail_bits, ", ") .. ")"
             end
-            if title_counts[r.title] > 1 then
-                header = header .. " [one of " .. tostring(title_counts[r.title]) ..
+            -- Structural, not just a prompt reminder: multiple documents
+            -- genuinely sharing a title is real and common here (293
+            -- duplicate titles in production, mostly repeated Benchling
+            -- resyncs) -- the result itself surfaces the distinguishing
+            -- fields and calls out the collision whenever this batch has
+            -- one.
+            if r.same_title_count > 1 then
+                header = header .. " [one of " .. tostring(r.same_title_count) ..
                     " documents titled '" .. r.title .. "' -- distinguish by date/external_id/content above, never by asking the user for the id]"
             end
             -- A ready-made link to quote wherever the reply uses this
             -- document, so citing it costs the model nothing.
             link_title = string.gsub(r.title, "[%[%]]", "")
             cite = "cite as: [" .. link_title .. "](/document?entity_id=" .. tostring(r.id) .. ")"
-            table.insert(lines, header .. "\n" .. cite .. "\n" .. document.search_snippet(r.content, args.query, excerpt_length))
+            table.insert(lines, header .. "\n" .. cite .. "\n" .. r.excerpt)
         end
         return table.concat(lines, "\n\n")
     end

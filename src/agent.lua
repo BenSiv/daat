@@ -2101,7 +2101,7 @@ REPEAT_SAFE_TOOLS = {
     ["entity.list_types"] = true, ["entity.fields"] = true, ["entity.relationships"] = true,
     ["entity.get"] = true, ["document.search"] = true, ["document.children"] = true,
 }
-REPEAT_CALL_NOTE = "Same call as one earlier in this conversation (same tool, same arguments), and nothing has been written since: its result is above and unchanged. Use that result instead of calling again."
+REPEAT_CALL_NOTE = "Same call as one earlier in this conversation (same tool, same arguments), and this conversation hasn't changed anything since: its result is above. Use that result instead of calling again."
 
 -- agent.find_repeat(messages, full_name, args, is_write) -> earlier call id | nil
 -- `messages` is the canonical history the model sees right now;

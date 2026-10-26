@@ -345,7 +345,9 @@ function config.platform_config()
         -- Passage retrieval (doc/passage-retrieval.md): search shows each
         -- shortlisted document's most relevant passages, chosen by
         -- meaning, to the agent and on /documents alike.
-        search_passages = false,
+        -- On since the 2026-10-26 live scorecard: answers and checks
+        -- unchanged, ~3% fewer tokens per passed run.
+        search_passages = true,
         passage_max_chars = 1500,
         passage_min_chars = 200,
         passages_per_document = 2,

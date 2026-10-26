@@ -6231,7 +6231,43 @@ function document_search_index_json(rows)
     return json_for_script(json.encode(index))
 end
 
-function html.render_document_tree(rows, can_create, nonce)
+-- The content-search results above the tree: the same results, and the
+-- same passages, the agent's document.search returns for the query
+-- (knowledge.search_for_display).
+function render_document_search_results(query, results)
+    if query == nil or query == "" then
+        return ""
+    end
+    if results == nil or #results == 0 then
+        return "<section class=\"platform-document-content-results\"><p class=\"platform-empty\">No documents match <strong>" ..
+            html.html_escape(query) .. "</strong>.</p></section>"
+    end
+    items = {}
+    for _, r in ipairs(results) do
+        meta = {}
+        if r.created_at != nil and r.created_at != "" then
+            table.insert(meta, "created " .. html.html_escape(string.sub(r.created_at, 1, 10)))
+        end
+        if r.external_id != nil and r.external_id != "" then
+            table.insert(meta, html.html_escape(r.external_id))
+        end
+        if r.same_title_count > 1 then
+            table.insert(meta, "one of " .. tostring(r.same_title_count) .. " with this title")
+        end
+        meta_html = ""
+        if #meta > 0 then
+            meta_html = "<div class=\"platform-document-result-meta\">" .. table.concat(meta, " &middot; ") .. "</div>"
+        end
+        table.insert(items, "<li><a href=\"document?entity_id=" .. tostring(r.id) .. "\">" .. html.html_escape(r.title) .. "</a>" ..
+            meta_html .. "<div class=\"platform-document-result-excerpt\">" .. html.html_escape(r.excerpt) .. "</div></li>")
+    end
+    return "<section class=\"platform-document-content-results\"><h3>" .. tostring(#results) .. " documents match <strong>" ..
+        html.html_escape(query) .. "</strong></h3><ol>" .. table.concat(items, "") .. "</ol></section>"
+end
+
+-- `query` / `results` (optional): a content search to show above the
+-- tree (render_document_search_results).
+function html.render_document_tree(rows, can_create, nonce, query, results)
     by_parent = build_document_tree_index(rows)
     tree_items = render_document_tree_level(by_parent, "root", 0)
     tree_html = "<ul class=\"platform-document-tree\">" .. tree_items .. "</ul>"
@@ -6246,6 +6282,10 @@ function html.render_document_tree(rows, can_create, nonce)
     end
 
     doc_tree_header = render_page_header("Documents", nil, new_page_link)
+    query_value = query
+    if query_value == nil then
+        query_value = ""
+    end
     return string.format("""
 <div class="fossil-doc" data-title="Documents">
     <style>
@@ -6253,6 +6293,13 @@ function html.render_document_tree(rows, can_create, nonce)
 %s
 %s
         .platform-document-search { position: relative; margin-bottom: 16px; }
+        .platform-document-content-results { margin-bottom: 24px; }
+        .platform-document-content-results h3 { font-size: 1rem; font-weight: 600; margin: 0 0 10px; }
+        .platform-document-content-results ol { list-style: none; padding: 0; margin: 0; }
+        .platform-document-content-results li { padding: 12px 0; border-bottom: 1px solid var(--platform-border, #e2e8f0); }
+        .platform-document-result-meta { color: var(--platform-muted, #64748b); font-size: 0.82rem; margin-top: 2px; }
+        .platform-document-result-excerpt { white-space: pre-wrap; font-size: 0.88rem; margin-top: 6px; color: var(--platform-text, #0f172a); }
+        .platform-document-search-hint { color: var(--platform-muted, #64748b); font-size: 0.8rem; margin-top: 4px; }
         .platform-document-search input {
             width: 100%%; padding: 10px 12px; box-sizing: border-box;
             border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-sm, 8px); font-size: 0.92rem;
@@ -6290,10 +6337,12 @@ function html.render_document_tree(rows, can_create, nonce)
     </style>
     <div class="platform-container">
         %s
-        <div class="platform-document-search">
-            <input type="text" id="platform-document-search-input" placeholder="Fuzzy search document titles..." autocomplete="off">
+        <form class="platform-document-search" method="get" action="documents" id="platform-document-search-form">
+            <input type="text" name="q" id="platform-document-search-input" value="%s" placeholder="Search documents..." autocomplete="off">
             <div class="platform-document-search-results" id="platform-document-search-results"></div>
-        </div>
+            <div class="platform-document-search-hint">Titles appear as you type; press Enter to search the contents.</div>
+        </form>
+        %s
         %s
     </div>
     <script nonce="%s">
@@ -6361,18 +6410,30 @@ function html.render_document_tree(rows, can_create, nonce)
         PlatformJS.onOutsideClick(input, function(){ return results; }, function(){
             results.classList.remove('platform-document-search-open');
         });
+        // Enter searches the contents (the form submits), unless a title
+        // was picked with the arrow keys, which opens it.
+        var active = -1;
+        function highlight(links) {
+            links.forEach(function(a, i){ a.classList.toggle('platform-search-active', i === active); });
+        }
         input.addEventListener('keydown', function(e){
-            if (e.key === 'Enter') {
-                var first = results.querySelector('a');
-                if (first) { window.location.href = first.getAttribute('href'); }
+            var links = Array.prototype.slice.call(results.querySelectorAll('a'));
+            if (e.key === 'ArrowDown' && links.length) {
+                e.preventDefault(); active = Math.min(active + 1, links.length - 1); highlight(links);
+            } else if (e.key === 'ArrowUp' && links.length) {
+                e.preventDefault(); active = Math.max(active - 1, -1); highlight(links);
+            } else if (e.key === 'Enter' && active >= 0 && links[active]) {
+                e.preventDefault(); window.location.href = links[active].getAttribute('href');
             } else if (e.key === 'Escape') {
                 results.classList.remove('platform-document-search-open');
             }
         });
+        input.addEventListener('input', function(){ active = -1; });
     })();
     </script>
 </div>
-""", platform_container_css(), platform_button_css(), platform_page_header_css(), doc_tree_header, tree_html,
+""", platform_container_css(), platform_button_css(), platform_page_header_css(), doc_tree_header,
+     html.html_escape(query_value), render_document_search_results(query, results), tree_html,
      nonce, document_search_index_json(rows))
 end
 
