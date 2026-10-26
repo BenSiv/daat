@@ -222,7 +222,13 @@ for _, row in ipairs(message_rows) do
         compactions = compactions + 1
     end
 end
-_, exact_repeats = context_report.count_exact_repeats(repeat_rows)
+by_tool, exact_repeats = context_report.count_exact_repeats(repeat_rows)
+-- Whether search excerpts were enough: reads of a whole document after
+-- searching (doc/passage-retrieval-plan.md).
+entity_get_calls = 0
+if by_tool["entity.get"] != nil then
+    entity_get_calls = by_tool["entity.get"].calls
+end
 
 print(json.encode({
     scenario = scenario.name,
@@ -240,6 +246,7 @@ print(json.encode({
     peak_prompt_tokens = tonumber(usage.peak),
     exact_repeat_calls = exact_repeats,
     compactions = compactions,
+    entity_get_calls = entity_get_calls,
     seconds = os.time() - started,
     session_id = session_id,
 }))

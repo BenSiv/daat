@@ -316,6 +316,37 @@ function generate(opts)
     })
     facts.protocol_doc_key = "doc-protocol-od"
 
+    -- A long lab handbook whose facts sit in late sections and share few
+    -- words with how people ask about them (doc/passage-retrieval-
+    -- plan.md): a keyword excerpt lands on its opening sections; the
+    -- passage that answers is found by meaning. Fixed text, no rng(), so
+    -- every other generated fact stays the same.
+    filler_sections = {
+        {"Working hours and access", "The lab is open on weekdays from eight in the morning until seven in the evening. Visitors sign in at the front desk and are accompanied at all times. Badges are renewed every January, and lost badges are reported to the office the same day. Weekend work is agreed with the lab manager a week ahead, and nobody works alone after hours."},
+        {"Ordering", "Consumables are ordered through the purchasing sheet every Tuesday. Write the catalogue number, the supplier and the quantity, and mark anything urgent. Deliveries arrive on Thursdays and are unpacked by whoever placed the order. Keep the packing slips in the blue folder for the monthly reconciliation."},
+        {"Waste", "Biological waste goes into the orange bags, which are autoclaved before disposal. Sharps go into the yellow containers, never into ordinary bins. Chemical waste is collected in labelled bottles by type, and the safety officer arranges collection when a bottle is three quarters full. Glass is rinsed and put in the cardboard glass box."},
+        {"Cleaning", "Benches are wiped with seventy percent ethanol at the start and end of each session. The shared centrifuge is cleaned after any spill and checked weekly. Every Friday someone from the rota empties the water baths, defrosts the small fridge if needed, and restocks gloves and paper towels."},
+        {"Equipment booking", "The plate reader, the spectrophotometer and the shaking platforms are booked on the shared calendar. Book in blocks of at most two hours during the day, and leave a note if a run will go overnight. Report any fault in the equipment log and put an out of order sign on the instrument."},
+        {"Data and notebooks", "Every experiment gets a lab number before it starts. Raw instrument files are saved to the shared drive under that number on the same day, and the notebook entry links to them. Never overwrite a raw file; corrections go in a new version with a note explaining the change."},
+    }
+    body = "# Lab handbook\n\nHow the lab runs day to day. Ask the lab manager about anything not covered here.\n\n"
+    for _, section in ipairs(filler_sections) do
+        body = body .. "## " .. section[1] .. "\n\n" .. section[2] .. " " .. section[2] .. "\n\n"
+    end
+    body = body ..
+        "## Glycerol stocks\n\nGlycerol stocks of every strain are kept in freezer F3, rack B, box 12, at minus eighty. " ..
+        "Take a stock out only on dry ice and put it back within ten minutes; never let it thaw.\n\n" ..
+        "## Antibiotics\n\nLet autoclaved media cool for forty-five minutes, to about 55 C, before adding antibiotics, " ..
+        "or the heat breaks them down.\n"
+    table.insert(out.documents, {key = "doc-handbook", title = "Lab handbook", content = body})
+    facts.handbook = {
+        doc_key = "doc-handbook",
+        stocks_location = "F3",
+        stocks_question = "Where are the frozen backups of our yeast kept?",
+        cooling_minutes = "45",
+        cooling_question = "How long do I wait after sterilising broth before putting in the antibiotics?",
+    }
+
     -- Asked about, but recorded nowhere: the agent should say so.
     facts.unknown = {
         {question = "Which supplier provided the yeast extract?", subject = "yeast extract supplier"},
