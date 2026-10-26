@@ -715,6 +715,7 @@ function document.init_schema(db_path)
     db.exec(db_path, DOCUMENT_LINK_SYNC_SCHEMA)
     tag.init_schema(db_path)
     require("tag_upkeep").init_schema(db_path)
+    require("passage").init_schema(db_path)
     reference.init_schema(db_path)
     ensure_document_knowledge_columns(db_path)
     ensure_document_knowledge_indexes(db_path)
@@ -2164,6 +2165,7 @@ end
 function hex_literal(bytes)
     return "X'" .. string.gsub(bytes, ".", function(c) return string.format("%02x", string.byte(c)) end) .. "'"
 end
+document.hex_literal = hex_literal
 
 -- The text a document's embedding was made from before the rules below
 -- -- what a row with no text_hash (made before it existed) was made from.
@@ -2878,10 +2880,15 @@ function document.search(db_path, query_text, limit, use_semantic)
     lexical = lexical_ranking(db_path, terms, query_text)
 
     semantic = {}
+    -- Also returned, so passage scoring (src/passage.lua) can reuse the
+    -- query's embedding instead of asking for it again.
+    query_vector = nil
+    query_model = nil
     if use_semantic == true and query_text != nil and query_text != "" then
         agent_provider = require("agent_provider")
         model = agent_provider.embedding_model()
         if model != nil then
+            query_model = model
             query_vector, _ = agent_provider.embeddings(model, query_text)
             if query_vector != nil then
                 semantic = semantic_ranking(db_path, query_vector, model)
@@ -2967,7 +2974,7 @@ function document.search(db_path, query_text, limit, use_semantic)
         table.insert(results, scored[i])
     end
     if #results == 0 then
-        return results
+        return results, query_vector, query_model
     end
 
     -- Content only for what's actually returned.
@@ -2985,7 +2992,28 @@ function document.search(db_path, query_text, limit, use_semantic)
     for _, r in ipairs(results) do
         r.content = content_by_id[tonumber(r.id)]
     end
-    return results
+    return results, query_vector, query_model
+end
+
+-- Where a document's own text starts: past a leading metadata preamble
+-- (synced files open with quoted lines -- source path, author, "synced
+-- daily" -- closed by a "---" rule), else 1. Only a preamble closed by
+-- a rule counts, so a document that merely opens with a quote keeps it.
+-- Shared by search excerpts and passage splitting (src/passage.lua).
+function document.preamble_end(content)
+    position = 1
+    while string.sub(content, position, position) == ">" or string.sub(content, position, position) == "\n" do
+        line_end = string.find(content, "\n", position, true)
+        if line_end == nil then
+            break
+        end
+        position = line_end + 1
+    end
+    rule_end = string.match(content, "^%-%-%-+\n+()", position)
+    if position > 1 and rule_end != nil then
+        return rule_end
+    end
+    return 1
 end
 
 -- The passage of `content` most worth showing for a search: the window
@@ -3063,20 +3091,7 @@ function document.search_snippet(content, query_text, max_length)
             start = lead_start
         end
     else
-        -- Walk the leading quoted (and blank) lines; only if a "---"
-        -- rule closes them is it a preamble worth skipping.
-        position = 1
-        while string.sub(content, position, position) == ">" or string.sub(content, position, position) == "\n" do
-            line_end = string.find(content, "\n", position, true)
-            if line_end == nil then
-                break
-            end
-            position = line_end + 1
-        end
-        rule_end = string.match(content, "^%-%-%-+\n+()", position)
-        if position > 1 and rule_end != nil then
-            start = rule_end
-        end
+        start = document.preamble_end(content)
     end
     while start > 1 and string.find(string.sub(content, start - 1, start - 1), "%w") != nil do
         start = start - 1

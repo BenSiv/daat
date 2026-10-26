@@ -214,10 +214,53 @@ function agent_test.converse(model, system_prompt, messages, tools)
     return response, nil, usage
 end
 
+-- Test switches for embeddings (environment variables):
+--   AGENT_TEST_EMBEDDINGS=terms     word-based vectors: each word hashed
+--                                   into one of 64 dimensions, so texts
+--                                   sharing words are similar (passage
+--                                   ranking tests need that)
+--   AGENT_TEST_EMBEDDINGS_LOG=path  append one line per embedded text
+--   AGENT_TEST_EMBEDDINGS_FAIL=1    every embedding call fails
+-- Unset, embeddings are the original stable pseudo-vectors below.
+function test_term_vector(text)
+    vector = {}
+    for i = 1, 64 do
+        vector[i] = 0
+    end
+    for word in string.gmatch(string.lower(text), "%a+") do
+        if string.len(word) > 2 then
+            h = 0
+            for i = 1, string.len(word) do
+                h = (h * 31 + string.byte(word, i)) % 64
+            end
+            vector[h + 1] = vector[h + 1] + 1
+        end
+    end
+    return vector
+end
+
+function test_log_embedding(text)
+    path = os.getenv("AGENT_TEST_EMBEDDINGS_LOG")
+    if path != nil and path != "" then
+        file = io.open(path, "a")
+        if file != nil then
+            io.write(file, string.gsub(string.sub(text, 1, 60), "\n", " ") .. "\n")
+            io.close(file)
+        end
+    end
+end
+
 -- A stable, content-derived pseudo-embedding -- not a real semantic
 -- vector, just enough determinism for ranking-formula tests to
 -- exercise the cosine-similarity code path reproducibly.
 function agent_test.embeddings(model, text)
+    if os.getenv("AGENT_TEST_EMBEDDINGS_FAIL") == "1" then
+        return nil, "test embeddings failure"
+    end
+    test_log_embedding(text)
+    if os.getenv("AGENT_TEST_EMBEDDINGS") == "terms" then
+        return test_term_vector(text)
+    end
     seed = 0
     for i = 1, string.len(text) do
         seed = seed + string.byte(text, i)
@@ -227,6 +270,18 @@ function agent_test.embeddings(model, text)
         table.insert(vector, math.sin(seed + i))
     end
     return vector
+end
+
+function agent_test.embeddings_batch(model, texts)
+    vectors = {}
+    for _, text in ipairs(texts) do
+        vector, err = agent_test.embeddings(model, text)
+        if vector == nil then
+            return nil, err
+        end
+        table.insert(vectors, vector)
+    end
+    return vectors
 end
 
 return agent_test

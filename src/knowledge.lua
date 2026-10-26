@@ -27,6 +27,7 @@
 db = require("database")
 document = require("document")
 entity = require("entity")
+config = require("config")
 
 knowledge = {}
 
@@ -1384,7 +1385,7 @@ end
 -- is threaded through to review_retrieval, purely for attributing any
 -- reactive distillation it triggers.
 function knowledge.search_and_log(db_path, query_text, limit, use_semantic, session_id, author)
-    results = document.search(db_path, query_text, limit, use_semantic)
+    results, query_vector, query_model = document.search(db_path, query_text, limit, use_semantic)
     retrieval_id = knowledge.begin_retrieval(db_path, session_id, query_text, #results)
     hit_ids = {}
     for _, r in ipairs(results) do
@@ -1401,7 +1402,47 @@ function knowledge.search_and_log(db_path, query_text, limit, use_semantic, sess
     if #results > 0 then
         knowledge.review_retrieval(db_path, retrieval_id, author)
     end
-    return results, retrieval_id
+    return results, retrieval_id, query_vector, query_model
+end
+
+-- knowledge.search_for_display(db_path, query_text, limit, session_id, author, full)
+--   -> {{id, title, created_at, external_id, excerpt, same_title_count}, ...}
+-- The one search everything shows -- the agent's document.search tool
+-- and the /documents search box alike (doc/architecture.md, "The agent
+-- sees what a user sees"): the same documents, the same excerpts, the
+-- same usage logging. `excerpt` is the document's best passages when
+-- search_passages is on (src/passage.lua), else the keyword window;
+-- `full` asks for longer excerpts. `same_title_count` > 1 marks
+-- documents sharing a title, so either side can tell them apart.
+function knowledge.search_for_display(db_path, query_text, limit, session_id, author, full)
+    results, _, query_vector, query_model = knowledge.search_and_log(db_path, query_text, limit, true, session_id, author)
+    conf = config.platform_config()
+    budget = conf.agent_search_excerpt_length
+    if full == true then
+        budget = conf.agent_search_excerpt_full_length
+    end
+    excerpts = {}
+    if conf.search_passages == true then
+        excerpts = require("passage").excerpts(db_path, results, query_text, query_vector, query_model, budget, full == true)
+    end
+    title_counts = {}
+    for _, r in ipairs(results) do
+        current = title_counts[r.title]
+        if current == nil then
+            current = 0
+        end
+        title_counts[r.title] = current + 1
+    end
+    shown = {}
+    for _, r in ipairs(results) do
+        excerpt = excerpts[tonumber(r.id)]
+        if excerpt == nil then
+            excerpt = document.search_snippet(r.content, query_text, budget)
+        end
+        table.insert(shown, {id = tonumber(r.id), title = r.title, created_at = r.created_at, external_id = r.external_id,
+            excerpt = excerpt, same_title_count = title_counts[r.title]})
+    end
+    return shown
 end
 
 --------------------------------------------------------------------------

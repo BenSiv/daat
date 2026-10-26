@@ -129,6 +129,15 @@ test_vertex_blocks_only_captures_signature_on_first_of_parallel_calls()
 test_vertex_blocks_captures_thought_signature_on_text_and_thinking_parts()
 test_vertex_contents_round_trips_thought_signature_for_every_block_type()
 
+print("Testing vertex_embedding_batches groups texts within the count and size limits, in order")
+batches = agent_vertex.vertex_embedding_batches({"aaaa", "bbbb", "cccc", "dddd", "eeeee"}, 2, 100)
+check(#batches == 3 and batches[1][1] == 1 and batches[1][2] == 2 and batches[3][1] == 5 and batches[3][2] == 5, "count limit of 2 gives 1-2, 3-4, 5")
+batches = agent_vertex.vertex_embedding_batches({"aaaa", "bbbb", "cccc"}, 100, 9)
+check(#batches == 2 and batches[1][2] == 2 and batches[2][1] == 3, "size limit of 9 characters gives 1-2, 3")
+batches = agent_vertex.vertex_embedding_batches({string.rep("x", 50), "y"}, 100, 10)
+check(#batches == 2 and batches[1][1] == 1 and batches[1][2] == 1, "a text over the size limit gets a request of its own")
+check(#agent_vertex.vertex_embedding_batches({}, 100, 10) == 0, "no texts, no requests")
+
 if FAILURES > 0 then
     print(tostring(FAILURES) .. " failure(s)")
     os.exit(1)

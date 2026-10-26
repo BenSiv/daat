@@ -110,7 +110,11 @@ passed_tokens = 0
 peak_sum = 0
 repeats = 0
 compactions = 0
+entity_gets = 0
 for _, run in ipairs(runs) do
+    if tonumber(run.entity_get_calls) != nil then
+        entity_gets = entity_gets + tonumber(run.entity_get_calls)
+    end
     if tonumber(run.peak_prompt_tokens) != nil then
         peak_sum = peak_sum + tonumber(run.peak_prompt_tokens)
     end
@@ -152,6 +156,7 @@ summary = {
     peak_prompt_tokens = nil,
     repeat_calls_per_run = nil,
     compactions_per_run = nil,
+    entity_get_calls_per_run = nil,
 }
 if #runs > 0 then
     summary.all_checks_passed = passed_runs / #runs
@@ -160,6 +165,7 @@ if #runs > 0 then
     summary.peak_prompt_tokens = peak_sum / #runs
     summary.repeat_calls_per_run = repeats / #runs
     summary.compactions_per_run = compactions / #runs
+    summary.entity_get_calls_per_run = entity_gets / #runs
 end
 -- Tokens per completed task: what a correct answer costs, so a change
 -- that saves tokens by failing more doesn't look like a win.
@@ -194,6 +200,7 @@ SCORES = {
     {"peak_prompt_tokens", "Peak prompt tokens (avg per run)", "int"},
     {"repeat_calls_per_run", "Exact repeat calls per run", "num"},
     {"compactions_per_run", "Compactions per run", "num"},
+    {"entity_get_calls_per_run", "entity.get calls per run", "num"},
 }
 
 function fmt(value, kind)

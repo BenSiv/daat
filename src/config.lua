@@ -329,6 +329,33 @@ function config.platform_config()
         -- Phase 1): schema lookups carried verbatim through compaction
         -- (within this many characters), and an exact repeat of a
         -- read-only call answered with a pointer to the earlier result.
+        -- Result sizes (doc/context-management-plan.md, Phase 2): tool
+        -- results were 77% of prod chat history. knowledge.list pages
+        -- (was every pool document); entity.query stops at a size as well
+        -- as a row count; entity.get shows the start of a long text field
+        -- (and reads the rest on request); any other tool result over
+        -- agent_tool_result_cap is cut when shown to the model, with the
+        -- rest readable through result.read. document.search's "full"
+        -- detail uses the longer excerpt.
+        agent_knowledge_list_page = 50,
+        agent_query_char_cap = 12000,
+        agent_get_field_chars = 4000,
+        agent_tool_result_cap = 24000,
+        agent_search_excerpt_full_length = 4000,
+        -- Passage retrieval (doc/passage-retrieval.md): search shows each
+        -- shortlisted document's most relevant passages, chosen by
+        -- meaning, to the agent and on /documents alike.
+        -- On since the 2026-10-26 live scorecard: answers and checks
+        -- unchanged, ~3% fewer tokens per passed run.
+        search_passages = true,
+        passage_max_chars = 1500,
+        passage_min_chars = 200,
+        passages_per_document = 2,
+        passage_lexical_weight = 0.2,
+        passage_max_embeds_per_search = 60,
+        -- Passage embeddings are cached (document_passage_cache) and
+        -- expire this many days after last use (0: never).
+        passage_cache_days = 30,
         agent_pin_schema = true,
         agent_pinned_schema_chars = 6000,
         agent_dedupe_repeat_calls = true,
@@ -470,6 +497,21 @@ function config.platform_config()
     end
     if type(parsed.prompt_retention_days) == "number" then
         conf.prompt_retention_days = parsed.prompt_retention_days
+    end
+    if parsed.search_passages == true or parsed.search_passages == false then
+        conf.search_passages = parsed.search_passages
+    end
+    if type(parsed.passage_lexical_weight) == "number" and parsed.passage_lexical_weight >= 0 then
+        conf.passage_lexical_weight = parsed.passage_lexical_weight
+    end
+    if type(parsed.passage_cache_days) == "number" and parsed.passage_cache_days >= 0 then
+        conf.passage_cache_days = parsed.passage_cache_days
+    end
+    for _, key in ipairs({"agent_knowledge_list_page", "agent_query_char_cap", "agent_get_field_chars", "agent_tool_result_cap", "agent_search_excerpt_full_length",
+            "passage_max_chars", "passage_min_chars", "passages_per_document", "passage_max_embeds_per_search"}) do
+        if type(parsed[key]) == "number" and parsed[key] > 0 then
+            conf[key] = parsed[key]
+        end
     end
     if parsed.agent_pin_schema == true or parsed.agent_pin_schema == false then
         conf.agent_pin_schema = parsed.agent_pin_schema

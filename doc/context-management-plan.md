@@ -81,6 +81,14 @@ A new shaping step, `agent.shape_context(messages, policy)`, runs on the canonic
 4. **`entity.get` on long text:** for text fields over ~4k characters, return the head, the heading outline and the total length. Add `offset` / `length` arguments to read more of that field.
 5. **Safety net for every tool,** in `agent.run_tool`: a result over `agent_tool_result_cap` (e.g. 24k characters) is cut to the head plus `[truncated: N more characters of result #id -- call agent.read_result(id, offset)]`. The full text stays in `agent_message`, which already stores what the tool returned. A new read-only `agent.read_result(id, offset, length)` tool pages it, checked against the caller's session.
 
+**Status:** items 2-5 built (`feature/context-tool-sizes`):
+- `knowledge.list` pages (`agent_knowledge_list_page`, 50).
+- `entity.query` stops at `agent_query_char_cap` (12,000).
+- `entity.get` previews long text fields (`agent_get_field_chars`, 4,000) and reads on with `field` / `offset` / `length`.
+- Any tool result over `agent_tool_result_cap` (24,000) is cut when rendered for the model, and the new `result.read` tool reads the stored whole, this session's results only. Research sub-loop results are cut with a "narrow the request" note, since they aren't stored.
+
+Item 1 became passage retrieval (`doc/passage-retrieval.md`, plan in `doc/passage-retrieval-plan.md`): what search shows of each document is chosen by meaning, within the same budget, for the agent and the `/documents` page alike.
+
 **Tests:** per-tool truncation footers; `read_result` returns the remainder and refuses another session's result; the scorecard search scenarios still pass at the shorter excerpt length.
 
 **Measure:** average and maximum tool-result size per tool (context report); tokens per task; correctness.

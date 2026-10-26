@@ -117,4 +117,34 @@ function agent_provider.embeddings(model, text)
     return provider.embeddings(model, text)
 end
 
+-- agent_provider.embeddings_batch(model, texts) -> {vector, ...} in the
+-- same order | nil, err
+-- One or a few provider requests for many texts (passage scoring,
+-- src/passage.lua). A provider without batch support is called once per
+-- text; any failure fails the whole batch, so callers can fall back.
+function agent_provider.embeddings_batch(model, texts)
+    provider, err = agent_provider.load()
+    if provider == nil then
+        return nil, err
+    end
+    if model == nil then
+        model = agent_provider.embedding_model()
+    end
+    if provider.embeddings_batch != nil then
+        return provider.embeddings_batch(model, texts)
+    end
+    if provider.embeddings == nil then
+        return nil, "provider has no embeddings support"
+    end
+    vectors = {}
+    for _, text in ipairs(texts) do
+        vector, embed_err = provider.embeddings(model, text)
+        if vector == nil then
+            return nil, embed_err
+        end
+        table.insert(vectors, vector)
+    end
+    return vectors
+end
+
 return agent_provider

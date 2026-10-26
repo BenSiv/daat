@@ -3,7 +3,10 @@ set -euo pipefail
 
 # The agent scorecard -- see doc/agent-eval.md.
 #
-#   bld/eval.sh [--mode test|live] [--repeat N] [--only NAME] [--set core|growth|all]
+#   bld/eval.sh [--mode test|live] [--repeat N] [--only NAME] [--set core|growth|all] [--extra 'k = v, ...']
+#   --extra appends platform.lua fields to every run's copy of the demo
+#   lab (e.g. --extra 'search_passages = true'), to compare settings
+#   without rebuilding or re-embedding the lab.
 #               [--compare eval-out/runs/<run>/results.json] [--seed N]
 #   bld/eval.sh --rescore eval-out/runs/<run>   (re-check a finished run's
 #               stored conversations after a check changed; no model calls)
@@ -26,6 +29,7 @@ SET=all
 COMPARE=""
 RESCORE=""
 SEED=20261020
+EXTRA=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --mode) MODE="$2"; shift 2 ;;
@@ -35,6 +39,7 @@ while [ $# -gt 0 ]; do
         --compare) COMPARE="$2"; shift 2 ;;
         --seed) SEED="$2"; shift 2 ;;
         --rescore) RESCORE="$2"; shift 2 ;;
+        --extra) EXTRA="$2"; shift 2 ;;
         *) echo "Unknown option: $1" >&2; exit 2 ;;
     esac
 done
@@ -80,6 +85,7 @@ ENV_DIR=$(./bld/eval-env.sh --provider "$PROVIDER" --seed "$SEED")
 RUN_DIR="$REPO_ROOT/eval-out/runs/$(date +%Y%m%d-%H%M%S)-$MODE"
 mkdir -p "$RUN_DIR/work"
 : > "$RUN_DIR/results.jsonl"
+printf '%s\n' "$EXTRA" > "$RUN_DIR/extra.txt"
 
 for scenario in tst/eval/scenarios/*.lua; do
     name=$(basename "$scenario" .lua)
@@ -89,6 +95,9 @@ for scenario in tst/eval/scenarios/*.lua; do
     for r in $(seq 1 "$REPEAT"); do
         work="$RUN_DIR/work/$name-$r"
         cp -r "$ENV_DIR" "$work"
+        if [ -n "$EXTRA" ]; then
+            sed -i "\$ s/}[[:space:]]*\$/, ${EXTRA}}/" "$work/platform.lua"
+        fi
         (
             cd "$work"
             if [ "$MODE" = test ]; then
