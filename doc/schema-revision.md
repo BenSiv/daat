@@ -11,7 +11,7 @@ Built on `feature/schema-revision`, as store migrations 1-6 (`src/store.lua`), w
 - **Not done, on purpose: D, E and H.** Each would merge tables written by different modules. With one shared row per document or tag, every write becomes a dialect-specific partial upsert, and every delete becomes "null out my columns". That's harder to keep correct than one small table per owner. Instead, `knowledge_tier_review` is renamed to `document_tier_judgment`. `document_embedding`, `document_embedding_due`, `document_link_sync`, `tag_centre`, `tag_upkeep`, `knowledge_link_review` and `tag_judgment` stay as they are.
 - **Retrieval-hit retention dropped:** old hits feed the co-retrieval link logic (pairs of documents returned by the same search), so deleting them would change link decisions. With the review folded in they're small.
 
-Result: **42 built-in tables → 36**: `tag_relation` kept, `knowledge_pool_state` kept, D/E/H not merged.
+Result: **42 built-in tables → 36**: `tag_relation` kept, `knowledge_pool_state` kept, D/E/H not merged. Since then, passage retrieval added `document_passage_cache` (`doc/passage-retrieval.md`): derived, expiring, and the only way to avoid re-embedding the same passages on every search. **37** built-in tables.
 
 
 

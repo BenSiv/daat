@@ -87,7 +87,7 @@ A new shaping step, `agent.shape_context(messages, policy)`, runs on the canonic
 - `entity.get` previews long text fields (`agent_get_field_chars`, 4,000) and reads on with `field` / `offset` / `length`.
 - Any tool result over `agent_tool_result_cap` (24,000) is cut when rendered for the model, and the new `result.read` tool reads the stored whole, this session's results only. Research sub-loop results are cut with a "narrow the request" note, since they aren't stored.
 
-Item 1: `document.search` takes `detail = "full"` (`agent_search_excerpt_full_length`, 4,000), but the default excerpt stays at 1,200 until a live scorecard run shows a shorter one keeps answer quality.
+Item 1 became passage retrieval (`doc/passage-retrieval.md`, plan in `doc/passage-retrieval-plan.md`): what search shows of each document is chosen by meaning, within the same budget, for the agent and the `/documents` page alike.
 
 **Tests:** per-tool truncation footers; `read_result` returns the remainder and refuses another session's result; the scorecard search scenarios still pass at the shorter excerpt length.
 
