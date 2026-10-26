@@ -591,6 +591,59 @@ function agent_vertex.embeddings(model, text)
     return embedding.values
 end
 
+-- Vertex's text-embedding :predict takes at most 250 instances and
+-- 20,000 tokens per request. These are the API's limits, not deployment
+-- policy, so they're constants here, with margin: 100 texts and 30,000
+-- characters (prod text runs ~2.8 characters per token, so ~11k tokens).
+EMBED_BATCH_MAX_TEXTS = 100
+EMBED_BATCH_MAX_CHARS = 30000
+
+-- Groups texts into requests within those limits, keeping order:
+-- {{first_index, last_index}, ...}. A single text over the character
+-- limit still gets a request of its own (Vertex truncates long inputs).
+function vertex_embedding_batches(texts, max_texts, max_chars)
+    batches = {}
+    first = 1
+    chars = 0
+    for i, text in ipairs(texts) do
+        size = string.len(text)
+        if i > first and (i - first >= max_texts or chars + size > max_chars) then
+            table.insert(batches, {first, i - 1})
+            first = i
+            chars = 0
+        end
+        chars = chars + size
+    end
+    if first <= #texts then
+        table.insert(batches, {first, #texts})
+    end
+    return batches
+end
+
+function agent_vertex.embeddings_batch(model, texts)
+    vectors = {}
+    for _, batch in ipairs(vertex_embedding_batches(texts, EMBED_BATCH_MAX_TEXTS, EMBED_BATCH_MAX_CHARS)) do
+        instances = {}
+        for i = batch[1], batch[2] do
+            table.insert(instances, {content = texts[i]})
+        end
+        response, err = vertex_post(model .. ":predict", {instances = instances})
+        if response == nil then
+            return nil, err
+        end
+        if response.predictions == nil or #response.predictions != #instances then
+            return nil, "Vertex AI returned " .. tostring(response.predictions and #response.predictions) .. " embeddings for " .. #instances .. " texts"
+        end
+        for _, prediction in ipairs(response.predictions) do
+            if prediction.embeddings == nil or prediction.embeddings.values == nil then
+                return nil, "malformed embeddings response"
+            end
+            table.insert(vectors, prediction.embeddings.values)
+        end
+    end
+    return vectors
+end
+
 -- Exposed purely so tst/unit/agent_vertex.lua can reach it
 -- across the require() boundary -- see the matching comment in
 -- agent_claude.lua.
@@ -598,5 +651,6 @@ agent_vertex.vertex_url = vertex_url
 agent_vertex.vertex_blocks_from_parts = vertex_blocks_from_parts
 agent_vertex.vertex_contents_from_messages = vertex_contents_from_messages
 agent_vertex.vertex_token_cache_expired = vertex_token_cache_expired
+agent_vertex.vertex_embedding_batches = vertex_embedding_batches
 
 return agent_vertex
