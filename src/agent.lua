@@ -1429,7 +1429,26 @@ end
 -- (see pair_tool_results above) -- both Gemini and Claude reject the
 -- whole request otherwise, and since nothing here is ever deleted, one
 -- unpaired row would fail every later message in that session.
+-- agent.cap_tool_text(text, cap, result_id) -> text
+-- What the model is shown of a long tool result: its first `cap`
+-- characters and a note. With a result_id (a stored chat result) the
+-- note says how to read on (result.read); without one (a research
+-- sub-loop's in-memory result) it says to narrow the request.
+function agent.cap_tool_text(text, cap, result_id)
+    if text == nil or cap == nil or string.len(text) <= cap then
+        return text
+    end
+    note = string.format("\n[... cut at %d of %d characters", cap, string.len(text))
+    if result_id != nil then
+        note = note .. string.format("; read on with result.read result_id=%d offset=%d]", tonumber(result_id), cap)
+    else
+        note = note .. "; narrow the request for the rest]"
+    end
+    return string.sub(text, 1, cap) .. note
+end
+
 function build_history_messages(messages)
+    result_cap = config.platform_config().agent_tool_result_cap
     result = {}
     for _, msg in ipairs(messages) do
         if msg.role == "user" then
@@ -1450,7 +1469,7 @@ function build_history_messages(messages)
                     role = "toolResult",
                     toolCallId = decoded.tool_call_id,
                     toolName = decoded.tool_name,
-                    content = {{type = "text", text = decoded.text}},
+                    content = {{type = "text", text = agent.cap_tool_text(decoded.text, result_cap, msg.id)}},
                     isError = decoded.is_error == true,
                 })
             else
@@ -1786,7 +1805,7 @@ function agent.run_research_loop(db_path, author, session_id, model, question, m
             end
             table.insert(messages, {
                 role = "toolResult", toolCallId = tool_call.id, toolName = tool_call.name,
-                content = {{type = "text", text = result_text}}, isError = is_error,
+                content = {{type = "text", text = agent.cap_tool_text(result_text, config.platform_config().agent_tool_result_cap, nil)}}, isError = is_error,
             })
             agent.turn_heartbeat(db_path, session_id)
         end

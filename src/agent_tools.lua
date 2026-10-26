@@ -15,6 +15,7 @@
 agent = require("agent")
 auth = require("auth")
 calc = require("calc")
+db = require("database")
 config = require("config")
 document = require("document")
 entity = require("entity")
@@ -34,10 +35,13 @@ agent_tools.AGENT_TOOLS = {
     document = {
         search = {
             destructive = false,
-            description = "Search documents by keyword or topic; returns each matching document's id, title, and a real content excerpt so you can answer from what the document actually says, not just its title.",
+            description = "Search documents by keyword or topic; returns each matching document's id, title, and a real content excerpt so you can answer from what the document actually says, not just its title. Excerpts are short by default; pass detail = \"full\" for longer ones when the short excerpt isn't enough, or read one document with entity.get.",
             parameters = {
                 type = "object",
-                properties = {query = {type = "string", description = "search text"}},
+                properties = {
+                    query = {type = "string", description = "search text"},
+                    detail = {type = "string", description = "optional: \"full\" for longer excerpts"},
+                },
                 required = {"query"},
             },
         },
@@ -147,10 +151,16 @@ agent_tools.AGENT_TOOLS = {
         },
         get = {
             destructive = false,
-            description = "Fetch one entity row by id.",
+            description = "Fetch one entity row by id. A long text field (e.g. a document's content) shows its beginning, its headings and its total length; to read more of it, call again with field (the field name) and offset (the character to start from), and optionally length.",
             parameters = {
                 type = "object",
-                properties = {entity_type = {type = "string"}, entity_id = {type = "integer"}},
+                properties = {
+                    entity_type = {type = "string"},
+                    entity_id = {type = "integer"},
+                    field = {type = "string", description = "optional: read this one text field"},
+                    offset = {type = "integer", description = "optional, with field: first character to read (0-based)"},
+                    length = {type = "integer", description = "optional, with field: how many characters"},
+                },
                 required = {"entity_type", "entity_id"},
             },
         },
@@ -258,6 +268,23 @@ agent_tools.AGENT_TOOLS = {
             },
         },
     },
+    -- More of a long tool result the model was shown cut short
+    -- (agent.cap_tool_text); the full text is always stored.
+    result = {
+        read = {
+            destructive = false,
+            description = "Read more of an earlier tool result that was cut short because it was long (its note gives the result_id and the offset to continue from).",
+            parameters = {
+                type = "object",
+                properties = {
+                    result_id = {type = "integer", description = "the result_id from the cut result's note"},
+                    offset = {type = "integer", description = "first character to read (0-based)"},
+                    length = {type = "integer", description = "optional, how many characters"},
+                },
+                required = {"result_id", "offset"},
+            },
+        },
+    },
     -- Arithmetic on values a tool already returned (src/calc.lua), so
     -- the model never computes logs, ratios or rates in its head.
     calc = {
@@ -329,10 +356,13 @@ agent_tools.AGENT_TOOLS = {
         },
         list = {
             destructive = false,
-            description = "List knowledge pool documents with their id, tier, content shape (developed/atomic/thin/simple), heat, and retrieval count.",
+            description = "List knowledge pool documents with their id, tier, content shape (developed/atomic/thin/simple), heat, and retrieval count, hottest first, one page at a time (the footer says how many there are and how to get the next page).",
             parameters = {
                 type = "object",
-                properties = {tier = {type = "integer", description = "optional, filter to one tier 0-3"}},
+                properties = {
+                    tier = {type = "integer", description = "optional, filter to one tier 0-3"},
+                    offset = {type = "integer", description = "optional, for the next page"},
+                },
             },
         },
         distill = {
@@ -590,10 +620,34 @@ end
 -- Compact "field=value; field=value" text for one entity.get/list row,
 -- for the model to read -- sorted so output is deterministic rather
 -- than depending on pairs()'s unspecified iteration order.
-function row_summary(row)
+-- A long text value, shown as its start, its markdown headings and its
+-- total length, with how to read on (entity.get with field/offset).
+function long_text_preview(field_name, text, limit)
+    headings = {}
+    for line in string.gmatch(text, "[^\n]+") do
+        if string.find(line, "^#+%s") != nil and #headings < 30 then
+            table.insert(headings, line)
+        end
+    end
+    preview = string.sub(text, 1, limit)
+    note = string.format("[... %d of %d characters shown", limit, string.len(text))
+    if #headings > 0 then
+        note = note .. "; headings: " .. table.concat(headings, " | ")
+    end
+    note = note .. string.format("; read on with entity.get field=%s offset=%d]", field_name, limit)
+    return preview .. "\n" .. note
+end
+
+-- `field_limit` (optional): longer text values are previewed, not
+-- returned whole (agent_get_field_chars).
+function row_summary(row, field_limit)
     parts = {}
     for k, v in pairs(row) do
-        table.insert(parts, tostring(k) .. "=" .. format_field_value(v))
+        value = format_field_value(v)
+        if field_limit != nil and type(v) == "string" and string.len(v) > field_limit then
+            value = long_text_preview(tostring(k), v, field_limit)
+        end
+        table.insert(parts, tostring(k) .. "=" .. value)
     end
     table.sort(parts)
     return table.concat(parts, "; ")
@@ -712,6 +766,10 @@ function agent_tools.execute_tool(db_path, author, session_id, tool_name, method
     source = {notebook_entry_id = "agent-session:" .. tostring(session_id)}
 
     if tool_name == "document" and method_name == "search" then
+        excerpt_length = config.platform_config().agent_search_excerpt_length
+        if args.detail == "full" then
+            excerpt_length = config.platform_config().agent_search_excerpt_full_length
+        end
         results = knowledge.search_and_log(db_path, args.query, 5, true, session_id, author)
         if #results == 0 then
             return "No matching documents found."
@@ -753,7 +811,7 @@ function agent_tools.execute_tool(db_path, author, session_id, tool_name, method
             -- document, so citing it costs the model nothing.
             link_title = string.gsub(r.title, "[%[%]]", "")
             cite = "cite as: [" .. link_title .. "](/document?entity_id=" .. tostring(r.id) .. ")"
-            table.insert(lines, header .. "\n" .. cite .. "\n" .. document.search_snippet(r.content, args.query, config.platform_config().agent_search_excerpt_length))
+            table.insert(lines, header .. "\n" .. cite .. "\n" .. document.search_snippet(r.content, args.query, excerpt_length))
         end
         return table.concat(lines, "\n\n")
     end
@@ -930,14 +988,32 @@ function agent_tools.execute_tool(db_path, author, session_id, tool_name, method
         end
         lines = {}
         table.insert(lines, table.concat(column_names, " | "))
+        char_cap = config.platform_config().agent_query_char_cap
+        used = string.len(lines[1])
+        shown = 0
         for _, row in ipairs(rows) do
             values = {}
             for _, col in ipairs(column_names) do
                 table.insert(values, tostring(row[col]))
             end
-            table.insert(lines, table.concat(values, " | "))
+            line = table.concat(values, " | ")
+            if shown > 0 and used + string.len(line) + 1 > char_cap then
+                break
+            end
+            table.insert(lines, line)
+            used = used + string.len(line) + 1
+            shown = shown + 1
         end
         result = table.concat(lines, "\n")
+        if shown < #rows then
+            total_text = tostring(#rows)
+            if truncated == true and total_count != nil then
+                total_text = tostring(total_count)
+            end
+            result = result .. "\n\n(showing " .. tostring(shown) .. " of " .. total_text ..
+                " rows -- the result reached its size limit; select fewer columns, aggregate, or narrow the query)"
+            truncated = false
+        end
         if truncated == true then
             if total_count != nil then
                 result = result .. "\n\n(showing " .. tostring(#rows) .. " of " .. tostring(total_count) .. " total matching rows -- add your own LIMIT or narrow the query for a complete result)"
@@ -949,6 +1025,42 @@ function agent_tools.execute_tool(db_path, author, session_id, tool_name, method
             result = result .. "\n\n" .. archived_note
         end
         return result
+    end
+
+    -- The full text of a tool result is always stored (agent_message);
+    -- only what the model is shown gets cut (agent.cap_tool_text). Only
+    -- this session's own results are readable.
+    if tool_name == "result" and method_name == "read" then
+        result_id = tonumber(args.result_id)
+        if result_id == nil then
+            return nil, "read requires result_id"
+        end
+        rows = db.query(db_path, string.format(
+            "SELECT content FROM agent_message WHERE id = %d AND session_id = %s AND role = 'tool_result';",
+            result_id, db.quote(session_id)))
+        if rows == nil or rows[1] == nil then
+            return nil, "no tool result #" .. tostring(result_id) .. " in this conversation"
+        end
+        decoded, _, _ = json.decode(rows[1].content)
+        text = rows[1].content
+        if decoded != nil and decoded.text != nil then
+            text = decoded.text
+        end
+        start = tonumber(args.offset)
+        if start == nil or start < 0 then
+            start = 0
+        end
+        length = tonumber(args.length)
+        if length == nil or length <= 0 then
+            length = config.platform_config().agent_tool_result_cap
+        end
+        total = string.len(text)
+        out = string.format("result #%d, characters %d-%d of %d:\n", result_id, start, math.min(start + length, total), total) ..
+            string.sub(text, start + 1, start + length)
+        if start + length < total then
+            out = out .. string.format("\n[read on with result.read result_id=%d offset=%d]", result_id, start + length)
+        end
+        return out
     end
 
     if tool_name == "calc" and method_name == "evaluate" then
@@ -1095,7 +1207,31 @@ function agent_tools.execute_tool(db_path, author, session_id, tool_name, method
         if row == nil then
             return nil, "no such " .. tostring(args.entity_type) .. " #" .. tostring(target_id)
         end
-        return row_summary(row)
+        limit = config.platform_config().agent_get_field_chars
+        if args.field != nil then
+            value = row[args.field]
+            if value == nil then
+                return nil, tostring(args.entity_type) .. " has no field '" .. tostring(args.field) .. "' (or it's empty)"
+            end
+            value = format_field_value(value)
+            start = tonumber(args.offset)
+            if start == nil or start < 0 then
+                start = 0
+            end
+            length = tonumber(args.length)
+            if length == nil or length <= 0 then
+                length = limit
+            end
+            total = string.len(value)
+            slice = string.sub(value, start + 1, start + length)
+            header = string.format("%s #%d %s, characters %d-%d of %d:", tostring(args.entity_type), target_id,
+                tostring(args.field), start, math.min(start + length, total), total)
+            if start + length < total then
+                return header .. "\n" .. slice .. string.format("\n[read on with offset=%d]", start + length)
+            end
+            return header .. "\n" .. slice
+        end
+        return row_summary(row, limit)
     end
 
     if tool_name == "entity" and method_name == "validate" then
@@ -1281,8 +1417,20 @@ function agent_tools.execute_tool(db_path, author, session_id, tool_name, method
         if #rows == 0 then
             return "No knowledge pool documents found."
         end
+        -- One page at a time: listing the whole pool was ~50k characters
+        -- per call in prod (doc/context-management-research.md).
+        page = config.platform_config().agent_knowledge_list_page
+        first = tonumber(args.offset)
+        if first == nil or first < 0 then
+            first = 0
+        end
+        if first >= #rows then
+            return "No more knowledge pool documents (there are " .. tostring(#rows) .. ")."
+        end
+        last = math.min(first + page, #rows)
         lines = {}
-        for _, row in ipairs(rows) do
+        for i = first + 1, last do
+            row = rows[i]
             body = row.content
             if body == nil then
                 body = ""
@@ -1293,7 +1441,11 @@ function agent_tools.execute_tool(db_path, author, session_id, tool_name, method
                 row.effective_heat, tostring(row.retrieval_count)
             ))
         end
-        return table.concat(lines, "\n")
+        footer = string.format("(documents %d-%d of %d", first + 1, last, #rows)
+        if last < #rows then
+            footer = footer .. string.format(" -- next page: offset = %d", last)
+        end
+        return table.concat(lines, "\n") .. "\n\n" .. footer .. ")"
     end
 
     -- Destructive: writes a new, concise, single-idea document
