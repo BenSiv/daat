@@ -120,19 +120,24 @@ function main()
         return
     end
 
-    -- Clears stored prompts past the deployment's retention period
-    -- (prompt_retention_days); meant for the same jobs timer as
-    -- run-pending-background.
-    if command == "agent" and arg[2] == "prune-prompts" then
+    -- Every retention rule, for the jobs timer: stored prompts past
+    -- prompt_retention_days, passage embeddings unused for
+    -- passage_cache_days. `agent prune-prompts` is the old name (kept for
+    -- one release, while the startup script switches over).
+    if (command == "store" and arg[2] == "prune") or (command == "agent" and arg[2] == "prune-prompts") then
         if config.is_initialized(".") == false then
             print("Not initialized. Run 'daat init' first.")
             return
         end
         db_path = config.db_path(".")
         agent.init_schema(db_path)
-        days = config.platform_config().prompt_retention_days
-        cleared = agent.prune_prompts(db_path, days)
-        print(string.format("Cleared %d stored prompts older than %s days", cleared, tostring(days)))
+        passage = require("passage")
+        passage.init_schema(db_path)
+        conf = config.platform_config()
+        cleared = agent.prune_prompts(db_path, conf.prompt_retention_days)
+        print(string.format("Cleared %d stored prompts older than %s days", cleared, tostring(conf.prompt_retention_days)))
+        deleted = passage.prune_cache(db_path, conf.passage_cache_days)
+        print(string.format("Deleted %d passage embeddings unused for %s days", deleted, tostring(conf.passage_cache_days)))
         return
     end
 
