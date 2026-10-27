@@ -637,7 +637,7 @@ make_thin_connection() {
 @test "repair connections: a connection document with no reason is explained again when the agent can say what both share" {
     make_thin_connection
     run env AGENT_TEST_RESPONSES="YES: the startup and cleaning steps belong to the same bioreactor procedure." "$BIN" repair connections
-    [[ "$output" =~ "1 explained, 0 revoked, 1 already explained" ]]
+    [[ "$output" =~ "1 explained, 0 revoked by the passage gate, 0 revoked, 1 kept as they are" ]]
     run sqlite3 .store/store.db "SELECT content, archived_at IS NULL FROM document WHERE title = 'Bioreactor Cleaning ↔ Bioreactor Startup';"
     [[ "$output" == "[[Bioreactor Cleaning]] and [[Bioreactor Startup]]: the startup and cleaning steps belong to the same bioreactor procedure.|1" ]]
     run sqlite3 .store/store.db "SELECT content FROM document WHERE title = 'Feed ↔ Startup';"
@@ -647,7 +647,7 @@ make_thin_connection() {
 @test "repair connections: a connection document the agent still can't explain is archived, taking its links with it" {
     make_thin_connection
     run env AGENT_TEST_RESPONSES="YES: both are bioreactor notes." "$BIN" repair connections
-    [[ "$output" =~ "0 explained, 1 revoked, 1 already explained" ]]
+    [[ "$output" =~ "0 explained, 0 revoked by the passage gate, 1 revoked, 1 kept as they are" ]]
     run sqlite3 .store/store.db "SELECT archived_at IS NOT NULL FROM document WHERE title = 'Bioreactor Cleaning ↔ Bioreactor Startup';"
     [ "$output" = "1" ]
     run sqlite3 .store/store.db "SELECT COUNT(*) FROM document_link WHERE from_document_id = 3 AND archived_at IS NULL;"
@@ -694,7 +694,7 @@ make_thin_connection() {
 
     run env AGENT_TEST_RESPONSES="NO: the overlap is coincidental, nothing specific is shared." "$BIN" repair connections --all
     [[ "$output" =~ "revoked #6 Bioreactor Feed ↔ Bioreactor Cleaning ↔ Bioreactor Startup: it connects another connection document" ]]
-    [[ "$output" =~ "0 explained, 3 revoked, 0 already explained" ]]
+    [[ "$output" =~ "0 explained, 0 revoked by the passage gate, 3 revoked, 0 kept as they are" ]]
     run sqlite3 .store/store.db "SELECT COUNT(*) FROM document WHERE title LIKE '%↔%' AND archived_at IS NULL;"
     [ "$output" = "0" ]
 }

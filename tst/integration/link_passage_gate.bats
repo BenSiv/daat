@@ -9,7 +9,8 @@ load test_helper.bash
 
 setup() {
     setup_test_env
-    write_platform_config ", link_passage_gate = 0.6"
+    # Test documents are short: a stub is under 20 characters here.
+    write_platform_config ", link_passage_gate = 0.6, passage_min_chars = 20"
     "$BIN" init >/dev/null
     "$BIN" user add alice secret123 i >/dev/null
     export AGENT_TEST_EMBEDDINGS=terms
@@ -107,7 +108,7 @@ connections() {
 
     # Within a cap too small to embed both sides, likewise.
     unset AGENT_TEST_EMBEDDINGS_FAIL
-    write_platform_config ", link_passage_gate = 0.6, link_gate_max_embeds = 1"
+    write_platform_config ", link_passage_gate = 0.6, passage_min_chars = 20, link_gate_max_embeds = 1"
     run "$BIN" knowledge link-score 1 2
     [[ "$output" =~ "Can't measure: no passages embedded" ]]
 }
@@ -138,10 +139,44 @@ ${filler} greenhouse
 The cleaning steps for the bioreactor procedure were repeated.
 # Week 3
 ${filler} lights" >/dev/null
-    write_platform_config ", link_passage_gate = 0.6, link_gate_passages_per_document = 1, passage_min_chars = 50"
+    write_platform_config ", link_passage_gate = 0.6, link_gate_passages_per_document = 1, passage_min_chars = 30"
     before=$(embeddings)
     run "$BIN" knowledge link-score 1 2
     [[ "$output" =~ "The cleaning steps for the bioreactor procedure were repeated." ]]
     # One passage each side: two embeddings, not the whole log.
     [ "$(( $(embeddings) - before ))" -eq 2 ]
+}
+
+@test "daat repair connections puts existing connections through the gate first: lists, then archives, those whose documents share too little" {
+    "$BIN" entity create document title="Bioreactor Invoice" content="bioreactor invoice paid to the vendor, quarterly budget approval and finance signature" >/dev/null
+    "$BIN" entity create document title="Bioreactor Startup" content="startup steps for the bioreactor procedure" >/dev/null
+    "$BIN" entity create document title="Bioreactor Cleaning ↔ Bioreactor Invoice" content="[[Bioreactor Cleaning]] and [[Bioreactor Invoice]]: both mention the bioreactor in the same facility." >/dev/null
+    "$BIN" entity create document title="Bioreactor Cleaning ↔ Bioreactor Startup" content="[[Bioreactor Cleaning]] and [[Bioreactor Startup]]: both are steps of the same bioreactor procedure." >/dev/null
+
+    run "$BIN" repair connections --dry-run
+    [[ "$output" =~ "would revoke #4 Bioreactor Cleaning ↔ Bioreactor Invoice: best passage pair similarity 0.567 is below 0.600 | #1 @0 Bioreactor Cleaning" ]]
+    [[ ! "$output" =~ "#5 Bioreactor Cleaning ↔ Bioreactor Startup" ]]
+    [[ "$output" =~ "1 would be revoked by the passage gate, 1 kept as they are" ]]
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM document WHERE id = 4 AND (archived_at IS NULL OR archived_at = '');"
+    [ "$output" -eq 1 ]
+
+    # No model reply is scripted: the gate decides alone.
+    run "$BIN" repair connections
+    [[ "$output" =~ "0 explained, 1 revoked by the passage gate, 0 revoked, 1 kept as they are" ]]
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT id FROM document WHERE title LIKE '%↔%' AND (archived_at IS NULL OR archived_at = '');"
+    [ "$output" = "5" ]
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT decision FROM knowledge_link_review WHERE document_a_id = 1 AND document_b_id = 2;"
+    [ "$output" = "dissimilar" ]
+}
+
+@test "a stub the gate can't measure goes to the model, in co-retrieval and in repair" {
+    "$BIN" entity create document title="Bioreactor Log" content="bioreactor" >/dev/null
+    run "$BIN" knowledge link-score 1 2
+    [[ "$output" =~ "Can't measure: too little text to compare in #2" ]]
+
+    "$BIN" entity create document title="Bioreactor Cleaning ↔ Bioreactor Log" content="[[Bioreactor Cleaning]] and [[Bioreactor Log]]: the log records each run of the bioreactor cleaning procedure." >/dev/null
+    run "$BIN" repair connections --dry-run
+    [[ "$output" =~ "would explain or revoke #3 Bioreactor Cleaning ↔ Bioreactor Log (the gate can't measure it: too little text to compare in #2)" ]]
+    AGENT_TEST_RESPONSES="YES: the log records each run of the bioreactor cleaning procedure." run "$BIN" repair connections
+    [[ "$output" =~ "1 explained" ]]
 }

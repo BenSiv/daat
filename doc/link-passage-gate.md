@@ -53,10 +53,30 @@ Whole-document similarity scored about the same on these labels. The passage pai
 | `link_gate_passages_per_document` | 40 | Most passages of each document compared |
 | `link_gate_max_embeds` | 80 | Most new passage embeddings one pair may request |
 
+## A long document that touches the other's subject once
+
+The score is the best single pair of passages, so a long document about one subject that turns to the other document's subject in one section is compared by that section: a strong match there passes, however unrelated the rest is. This is the case whole-document similarity misses.
+
+What can still miss it is the cap. A long document compares only `link_gate_passages_per_document` passages, chosen by how many of their words the other document also uses. A section making the connection in other words (synonyms, another language, an idea without its usual terms) may not be among them. On the 100 labelled pairs the cap made no difference (AUC 0.918 uncapped, 0.919 capped), but few of them paired a long document with a short one. Raising the cap costs only a slower first look at such a pair: embeddings are cached, so each passage is paid for once.
+
+## Stubs
+
+A document with less text than `passage_min_chars` (200) after any synced-file preamble, such as a page that only links to an experiment view or an empty index page, can't be measured: it would score low against everything. The gate lets such a pair through, and the model decides, as when embeddings are unavailable.
+
+## Connections made before the gate
+
+`daat repair connections` puts every existing connection document through the same pipeline a new pair goes through, gate first:
+1. **The gate**, comparing every passage (no per-pair cap). One below `link_passage_gate` is archived, taking its links with it, and the pair is recorded as `dissimilar`. No model call.
+2. **The model**, for one the gate can't measure (a stub), one whose reason doesn't say what both share, or with `--all` every one that passed: the same question co-retrieval asks, and the same checks. A reason that passes replaces the old one; anything else archives it.
+
+A connection whose two documents aren't both active, or that connects another connection document, is archived without asking. `--dry-run` makes no model calls and lists what would happen, with the score and the two passages behind each archive by the gate.
+
+On celleste-lims (2026-10-27, 306 active connections): 44 below the gate (mostly papers sharing only "cocoa" as a subject, some with an invented shared detail), 2 stubs for the model, 260 kept.
+
 ## Checking a pair
 
 `daat knowledge link-score <id> <id>` prints the score, the gate's verdict and the two passages. `--pairs <file>` scores every `<id> <id>` line, for measuring a threshold.
 
 ## Tests
 
-`tst/integration/link_passage_gate.bats`: a dissimilar pair is stopped without a model call, a similar one is judged as before, the off switch, the fallback when it can't be measured, the cap on a long document, `link-score`.
+`tst/integration/link_passage_gate.bats`: a dissimilar pair is stopped without a model call, a similar one is judged as before, the off switch, the fallback when it can't be measured, the cap on a long document, `link-score`, `repair connections` with the gate (dry run, then archive), a stub sent to the model.

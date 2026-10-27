@@ -1037,14 +1037,31 @@ end
 -- How closely two documents share an idea: the best passage pair's
 -- cosine (passage.best_pair), over each one's title and content.
 -- -> score, passage_a, passage_b; or nil, err when it can't be measured.
-function knowledge.link_similarity(db_path, doc_a, doc_b)
+-- `every_passage` lifts the per-pair caps (a one-off repair over
+-- existing connections, where a slow first look doesn't hold up a page).
+function knowledge.link_similarity(db_path, doc_a, doc_b, every_passage)
     passage = require("passage")
     agent_provider = require("agent_provider")
     conf = config.platform_config()
+    per_document = conf.link_gate_passages_per_document
+    max_new = conf.link_gate_max_embeds
+    if every_passage == true then
+        per_document = math.huge
+        max_new = math.huge
+    end
+    -- A stub (a page that only links to an experiment view, an empty
+    -- index) says too little about itself for any passage to match:
+    -- it would score low against everything.
+    for _, doc in ipairs({doc_a, doc_b}) do
+        content = tostring(doc.content)
+        if string.len(content) - document.preamble_end(content) + 1 < conf.passage_min_chars then
+            return nil, "too little text to compare in #" .. tostring(doc.id)
+        end
+    end
     return passage.best_pair(db_path, agent_provider.embedding_model(),
         tostring(doc_a.title) .. "\n\n" .. tostring(doc_a.content),
         tostring(doc_b.title) .. "\n\n" .. tostring(doc_b.content),
-        conf.link_gate_passages_per_document, conf.link_gate_max_embeds)
+        per_document, max_new)
 end
 
 -- The passage gate (doc/link-passage-gate.md): a pair whose best passage
@@ -1053,21 +1070,23 @@ end
 -- real connections, and the rest mostly shared a subject, not an idea.
 -- It's recorded like a decline ("dissimilar", with the score), so it's
 -- looked at again if co-retrieval grows or a document changes. When
--- the score can't be measured, the model decides as before.
-function knowledge.passes_passage_gate(db_path, doc_a, doc_b)
+-- the score can't be measured (a stub, no embeddings), the model
+-- decides as before. -> passed, why, measured, passage_a, passage_b
+function knowledge.passes_passage_gate(db_path, doc_a, doc_b, every_passage)
     threshold = config.platform_config().link_passage_gate
+    -- Off: no measurement at all (measured is nil, not false).
     if threshold <= 0 then
-        return true, nil
+        return true, nil, nil
     end
-    score, err = knowledge.link_similarity(db_path, doc_a, doc_b)
+    score, pa, pb = knowledge.link_similarity(db_path, doc_a, doc_b, every_passage)
     if score == nil then
-        io.write(io.stderr, "link passage gate skipped: " .. tostring(err) .. "\n")
-        return true, nil
+        io.write(io.stderr, "link passage gate skipped: " .. tostring(pa) .. "\n")
+        return true, tostring(pa), false
     end
     if score < threshold then
-        return false, string.format("best passage pair similarity %.3f is below %.3f", score, threshold)
+        return false, string.format("best passage pair similarity %.3f is below %.3f", score, threshold), true, pa, pb
     end
-    return true, nil
+    return true, nil, true, pa, pb
 end
 
 function knowledge.evaluate_co_retrieval_pair(db_path, author, doc_a, doc_b, co_count)
@@ -1122,15 +1141,21 @@ function revoke_connection(db_path, connection_id, why)
     end
 end
 
--- `daat repair connections`: every connection document ("A ↔ B") whose
--- reason is too thin to say what the two share (with `all`, every one)
--- is explained again -- the model is asked the same question
--- co-retrieval asks; a reason that passes judge_link replaces the old
--- one, anything else archives the connection document, which takes its
--- links with it. One whose two ends aren't both still active, or that
--- connects another connection document, is archived without asking.
--- With dry_run, only lists what it would do (no model calls).
--- -> report lines
+-- `daat repair connections`: every connection document ("A ↔ B") goes
+-- through the pipeline a new pair does (evaluate_co_retrieval_pair),
+-- gate first, then the model:
+-- - the passage gate, comparing every passage (no per-pair cap): one
+--   below link_passage_gate is archived, taking its links with it, and
+--   the pair is recorded as 'dissimilar' -- no model call;
+-- - then, for one the gate can't measure (a stub), one whose reason is
+--   too thin to say what the two share, or (with `all`) every one: the
+--   model is asked the same question co-retrieval asks; a reason that
+--   passes judge_link replaces the old one, anything else archives it.
+-- One whose two ends aren't both still active, or that connects another
+-- connection document, is archived without asking. With dry_run, only
+-- lists what it would do, with the score and the two passages behind
+-- an archive by the gate (embeddings are made and cached; no model
+-- calls). -> report lines
 function knowledge.repair_connections(db_path, dry_run, all)
     rows = db.query(db_path, string.format(
         "SELECT id FROM document WHERE title LIKE %s AND (archived_at IS NULL OR archived_at = '') ORDER BY id;",
@@ -1139,73 +1164,100 @@ function knowledge.repair_connections(db_path, dry_run, all)
         rows = {}
     end
     report = {}
-    counts = {explained = 0, revoked = 0, kept = 0, failed = 0}
+    counts = {explained = 0, revoked = 0, dissimilar = 0, kept = 0, failed = 0}
+    function snippet(p)
+        return "@" .. tostring(p.offset - 1) .. " " .. string.gsub(string.sub(p.text, 1, 160), "%s+", " ")
+    end
+    function record(doc_a, doc_b, decision, reason)
+        review = knowledge.get_link_review(db_path, doc_a.id, doc_b.id)
+        co_count = 0
+        if review != nil then
+            co_count = tonumber(review.last_co_count)
+        end
+        knowledge.record_link_review(db_path, doc_a.id, doc_b.id, co_count, decision, reason)
+    end
     for _, row in ipairs(rows) do
         connection = entity.get(db_path, "document", tonumber(row.id))
-        old_reason = knowledge.connection_reason(connection.content)
-        if all == true or knowledge.link_reason_too_thin(old_reason) or document.connection_title_count(connection.title) > 1 then
-            ends = db.query(db_path, string.format(
-                "SELECT DISTINCT l.to_document_id AS id, d.title FROM document_link l JOIN document d ON d.id = l.to_document_id " ..
-                "WHERE l.from_document_id = %d AND (l.archived_at IS NULL OR l.archived_at = '') " ..
-                "AND (d.archived_at IS NULL OR d.archived_at = '') ORDER BY l.to_document_id;", tonumber(connection.id)))
-            if ends == nil then
-                ends = {}
+        label = "#" .. tostring(connection.id) .. " " .. tostring(connection.title)
+        ends = db.query(db_path, string.format(
+            "SELECT DISTINCT l.to_document_id AS id, d.title FROM document_link l JOIN document d ON d.id = l.to_document_id " ..
+            "WHERE l.from_document_id = %d AND (l.archived_at IS NULL OR l.archived_at = '') " ..
+            "AND (d.archived_at IS NULL OR d.archived_at = '') ORDER BY l.to_document_id;", tonumber(connection.id)))
+        if ends == nil then
+            ends = {}
+        end
+        chained = document.connection_title_count(connection.title) > 1
+        for _, e in ipairs(ends) do
+            if document.is_connection_title(e.title) then
+                chained = true
             end
-            chained = document.connection_title_count(connection.title) > 1
-            for _, e in ipairs(ends) do
-                if document.is_connection_title(e.title) then
-                    chained = true
-                end
-            end
-            label = "#" .. tostring(connection.id) .. " " .. tostring(connection.title)
-            why = nil
-            if chained then
-                why = "it connects another connection document"
-            elseif #ends != 2 then
-                why = "its two documents aren't both active"
-            end
+        end
+        why = nil
+        if chained then
+            why = "it connects another connection document"
+        elseif #ends != 2 then
+            why = "its two documents aren't both active"
+        end
+        if why != nil then
             if dry_run then
-                if why != nil then
-                    table.insert(report, "would revoke " .. label .. ": " .. why)
-                else
-                    table.insert(report, "would explain or revoke " .. label)
-                end
-            elseif why != nil then
-                revoke_connection(db_path, connection.id, why)
-                counts.revoked = counts.revoked + 1
-                table.insert(report, "revoked " .. label .. ": " .. why)
+                table.insert(report, "would revoke " .. label .. ": " .. why)
             else
-                doc_a = knowledge.get_document(db_path, tonumber(ends[1].id))
-                doc_b = knowledge.get_document(db_path, tonumber(ends[2].id))
-                review = knowledge.get_link_review(db_path, doc_a.id, doc_b.id)
-                co_count = 0
-                if review != nil then
-                    co_count = tonumber(review.last_co_count)
-                end
-                decision, reason = knowledge.judge_link(doc_a, doc_b)
-                if decision == nil then
-                    counts.failed = counts.failed + 1
-                    table.insert(report, "left " .. label .. ": model call failed: " .. tostring(reason))
-                elseif decision == "linked" and document.connection_draft(db_path, doc_a.id, doc_b.id, reason) != nil then
-                    draft = document.connection_draft(db_path, doc_a.id, doc_b.id, reason)
-                    document.update_page(db_path, "system", tonumber(connection.id), connection.title, connection.parent_id, draft.content, nil)
-                    knowledge.record_link_review(db_path, doc_a.id, doc_b.id, co_count, "linked", reason)
-                    counts.explained = counts.explained + 1
-                    table.insert(report, "explained " .. label .. ": " .. reason)
-                else
-                    revoke_connection(db_path, connection.id, decision .. " -- " .. tostring(reason))
-                    knowledge.record_link_review(db_path, doc_a.id, doc_b.id, co_count, decision, reason)
-                    counts.revoked = counts.revoked + 1
-                    table.insert(report, "revoked " .. label .. ": " .. decision .. " -- " .. tostring(reason))
-                end
+                revoke_connection(db_path, connection.id, why)
+                table.insert(report, "revoked " .. label .. ": " .. why)
             end
+            counts.revoked = counts.revoked + 1
         else
-            counts.kept = counts.kept + 1
+            doc_a = knowledge.get_document(db_path, tonumber(ends[1].id))
+            doc_b = knowledge.get_document(db_path, tonumber(ends[2].id))
+            passed, gate_why, measured, pa, pb = knowledge.passes_passage_gate(db_path, doc_a, doc_b, true)
+            if passed == false then
+                detail = label .. ": " .. gate_why .. " | #" .. tostring(doc_a.id) .. " " .. snippet(pa) .. " | #" .. tostring(doc_b.id) .. " " .. snippet(pb)
+                if dry_run then
+                    table.insert(report, "would revoke " .. detail)
+                else
+                    revoke_connection(db_path, connection.id, gate_why)
+                    record(doc_a, doc_b, "dissimilar", gate_why)
+                    table.insert(report, "revoked " .. detail)
+                end
+                counts.dissimilar = counts.dissimilar + 1
+            elseif all == true or measured == false or knowledge.link_reason_too_thin(knowledge.connection_reason(connection.content)) then
+                if dry_run then
+                    because = "asked to re-check every one"
+                    if measured == false then
+                        because = "the gate can't measure it: " .. tostring(gate_why)
+                    elseif all != true then
+                        because = "its reason doesn't say what both share"
+                    end
+                    table.insert(report, "would explain or revoke " .. label .. " (" .. because .. ")")
+                else
+                    decision, reason = knowledge.judge_link(doc_a, doc_b)
+                    if decision == nil then
+                        counts.failed = counts.failed + 1
+                        table.insert(report, "left " .. label .. ": model call failed: " .. tostring(reason))
+                    elseif decision == "linked" and document.connection_draft(db_path, doc_a.id, doc_b.id, reason) != nil then
+                        draft = document.connection_draft(db_path, doc_a.id, doc_b.id, reason)
+                        document.update_page(db_path, "system", tonumber(connection.id), connection.title, connection.parent_id, draft.content, nil)
+                        record(doc_a, doc_b, "linked", reason)
+                        counts.explained = counts.explained + 1
+                        table.insert(report, "explained " .. label .. ": " .. reason)
+                    else
+                        revoke_connection(db_path, connection.id, decision .. " -- " .. tostring(reason))
+                        record(doc_a, doc_b, decision, reason)
+                        counts.revoked = counts.revoked + 1
+                        table.insert(report, "revoked " .. label .. ": " .. decision .. " -- " .. tostring(reason))
+                    end
+                end
+            else
+                counts.kept = counts.kept + 1
+            end
         end
     end
-    if not dry_run then
-        table.insert(report, string.format("%d explained, %d revoked, %d already explained, %d left (model call failed)",
-            counts.explained, counts.revoked, counts.kept, counts.failed))
+    if dry_run then
+        table.insert(report, string.format("%d would be revoked by the passage gate, %d kept as they are (dry run: no model calls)",
+            counts.dissimilar, counts.kept))
+    else
+        table.insert(report, string.format("%d explained, %d revoked by the passage gate, %d revoked, %d kept as they are, %d left (model call failed)",
+            counts.explained, counts.dissimilar, counts.revoked, counts.kept, counts.failed))
     end
     return report
 end

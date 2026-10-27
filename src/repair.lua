@@ -162,7 +162,7 @@ REPAIRS = {
     {name = "knowledge", usage = "knowledge [--dry-run]", run = repair_knowledge,
      description = "Remove rows derived from archived documents or tags (embeddings, references; links archived); counts embeddings from another model."},
     {name = "connections", usage = "connections [--all] [--dry-run]", run = repair_connections,
-     description = "Ask the agent again why two documents are connected, for every connection document (A ↔ B) that doesn't say what both share (--all: every one): rewrite it with a real reason, or archive it; one connecting another connection document is archived (--dry-run: list them, no model calls)."},
+     description = "Put every connection document (A ↔ B) through the pipeline a new pair goes through: archive one whose two documents' most similar passages score below link_passage_gate (comparing every passage, no model call); ask the agent again about one the gate can't measure, one whose reason doesn't say what both share, or (--all) every one, rewriting it with a real reason or archiving it; archive one connecting another connection document (--dry-run: list them, with scores and passages; no model calls)."},
     {name = "pool-count", usage = "pool-count", run = repair_pool_count,
      description = "Recount active documents into knowledge_pool_state.document_count."},
 }
