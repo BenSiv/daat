@@ -2520,6 +2520,11 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
                 -- destructive call after it gets an explicit "skipped" result
                 -- instead of being silently dropped, so every call the model
                 -- made still gets a real, visible outcome to react to.
+                -- Ordering rule: calls before the pending destructive call
+                -- run as usual; every call after it is deferred, not run,
+                -- since its result would show the state before a write
+                -- that may yet be approved or denied. The model calls it
+                -- again once the pending action is resolved.
                 -- clarify.ask is handled the same "first one wins" way, but
                 -- checked ahead of pending_call below: asking the user
                 -- something is the safer default over auto-pausing a write
@@ -2555,6 +2560,9 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
                             agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name,
                                 "ERROR: skipped -- only one destructive action can be proposed per turn; resolve the pending one first, then ask for this one again", true)
                         end
+                    elseif pending_call != nil then
+                        agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name,
+                            "ERROR: deferred -- a destructive action earlier in this turn is waiting for approval; call this again after it is resolved", true)
                     else
                         tool_result, tool_err = agent.run_tool(db_path, login, session_id, tool_name, method_name, tool_call.arguments, history_messages)
                         summary = tostring(tool_result)

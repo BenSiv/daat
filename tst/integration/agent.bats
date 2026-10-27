@@ -372,6 +372,49 @@ EOF
     [ "$output" -eq 1 ]
 }
 
+@test "a call proposed after a pending destructive call is deferred, not run, and can run again after approval (issue #1)" {
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(multi_tool_call_response \
+        "document.create" '{"title":"New Page","content":"hello"}' \
+        "document.search" '{"query":"zebra"}')"
+    send_resp=$(raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"create a page, then search for it\"}" "$COOKIE" "$CSRF" "$scripted")
+    pending_id=$(json_body "$send_resp" | jq -r '.pending.id')
+    [ "$pending_id" != "null" ]
+
+    # The search got the deferred result and never ran.
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "deferred" ]]
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM knowledge_retrieval WHERE query_text = 'zebra';"
+    [ "$output" -eq 0 ]
+
+    # After approval the loop resumes and the model can search again.
+    scripted="$(tool_call_response "document.search" '{"query":"zebra"}')"$'\1'"$(done_response "Created and searched.")"
+    run raw_post_json "/api/chat-widget-approve" "{\"pending_id\":${pending_id},\"session_id\":\"${session_id}\"}" "$COOKIE" "$CSRF" "$scripted"
+    [[ "$output" =~ "200 OK" ]]
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM knowledge_retrieval WHERE query_text = 'zebra';"
+    [ "$output" -eq 1 ]
+    run raw_get "/api/chat-widget-history" "session_id=${session_id}" "$COOKIE"
+    [[ "$output" =~ "Created and searched." ]]
+}
+
+@test "a call proposed before a destructive call still runs before the turn pauses (issue #1)" {
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(multi_tool_call_response \
+        "document.search" '{"query":"zebra"}' \
+        "document.create" '{"title":"New Page","content":"hello"}')"
+    send_resp=$(raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"search, then create a page\"}" "$COOKIE" "$CSRF" "$scripted")
+    [ "$(json_body "$send_resp" | jq -r '.pending.id')" != "null" ]
+
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM knowledge_retrieval WHERE query_text = 'zebra';"
+    [ "$output" -eq 1 ]
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM agent_message WHERE session_id = '${session_id}' AND content LIKE '%deferred%';"
+    [ "$output" -eq 0 ]
+}
+
 @test "entity.fields lists a type's field names and types, for discovery before create/update" {
     write_task_schema
     resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
