@@ -241,6 +241,7 @@ A built-in assistant, not a bolted-on integration: real per-user conversation se
   | `agent_context_fixed_tokens` | 3900 | Estimate without a recorded count: tokens for the system prompt and tool definitions |
   | `agent_chars_per_token` | 2.8 | Estimate: characters of rendered history per token |
   | `agent_compaction_mid_turn` | `true` | Check for compaction before every step of a turn, not only when it starts |
+  | `link_passage_gate` | 0.72 | Co-retrieved pairs whose most similar passages score below this aren't put to the model (doc/link-passage-gate.md; 0: off). With `link_gate_passages_per_document` (40) and `link_gate_max_embeds` (80) |
   | `platform_adhoc_row_cap` | 1000 | Row cap on the admin-only `/sql` ad-hoc console (a human reading an HTML table, not a model's context budget) |
   | `extension_max_job_attempts` | 5 | Retries before an `system_job` (after-hook write queue) is marked permanently `failed` |
   | `db_backend` | `"sqlite"` | `"sqlite"` or `"mariadb"` -- see doc/mariadb-migration.md |

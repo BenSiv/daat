@@ -1034,7 +1034,48 @@ function knowledge.judge_link(doc_a, doc_b)
     return "linked", reason
 end
 
+-- How closely two documents share an idea: the best passage pair's
+-- cosine (passage.best_pair), over each one's title and content.
+-- -> score, passage_a, passage_b; or nil, err when it can't be measured.
+function knowledge.link_similarity(db_path, doc_a, doc_b)
+    passage = require("passage")
+    agent_provider = require("agent_provider")
+    conf = config.platform_config()
+    return passage.best_pair(db_path, agent_provider.embedding_model(),
+        tostring(doc_a.title) .. "\n\n" .. tostring(doc_a.content),
+        tostring(doc_b.title) .. "\n\n" .. tostring(doc_b.content),
+        conf.link_gate_passages_per_document, conf.link_gate_max_embeds)
+end
+
+-- The passage gate (doc/link-passage-gate.md): a pair whose best passage
+-- pair is less similar than link_passage_gate isn't put to the model at
+-- all. In the 2026-09-26 human review only 12 of 100 YES verdicts were
+-- real connections, and the rest mostly shared a subject, not an idea.
+-- It's recorded like a decline ("dissimilar", with the score), so it's
+-- looked at again if co-retrieval grows or a document changes. When
+-- the score can't be measured, the model decides as before.
+function knowledge.passes_passage_gate(db_path, doc_a, doc_b)
+    threshold = config.platform_config().link_passage_gate
+    if threshold <= 0 then
+        return true, nil
+    end
+    score, err = knowledge.link_similarity(db_path, doc_a, doc_b)
+    if score == nil then
+        io.write(io.stderr, "link passage gate skipped: " .. tostring(err) .. "\n")
+        return true, nil
+    end
+    if score < threshold then
+        return false, string.format("best passage pair similarity %.3f is below %.3f", score, threshold)
+    end
+    return true, nil
+end
+
 function knowledge.evaluate_co_retrieval_pair(db_path, author, doc_a, doc_b, co_count)
+    passed, why = knowledge.passes_passage_gate(db_path, doc_a, doc_b)
+    if passed == false then
+        knowledge.record_link_review(db_path, doc_a.id, doc_b.id, co_count, "dissimilar", why)
+        return
+    end
     decision, reason = knowledge.judge_link(doc_a, doc_b)
     if decision == nil then
         return
@@ -1715,7 +1756,64 @@ function knowledge.do_knowledge(cmd_args, db_path)
         return
     end
 
-    print("Usage: daat knowledge <stats|list [tier]|show <document_id>|promote <document_id> <tier>|distill>")
+    -- How the passage gate sees a pair, or (with --pairs) every
+    -- "<id> <id>" line of a file, one "<id> <id> <score>" line each.
+    if action == "link-score" then
+        pairs_file = nil
+        wanted = {}
+        if cmd_args[2] == "--pairs" and cmd_args[3] != nil then
+            pairs_file = io.open(cmd_args[3], "r")
+            if pairs_file == nil then
+                print("Error: can't read " .. tostring(cmd_args[3]))
+                return
+            end
+            for line in io.lines(cmd_args[3]) do
+                a, b = string.match(line, "^%s*(%d+)%s+(%d+)")
+                if a != nil then
+                    table.insert(wanted, {tonumber(a), tonumber(b)})
+                end
+            end
+            io.close(pairs_file)
+        elseif tonumber(cmd_args[2]) != nil and tonumber(cmd_args[3]) != nil then
+            table.insert(wanted, {tonumber(cmd_args[2]), tonumber(cmd_args[3])})
+        else
+            print("Usage: daat knowledge link-score <document_id> <document_id> | --pairs <file>")
+            return
+        end
+        for _, pair in ipairs(wanted) do
+            doc_a = knowledge.get_document(db_path, pair[1])
+            doc_b = knowledge.get_document(db_path, pair[2])
+            score = nil
+            pa = nil
+            pb = nil
+            if doc_a == nil or doc_b == nil then
+                pa = "no such document"
+            else
+                score, pa, pb = knowledge.link_similarity(db_path, doc_a, doc_b)
+            end
+            if pairs_file != nil then
+                shown = "NA"
+                if score != nil then
+                    shown = string.format("%.4f", score)
+                end
+                print(string.format("%d %d %s", pair[1], pair[2], shown))
+            elseif score == nil then
+                print("Can't measure: " .. tostring(pa))
+            else
+                threshold = config.platform_config().link_passage_gate
+                verdict = "stops it"
+                if threshold <= 0 or score >= threshold then
+                    verdict = "passes"
+                end
+                print(string.format("best passage pair similarity: %.4f (gate %.3f: %s)", score, threshold, verdict))
+                print("#" .. tostring(pair[1]) .. " at character " .. tostring(pa.offset - 1) .. ":\n" .. string.sub(pa.text, 1, 600))
+                print("#" .. tostring(pair[2]) .. " at character " .. tostring(pb.offset - 1) .. ":\n" .. string.sub(pb.text, 1, 600))
+            end
+        end
+        return
+    end
+
+    print("Usage: daat knowledge <stats|list [tier]|show <document_id>|promote <document_id> <tier>|link-score <id> <id>|distill>")
 end
 
 return knowledge

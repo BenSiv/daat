@@ -365,6 +365,13 @@ function config.platform_config()
         -- Passage embeddings are cached (document_passage_cache) and
         -- expire this many days after last use (0: never).
         passage_cache_days = 30,
+        -- The co-retrieval link gate (doc/link-passage-gate.md): a pair
+        -- whose most similar passages score below this isn't put to the
+        -- model (0: off). Compares at most this many passages of each
+        -- document, embedding at most this many new ones per pair.
+        link_passage_gate = 0.72,
+        link_gate_passages_per_document = 40,
+        link_gate_max_embeds = 80,
         agent_pin_schema = true,
         agent_pinned_schema_chars = 6000,
         agent_dedupe_repeat_calls = true,
@@ -525,8 +532,12 @@ function config.platform_config()
     if type(parsed.passage_cache_days) == "number" and parsed.passage_cache_days >= 0 then
         conf.passage_cache_days = parsed.passage_cache_days
     end
+    if type(parsed.link_passage_gate) == "number" and parsed.link_passage_gate >= 0 then
+        conf.link_passage_gate = parsed.link_passage_gate
+    end
     for _, key in ipairs({"agent_knowledge_list_page", "agent_query_char_cap", "agent_get_field_chars", "agent_tool_result_cap", "agent_search_excerpt_full_length",
-            "passage_max_chars", "passage_min_chars", "passages_per_document", "passage_max_embeds_per_search"}) do
+            "passage_max_chars", "passage_min_chars", "passages_per_document", "passage_max_embeds_per_search",
+            "link_gate_passages_per_document", "link_gate_max_embeds"}) do
         if type(parsed[key]) == "number" and parsed[key] > 0 then
             conf[key] = parsed[key]
         end

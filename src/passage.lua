@@ -375,6 +375,164 @@ function passage.select(passages, scores, budget, per_document)
 end
 passage.format_passages = format_passages
 
+-- passage.vectors(db_path, model, passages, max_new) -> {[hash] = unit
+-- vector}, or nil, err when the provider fails. Sets each passage's
+-- `embed` and `hash`; looks them all up in the cache in one query, and
+-- embeds at most `max_new` of the missing ones in batched calls (in the
+-- order given). A passage over the cap has no vector.
+function passage.vectors(db_path, model, passages, max_new)
+    hashes = {}
+    seen = {}
+    for _, p in ipairs(passages) do
+        if p.hash == nil then
+            p.embed = embed_text(p)
+            p.hash = passage.text_hash(p.embed)
+        end
+        if seen[p.hash] == nil then
+            seen[p.hash] = true
+            table.insert(hashes, p.hash)
+        end
+    end
+    found = passage.cache_get(db_path, model, hashes)
+    missing = {}
+    missing_text = {}
+    for _, p in ipairs(passages) do
+        if found[p.hash] == nil and missing_text[p.hash] == nil and #missing < max_new then
+            missing_text[p.hash] = p.embed
+            table.insert(missing, p.hash)
+        end
+    end
+    if #missing > 0 then
+        agent_provider = require("agent_provider")
+        texts = {}
+        for _, h in ipairs(missing) do
+            table.insert(texts, missing_text[h])
+        end
+        new_vectors, err = agent_provider.embeddings_batch(model, texts)
+        if new_vectors == nil then
+            return nil, err
+        end
+        entries = {}
+        for i, h in ipairs(missing) do
+            table.insert(entries, {h, new_vectors[i]})
+        end
+        for h, v in pairs(passage.cache_put(db_path, model, entries)) do
+            found[h] = v
+        end
+    end
+    return found
+end
+
+-- The distinct words of a text worth matching on: lower case, 4 letters
+-- or more (which leaves out most function words).
+function content_words(text)
+    words = {}
+    for word in string.gmatch(string.lower(tostring(text)), "[%w]+") do
+        if string.len(word) >= 4 then
+            words[word] = true
+        end
+    end
+    return words
+end
+
+-- Which passages of a long document are compared, at most `limit`: the
+-- ones sharing the largest share of their words with the other
+-- document, ties to the earlier one. A short document's passages are
+-- all compared.
+function comparison_candidates(passages, other_words, limit)
+    if #passages <= limit then
+        return passages
+    end
+    ranked = {}
+    for i, p in ipairs(passages) do
+        total = 0
+        shared = 0
+        for word, _ in pairs(content_words(p.text)) do
+            total = total + 1
+            if other_words[word] == true then
+                shared = shared + 1
+            end
+        end
+        share = 0
+        if total > 0 then
+            share = shared / total
+        end
+        table.insert(ranked, {index = i, share = share})
+    end
+    table.sort(ranked, function(x, y)
+        if x.share != y.share then
+            return x.share > y.share
+        end
+        return x.index < y.index
+    end)
+    chosen = {}
+    for k = 1, limit do
+        table.insert(chosen, passages[ranked[k].index])
+    end
+    return chosen
+end
+
+-- How closely two documents share an idea somewhere in them, not just a
+-- subject: the cosine of their most similar pair of passages
+-- (doc/link-passage-gate.md). Whole-document similarity mostly measures
+-- shared subject; the best passage pair also finds a small shared idea
+-- inside documents about different things. Compares at most
+-- `per_document` passages of each (comparison_candidates), embedding
+-- what the cache lacks, up to `max_new` in all.
+-- -> score, passage_a, passage_b; or nil, err when it can't be measured
+-- (no embedding model, a provider failure, an empty document, or
+-- nothing embedded within the cap).
+function passage.best_pair(db_path, model, content_a, content_b, per_document, max_new)
+    if model == nil then
+        return nil, "no embedding model"
+    end
+    conf = config.platform_config()
+    all_a = passage.split(content_a, conf.passage_max_chars, conf.passage_min_chars)
+    all_b = passage.split(content_b, conf.passage_max_chars, conf.passage_min_chars)
+    if #all_a == 0 or #all_b == 0 then
+        return nil, "empty document"
+    end
+    side_a = comparison_candidates(all_a, content_words(content_b), per_document)
+    side_b = comparison_candidates(all_b, content_words(content_a), per_document)
+    both = {}
+    -- Interleaved, so a cap that runs out leaves both sides some vectors.
+    for i = 1, math.max(#side_a, #side_b) do
+        if side_a[i] != nil then
+            table.insert(both, side_a[i])
+        end
+        if side_b[i] != nil then
+            table.insert(both, side_b[i])
+        end
+    end
+    vectors, err = passage.vectors(db_path, model, both, max_new)
+    if vectors == nil then
+        return nil, err
+    end
+    best = nil
+    best_a = nil
+    best_b = nil
+    for _, pa in ipairs(side_a) do
+        va = vectors[pa.hash]
+        if va != nil then
+            for _, pb in ipairs(side_b) do
+                vb = vectors[pb.hash]
+                if vb != nil then
+                    score = dot(va, vb)
+                    if best == nil or score > best then
+                        best = score
+                        best_a = pa
+                        best_b = pb
+                    end
+                end
+            end
+        end
+    end
+    if best == nil then
+        return nil, "no passages embedded"
+    end
+    return best, best_a, best_b
+end
+
 -- passage.excerpts(db_path, results, query_text, query_vector, model, budget, full)
 --   -> {[document id] = excerpt}
 -- The excerpt search shows for each result: its best passages by
@@ -405,8 +563,6 @@ function passage.excerpts(db_path, results, query_text, query_vector, model, bud
 
     -- Split every result; documents that fit whole need nothing more.
     work = {}
-    hashes = {}
-    seen = {}
     for _, r in ipairs(results) do
         content = r.content
         if content != nil and content != "" then
@@ -415,14 +571,6 @@ function passage.excerpts(db_path, results, query_text, query_vector, model, bud
                 excerpts[tonumber(r.id)] = string.sub(content, body_start)
             else
                 ps = passage.split(content, conf.passage_max_chars, conf.passage_min_chars)
-                for _, p in ipairs(ps) do
-                    p.embed = embed_text(p)
-                    p.hash = passage.text_hash(p.embed)
-                    if seen[p.hash] == nil then
-                        seen[p.hash] = true
-                        table.insert(hashes, p.hash)
-                    end
-                end
                 table.insert(work, {id = tonumber(r.id), passages = ps})
             end
         end
@@ -431,35 +579,16 @@ function passage.excerpts(db_path, results, query_text, query_vector, model, bud
         return excerpts
     end
 
-    vectors = passage.cache_get(db_path, model, hashes)
-    missing = {}
-    missing_text = {}
+    all_passages = {}
     for _, item in ipairs(work) do
         for _, p in ipairs(item.passages) do
-            if vectors[p.hash] == nil and missing_text[p.hash] == nil and #missing < conf.passage_max_embeds_per_search then
-                missing_text[p.hash] = p.embed
-                table.insert(missing, p.hash)
-            end
+            table.insert(all_passages, p)
         end
     end
-    if #missing > 0 then
-        agent_provider = require("agent_provider")
-        texts = {}
-        for _, h in ipairs(missing) do
-            table.insert(texts, missing_text[h])
-        end
-        new_vectors, err = agent_provider.embeddings_batch(model, texts)
-        if new_vectors == nil then
-            io.write(io.stderr, "passage embeddings failed, using keyword excerpts: " .. tostring(err) .. "\n")
-            return excerpts
-        end
-        entries = {}
-        for i, h in ipairs(missing) do
-            table.insert(entries, {h, new_vectors[i]})
-        end
-        for h, v in pairs(passage.cache_put(db_path, model, entries)) do
-            vectors[h] = v
-        end
+    vectors, err = passage.vectors(db_path, model, all_passages, conf.passage_max_embeds_per_search)
+    if vectors == nil then
+        io.write(io.stderr, "passage embeddings failed, using keyword excerpts: " .. tostring(err) .. "\n")
+        return excerpts
     end
 
     for _, item in ipairs(work) do

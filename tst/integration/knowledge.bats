@@ -4,6 +4,9 @@ load test_helper.bash
 
 setup() {
     setup_test_env
+    # These tests are about the model's judgment of a pair; the passage
+    # gate in front of it has its own file (link_passage_gate.bats).
+    write_platform_config ", link_passage_gate = 0"
     "$BIN" init
     "$BIN" user add alice secret123 i
 
