@@ -37,7 +37,7 @@ Format: the first line is "# " and a title naming the subject specifically (not 
 
 If the source is a conversation between a user and an assistant, keep what it established -- conclusions, facts found, decisions -- not the back-and-forth.
 
-If the source holds nothing worth keeping (small talk, a failed or empty exchange, text that didn't extract), reply with NOTHING: and a few words on why.
+If the source holds nothing worth keeping (small talk, a failed or empty exchange, text that didn't extract), reply with one line: "NOTHING: <the reason, in a few words>".
 """
 
 -- Said after the deployment's own description of its work (theme.lua's
@@ -46,8 +46,11 @@ If the source holds nothing worth keeping (small talk, a failed or empty exchang
 -- conference's proceedings and a mathematical software congress -- huge
 -- documents a search matches on almost any query, not material the team
 -- uses, and a faithful note about them would pass the check.
+-- First version (2026-10-28) said "unrelated to this team's work"; the
+-- model read that as the team's own lab data only and skipped a book on
+-- cacao breeding. Published work in the field is what a team reads.
 CURATE_RELEVANCE_RULE = """
-If the source is unrelated to this team's work, reply with NOTHING: and a few words on why. Curate only what a colleague here could use.
+Judge relevance by the team's field and subject matter, not only its own data: published papers, books, protocols and reviews on its subjects are worth curating. Only if the source's subject has nothing to do with the team's field, reply with one line: "NOTHING: <the reason, in a few words>".
 """
 
 -- The curate prompt, with the deployment's description of its work when
@@ -133,13 +136,13 @@ end
 -- Queues a source for curation unless this version of it is already
 -- queued or done. Cheap: one read, at most one write. Returns true
 -- when it queued.
-function curate.queue(db_path, doc)
+function curate.queue(db_path, doc, recheck)
     if not curate.is_source(doc) then
         return false
     end
     hash = curate_source_hash(doc)
     row = curate_row(db_path, doc.id)
-    if row != nil and row.source_hash == hash then
+    if row != nil and row.source_hash == hash and not (recheck == true and row.status != "curated" and row.status != "pending") then
         return false
     end
     note_id = nil
@@ -269,8 +272,10 @@ function curate.run_pending(db_path, limit, author)
 end
 
 -- Sources already due by their use, most used first, that this version
--- of hasn't been curated or tried.
-function curate.due_sources(db_path)
+-- of hasn't been curated or tried. With `recheck`, sources whose last
+-- try came to nothing, was rejected or failed count as due again --
+-- after the prompts change, say.
+function curate.due_sources(db_path, recheck)
     rows = db.query(db_path, """
         SELECT d.id, d.title, d.content, d.source_type, d.retrieval_count FROM document d
         LEFT JOIN knowledge_curation c ON c.document_id = d.id
@@ -286,7 +291,8 @@ function curate.due_sources(db_path)
     for _, row in ipairs(rows) do
         if curate.is_source(row) then
             existing = curate_row(db_path, row.id)
-            if existing == nil or existing.source_hash != curate_source_hash(row) then
+            retry = recheck == true and existing != nil and existing.status != "curated" and existing.status != "pending"
+            if existing == nil or existing.source_hash != curate_source_hash(row) or retry then
                 table.insert(due, row)
             end
         end
@@ -294,10 +300,10 @@ function curate.due_sources(db_path)
     return due
 end
 
--- `daat repair curate [--limit N] [--dry-run]`.
-function curate.repair(db_path, limit, dry_run, author)
+-- `daat repair curate [--limit N] [--dry-run] [--recheck]`.
+function curate.repair(db_path, limit, dry_run, author, recheck)
     lines = {}
-    due = curate.due_sources(db_path)
+    due = curate.due_sources(db_path, recheck)
     if limit == nil then
         limit = #due
     end
@@ -309,7 +315,7 @@ function curate.repair(db_path, limit, dry_run, author)
             table.insert(lines, string.format("would curate #%d %s (retrieved %d times)",
                 tonumber(row.id), tostring(row.title), tonumber(row.retrieval_count)))
         else
-            curate.queue(db_path, row)
+            curate.queue(db_path, row, recheck)
         end
     end
     if dry_run then
