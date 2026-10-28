@@ -37,8 +37,29 @@ Format: the first line is "# " and a title naming the subject specifically (not 
 
 If the source is a conversation between a user and an assistant, keep what it established -- conclusions, facts found, decisions -- not the back-and-forth.
 
-If the source holds nothing worth keeping (small talk, a failed or empty exchange, text that didn't extract), reply with exactly: NOTHING
+If the source holds nothing worth keeping (small talk, a failed or empty exchange, text that didn't extract), reply with NOTHING: and a few words on why.
 """
+
+-- Said after the deployment's own description of its work (theme.lua's
+-- system_prompt_extra, the same text the chat agent gets). Found in
+-- production 2026-10-28: the most-retrieved sources were a neuroscience
+-- conference's proceedings and a mathematical software congress -- huge
+-- documents a search matches on almost any query, not material the team
+-- uses, and a faithful note about them would pass the check.
+CURATE_RELEVANCE_RULE = """
+If the source is unrelated to this team's work, reply with NOTHING: and a few words on why. Curate only what a colleague here could use.
+"""
+
+-- The curate prompt, with the deployment's description of its work when
+-- it has one.
+function curate.system_prompt()
+    config = require("config")
+    theme = config.load_theme(config.find_root())
+    if theme.system_prompt_extra == nil or theme.system_prompt_extra == "" then
+        return CURATE_SYSTEM_PROMPT
+    end
+    return CURATE_SYSTEM_PROMPT .. "\nAbout this team and its work:\n" .. theme.system_prompt_extra .. "\n" .. CURATE_RELEVANCE_RULE
+end
 
 CURATE_CHECK_SYSTEM_PROMPT = """
 You check a curated note against the source it was written from. Reply PASS if every statement in the note is supported by the source, it adds nothing the source doesn't say, and it's clearly cleaner and more useful to a reader than the raw source. Otherwise reply FAIL: followed by one short reason. Reply with nothing else.
@@ -169,15 +190,19 @@ function curate.run(db_path, document_id, author)
         return "nothing", nil
     end
 
-    draft, err = agent_provider.generate(nil, CURATE_SYSTEM_PROMPT, "Title: " .. tostring(doc.title) .. "\n\n" .. text)
+    draft, err = agent_provider.generate(nil, curate.system_prompt(), "Title: " .. tostring(doc.title) .. "\n\n" .. text)
     if draft == nil then
         curate_record(db_path, doc.id, hash, "failed", note_id, tostring(err))
         return "failed", nil
     end
     draft = string.gsub(draft, "^%s+", "")
     draft = string.gsub(draft, "%s+$", "")
-    if draft == "" or draft == "NOTHING" then
-        curate_record(db_path, doc.id, hash, "nothing", note_id, nil)
+    if draft == "" or string.sub(draft, 1, 7) == "NOTHING" then
+        why = string.gsub(string.sub(draft, 8), "^:?%s*", "")
+        if why == "" then
+            why = nil
+        end
+        curate_record(db_path, doc.id, hash, "nothing", note_id, why)
         return "nothing", nil
     end
 
