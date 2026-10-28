@@ -144,3 +144,21 @@ $(paper_text cell 60 count)" >/dev/null
     run "$BIN" repair duplicates
     [[ "$output" =~ "0 paper(s) with copies" ]]
 }
+
+@test "repair duplicates keeps the copy whose title says what the file is, not a bare number or a '- Copy'" {
+    text=$(paper_text phenol)
+    numbered=$(synced "17" "Literature/top_50_missing" item-1 "$text")
+    named=$(synced "Rojas et al 2015" "R&D/Danielle" item-2 "$text")
+    copied=$(synced "Rojas et al 2015 - Copy" "R&D/Silvia" item-3 "$text")
+
+    run "$BIN" repair duplicates --dry-run
+    [[ "$output" =~ "would fold #$numbered 17 into #$named Rojas et al 2015 (same text)" ]]
+    [[ "$output" =~ "would fold #$copied Rojas et al 2015 - Copy into #$named Rojas et al 2015 (same text)" ]]
+
+    # A Hebrew title says what the file is too; a date doesn't.
+    text=$(paper_text growth)
+    dated=$(synced "2025-03-12" "R&D/Ian" item-4 "$text")
+    hebrew=$(synced "נספח אקסל" "R&D/Silvia" item-5 "$text")
+    run "$BIN" repair duplicates --dry-run
+    [[ "$output" =~ "would fold #$dated 2025-03-12 into #$hebrew נספח אקסל (same text)" ]]
+}

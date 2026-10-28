@@ -17,7 +17,7 @@ Only synced files are considered (`external_id` `sharepoint:…`). A page someon
 
 ## Folding
 
-The copy with the lowest id is kept. It's the one a `[[Title]]` link already resolves to. For each other copy:
+The copy with the lowest id whose title says what the file is gets kept. A bare number or date, a few characters, or a copy's name ("- Copy", "(2)") doesn't count: in production "17.pdf" would otherwise have been kept over its copy titled "Rojas et al 2015" (44 of 405 groups). If no title qualifies, the lowest id is kept. `[[Title]]` links still resolve, since resolution only looks at active documents. For each other copy:
 
 1. Links to the copy point at the kept document. A link from the kept document to its own copy is archived.
 2. `duplicate_of` and `merged_into` record where it went.

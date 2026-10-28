@@ -19,8 +19,9 @@
 -- a page someone wrote is never folded into another, the same rule
 -- knowledge.duplication_status keeps.
 --
--- fold keeps the copy with the lowest id (the one a [[Title]] link
--- already resolves to), points links to the other copies at it, and
+-- fold keeps the copy with the lowest id among those whose title says
+-- what the file is (duplicate.poor_title), points links to the other
+-- copies at it, and
 -- archives them, recording duplicate_of/merged_into. Archiving is what
 -- takes a copy out of the pool: its heat goes back to the pool, its
 -- vector leaves its tags' centres, its embedding and outgoing links go
@@ -71,6 +72,24 @@ function duplicate.file_type(content)
         return nil
     end
     return string.lower(extension)
+end
+
+-- A title that doesn't say what the file is: a bare number or date
+-- ("17", "2025-03-12"), a few characters, or a copy's name ("- Copy",
+-- "(2)"). Found in production: "17.pdf" kept over its copy titled
+-- "Rojas et al 2015".
+function duplicate.poor_title(title)
+    if title == nil then
+        return true
+    end
+    lowered = string.lower(title)
+    if string.find(lowered, "copy", 1, true) != nil or string.find(lowered, "%(%d+%)%s*$") != nil then
+        return true
+    end
+    -- Bytes of letters: ASCII ones, and any non-ASCII byte (a Hebrew
+    -- letter is two), since %a only knows ASCII.
+    letters = string.gsub(lowered, "[%c%p%d%s]", "")
+    return string.len(letters) < 4
 end
 
 function duplicate.title_key(title)
@@ -235,27 +254,44 @@ function duplicate.find_groups(db_path)
         end
     end
 
-    groups_by_root = {}
+    members_by_root = {}
     roots = {}
     for id, _ in pairs(parents) do
         root = duplicate_root(parents, id)
-        if root != id then
-            if groups_by_root[root] == nil then
-                groups_by_root[root] = {keep = root, title = titles[root], copies = {}}
-                table.insert(roots, root)
-            end
-            reason = reasons[id]
-            if reason == nil then
-                reason = "a copy of another copy"
-            end
-            table.insert(groups_by_root[root].copies, {id = id, title = titles[id], reason = reason})
+        if members_by_root[root] == nil then
+            members_by_root[root] = {}
+            table.insert(roots, root)
         end
+        table.insert(members_by_root[root], id)
     end
     table.sort(roots)
     groups = {}
     for _, root in ipairs(roots) do
-        table.sort(groups_by_root[root].copies, function(a, b) return a.id < b.id end)
-        table.insert(groups, groups_by_root[root])
+        members = members_by_root[root]
+        if #members > 1 then
+            table.sort(members)
+            keep = members[1]
+            for _, id in ipairs(members) do
+                if not duplicate.poor_title(titles[id]) then
+                    keep = id
+                    break
+                end
+            end
+            group = {keep = keep, title = titles[keep], copies = {}}
+            for _, id in ipairs(members) do
+                if id != keep then
+                    reason = reasons[id]
+                    if reason == nil and id == root then
+                        reason = reasons[keep]
+                    end
+                    if reason == nil then
+                        reason = "a copy of another copy"
+                    end
+                    table.insert(group.copies, {id = id, title = titles[id], reason = reason})
+                end
+            end
+            table.insert(groups, group)
+        end
     end
     return groups
 end
