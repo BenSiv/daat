@@ -438,10 +438,11 @@ function knowledge.review_retrieval(db_path, retrieval_id, author)
             -- without being edited doesn't re-trigger a model call every
             -- time it comes due for review.
             if knowledge.due_for_review(tonumber(doc.retrieval_count), doc.effective_heat) then
-                maturity = document.processing_maturity(db_path, doc.id, body, doc.source_type)
-                if is_duplicate then
+                if not knowledge.can_hold_tier(doc.source_type) then
+                    target_tier = 0
+                elseif is_duplicate then
                     target_tier = tonumber(doc.tier)
-                elseif maturity.revised != true then
+                elseif document.processing_maturity(db_path, doc.id, body, doc.source_type).revised != true then
                     target_tier = 0
                 elseif knowledge.due_for_tier_judgment(knowledge.get_tier_review(db_path, doc.id), doc.content_hash) then
                     target_tier = knowledge.judge_promotion_target(db_path, doc, tonumber(doc.tier), content_shape)
@@ -1376,13 +1377,30 @@ TIER_JUDGMENT_SOURCE_MAX_CHARS = 20000
 -- was already recomputed bidirectionally on every review (task #87);
 -- this just gives that recompute something to demote AGAINST besides
 -- the note's own drifting content.
+-- Tiers 1-3 are earned by curation (doc/tier-curation-ladder.md): only a
+-- document the curation wrote can hold one. A source -- a synced file, a
+-- page someone wrote, a chat transcript, reasoning, a connection note, a
+-- legacy distilled fact -- stays at tier 0 however it's edited or used.
+-- Found in production 2026-10-28: a 151k-character chat transcript with
+-- raw tool results judged tier 3 on its first look.
+CURATED_SOURCE_TYPES = {curated = true, reference = true, record = true}
+
+function knowledge.can_hold_tier(source_type)
+    return source_type != nil and CURATED_SOURCE_TYPES[source_type] == true
+end
+
 function knowledge.judge_promotion_target(db_path, doc, current_tier, content_shape)
     agent_provider = require("agent_provider")
     body = doc.content
     if body == nil then
         body = ""
     end
-    prompt = string.format("Current tier: %d\n\n%s", tonumber(current_tier), body)
+    kind = doc.source_type
+    if kind == nil or kind == "" then
+        kind = "page"
+    end
+    header = string.format("Title: %s\nKind: %s\n", tostring(doc.title), kind)
+    prompt = string.format("%sCurrent tier: %d\n\n%s", header, tonumber(current_tier), body)
     if doc.source_type == "distilled" and doc.source_id != nil then
         source_doc = knowledge.get_document(db_path, tonumber(doc.source_id))
         if source_doc != nil and source_doc.content != nil then
@@ -1391,7 +1409,7 @@ function knowledge.judge_promotion_target(db_path, doc, current_tier, content_sh
                 source_body = string.sub(source_body, 1, TIER_JUDGMENT_SOURCE_MAX_CHARS) ..
                     "\n\n[...source truncated, showing the first " .. tostring(TIER_JUDGMENT_SOURCE_MAX_CHARS) .. " characters...]"
             end
-            prompt = string.format(
+            prompt = header .. string.format(
                 "Current tier: %d\n\nDistilled note (judge THIS one):\n%s\n\nSource it was distilled from (shown only for fidelity comparison -- do not judge the source's own maturity):\n%s",
                 tonumber(current_tier), body, source_body
             )
@@ -1801,6 +1819,15 @@ function knowledge.do_knowledge(cmd_args, db_path)
         tier = tonumber(cmd_args[3])
         if document_id == nil or tier == nil then
             print("Usage: daat knowledge promote <document_id> <tier>")
+            return
+        end
+        doc = knowledge.get_document(db_path, document_id)
+        if doc == nil then
+            print("Error: no document #" .. tostring(document_id))
+            return
+        end
+        if tier != 0 and not knowledge.can_hold_tier(doc.source_type) then
+            print("Error: document #" .. tostring(document_id) .. " is a source; only documents the curation wrote hold tiers 1-3 (doc/tier-curation-ladder.md)")
             return
         end
         knowledge.set_tier(db_path, document_id, tier)

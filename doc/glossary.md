@@ -10,6 +10,8 @@ Terms this codebase, its UI, and its agent tools should use consistently. When a
 
 - **Knowledge Pool** -- the container: documents that have been retrieved, or were created as system/agent-derived content in the first place (chat-session transcripts, reasoning notes, distilled notes). See `architecture.md`'s "Knowledge pool" section for the full mechanism.
 
+  Since 2026-10-28 (`doc/tier-curation-ladder.md`) a tier is earned by curation work: only a document the curation wrote (`source_type` `curated`, `reference` or `record`) can hold tier 1-3. Every source -- a synced file, a page someone wrote, a chat transcript, reasoning, a connection note, a legacy distilled fact -- stays at tier 0. The definitions below are what each tier's documents should look like; the ladder doc describes the steps that make them.
+
   - **Raw Intake** (Tier 0) -- captured, not yet worked on.
   - **Curated Draft** (Tier 1) -- has been revised at least once (`document.was_revised`), but its content hasn't earned a more specific shape yet.
   - **Developed Reference** (Tier 2) -- revised, and its content is "developed": multi-section or long -- a real, complete article, not a stub.
