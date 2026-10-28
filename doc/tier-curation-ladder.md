@@ -71,9 +71,9 @@ Each step is one generation call plus one check call. With the use gate, the fir
 
 Each phase comes with scorecard scenarios (a chat transcript never rises; a curated note cites its source; a reference covers its notes) and a check on production: `daat knowledge stats` by tier and type, before and after.
 
-## Open questions
+## Decisions (2026-10-28)
 
-1. **Pages people write:** keep them out of the ladder at tier 0? Or let the judge place an edited page at tier 1-2 as today, at most one step per judgment?
-2. **Curated notes for chats:** one note per chat, or only for chats whose conclusions are worth keeping (the check can say "nothing to keep")?
-3. **Legacy distilled facts:** absorb them gradually as above, or archive them at the reset?
-4. **Where curated documents live:** under the Knowledge Pool folder, as today, or under their tag's page?
+1. **Pages people write** stay out of the ladder, at tier 0. They're sources the agent curates from, never relabelled.
+2. **Chats** get a curated note only when they have conclusions worth keeping. The curate step can answer "nothing to keep".
+3. **Legacy distilled facts** (`source_type = 'distilled'`) are kept and absorbed gradually. The new steps use new source types (`curated`, `reference`, `record`), so the legacy facts stay identifiable without marking them.
+4. **Curated documents** live in the Knowledge Pool folder, as today. Tags group them by subject.

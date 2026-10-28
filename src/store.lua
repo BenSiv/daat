@@ -315,6 +315,20 @@ table.insert(MIGRATIONS, {version = 6, name = "knowledge_retrieval_hit", run = f
     end
 end})
 
+-- 7. Tiers restart from 0 (doc/tier-curation-ladder.md): every document
+-- above tier 0 in production was an unprocessed source, labelled by a
+-- judge that saw only its body. Only documents the curation writes can
+-- hold a tier from here on; old judgments are cleared so they're made
+-- again under the new rule. Content is untouched.
+table.insert(MIGRATIONS, {version = 7, name = "tier reset for the curation ladder", run = function(db_path)
+    if exists(db_path, "document") then
+        db.exec(db_path, "UPDATE document SET tier = 0 WHERE tier IS NOT NULL AND tier != 0;")
+    end
+    if exists(db_path, "document_tier_judgment") then
+        db.exec(db_path, "DELETE FROM document_tier_judgment;")
+    end
+end})
+
 function latest_version()
     latest = 0
     for _, m in ipairs(MIGRATIONS) do

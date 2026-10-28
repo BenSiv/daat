@@ -172,36 +172,43 @@ search_for_bioreactor_extra() {
     [[ ! "$output" =~ "Bioreactor Notes" ]]
 }
 
-@test "editing a document's content, then searching for it, promotes it based on the edited content's own shape (content-maturity, not retrieval count)" {
-    "$BIN" entity create document title="Bioreactor Notes" content="cleaning steps for the bioreactor procedure"
-    # A single long paragraph (>120 words, one heading at most) is neither
-    # "developed" (needs >1 heading or >6 paragraphs) nor "atomic" (needs
-    # <=120 words) -- it's "simple", landing at tier 1 (Curated Draft).
-    long_content=$(printf 'word %.0s' $(seq 1 130))
-    "$BIN" entity update document 1 content="$long_content"
-    # Two retrievals to reliably cross due_for_review's retrieval_count
-    # >= 2 gate -- the heat side of that gate (doc/heat-decay-redesign.md,
-    # Phase 4) can no longer be counted on to cross 1.15 from a single
-    # hit: exponential redistribution means a document always receives
-    # strictly less than the raw nominal delta once there's any other
-    # document in the pool to draw from, so retrieval_count is the
-    # reliable trigger here, not heat. document.was_revised is true (a
-    # real entity.update ledger event exists for this document).
-    search_for_bioreactor
-    search_for_bioreactor
-
-    run "$BIN" knowledge list 1
-    [[ "$output" =~ "Bioreactor Notes" ]]
-    run "$BIN" knowledge list 0
-    [[ ! "$output" =~ "Bioreactor Notes" ]]
+# Tiers 1-3 belong to documents the curation wrote (doc/tier-curation-
+# ladder.md); a test stands one in by giving a page a curated source type.
+mark_curated() {
+    sqlite3 .store/store.db "UPDATE document SET source_type = 'curated' WHERE id = $1;"
 }
 
-@test "the agent's tier judgment can promote straight to tier 3 on a reply the content_shape formula alone wouldn't reach" {
+@test "a page someone wrote stays at tier 0 however it's edited and searched, with no judge call (tier curation ladder)" {
     "$BIN" entity create document title="Bioreactor Notes" content="cleaning steps for the bioreactor procedure"
-    # Same 130-word single-paragraph body as the content_shape test above
-    # ("simple" under the old formula -- too long for "atomic", not
-    # multi-section enough for "developed") -- here to prove tier 3 is
-    # reached via the agent's own judgment, not the word-count formula.
+    long_content=$(printf 'word %.0s' $(seq 1 130))
+    "$BIN" entity update document 1 content="$long_content"
+    search_for_bioreactor
+    search_for_bioreactor
+
+    run "$BIN" knowledge list 0
+    [[ "$output" =~ "Bioreactor Notes" ]]
+    run sqlite3 .store/store.db "SELECT COUNT(*) FROM document_tier_judgment;"
+    [ "$output" -eq 0 ]
+}
+
+@test "a chat transcript stays at tier 0 however long it grows (found live: a 151k-character transcript judged tier 3)" {
+    "$BIN" entity create document title="Chat: bioreactor cleaning" content="User: how do we clean the bioreactor?"
+    sqlite3 .store/store.db "UPDATE document SET source_type = 'chat_session' WHERE id = 1;"
+    "$BIN" entity update document 1 content="User: how do we clean the bioreactor?
+
+Assistant: Rinse, then autoclave."
+    search_for_bioreactor
+    search_for_bioreactor_extra "3"
+
+    run sqlite3 .store/store.db "SELECT tier FROM document WHERE id = 1;"
+    [ "$output" -eq 0 ]
+    run "$BIN" knowledge list 3
+    [[ ! "$output" =~ "Chat: bioreactor cleaning" ]]
+}
+
+@test "the agent's tier judgment can place a curated document at tier 3, and records what it judged" {
+    "$BIN" entity create document title="Bioreactor Notes" content="cleaning steps for the bioreactor procedure"
+    mark_curated 1
     long_content=$(printf 'word %.0s' $(seq 1 130))
     "$BIN" entity update document 1 content="$long_content"
     search_for_bioreactor
@@ -209,16 +216,14 @@ search_for_bioreactor_extra() {
 
     run "$BIN" knowledge list 3
     [[ "$output" =~ "Bioreactor Notes" ]]
-    run "$BIN" knowledge list 1
-    [[ ! "$output" =~ "Bioreactor Notes" ]]
-
     content_hash=$(sqlite3 .store/store.db "SELECT content_hash FROM document WHERE id = 1;")
     run sqlite3 .store/store.db "SELECT judged_tier, judged_hash FROM document_tier_judgment WHERE document_id = 1;"
     [[ "$output" =~ "3|${content_hash}" ]]
 }
 
-@test "a document's tier judgment isn't re-asked when its content hasn't changed, but is re-asked (and can move either direction) after a real edit" {
+@test "a curated document's tier judgment isn't re-asked when its content hasn't changed, but is re-asked (and can move either direction) after a real edit" {
     "$BIN" entity create document title="Bioreactor Notes" content="cleaning steps for the bioreactor procedure"
+    mark_curated 1
     long_content=$(printf 'word %.0s' $(seq 1 130))
     "$BIN" entity update document 1 content="$long_content"
     search_for_bioreactor
@@ -226,18 +231,10 @@ search_for_bioreactor_extra() {
     run "$BIN" knowledge list 3
     [[ "$output" =~ "Bioreactor Notes" ]]
 
-    # A further search with no content change: due_for_tier_judgment
-    # sees the same content_hash already on file and must not call the
-    # model again -- tier stays exactly as judged above.
     search_for_bioreactor
     run "$BIN" knowledge list 3
     [[ "$output" =~ "Bioreactor Notes" ]]
 
-    # Now a real edit changes content_hash -- this must be due for a
-    # fresh judgment, and the new judgment (demoting to tier 1 here)
-    # takes effect, same "recomputed fresh every judged review, not
-    # ratcheted upward" bidirectionality the old content_shape mechanism
-    # already had.
     "$BIN" entity update document 1 content="a short revised note"
     search_for_bioreactor_extra "1"
     run "$BIN" knowledge list 1
@@ -261,10 +258,16 @@ search_for_bioreactor_extra() {
     [[ "$output" =~ "cleaning steps for the bioreactor procedure" ]]
 }
 
-@test "daat knowledge promote manually overrides a document's tier" {
+@test "daat knowledge promote manually overrides a curated document's tier, and refuses a source" {
     "$BIN" entity create document title="Bioreactor Notes" content="cleaning steps for the bioreactor procedure"
     search_for_bioreactor
 
+    run "$BIN" knowledge promote 1 2
+    [[ "$output" =~ "is a source; only documents the curation wrote hold tiers 1-3" ]]
+    run "$BIN" knowledge list 0
+    [[ "$output" =~ "Bioreactor Notes" ]]
+
+    mark_curated 1
     run "$BIN" knowledge promote 1 2
     [[ "$output" =~ "Document #1 set to tier 2" ]]
 

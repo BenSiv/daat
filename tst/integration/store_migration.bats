@@ -219,3 +219,18 @@ view|stock|SELECT 1|admin" ]
     run latest_tool_result "$chat"
     [[ "$output" =~ "'entity_source' was renamed to 'entity_ref'" ]]
 }
+
+@test "migration 7 restarts every tier from 0 and clears old tier judgments, leaving content alone" {
+    "$BIN" entity create document title="Raw paper" content="a long synced paper" >/dev/null
+    store "UPDATE document SET tier = 3 WHERE title = 'Raw paper';"
+    store "INSERT INTO document_tier_judgment (document_id, judged_hash, judged_tier) VALUES (1, 'abc', 3);"
+    rewind_to 6
+
+    "$BIN" entity list document >/dev/null
+    run store "SELECT tier || ' ' || content FROM document WHERE title = 'Raw paper';"
+    [ "$output" = "0 a long synced paper" ]
+    run store "SELECT COUNT(*) FROM document_tier_judgment;"
+    [ "$output" = "0" ]
+    run store "SELECT number_value = 7 FROM system_state WHERE name = 'store.schema_version';"
+    [ "$output" = "1" ]
+}
