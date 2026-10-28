@@ -171,7 +171,7 @@ REPAIRS = {
     {name = "connections", usage = "connections [--all] [--dry-run]", run = repair_connections,
      description = "Put every connection document (A ↔ B) through the pipeline a new pair goes through: archive one whose two documents' most similar passages score below link_passage_gate (comparing every passage, no model call); ask the agent again about one the gate can't measure, one whose reason doesn't say what both share, or (--all) every one, rewriting it with a real reason or archiving it; archive one connecting another connection document (--dry-run: list them, with scores and passages; no model calls)."},
     {name = "duplicates", usage = "duplicates [--dry-run]", run = repair_duplicates,
-     description = "Fold copies of the same synced file (same text past the sync header, or the same title and most of the text) into the copy with the lowest id: links move to it, the copies are archived as its duplicates (--dry-run: list them)."},
+     description = "Fold copies of the same synced file (same text past the sync header, or the same title and most of the text) into one copy (the lowest id with a real title): links move to it, the copies are archived as its duplicates (--dry-run: list them)."},
     {name = "pool-count", usage = "pool-count", run = repair_pool_count,
      description = "Recount active documents into knowledge_pool_state.document_count."},
 }
