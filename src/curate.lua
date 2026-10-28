@@ -27,8 +27,6 @@ curate = {}
 CURATE_INPUT_MAX_CHARS = 40000
 -- Shorter than this has nothing to curate (a stub, a folder page).
 CURATE_MIN_CHARS = 500
--- How much of the source the check sees next to the note.
-CURATE_CHECK_SOURCE_MAX_CHARS = 40000
 
 CURATE_SYSTEM_PROMPT = """
 You curate a team's knowledge base. Rewrite the source below as a clean note in your own words for a colleague who hasn't read it: one line on what it is, then its key findings, methods or decisions, with the concrete numbers, conditions, materials and names that matter. Leave out boilerplate, file paths, headers, tool output, greetings and anything the source doesn't support. Never add a fact that isn't in the source.
@@ -65,7 +63,7 @@ function curate.system_prompt()
 end
 
 CURATE_CHECK_SYSTEM_PROMPT = """
-You check a curated note against the source it was written from. Reply PASS if every statement in the note is supported by the source, it adds nothing the source doesn't say, and it's clearly cleaner and more useful to a reader than the raw source. Otherwise reply FAIL: followed by one short reason. Reply with nothing else.
+You check a curated note against the source it was written from. Reply PASS if every statement in the note is supported by the source, it adds nothing the source doesn't say, and it's clearly cleaner and more useful to a reader than the raw source. A long source may be cut, with a line saying so; the note was written from the part shown, so judge it against that part only. Otherwise reply FAIL: followed by one short reason. Reply with nothing else.
 """
 
 -- Sources curate reads: synced files and pages (no source_type) and
@@ -209,12 +207,12 @@ function curate.run(db_path, document_id, author)
         return "nothing", nil
     end
 
-    check_source = text
-    if string.len(check_source) > CURATE_CHECK_SOURCE_MAX_CHARS then
-        check_source = string.sub(check_source, 1, CURATE_CHECK_SOURCE_MAX_CHARS)
-    end
+    -- The check sees exactly what the writer saw, cut line included.
+    -- Found in production 2026-10-28: cutting it again here dropped
+    -- that line, and the check rejected a faithful note on a 200k
+    -- character book for covering more than the "truncated" text.
     verdict, err = agent_provider.generate(nil, CURATE_CHECK_SYSTEM_PROMPT,
-        "Note:\n" .. draft .. "\n\nSource:\n" .. check_source)
+        "Note:\n" .. draft .. "\n\nSource:\n" .. text)
     if verdict == nil then
         curate_record(db_path, doc.id, hash, "failed", note_id, tostring(err))
         return "failed", nil
