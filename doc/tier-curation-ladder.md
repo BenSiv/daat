@@ -1,0 +1,79 @@
+# Tier curation ladder
+
+Proposal, 2026-10-28. Replaces tiers as labels on raw content with tiers as stages of curation work the agent does, one step at a time.
+
+## Problem
+
+In production (2026-10-28, 7,478 active documents), every document above tier 1 is unprocessed:
+
+| Tier | Documents | What they are |
+|---|---|---|
+| 3 Atomic Record | 3 | a 151k-character chat transcript with raw tool results (#292404), a one-sentence connection note, a synced PDF |
+| 2 Developed Reference | 6 | synced files up to 200k characters |
+| 1 Curated Draft | 133 | synced files, average 71k characters |
+| 0 Raw Intake | 7,336 | everything else, including all 132 distilled facts |
+
+The documents the agent did curate (distilled facts) sit at tier 0, and raw sources sit above them. Search weights by tier (`document.TIER_WEIGHT`), so raw sources are boosted over the curated notes.
+
+Causes (`knowledge.review_retrieval`, `knowledge.judge_promotion_target`):
+
+1. **The gate to leave tier 0 is any edit** (`document.was_revised`: one `update` event). A chat transcript gets one on its second turn, and a synced file on its second sync.
+2. **The judge sees only the body.** No title, no source type, nothing saying "this is a chat transcript". One call can move a document from 0 to 3.
+3. **Promotion never changes content.** A tier is a label put on the text as it is, so a raw source can only ever be labelled, never improved.
+4. **Distillation is one fact per source, ever.** The fact starts at tier 0 and is judged only once it's retrieved twice. The source isn't linked to it, and similar facts aren't deduplicated.
+
+## The ladder
+
+A tier is earned by curation work, not assigned to raw text. Each step up is the agent writing a cleaner document from the step below, and a judge checking that work before it counts.
+
+| Tier | What it is | Made by | From |
+|---|---|---|---|
+| 0 Raw | every source as it arrived: synced files, chat transcripts, reasoning, experiment views, connection notes | sync, chat, review | — |
+| 1 Curated note | one source rewritten as a clean note in the agent's words: what it is, key findings, numbers, with a link to the source. A chat becomes its conclusions, not its transcript. | **curate** step | one tier-0 source |
+| 2 Developed reference | a structured reference on one subject, synthesized from several tier-1 notes, with sections and links to each note | **synthesize** step | ≥ 3 tier-1 notes on one subject |
+| 3 Atomic record | one verified idea, short and self-contained, deduplicated against existing records | **distill** step | a tier-2 reference (or a tier-1 note) |
+
+Rules:
+
+- **Raw stays raw.** A source never moves above tier 0. Only documents the curation wrote can hold tiers 1-3. This includes synced files, transcripts, reasoning and connection notes.
+- **One step at a time.** A document is made from the tier directly below it. Nothing jumps from raw to atomic.
+- **The agent rewrites only its own documents.** Sources are never edited; the pool stays additive for everything it didn't write. A tier-2 reference is updated in place when new tier-1 notes on its subject arrive, so it grows instead of being duplicated. Pages people write stay as they are (see the open questions).
+- **Every step is checked.** A judge call compares the new document with what it was made from: is it faithful, does it add nothing that isn't there, is it cleaner? A failed check discards the draft and records why. The current judge prompt's lessons (a reminder isn't a record, a list of links isn't a definition, fidelity to the source) move into these checks.
+- **Driven by use, run in the background.** A step is queued when a document is used (the `due_for_review` rule today: retrieved twice, or hot), not by a scan of the whole pool. It runs in the jobs worker (`platform-jobs`, every 2 min), not inside the search request. That also removes the review time from search latency (brex 712351373).
+- **Provenance is kept.** Each curated document records what it was made from (`source_id`, plus `document_link`s so the graph and the "cite sources" check see it), and the agent's prompt and output are logged in `agent_model_call` as today.
+
+Search keeps its tier weights, so curated documents now rank above the raw sources they came from, and a reader can follow the links down to the source.
+
+## Subjects for tier 2
+
+A tier-2 reference needs a subject that several tier-1 notes share. Tags already give one: each tier-1 note is placed in a tag when it's embedded, so a tag with ≥ 3 tier-1 notes and no reference is a candidate. The reference lives under its tag and is updated when the tag gains notes. Tag splits and merges (tag upkeep) re-point references the same way they move memberships.
+
+## Reset
+
+Every document above tier 0 today is raw, so the ladder starts from a reset:
+
+1. All documents to tier 0, and `document_tier_judgment` cleared.
+2. The 132 existing distilled facts are kept but marked legacy. They're one fact per source, unchecked and partly duplicated. The new distill step can absorb them: it deduplicates against them and archives a legacy fact once a checked record covers it.
+3. Curation then starts from use. The first searches queue curate steps for the sources they touch.
+
+The reset is a migration (`store` migration 7). It's reversible from the Cloud SQL backup, and it changes no content, only tiers.
+
+## Cost
+
+Each step is one generation call plus one check call. With the use gate, the first weeks would be roughly the documents searched twice: 133 are at tier 1 today by that rule, so about 260 calls to curate them, then a trickle. Chat transcripts are the largest inputs (up to 300k characters). The curate step reads a transcript's conversation without the tool results (`transcript_conversation`, already used for embeddings) and caps the input size, as the judge already does with `TIER_JUDGMENT_SOURCE_MAX_CHARS`.
+
+## Phases
+
+1. **Stop the damage:** raw stays raw (sources capped at tier 0), give the judge the title and the source type, then the reset. Small change; it makes tiers honest right away.
+2. **Curate (tier 1):** the curate step and its check, queued from review and run by the jobs worker. Move review out of the search request at the same time.
+3. **Synthesize (tier 2):** references per tag, updated in place.
+4. **Distill (tier 3):** records from references, deduplicated by embedding against existing records; legacy facts absorbed.
+
+Each phase comes with scorecard scenarios (a chat transcript never rises; a curated note cites its source; a reference covers its notes) and a check on production: `daat knowledge stats` by tier and type, before and after.
+
+## Open questions
+
+1. **Pages people write:** keep them out of the ladder at tier 0? Or let the judge place an edited page at tier 1-2 as today, at most one step per judgment?
+2. **Curated notes for chats:** one note per chat, or only for chats whose conclusions are worth keeping (the check can say "nothing to keep")?
+3. **Legacy distilled facts:** absorb them gradually as above, or archive them at the reset?
+4. **Where curated documents live:** under the Knowledge Pool folder, as today, or under their tag's page?
