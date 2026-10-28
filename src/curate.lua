@@ -89,7 +89,7 @@ end
 function curate.source_text(db_path, doc)
     text = nil
     if doc.source_type == "chat_session" then
-        text = transcript_conversation(db_path, tonumber(doc.id))
+        text = document.transcript_conversation(db_path, tonumber(doc.id))
     end
     if text == nil then
         content = doc.content
