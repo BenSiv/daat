@@ -177,6 +177,7 @@ function curate.run(db_path, document_id, author)
     agent_provider = require("agent_provider")
     doc = knowledge.get_document(db_path, tonumber(document_id))
     if doc == nil or (doc.archived_at != nil and doc.archived_at != "") or not curate.is_source(doc) then
+        db.exec(db_path, string.format("DELETE FROM knowledge_curation WHERE document_id = %d;", tonumber(document_id)))
         return "skipped", nil
     end
     hash = curate_source_hash(doc)
@@ -246,6 +247,27 @@ function curate.run(db_path, document_id, author)
     return "curated", note_id
 end
 
+-- Takes a queued source for this process: pending -> running, marked
+-- with a token only this process knows, so two runners never curate
+-- the same source. Found in production 2026-10-28: the jobs worker
+-- (curate-pending every 2 minutes) took the same pending rows as a
+-- `repair curate` batch and wrote a second note for one source. A row
+-- left running by a process that died is retried by `--recheck`.
+function curate_claim(db_path, document_id)
+    urandom = io.open("/dev/urandom", "rb")
+    if urandom == nil then
+        return false
+    end
+    raw = io.read(urandom, 8)
+    io.close(urandom)
+    token = string.gsub(raw, ".", function(c) return string.format("%02x", string.byte(c)) end)
+    db.exec(db_path, string.format(
+        "UPDATE knowledge_curation SET status = 'running', reason = %s WHERE document_id = %d AND status = 'pending';",
+        db.quote(token), document_id))
+    row = curate_row(db_path, document_id)
+    return row != nil and row.status == "running" and row.reason == token
+end
+
 -- Runs up to `limit` queued sources, oldest first. Returns report lines.
 function curate.run_pending(db_path, limit, author)
     if limit == nil then
@@ -259,12 +281,14 @@ function curate.run_pending(db_path, limit, author)
         return lines
     end
     for _, row in ipairs(rows) do
-        status, note_id = curate.run(db_path, tonumber(row.document_id), author)
-        line = string.format("#%d %s", tonumber(row.document_id), status)
-        if note_id != nil then
-            line = line .. " -> note #" .. tostring(note_id)
+        if curate_claim(db_path, tonumber(row.document_id)) then
+            status, note_id = curate.run(db_path, tonumber(row.document_id), author)
+            line = string.format("#%d %s", tonumber(row.document_id), status)
+            if note_id != nil then
+                line = line .. " -> note #" .. tostring(note_id)
+            end
+            table.insert(lines, line)
         end
-        table.insert(lines, line)
     end
     return lines
 end

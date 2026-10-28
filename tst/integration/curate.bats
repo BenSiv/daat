@@ -167,3 +167,29 @@ THEME
     [[ "$output" =~ "[...source cut here, showing the first 40000 characters...]" ]]
     unset AGENT_TEST_CAPTURE_PROMPT
 }
+
+@test "a source another runner already took is left to it, so no source gets two notes" {
+    taken=$(used_source "Growth run A" 3)
+    free=$(used_source "Growth run B" 3)
+    db "INSERT INTO knowledge_curation (document_id, source_hash, status, reason) VALUES ($taken, 'x', 'running', 'other-runner');"
+    db "INSERT INTO knowledge_curation (document_id, source_hash, status) VALUES ($free, 'x', 'pending');"
+    export AGENT_TEST_GENERATE_RESPONSES="$NOTE"$'\1'"PASS"
+
+    run "$BIN" knowledge curate-pending
+    [ "${#lines[@]}" -eq 1 ]
+    [[ "${lines[0]}" =~ "#$free curated" ]]
+    run db "SELECT status || '|' || reason FROM knowledge_curation WHERE document_id = $taken;"
+    [ "$output" = "running|other-runner" ]
+    run db "SELECT COUNT(*) FROM document WHERE source_type = 'curated';"
+    [ "$output" -eq 1 ]
+}
+
+@test "a queued source that was archived meanwhile leaves the queue" {
+    gone=$(used_source "Growth run A" 3)
+    db "INSERT INTO knowledge_curation (document_id, source_hash, status) VALUES ($gone, 'x', 'pending');"
+    db "UPDATE document SET archived_at = '2026-10-29' WHERE id = $gone;"
+
+    run "$BIN" knowledge curate-pending
+    run db "SELECT COUNT(*) FROM knowledge_curation WHERE document_id = $gone;"
+    [ "$output" -eq 0 ]
+}
