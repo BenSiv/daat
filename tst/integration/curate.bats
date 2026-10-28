@@ -117,3 +117,21 @@ NOTE=$'# Medium B growth\n\nCell suspensions in medium B reached up to 20 g/L dr
     [ "${#lines[@]}" -eq 1 ]
     [[ "${lines[0]}" =~ "#$queued curated" ]]
 }
+
+@test "the curate prompt carries the deployment's own description of its work, and an unrelated source is skipped with a reason" {
+    cat > theme.lua <<'THEME'
+return {system_prompt_extra = "A cocoa plant cell culture lab."}
+THEME
+    source=$(used_source "Computational Neuroscience Meeting proceedings" 41)
+    export AGENT_TEST_CAPTURE_SYSTEM_PROMPT="$TEST_DIR/curate-prompt.txt"
+    export AGENT_TEST_GENERATE_RESPONSES="NOTHING: neuroscience conference abstracts, unrelated to cell culture"
+
+    run "$BIN" repair curate
+    [[ "$output" =~ "#$source nothing" ]]
+    run cat "$TEST_DIR/curate-prompt.txt"
+    [[ "$output" =~ "A cocoa plant cell culture lab." ]]
+    [[ "$output" =~ "unrelated to this team's work" ]]
+    run db "SELECT status || '|' || reason FROM knowledge_curation WHERE document_id = $source;"
+    [ "$output" = "nothing|neuroscience conference abstracts, unrelated to cell culture" ]
+    unset AGENT_TEST_CAPTURE_SYSTEM_PROMPT
+}
