@@ -2199,6 +2199,7 @@ function transcript_conversation(db_path, document_id)
     end
     return table.concat(parts, "\n\n")
 end
+document.transcript_conversation = transcript_conversation
 
 -- The text a document's embedding is made from: what the document is
 -- about, not where it came from. Its title and content, less every line

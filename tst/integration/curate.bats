@@ -193,3 +193,21 @@ THEME
     run db "SELECT COUNT(*) FROM knowledge_curation WHERE document_id = $gone;"
     [ "$output" -eq 0 ]
 }
+
+@test "a chat is curated from what was said, without its tool results" {
+    chat=$(used_source "Chat: media" 3)
+    db "INSERT INTO agent_session (id, login, title) VALUES ('s1', 'admin', 'media');"
+    db "INSERT INTO agent_message (session_id, role, content) VALUES ('s1', 'user', 'which medium for cotyledons? $(printf 'context %s ' $(seq 1 80))');"
+    db "INSERT INTO agent_message (session_id, role, content) VALUES ('s1', 'tool_result', 'raw search output #12 #13');"
+    db "INSERT INTO agent_message (session_id, role, content) VALUES ('s1', 'assistant', 'M9, per the protocol.');"
+    db "UPDATE document SET source_type = 'chat_session', source_ref = 's1' WHERE id = $chat;"
+    export AGENT_TEST_CAPTURE_PROMPT="$TEST_DIR/check-prompt.txt"
+    export AGENT_TEST_GENERATE_RESPONSES=$'# Cotyledon medium\n\nM9, per the protocol.'$'\1'"PASS"
+
+    run "$BIN" repair curate
+    [[ "$output" =~ "#$chat curated" ]]
+    run cat "$TEST_DIR/check-prompt.txt"
+    [[ "$output" =~ "User: which medium for cotyledons?" ]]
+    [[ ! "$output" =~ "raw search output" ]]
+    unset AGENT_TEST_CAPTURE_PROMPT
+}
