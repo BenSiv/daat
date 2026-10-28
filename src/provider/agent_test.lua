@@ -67,6 +67,15 @@ function agent_test.generate(model, system_prompt, prompt)
             io.close(capture_file)
         end
     end
+    -- The same for the prompt itself; the last call wins.
+    prompt_capture_path = os.getenv("AGENT_TEST_CAPTURE_PROMPT")
+    if prompt_capture_path != nil and prompt_capture_path != "" then
+        prompt_capture_file = io.open(prompt_capture_path, "w")
+        if prompt_capture_file != nil then
+            io.write(prompt_capture_file, prompt)
+            io.close(prompt_capture_file)
+        end
+    end
 
     -- AGENT_TEST_GENERATE_RESPONSES, when set, gives generate() its own
     -- list and counter, so side-effect calls a turn may trigger

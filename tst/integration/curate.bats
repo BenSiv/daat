@@ -153,3 +153,17 @@ THEME
     run "$BIN" repair curate --recheck
     [[ "$output" =~ "#$skipped curated" ]]
 }
+
+@test "the check sees a long source cut where the writer's was, with the line that says so" {
+    "$BIN" entity create document title="Cacao breeding" content="$(printf 'Breeding cycle %s selected for yield and flavour. ' $(seq 1 1200))" >/dev/null
+    db "UPDATE document SET retrieval_count = 39 WHERE title = 'Cacao breeding';"
+    export AGENT_TEST_CAPTURE_PROMPT="$TEST_DIR/check-prompt.txt"
+    export AGENT_TEST_GENERATE_RESPONSES=$'# Cacao breeding\n\nBreeding cycles selected for yield and flavour.'$'\1'"PASS"
+
+    run "$BIN" repair curate
+    [[ "$output" =~ "curated" ]]
+    run cat "$TEST_DIR/check-prompt.txt"
+    [[ "$output" =~ "Note:" ]]
+    [[ "$output" =~ "[...source cut here, showing the first 40000 characters...]" ]]
+    unset AGENT_TEST_CAPTURE_PROMPT
+}

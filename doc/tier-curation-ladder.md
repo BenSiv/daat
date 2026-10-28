@@ -74,7 +74,9 @@ Status:
 - **Phase 2's curate step** is built (`src/curate.lua`):
   - Review queues a source once it's due (`knowledge_curation`, one row per source and content version).
   - The jobs worker runs `daat knowledge curate-pending 3` every 2 minutes (software `startup-platform.sh.tpl`).
-  - `daat repair curate [--limit N] [--dry-run]` backfills the sources already in use, most used first.
+  - `daat repair curate [--limit N] [--dry-run] [--recheck]` backfills the sources already in use, most used first. `--recheck` tries again the sources that came to nothing, were rejected or failed (after a prompt change).
+  - The agent first judges whether the source is in the team's field (published papers, books and reviews on its subjects count) and answers `NOTHING: <reason>` when it isn't.
+  - A source longer than 40,000 characters is cut, with a line saying so; the check sees the same cut text.
   - A note that passes the check is created at tier 1 with a `Source: [[...]]` link. A source edited later gets its note rewritten in place.
   - Moving the rest of review out of the search request is still to do.
 
