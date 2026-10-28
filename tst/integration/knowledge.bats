@@ -191,6 +191,20 @@ mark_curated() {
     [ "$output" -eq 0 ]
 }
 
+@test "a source that comes due through use is queued for the curate step, once per version" {
+    long_content=$(printf 'Bioreactor cleaning step %s: rinse, then autoclave. ' $(seq 1 20))
+    "$BIN" entity create document title="Bioreactor Notes" content="$long_content"
+    search_for_bioreactor
+    search_for_bioreactor
+
+    run sqlite3 .store/store.db "SELECT status FROM knowledge_curation WHERE document_id = 1;"
+    [ "$output" = "pending" ]
+    queued_at=$(sqlite3 .store/store.db "SELECT queued_at FROM knowledge_curation WHERE document_id = 1;")
+    search_for_bioreactor
+    run sqlite3 .store/store.db "SELECT COUNT(*) || '|' || MAX(queued_at) FROM knowledge_curation WHERE document_id = 1;"
+    [ "$output" = "1|$queued_at" ]
+}
+
 @test "a chat transcript stays at tier 0 however long it grows (found live: a 151k-character transcript judged tier 3)" {
     "$BIN" entity create document title="Chat: bioreactor cleaning" content="User: how do we clean the bioreactor?"
     sqlite3 .store/store.db "UPDATE document SET source_type = 'chat_session' WHERE id = 1;"

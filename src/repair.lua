@@ -141,6 +141,25 @@ function repair_duplicates(cmd_args, db_path)
     end
 end
 
+function repair_curate(cmd_args, db_path)
+    curate = require("curate")
+    limit = nil
+    dry_run = false
+    i = 2
+    while i <= #cmd_args do
+        if cmd_args[i] == "--dry-run" then
+            dry_run = true
+        elseif cmd_args[i] == "--limit" then
+            limit = tonumber(cmd_args[i + 1])
+            i = i + 1
+        end
+        i = i + 1
+    end
+    for _, line in ipairs(curate.repair(db_path, limit, dry_run, "system")) do
+        print(line)
+    end
+end
+
 function repair_connections(cmd_args, db_path)
     knowledge = require("knowledge")
     flags = {}
@@ -172,6 +191,8 @@ REPAIRS = {
      description = "Put every connection document (A ↔ B) through the pipeline a new pair goes through: archive one whose two documents' most similar passages score below link_passage_gate (comparing every passage, no model call); ask the agent again about one the gate can't measure, one whose reason doesn't say what both share, or (--all) every one, rewriting it with a real reason or archiving it; archive one connecting another connection document (--dry-run: list them, with scores and passages; no model calls)."},
     {name = "duplicates", usage = "duplicates [--dry-run]", run = repair_duplicates,
      description = "Fold copies of the same synced file (same text past the sync header, or the same title and most of the text) into one copy (the lowest id with a real title): links move to it, the copies are archived as its duplicates (--dry-run: list them)."},
+    {name = "curate", usage = "curate [--limit N] [--dry-run]", run = repair_curate,
+     description = "Curate the sources already in use (retrieved twice or more), most used first, into checked tier-1 notes -- one model call to write and one to check each (--dry-run: list them, no model calls)."},
     {name = "pool-count", usage = "pool-count", run = repair_pool_count,
      description = "Recount active documents into knowledge_pool_state.document_count."},
 }
