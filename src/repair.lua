@@ -145,17 +145,20 @@ function repair_curate(cmd_args, db_path)
     curate = require("curate")
     limit = nil
     dry_run = false
+    recheck = false
     i = 2
     while i <= #cmd_args do
         if cmd_args[i] == "--dry-run" then
             dry_run = true
+        elseif cmd_args[i] == "--recheck" then
+            recheck = true
         elseif cmd_args[i] == "--limit" then
             limit = tonumber(cmd_args[i + 1])
             i = i + 1
         end
         i = i + 1
     end
-    for _, line in ipairs(curate.repair(db_path, limit, dry_run, "system")) do
+    for _, line in ipairs(curate.repair(db_path, limit, dry_run, "system", recheck)) do
         print(line)
     end
 end
@@ -191,8 +194,8 @@ REPAIRS = {
      description = "Put every connection document (A ↔ B) through the pipeline a new pair goes through: archive one whose two documents' most similar passages score below link_passage_gate (comparing every passage, no model call); ask the agent again about one the gate can't measure, one whose reason doesn't say what both share, or (--all) every one, rewriting it with a real reason or archiving it; archive one connecting another connection document (--dry-run: list them, with scores and passages; no model calls)."},
     {name = "duplicates", usage = "duplicates [--dry-run]", run = repair_duplicates,
      description = "Fold copies of the same synced file (same text past the sync header, or the same title and most of the text) into one copy (the lowest id with a real title): links move to it, the copies are archived as its duplicates (--dry-run: list them)."},
-    {name = "curate", usage = "curate [--limit N] [--dry-run]", run = repair_curate,
-     description = "Curate the sources already in use (retrieved twice or more), most used first, into checked tier-1 notes -- one model call to write and one to check each (--dry-run: list them, no model calls)."},
+    {name = "curate", usage = "curate [--limit N] [--dry-run] [--recheck]", run = repair_curate,
+     description = "Curate the sources already in use (retrieved twice or more), most used first, into checked tier-1 notes -- one model call to write and one to check each (--dry-run: list them, no model calls; --recheck: try again the sources that came to nothing, were rejected or failed)."},
     {name = "pool-count", usage = "pool-count", run = repair_pool_count,
      description = "Recount active documents into knowledge_pool_state.document_count."},
 }

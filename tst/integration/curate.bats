@@ -130,8 +130,26 @@ THEME
     [[ "$output" =~ "#$source nothing" ]]
     run cat "$TEST_DIR/curate-prompt.txt"
     [[ "$output" =~ "A cocoa plant cell culture lab." ]]
-    [[ "$output" =~ "unrelated to this team's work" ]]
+    [[ "$output" =~ "published papers, books, protocols and reviews on its subjects are worth curating" ]]
     run db "SELECT status || '|' || reason FROM knowledge_curation WHERE document_id = $source;"
     [ "$output" = "nothing|neuroscience conference abstracts, unrelated to cell culture" ]
     unset AGENT_TEST_CAPTURE_SYSTEM_PROMPT
+}
+
+@test "repair curate --recheck tries again a source that came to nothing, and leaves curated ones alone" {
+    skipped=$(used_source "Cacao breeding" 39)
+    done=$(used_source "Growth run A" 3)
+    export AGENT_TEST_GENERATE_RESPONSES="NOTHING: no lab data"$'\1'"$NOTE"$'\1'"PASS"
+    "$BIN" repair curate >/dev/null
+    [ "$(db "SELECT status FROM knowledge_curation WHERE document_id = $skipped;")" = "nothing" ]
+
+    run "$BIN" repair curate --dry-run
+    [[ "$output" =~ "0 source(s) due" ]]
+    run "$BIN" repair curate --dry-run --recheck
+    [[ "$output" =~ "would curate #$skipped Cacao breeding" ]]
+    [[ ! "$output" =~ "Growth run A" ]]
+
+    export AGENT_TEST_GENERATE_RESPONSES=$'# Cacao breeding\n\nBreeding history and strategies.'$'\1'"PASS"
+    run "$BIN" repair curate --recheck
+    [[ "$output" =~ "#$skipped curated" ]]
 }
