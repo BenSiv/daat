@@ -69,6 +69,15 @@ Each step is one generation call plus one check call. With the use gate, the fir
 3. **Synthesize (tier 2):** references per tag, updated in place.
 4. **Distill (tier 3):** records from references, deduplicated by embedding against existing records; legacy facts absorbed.
 
+Status:
+- **Phase 1** is done (2026-10-28): `knowledge.can_hold_tier`, the judge sees title and kind, and store migration 7 reset every tier.
+- **Phase 2's curate step** is built (`src/curate.lua`):
+  - Review queues a source once it's due (`knowledge_curation`, one row per source and content version).
+  - The jobs worker runs `daat knowledge curate-pending 3` every 2 minutes (software `startup-platform.sh.tpl`).
+  - `daat repair curate [--limit N] [--dry-run]` backfills the sources already in use, most used first.
+  - A note that passes the check is created at tier 1 with a `Source: [[...]]` link. A source edited later gets its note rewritten in place.
+  - Moving the rest of review out of the search request is still to do.
+
 Each phase comes with scorecard scenarios (a chat transcript never rises; a curated note cites its source; a reference covers its notes) and a check on production: `daat knowledge stats` by tier and type, before and after.
 
 ## Decisions (2026-10-28)

@@ -94,11 +94,25 @@ CREATE TABLE IF NOT EXISTS document_tier_judgment (
     evaluated_at TEXT DEFAULT (%s)
 );
 
+-- The curate step's queue and outcomes, one row per source (src/curate.lua,
+-- doc/tier-curation-ladder.md): the content hash it last saw, and how
+-- that went -- pending, curated (note_id is the tier-1 note), nothing,
+-- rejected (reason from the check), failed.
+CREATE TABLE IF NOT EXISTS knowledge_curation (
+    document_id INTEGER PRIMARY KEY,
+    source_hash VARCHAR(64) NOT NULL,
+    status VARCHAR(32) NOT NULL,
+    note_id INTEGER,
+    reason TEXT,
+    queued_at TEXT DEFAULT (%s)
+);
+
 """
 
 function knowledge_schema_sql(db_path)
     return string.format(KNOWLEDGE_SCHEMA,
         db.autoincrement_keyword(db_path), db.now_expr(db_path),
+        db.now_expr(db_path),
         db.now_expr(db_path),
         db.now_expr(db_path)
     )
@@ -440,6 +454,9 @@ function knowledge.review_retrieval(db_path, retrieval_id, author)
             if knowledge.due_for_review(tonumber(doc.retrieval_count), doc.effective_heat) then
                 if not knowledge.can_hold_tier(doc.source_type) then
                     target_tier = 0
+                    -- A source in use is curated into a tier-1 note by the
+                    -- jobs worker, not here (src/curate.lua).
+                    require("curate").queue(db_path, doc)
                 elseif is_duplicate then
                     target_tier = tonumber(doc.tier)
                 elseif document.processing_maturity(db_path, doc.id, body, doc.source_type).revised != true then
@@ -1814,6 +1831,15 @@ function knowledge.do_knowledge(cmd_args, db_path)
         return
     end
 
+    -- The curate step's queue (src/curate.lua), run by the jobs worker.
+    if action == "curate-pending" then
+        limit = tonumber(cmd_args[2])
+        for _, line in ipairs(require("curate").run_pending(db_path, limit, "system")) do
+            print(line)
+        end
+        return
+    end
+
     if action == "promote" then
         document_id = tonumber(cmd_args[2])
         tier = tonumber(cmd_args[3])
@@ -1892,7 +1918,7 @@ function knowledge.do_knowledge(cmd_args, db_path)
         return
     end
 
-    print("Usage: daat knowledge <stats|list [tier]|show <document_id>|promote <document_id> <tier>|link-score <id> <id>|distill>")
+    print("Usage: daat knowledge <stats|list [tier]|show <document_id>|promote <document_id> <tier>|curate-pending [N]|link-score <id> <id>|distill>")
 end
 
 return knowledge
