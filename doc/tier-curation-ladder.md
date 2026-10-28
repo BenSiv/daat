@@ -77,6 +77,7 @@ Status:
   - `daat repair curate [--limit N] [--dry-run] [--recheck]` backfills the sources already in use, most used first. `--recheck` tries again the sources that came to nothing, were rejected or failed (after a prompt change).
   - The agent first judges whether the source is in the team's field (published papers, books and reviews on its subjects count) and answers `NOTHING: <reason>` when it isn't.
   - A source longer than 40,000 characters is cut, with a line saying so; the check sees the same cut text.
+  - A runner claims a queued source (pending -> running, with its own token) before curating it, so a `repair curate` batch and the jobs worker never curate the same source twice. A row left running by a process that died is retried by `--recheck`.
   - A note that passes the check is created at tier 1 with a `Source: [[...]]` link. A source edited later gets its note rewritten in place.
   - Moving the rest of review out of the search request is still to do.
 
