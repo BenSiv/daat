@@ -896,4 +896,8 @@ function tag_build.run(db_path, opts)
     end
 end
 
+-- For tag_broader.lua, which groups tags the same way.
+tag_build.average_linkage = build_average_linkage
+tag_build.cut = build_cut
+
 return tag_build

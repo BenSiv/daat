@@ -65,7 +65,9 @@ DOCUMENT_SCHEMA = {
 -- by a clustering job that writes these through the API, with manual
 -- overrides that a recompute never touches. Ordinary entity types, so
 -- they're browsable, editable and ledgered like any other.
---   tag.source: "computed" (the job's) or "manual" (a person's).
+--   tag.source: "computed" (the job's), "manual" (a person's) or
+--   "broader" (tag_broader.lua's: a group of tags, the parent level; it
+--   holds no documents of its own).
 --   document_tag.decision: "computed" (the job replaces it freely),
 --   "pinned" (a person put the document in the tag; never removed by
 --   the job) or "excluded" (a person took it out; never re-added, and
@@ -80,7 +82,7 @@ TAG_SCHEMA = {
         -- how it differs from the tags beside it.
         {name = "description", type = "text", required = false},
         {name = "terms", type = "text", required = false},
-        {name = "source", type = "select", required = true, values = {"computed", "manual"}},
+        {name = "source", type = "select", required = true, values = {"computed", "manual", "broader"}},
         {name = "computed_at", type = "text", required = false},
         -- Optional broader tag this one sits under (one level: broad >
         -- specific). Documents carry the specific tag; the broad one

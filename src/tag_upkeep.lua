@@ -854,7 +854,9 @@ end
 -- (a person asked for it); the merged tag's baselines start over.
 function tag_upkeep.do_tag(cmd_args, db_path)
     usage = "Usage: daat tag merge <into_id> <from_id>... [--label <label>] [--description <text>]\n" ..
-        "       daat tag build [--dry-run [--name]] [--replace] [--max-tags N] [--coarseness C]"
+        "       daat tag build [--dry-run [--name]] [--replace] [--max-tags N] [--coarseness C]\n" ..
+        "       daat tag broaden [--dry-run] [--replace]\n" ..
+        "       daat tag define [--dry-run] [--limit N]"
     if cmd_args[1] == "build" then
         flags = {}
         max_tags = nil
@@ -871,6 +873,30 @@ function tag_upkeep.do_tag(cmd_args, db_path)
         -- Required here, not at the top: tag_build.lua requires this file.
         require("tag_build").run(db_path, {dry_run = flags["--dry-run"] == true, name = flags["--name"] == true,
             replace = flags["--replace"] == true, max_tags = max_tags, coarseness = coarseness})
+        return
+    end
+    if cmd_args[1] == "define" then
+        dry_run, limit = false, nil
+        for i = 2, #cmd_args do
+            if cmd_args[i] == "--dry-run" then
+                dry_run = true
+            elseif cmd_args[i] == "--limit" then
+                limit = tonumber(cmd_args[i + 1])
+            end
+        end
+        for _, line in ipairs(require("tag_define").repair(db_path, limit, dry_run, "system")) do
+            print(line)
+        end
+        return
+    end
+    if cmd_args[1] == "broaden" then
+        flags = {}
+        for i = 2, #cmd_args do
+            flags[cmd_args[i]] = true
+        end
+        for _, line in ipairs(require("tag_broader").run(db_path, {dry_run = flags["--dry-run"] == true, replace = flags["--replace"] == true})) do
+            print(line)
+        end
         return
     end
     if cmd_args[1] != "merge" then
@@ -926,6 +952,7 @@ end
 -- For tag_build.lua, which names the tags it builds the same way.
 tag_upkeep.context = upkeep_context
 tag_upkeep.titles = upkeep_titles
+tag_upkeep.members = upkeep_members
 tag_upkeep.label_taken = upkeep_label_taken
 
 return tag_upkeep
