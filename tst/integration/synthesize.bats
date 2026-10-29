@@ -27,7 +27,9 @@ new_tag() {
 # A tier-1 curated note in a tag.
 note_in() {
     local tag="$1" title="$2"
-    "$BIN" entity create document title="$title" content="$title: medium B gave 12 g/L dry weight." >/dev/null
+    "$BIN" entity create document title="$title" content="$title: medium B gave 12 g/L dry weight.
+
+Source: [[Raw $title]]" >/dev/null
     local id
     id=$(db "SELECT id FROM document WHERE title = '$title';")
     db "UPDATE document SET source_type = 'curated', tier = 1 WHERE id = $id;"
@@ -141,4 +143,20 @@ THEME
     [ "$output" = "running|other-runner" ]
     run db "SELECT COUNT(*) FROM document WHERE source_type = 'reference';"
     [ "$output" -eq 0 ]
+}
+
+@test "the writer reads each note without its source line, and is told to leave out a few off-subject notes rather than give up" {
+    t=$(new_tag "Medium B")
+    for n in A B C; do note_in "$t" "Run $n" >/dev/null; done
+    export AGENT_TEST_CAPTURE_SYSTEM_PROMPT="$TEST_DIR/system.txt"
+    export AGENT_TEST_CAPTURE_PROMPT="$TEST_DIR/prompt.txt"
+    export AGENT_TEST_GENERATE_RESPONSES="NOTHING: off-field"
+
+    "$BIN" repair synthesize >/dev/null
+    run cat "$TEST_DIR/prompt.txt"
+    [[ "$output" =~ "Run A: medium B gave 12 g/L dry weight." ]]
+    [[ ! "$output" =~ "Raw Run A" ]]
+    run cat "$TEST_DIR/system.txt"
+    [[ "$output" =~ "Left out: [[Note title]]" ]]
+    unset AGENT_TEST_CAPTURE_SYSTEM_PROMPT AGENT_TEST_CAPTURE_PROMPT
 }

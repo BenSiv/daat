@@ -34,7 +34,7 @@ Start with one line "# <title>" naming the subject. Then a short overview, then 
 Merge what the notes say about the same thing. State numbers, conditions and results exactly as the notes give them. Where notes disagree, say so and cite both.
 After every statement, cite the note it comes from as [[Note title]], with the title exactly as given. Say nothing the notes don't say.
 At most 900 words.
-If the notes don't share one subject, reply with one line: "NOTHING: <the reason, in a few words>".
+A tag can hold a few notes off its subject. Write about the subject most of the notes share, leave the others out, and end with one line "Left out: [[Note title]], ..." naming them. Only if most of the notes share no subject, reply with one line: "NOTHING: <the reason, in a few words>".
 """
 
 SYNTHESIZE_RELEVANCE_RULE = """
@@ -42,7 +42,7 @@ Judge relevance by the team's field and subject matter: published papers, books,
 """
 
 SYNTHESIZE_CHECK_SYSTEM_PROMPT = """
-You check a reference against the notes it was written from. Reply PASS if every statement in it is supported by the note it cites, it adds nothing the notes don't say, and it doesn't drop any note's main point without saying so. Otherwise reply FAIL: followed by one short reason. Reply with nothing else.
+You check a reference against the notes it was written from. Reply PASS if every statement in it is supported by the note it cites, it adds nothing the notes don't say, and it doesn't drop any note's main point without saying so (a note named in its "Left out:" line is dropped on purpose). Otherwise reply FAIL: followed by one short reason. Reply with nothing else.
 """
 
 function synthesize.system_prompt()
@@ -150,6 +150,14 @@ function synthesize_title(text)
     return title, body
 end
 
+-- A note as the writer reads it: without its "Source: [[...]]" line, so
+-- the reference cites the note, not the raw source behind it (found on
+-- prod 2026-10-29: the first reference cited source titles).
+function synthesize_note_text(content)
+    text = string.gsub(tostring(content), "\n*Source: [^\n]*%s*$", "")
+    return text
+end
+
 -- Writes one tag's reference now. Returns the status written:
 -- "referenced", "nothing", "rejected", "failed" or "skipped" (the tag is
 -- gone or has too few notes), and the reference's id when one was written.
@@ -180,7 +188,7 @@ function synthesize.run(db_path, tag_id, author)
             break
         end
         table.insert(used, note)
-        table.insert(parts, "### Note: " .. tostring(note.title) .. "\n" .. tostring(note.content))
+        table.insert(parts, "### Note: " .. tostring(note.title) .. "\n" .. synthesize_note_text(note.content))
     end
     input = table.concat(parts, "\n\n")
 
