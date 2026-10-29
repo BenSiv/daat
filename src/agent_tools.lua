@@ -1840,6 +1840,11 @@ ROLE_LABELS = {user = "User", assistant = "Assistant", tool_result = "Tool resul
 -- display_content cleanup (strips the [Current user:...]/[Current
 -- page:...] annotations, renders a tool call as "-> tool.method(...)")
 -- rather than a second rendering path.
+--
+-- [[...]] in the conversation is escaped (\[\[...\]\]): it still reads as
+-- written, but the transcript makes no links. Otherwise every title the
+-- agent or the person typed -- even "use [[title]] links" -- became a
+-- link from the chat, and a chat turned into a hub in the graph.
 function build_session_transcript(messages)
     lines = {}
     for _, msg in ipairs(messages) do
@@ -1847,7 +1852,9 @@ function build_session_transcript(messages)
         if label == nil then
             label = msg.role
         end
-        table.insert(lines, label .. ": " .. tostring(msg.content))
+        text = string.gsub(tostring(msg.content), "%[%[", "\\[\\[")
+        text = string.gsub(text, "%]%]", "\\]\\]")
+        table.insert(lines, label .. ": " .. text)
     end
     return table.concat(lines, "\n\n")
 end

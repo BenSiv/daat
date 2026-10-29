@@ -67,6 +67,21 @@ search_for_bioreactor_extra() {
     sqlite3 .store/store.db "UPDATE document SET archived_at = '2026-01-01 00:00:00' WHERE source_type = 'chat_session';"
 }
 
+@test "a chat transcript shows [[titles]] as written but makes no links" {
+    # Found on daat-test: every [[title]] the agent or the person typed
+    # became a link from the chat's transcript -- even "use [[title]]
+    # links" -- so a chat turned into a hub in the knowledge graph.
+    "$BIN" entity create document title="Bioreactor SOP" content="How to run the bioreactor."
+    resp=$(start_chat)
+    session_id=$(extract_query_param "$resp" "session_id")
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"use [[title]] links\"}" "$COOKIE" "$CSRF" "$(done_response "See [[Bioreactor SOP]].")" >/dev/null
+    transcript=$(sqlite3 .store/store.db "SELECT id FROM document WHERE source_type = 'chat_session';")
+    [ -n "$transcript" ]
+    [ "$(sqlite3 .store/store.db "SELECT COUNT(*) FROM document_link WHERE from_document_id = ${transcript};")" = "0" ]
+    run "$BIN" entity show document "$transcript"
+    [[ "$output" =~ 'See \[\[Bioreactor SOP\]\]' ]]
+}
+
 @test "daat knowledge stats shows all zeros on a fresh store" {
     run "$BIN" knowledge stats
     [[ "$output" =~ "tier0=0 tier1=0 tier2=0 tier3=0" ]]
