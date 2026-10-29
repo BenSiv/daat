@@ -310,11 +310,12 @@ agent_tools.AGENT_TOOLS = {
     stats = {
         fit = {
             destructive = false,
-            description = "Fit a line or an exponential to two numeric columns of a read-only SQL query (same rules as entity.query) and get the fitted rate with how well it fits. Use it for any growth rate, doubling time, decay or trend over a time series instead of picking two points yourself. model \"exponential\" fits ln(y) against x and reports the growth rate and doubling time; without x_min/x_max it finds the exponential phase from the data and leaves out a lag or plateau, and says which points it used. model \"linear\" fits y against x. Fit each series (e.g. each replicate) separately.",
+            description = "Fit a line or an exponential to two numeric columns of a read-only SQL query (same rules as entity.query) and get the fitted rate with how well it fits. Use it for any growth rate, doubling time, decay or trend over a time series instead of picking two points yourself. model \"exponential\" fits ln(y) against x and reports the growth rate and doubling time; without x_min/x_max it finds the exponential phase from the data and leaves out a lag or plateau, and says which points it used. model \"linear\" fits y against x. Each series is fitted separately: for one value per experiment, sample or replicate, return all of them in one query with a group_column and get one fit per group plus their mean in a single call.",
             parameters = {
                 type = "object",
                 properties = {
-                    sql = {type = "string", description = "a single SELECT returning the x_column and y_column for ONE series"},
+                    sql = {type = "string", description = "a single SELECT returning the x_column and y_column -- for one series, or for many with a group_column"},
+                    group_column = {type = "string", description = "optional: result column naming each series (e.g. lab_number); fits each group separately"},
                     x_column = {type = "string", description = "result column for x (e.g. time) -- numeric"},
                     y_column = {type = "string", description = "result column for y -- numeric, above 0 for an exponential fit"},
                     model = {type = "string", description = "\"exponential\" or \"linear\""},
@@ -767,6 +768,95 @@ function numeric_series(db_path, args, purpose)
     return {x = x_values, y = y_values, rows = rows, truncated = truncated, total_count = total_count}
 end
 
+-- One series' fit for stats.fit: {rate, intercept, r2, n, x_from,
+-- x_to, phase}, or nil and why. x_min/x_max limit the points used.
+function fit_series(args, xs, ys)
+    if args.model == "exponential" then
+        return stats.exponential_fit(xs, ys, {x_min = tonumber(args.x_min), x_max = tonumber(args.x_max)})
+    end
+    fx, fy = {}, {}
+    for i, x in ipairs(xs) do
+        inside = true
+        if tonumber(args.x_min) != nil and x < tonumber(args.x_min) then
+            inside = false
+        end
+        if tonumber(args.x_max) != nil and x > tonumber(args.x_max) then
+            inside = false
+        end
+        if inside == true then
+            table.insert(fx, x)
+            table.insert(fy, ys[i])
+        end
+    end
+    slope, intercept, r2 = stats.linear_fit(fx, fy)
+    if slope == nil then
+        return nil, intercept
+    end
+    table.sort(fx)
+    return {rate = slope, intercept = intercept, r2 = r2, n = #fx, x_from = fx[1], x_to = fx[#fx], phase = "all"}
+end
+
+-- stats.fit with group_column: one fit per value of that column (e.g.
+-- per experiment or sample), in the order the query returns them, one
+-- line each, then the mean over the groups that fit. A value per group
+-- in one call -- fitting each separately took one call per series and
+-- ran a per-medium question out of turns (eval mean-per-medium).
+function fit_groups(args, series)
+    order = {}
+    groups = {}
+    for i, row in ipairs(series.rows) do
+        key = row[args.group_column]
+        if key == nil then
+            return nil, "query result has no column named \"" .. tostring(args.group_column) .. "\" for group_column"
+        end
+        key = tostring(key)
+        if groups[key] == nil then
+            groups[key] = {x = {}, y = {}}
+            table.insert(order, key)
+        end
+        table.insert(groups[key].x, series.x[i])
+        table.insert(groups[key].y, series.y[i])
+    end
+    lines = {}
+    values = {}
+    measure = "slope"
+    if args.model == "exponential" then
+        measure = "doubling time"
+    end
+    for _, key in ipairs(order) do
+        g = groups[key]
+        fit, fit_err = fit_series(args, g.x, g.y)
+        if fit == nil then
+            table.insert(lines, string.format("%s: cannot fit (%s)", key, tostring(fit_err)))
+        else
+            value = fit.rate
+            if args.model == "exponential" then
+                value = nil
+                if fit.rate > 0 then
+                    value = math.log(2) / fit.rate
+                end
+            end
+            if value == nil then
+                table.insert(lines, string.format("%s: not growing (rate %.6g); fitted %d of %d points, r^2 = %.4f",
+                    key, fit.rate, fit.n, #g.x, fit.r2))
+            else
+                table.insert(values, value)
+                table.insert(lines, string.format("%s: %s %.4g (in %s); fitted %d of %d points, %s %.6g to %.6g, r^2 = %.4f",
+                    key, measure, value, args.x_column, fit.n, #g.x, args.x_column, fit.x_from, fit.x_to, fit.r2))
+            end
+        end
+    end
+    if #values > 0 then
+        total = 0
+        for _, v in ipairs(values) do
+            total = total + v
+        end
+        table.insert(lines, string.format("mean %s over %d of %d %s groups: %.4g", measure, #values, #order,
+            args.group_column, total / #values))
+    end
+    return table.concat(lines, "\n")
+end
+
 function agent_tools.execute_tool(db_path, author, session_id, tool_name, method_name, args)
     source = {notebook_entry_id = "agent-session:" .. tostring(session_id)}
 
@@ -1076,37 +1166,16 @@ function agent_tools.execute_tool(db_path, author, session_id, tool_name, method
             return nil, err
         end
         if series.truncated == true then
-            return nil, "the query hit the row cap -- narrow it to one series (e.g. one sample) before fitting"
+            return nil, "the query hit the row cap -- narrow it (fewer series, or only the columns needed) before fitting"
         end
-        fit, fit_err = nil, nil
-        if args.model == "exponential" then
-            fit, fit_err = stats.exponential_fit(series.x, series.y, {x_min = tonumber(args.x_min), x_max = tonumber(args.x_max)})
-        else
-            fx, fy = {}, {}
-            for i, x in ipairs(series.x) do
-                inside = true
-                if tonumber(args.x_min) != nil and x < tonumber(args.x_min) then
-                    inside = false
-                end
-                if tonumber(args.x_max) != nil and x > tonumber(args.x_max) then
-                    inside = false
-                end
-                if inside == true then
-                    table.insert(fx, x)
-                    table.insert(fy, series.y[i])
-                end
+        if args.group_column == nil or args.group_column == "" then
+            fit, fit_err = fit_series(args, series.x, series.y)
+            if fit == nil then
+                return nil, "cannot fit: " .. tostring(fit_err)
             end
-            slope, intercept, r2 = stats.linear_fit(fx, fy)
-            fit_err = intercept
-            if slope != nil then
-                table.sort(fx)
-                fit = {rate = slope, intercept = intercept, r2 = r2, n = #fx, x_from = fx[1], x_to = fx[#fx], phase = "all"}
-            end
+            return stats.describe(args.model, fit, args.x_column, args.y_column, #series.x)
         end
-        if fit == nil then
-            return nil, "cannot fit: " .. tostring(fit_err)
-        end
-        return stats.describe(args.model, fit, args.x_column, args.y_column, #series.x)
+        return fit_groups(args, series)
     end
 
     if tool_name == "plot" and method_name == "from_query" then
