@@ -411,6 +411,9 @@ function config.platform_config()
         -- The most tags `daat tag build` may cut the pool into
         -- (tag_build.lua's range; `--max-tags N` overrides it).
         tag_build_max = 60,
+        -- How strongly `daat tag build` leans to fewer tags (tag_build.lua:
+        -- a level scores life / tags^c); 0 takes the longest-lived level.
+        tag_build_coarseness = 0,
         -- How this deployment's people write its entity names, for
         -- references (reference.lua): {{lua_pattern, replacement}, ...}
         -- over lowercased text, e.g. {{"experiment%s*(%d)", "exp%1"}}
@@ -576,6 +579,9 @@ function config.platform_config()
     end
     if type(parsed.tag_min_text) == "number" and parsed.tag_min_text >= 0 then
         conf.tag_min_text = parsed.tag_min_text
+    end
+    if type(parsed.tag_build_coarseness) == "number" and parsed.tag_build_coarseness >= 0 then
+        conf.tag_build_coarseness = parsed.tag_build_coarseness
     end
     if type(parsed.tag_build_max) == "number" and parsed.tag_build_max >= 2 then
         conf.tag_build_max = parsed.tag_build_max

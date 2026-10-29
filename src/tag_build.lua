@@ -372,24 +372,51 @@ function build_max_tags()
     return BUILD_TAG_RANGE[2]
 end
 
+-- How strongly the build leans to fewer tags: a level is scored by its
+-- life / tags^c, so a level with more tags must live clearly longer to
+-- win. 0 is the longest-lived level as is. `--coarseness C`, else
+-- platform.lua's tag_build_coarseness (Ben, 2026-10-29: fewer tags, but
+-- left to the data rather than a fixed number).
+BUILD_COARSENESS = nil
+
+function build_coarseness()
+    if BUILD_COARSENESS != nil then
+        return BUILD_COARSENESS
+    end
+    configured = tonumber(config.platform_config().tag_build_coarseness)
+    if configured != nil then
+        return configured
+    end
+    return 0
+end
+
+-- -> the chosen tag count, its life, the range, and the levels in the
+-- range by score ({groups, life, score}), best first, for the report.
 function build_choose(merges, m, n)
     low = math.min(BUILD_TAG_RANGE[1], math.max(2, math.floor(n / BUILD_DOCS_PER_TAG)))
     high = math.min(build_max_tags(), m - 1)
     low = math.min(low, high)
-    best, best_life = nil, -1.0
+    c = build_coarseness()
+    best, best_life, best_score = nil, -1.0, -1.0
+    levels = {}
     for i = 1, #merges - 1 do
         groups = m - i
         life = merges[i + 1][3] - merges[i][3]
+        score = life / (groups ^ c)
         -- >=: merges run from many groups to few, so a tie goes to the
         -- coarser cut -- the simpler answer.
-        if groups >= low and groups <= high and life >= best_life then
-            best, best_life = groups, life
+        if groups >= low and groups <= high then
+            table.insert(levels, {groups = groups, life = life, score = score})
+            if score >= best_score then
+                best, best_life, best_score = groups, life, score
+            end
         end
     end
     if best == nil then
         best, best_life = math.max(1, math.min(high, m)), 0.0
     end
-    return best, best_life, low, high
+    table.sort(levels, function(a, b) return a.score > b.score end)
+    return best, best_life, low, high, levels
 end
 
 function build_centres(vectors, label_of, k)
@@ -582,9 +609,15 @@ function tag_build.plan(db_path, report)
         end
     end
     merges = build_average_linkage(distance, count)
-    groups, life, low, high = build_choose(merges, m, n)
+    groups, life, low, high, levels = build_choose(merges, m, n)
     group_of = build_cut(merges, m, groups)
-    report(string.format("cut: %d tags (level lives %.3f; range %d-%d)", groups, life, low, high))
+    report(string.format("cut: %d tags (level lives %.3f; range %d-%d; coarseness %g)", groups, life, low, high, build_coarseness()))
+    for i, level in ipairs(levels) do
+        if i > 5 then
+            break
+        end
+        report(string.format("  level %d tags: lives %.3f, score %.5f", level.groups, level.life, level.score))
+    end
 
     tags = build_assign(vectors, micro, group_of, groups)
     if #tags != groups then
@@ -790,9 +823,10 @@ function build_archive_computed(db_path, report)
     end
 end
 
--- `daat tag build [--dry-run [--name]] [--replace] [--max-tags N]`.
+-- `daat tag build [--dry-run [--name]] [--replace] [--max-tags N] [--coarseness C]`.
 function tag_build.run(db_path, opts)
     BUILD_MAX_TAGS = opts.max_tags
+    BUILD_COARSENESS = opts.coarseness
     function report(line)
         print(line)
         io.flush()
