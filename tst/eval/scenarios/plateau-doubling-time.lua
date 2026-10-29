@@ -20,6 +20,7 @@ return function(f, s)
         checks = {
             {kind = "answer", number = rep.doubling_time_hours, tolerance = 0.1},
             {kind = "shows_method"},
+            {kind = "no_latex"},
             {kind = "no_tool_names"},
             {kind = "finished"},
         },

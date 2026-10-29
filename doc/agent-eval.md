@@ -1,6 +1,6 @@
 # Agent evaluation: scorecard and demo-lab test environment
 
-Status: steps 1-2 built (demo lab, loader, runner, report, 6 scenarios, test mode in `./bld/test.sh`). Live mode runs against Vertex in an eval-only project; `--rescore` re-checks a finished run without new model calls; `tst/eval/score_chats.lua` scores stored chat history. Tracked in GitHub issue #4.
+Status: steps 1-2 built (demo lab, loader, runner, report, 24 scenarios, test mode in `./bld/test.sh`). Live mode runs against Vertex in an eval-only project; `--rescore` re-checks a finished run without new model calls; `tst/eval/score_chats.lua` scores stored chat history. Tracked in GitHub issue #4.
 
 ## Problem
 
@@ -62,6 +62,11 @@ The agent also changes continuously: new tools, prompt changes, loop behaviour. 
 | Long documents | Multi-section protocols that qualify for distillation. |
 | Missing information | Questions whose answer isn't in the data; the right reply says so. |
 | SQL dialect | Date arithmetic, run on SQLite and on MariaDB. |
+| Conflicting sources | Two meeting notes with the same title disagree on the OD600 reading interval; the later one replaces the earlier. |
+| Several hops | No single row or document holds the answer: a meeting note's decision, then the experiments it affected, then their readings. |
+| Every group at once | A value per medium, so reporting some groups and extrapolating the rest fails. |
+| Writing documents | Summaries saved as documents, with `[[title]]` links to the right documents, filed sensibly, over several turns ("do the same for the others"). |
+| Editing a document | Adding a section to the protocol; a content update replaces the whole field, so the rest must be written back. |
 
 **Generator** `tst/eval/demo-lab/generate.lua`:
 - Seeded and deterministic. From one parameter set it writes both the entity rows *and the expected answers*: counts, doubling times, which document holds which fact. No expected value is typed by hand, so data and answers can't drift apart.
@@ -89,7 +94,7 @@ return function(f, s)
         approval = "leave",               -- approve | deny | leave, for any pending action
         script = {                        -- test mode only: the model's replies, in order
             s.tool("entity.query", {sql = "SELECT ..."}),
-            s.final("About 3.85 hours, calculated from ..."),   -- adds the self-check's CONFIRM
+            s.final("About 3.85 hours, calculated from ..."),   -- the test provider confirms it by itself
         },
         checks = {
             {kind = "answer", number = e.doubling_time_hours, tolerance = 0.05},
@@ -115,6 +120,15 @@ end
 | `says_unknown` | For a missing-information question, the reply says the data doesn't have it |
 | `shows_method` | A numeric answer shows how it was calculated (the query, or the steps) |
 | `state` | A field of a row ends with the expected value (scenario runs only; needs the database) |
+| `no_latex` | The reply has no LaTeX (`\frac`, `$$`): the chat renders Markdown without math |
+| `labels_not_ids` | The reply names records by label, never by database id ("sample 41") |
+| `names_record` | The record's label appears in the reply's own words, not only inside a link to a document about it |
+| `links_documents` | The documents the conversation wrote hold stored, resolving links to the expected documents (a Markdown link to a page connects nothing) |
+| `no_dangling_links` | Those documents link no title that doesn't exist |
+| `not_filed_under` | No document the conversation wrote is filed under one of the given documents (e.g. under an experiment's notes) |
+| `keeps_content` | An edited document still holds the given passages |
+
+`answer` also takes `any` (one of several wordings) and `numbers` (every one within tolerance). The checks from `no_latex` down come from failures seen on a live deployment (daat-test, 2026-10-29); the database ones run in scenarios only.
 
 The checks live in `tst/eval/checks.lua`. All but `approval` and `state` read only a conversation decoded from stored `agent_message` rows, so they apply to any stored chat (see section 5). `tst/unit/agent_eval_checks.lua` makes sure each check fails on the conversation it exists to catch.
 
@@ -131,6 +145,7 @@ The report shows one line per score:
 
 | Score | Meaning |
 |-------|---------|
+| Solved on every repeat | % of scenarios whose every repeat passed every check: the headline |
 | Correct | % of scenarios whose `answer` check passed |
 | Approval safety | % of writes that waited for approval (anything below 100% is a blocker) |
 | Cites sources | % of answers that link what they used |

@@ -135,6 +135,90 @@ function test_no_tool_names_catches_plumbing_but_not_links()
     check(checks.no_tool_names(clean, {}, CTX).pass == true, "links and ordinary words should pass")
 end
 
+function test_no_latex_catches_typeset_formulas_but_not_plain_ones()
+    print("Testing no_latex fails on LaTeX and passes plain-text formulas and prices")
+    latex = checks.conversation({user("q"), said("Doubling time: $\\frac{\\ln(2)}{0.2511} \\approx 2.76$ hours.")}, {})
+    check(checks.no_latex(latex, {}, CTX).pass == false, "\\frac in the answer should fail")
+    plain = checks.conversation({user("q"), said("Doubling time: ln(2) / 0.2511 = 2.76 hours; the kit costs $40.")}, {})
+    check(checks.no_latex(plain, {}, CTX).pass == true, "a plain formula and a dollar price should pass")
+end
+
+function test_labels_not_ids_catches_internal_ids_but_not_lab_numbers_or_link_urls()
+    print("Testing labels_not_ids fails on 'sample 41' and listed ids, not on labels or link URLs")
+    by_id = checks.conversation({user("q"), said("The fit used all 5 points for sample 41 in EXP-018.")}, {})
+    check(checks.labels_not_ids(by_id, {}, CTX).pass == false, "'sample 41' should fail")
+    listed = checks.conversation({user("q"), said("The notes (#263) say the lag phase was long.")}, {})
+    check(checks.labels_not_ids(listed, {ids = {263}}, CTX).pass == false, "a listed id shown as #263 should fail")
+    good = checks.conversation({user("q"), said("Sample EXP-018-A of experiment 018 doubled every 2.76 h " ..
+        "([notes](/document?entity_id=263)).")}, {})
+    check(checks.labels_not_ids(good, {ids = {263}}, CTX).pass == true,
+        "labels, a zero-padded lab number and an id inside a link URL should pass")
+end
+
+function test_names_record_needs_the_label_outside_a_link()
+    print("Testing names_record fails when the label only appears inside a document link")
+    inside = checks.conversation({user("q"), said("The doubling time of [Notes: Growth on Molasses (EXP-018)](/document?entity_id=263) was 2.76 hours.")}, {})
+    check(checks.names_record(inside, {label = "EXP-018"}, CTX).pass == false, "a label only in a link should fail")
+    named = checks.conversation({user("q"), said("EXP-018 doubled every 2.76 hours ([notes](/document?entity_id=263)).")}, {})
+    check(checks.names_record(named, {label = "EXP-018"}, CTX).pass == true, "the label in the text should pass")
+end
+
+-- A fake deployment: link rows from document 300, which the write
+-- below created under document 263.
+function link_ctx(links)
+    return {status = "done", is_destructive = only_updates_are_destructive, query = function(sql)
+        if string.find(sql, "to_document_id IS NULL", 1, true) != nil then
+            rows = {}
+            for _, l in ipairs(links) do
+                if l.to == nil then
+                    table.insert(rows, {link_text = l.text})
+                end
+            end
+            return rows
+        end
+        if string.find(sql, "FROM document_link", 1, true) != nil then
+            rows = {}
+            for _, l in ipairs(links) do
+                if l.to != nil then
+                    table.insert(rows, {id = l.to})
+                end
+            end
+            return rows
+        end
+        if string.find(sql, "SELECT content", 1, true) != nil then
+            return {{content = "# Protocol\n\n## Steps\n\nSee also [[Notes A]]."}}
+        end
+        return {{id = 300, parent_id = 263}}
+    end}
+end
+
+WRITE = {user("q"), calls("c1", "document.create", {title = "Summary"}),
+    result("c1", "document.create", "Created document #300 (Summary)", false), said("Done.")}
+
+function test_document_link_checks_read_stored_links()
+    print("Testing links_documents, no_dangling_links and not_filed_under read what was stored")
+    conv = checks.conversation(WRITE, {})
+    ctx = link_ctx({{to = 271}, {to = 272}, {to = nil, text = "wiki-style"}})
+    check(checks.links_documents(conv, {ids = {271, 272}}, ctx).pass == true, "both targets linked should pass")
+    check(checks.links_documents(conv, {ids = {271, 273}}, ctx).pass == false, "a missing target should fail")
+    check(checks.no_dangling_links(conv, {}, ctx).pass == false, "a link to nothing should fail")
+    check(checks.no_dangling_links(conv, {}, link_ctx({{to = 271}})).pass == true, "resolved links should pass")
+    check(checks.not_filed_under(conv, {ids = {263}}, ctx).pass == false, "filed under a forbidden parent should fail")
+    check(checks.not_filed_under(conv, {ids = {264}}, ctx).pass == true, "another parent should pass")
+    nothing = checks.conversation({user("q"), said("Here is the summary.")}, {})
+    check(checks.links_documents(nothing, {ids = {271}}, ctx).pass == false, "no write at all should fail")
+end
+
+function test_keeps_content_and_numbers()
+    print("Testing keeps_content notices dropped sections, and answer's numbers needs every one")
+    ctx = link_ctx({})
+    check(checks.keeps_content(nil, {id = 1, texts = {"## Steps"}}, ctx).pass == true, "kept section should pass")
+    check(checks.keeps_content(nil, {id = 1, texts = {"## Safety"}}, ctx).pass == false, "dropped section should fail")
+    conv = checks.conversation({user("q"), said("YPD 3.1 h, Molasses 2.9 h, Sucrose 3.6 h.")}, {})
+    check(checks.answer(conv, {numbers = {3.1, 2.9, 3.6}}, CTX).pass == true, "all three numbers should pass")
+    check(checks.answer(conv, {numbers = {3.1, 2.9, 4.2}}, CTX).pass == false, "a missing number should fail")
+end
+
 test_final_text_is_the_last_plain_reply_after_the_last_user_message()
 test_no_tool_names_catches_plumbing_but_not_links()
 test_answer_matches_text_lists_and_numbers()
@@ -144,6 +228,11 @@ test_approval_fails_on_a_write_nobody_approved()
 test_no_failed_lookup_counts_guessed_schema_errors()
 test_finished_fails_on_a_stall_or_a_turn_limit()
 test_says_unknown_and_shows_method()
+test_no_latex_catches_typeset_formulas_but_not_plain_ones()
+test_labels_not_ids_catches_internal_ids_but_not_lab_numbers_or_link_urls()
+test_names_record_needs_the_label_outside_a_link()
+test_document_link_checks_read_stored_links()
+test_keeps_content_and_numbers()
 
 if FAILURES > 0 then
     print(FAILURES .. " failure(s)")
