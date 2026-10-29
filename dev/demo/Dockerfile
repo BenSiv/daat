@@ -5,10 +5,10 @@
 #
 #   docker build -f dev/demo/Dockerfile .
 #
-# No deployment-specific content is baked in: platform.lua is written
-# onto the data disk by the VM's startup script (dev/demo/terraform),
-# and the store is seeded with the public demo lab (tst/eval/demo-lab,
-# doc/agent-eval.md) on first boot.
+# No deployment-specific content is baked in: the host writes
+# platform.lua into /data, and the store is seeded with the public demo
+# lab (tst/eval/demo-lab, doc/agent-eval.md) on first boot. See
+# dev/demo/README.md.
 
 FROM debian:12-slim AS luam-builder
 # luam's build_libs.sh fails when any of its C modules fails, so every

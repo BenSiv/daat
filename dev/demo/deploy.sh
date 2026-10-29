@@ -3,15 +3,14 @@ set -euo pipefail
 
 # Builds this checkout into the demo image (Cloud Build), pushes it as a
 # timestamped tag and :latest, then resets the demo VM so its startup
-# script pulls and runs the new image. The VM and everything around it
-# come from dev/demo/terraform; see dev/demo/README.md.
+# script pulls and runs the new image. The VM and the image repository
+# are the host's own; see dev/demo/README.md.
 #
 #   PROJECT_ID=<project> ./dev/demo/deploy.sh               # build, then roll out
 #   PROJECT_ID=<project> ./dev/demo/deploy.sh --build-only  # build and push only
 #
 # Env: PROJECT_ID (required), REGION (europe-west3), ZONE (<REGION>-b),
-# NAME (daat-demo) and ARTIFACT_REPO (daat) -- the last three must match
-# the Terraform variables of the same names.
+# NAME (daat-demo: the VM, and the image name) and ARTIFACT_REPO (daat).
 
 cd "$(dirname "$0")/../.."
 REPO_ROOT=$(pwd)
