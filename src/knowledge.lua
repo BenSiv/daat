@@ -107,11 +107,25 @@ CREATE TABLE IF NOT EXISTS knowledge_curation (
     queued_at TEXT DEFAULT (%s)
 );
 
+-- The synthesize step's queue and outcomes, one row per tag
+-- (src/synthesize.lua): the hash of the notes it last saw, and how that
+-- went -- pending, running, referenced (document_id is the tier-2
+-- reference), nothing, rejected, failed.
+CREATE TABLE IF NOT EXISTS knowledge_reference (
+    tag_id INTEGER PRIMARY KEY,
+    notes_hash VARCHAR(64) NOT NULL,
+    status VARCHAR(32) NOT NULL,
+    document_id INTEGER,
+    reason TEXT,
+    queued_at TEXT DEFAULT (%s)
+);
+
 """
 
 function knowledge_schema_sql(db_path)
     return string.format(KNOWLEDGE_SCHEMA,
         db.autoincrement_keyword(db_path), db.now_expr(db_path),
+        db.now_expr(db_path),
         db.now_expr(db_path),
         db.now_expr(db_path),
         db.now_expr(db_path)
@@ -457,13 +471,12 @@ function knowledge.review_retrieval(db_path, retrieval_id, author)
                     -- A source in use is curated into a tier-1 note by the
                     -- jobs worker, not here (src/curate.lua).
                     require("curate").queue(db_path, doc)
-                elseif is_duplicate then
-                    target_tier = tonumber(doc.tier)
-                elseif document.processing_maturity(db_path, doc.id, body, doc.source_type).revised != true then
-                    target_tier = 0
-                elseif knowledge.due_for_tier_judgment(knowledge.get_tier_review(db_path, doc.id), doc.content_hash) then
-                    target_tier = knowledge.judge_promotion_target(db_path, doc, tonumber(doc.tier), content_shape)
                 end
+                -- A document the curation wrote keeps the tier its step
+                -- gave it (curate: 1, synthesize: 2). Found 2026-10-29:
+                -- the old judge path here would have reset a fresh
+                -- tier-1 note to 0 on its second retrieval (never
+                -- "revised"), or moved a revised one to any tier.
             end
 
             db.exec(db_path, string.format(
