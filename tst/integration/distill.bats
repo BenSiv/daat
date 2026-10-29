@@ -152,3 +152,20 @@ CLAIM=$'CLAIM: Cocoa cells in medium B reach 12 g/L dry weight\nTEXT: Cocoa cell
     run db "SELECT merged_into FROM document WHERE id = $legacy;"
     [ "$output" = "$first" ]
 }
+
+@test "a record is embedded as it's written, so the next reference's dedup sees it before the quiet period ends" {
+    write_platform_config ", embedding_quiet_minutes = 10"
+    ref=$(reference)
+    export AGENT_TEST_GENERATE_RESPONSES="$CLAIM"$'\1'"1: PASS"
+    "$BIN" repair distill >/dev/null
+    record=$(db "SELECT id FROM document WHERE source_type = 'record';")
+    run db "SELECT COUNT(*) FROM document_embedding WHERE document_id = $record;"
+    [ "$output" -eq 1 ]
+
+    # A second reference with the same claim: the judge is asked, and the
+    # claim isn't written twice.
+    db "UPDATE document SET content = content || ' Rewritten.', content_hash = 'changed' WHERE id = $ref;"
+    export AGENT_TEST_GENERATE_RESPONSES="$CLAIM"$'\1'"SAME 1"
+    run "$BIN" repair distill
+    [[ "$output" =~ "0 new, 0 updated, 1 already there" ]]
+}
