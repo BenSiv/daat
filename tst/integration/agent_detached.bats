@@ -126,6 +126,11 @@ wait_idle() {
     [ "$(store "SELECT COUNT(*) FROM agent_message WHERE session_id = '${sid}' AND role = 'error';")" = "0" ]
     # Both attempts were real calls, so both are recorded for step 1.
     [ "$(store "SELECT COUNT(*) FROM agent_model_call WHERE session_id = '${sid}' AND kind = 'chat' AND step = 1;")" = "2" ]
+    # The retry says what went wrong (resending the same request failed
+    # the same way on daat-test); the stored history doesn't carry it.
+    [[ "$(store "SELECT prompt FROM agent_model_call WHERE session_id = '${sid}' AND kind = 'chat' AND step = 1 ORDER BY id DESC LIMIT 1;")" =~ "could not be parsed (MALFORMED_FUNCTION_CALL)" ]]
+    [[ ! "$(store "SELECT prompt FROM agent_model_call WHERE session_id = '${sid}' AND kind = 'chat' AND step = 1 ORDER BY id ASC LIMIT 1;")" =~ "could not be parsed" ]]
+    [ "$(store "SELECT COUNT(*) FROM agent_message WHERE session_id = '${sid}' AND content LIKE '%could not be parsed%';")" = "0" ]
 }
 
 @test "agent continue with no session id prints its usage" {
