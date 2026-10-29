@@ -64,13 +64,12 @@ function helpers.tool(name, arguments)
     })
 end
 
--- A final answer, followed by the self-check's CONFIRM: run_turn asks
--- the model to check every final answer before it goes out.
+-- A final answer. run_turn's self-check after it is a no-tools call,
+-- which the test provider answers with CONFIRM by itself without taking
+-- from the script (src/provider/agent_test.lua) -- a scripted CONFIRM
+-- here would be read as the next turn's first reply.
 function helpers.final(text)
-    return {
-        json.encode({content = {{type = "text", text = text}}, stopReason = "stop"}),
-        json.encode({content = {{type = "text", text = "CONFIRM"}}, stopReason = "stop"}),
-    }
+    return json.encode({content = {{type = "text", text = text}}, stopReason = "stop"})
 end
 
 function load_scenario(path)
