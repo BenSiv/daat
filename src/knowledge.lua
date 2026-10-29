@@ -123,6 +123,19 @@ CREATE TABLE IF NOT EXISTS knowledge_distillation (
     queued_at TEXT DEFAULT (%s)
 );
 
+-- Tag definitions as records (src/tag_define.lua), one row per tag:
+-- the hash of what the definition was written from (label, description,
+-- broader tag, siblings, central titles) and how that went -- defined
+-- (document_id is the record), rejected, failed.
+CREATE TABLE IF NOT EXISTS knowledge_tag_definition (
+    tag_id INTEGER PRIMARY KEY,
+    input_hash VARCHAR(64) NOT NULL,
+    status VARCHAR(32) NOT NULL,
+    document_id INTEGER,
+    reason TEXT,
+    defined_at TEXT DEFAULT (%s)
+);
+
 CREATE TABLE IF NOT EXISTS knowledge_reference (
     tag_id INTEGER PRIMARY KEY,
     notes_hash VARCHAR(64) NOT NULL,
@@ -137,6 +150,7 @@ CREATE TABLE IF NOT EXISTS knowledge_reference (
 function knowledge_schema_sql(db_path)
     return string.format(KNOWLEDGE_SCHEMA,
         db.autoincrement_keyword(db_path), db.now_expr(db_path),
+        db.now_expr(db_path),
         db.now_expr(db_path),
         db.now_expr(db_path),
         db.now_expr(db_path),
