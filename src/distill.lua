@@ -335,6 +335,7 @@ function distill.run(db_path, reference_id, author)
             return "failed", counts
         end
         passed = {}
+        absorbed = {}
         for n, rest in string.gmatch(verdicts, "(%d+)%s*:%s*(%u+)") do
             if rest == "PASS" then
                 passed[tonumber(n)] = true
@@ -359,13 +360,17 @@ function distill.run(db_path, reference_id, author)
                         knowledge.set_tier(db_path, record_id, 3)
                         counts.new = counts.new + 1
                         -- A legacy fact this record covers is absorbed.
-                        if w.match != nil and w.match.source_type == "distilled" then
+                        -- Once: a second candidate matching the same
+                        -- fact (prod 2026-10-29) leaves it where the
+                        -- first put it.
+                        if w.match != nil and w.match.source_type == "distilled" and absorbed[w.match.id] != true then
+                            absorbed[w.match.id] = true
                             archived_id = entity.archive(db_path, "document", w.match.id, author, nil, "covered by record #" .. tostring(record_id))
                             if archived_id != nil then
                                 document.on_entity_archived(db_path, "document", archived_id)
+                                db.exec(db_path, string.format("UPDATE document SET merged_into = %d WHERE id = %d;", record_id, w.match.id))
+                                counts.absorbed = counts.absorbed + 1
                             end
-                            db.exec(db_path, string.format("UPDATE document SET merged_into = %d WHERE id = %d;", record_id, w.match.id))
-                            counts.absorbed = counts.absorbed + 1
                         end
                     end
                 else

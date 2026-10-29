@@ -136,3 +136,19 @@ CLAIM=$'CLAIM: Cocoa cells in medium B reach 12 g/L dry weight\nTEXT: Cocoa cell
     run db "SELECT COUNT(*) FROM document_link WHERE from_document_id = $record AND archived_at IS NULL;"
     [ "$output" -eq 2 ]
 }
+
+@test "a legacy fact two new records both match is absorbed once, into the first" {
+    ref=$(reference)
+    legacy=$(existing distilled "Medium B 12 g/L" "Cocoa cells in medium B reached 12 g/L dry weight.")
+    second=$'CLAIM: Cocoa cells in medium B reach 12 g/L dry weight in culture\nTEXT: Cocoa cells in medium B reached 12 g/L dry weight in culture.\nNOTES: Run B'
+    # Extract; the first candidate's judge; the second's, which sees the
+    # first candidate nearest and the fact second, and names the fact;
+    # the check.
+    export AGENT_TEST_GENERATE_RESPONSES="$CLAIM"$'\n\n'"$second"$'\1'"SAME 1"$'\1'"SAME 2"$'\1'$'1: PASS\n2: PASS'
+
+    run "$BIN" repair distill
+    [[ "$output" =~ "1 legacy absorbed" ]]
+    first=$(db "SELECT id FROM document WHERE title = 'Cocoa cells in medium B reach 12 g/L dry weight';")
+    run db "SELECT merged_into FROM document WHERE id = $legacy;"
+    [ "$output" = "$first" ]
+}
