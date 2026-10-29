@@ -862,6 +862,17 @@ SCHEMA
     [[ "$output" =~ "R2: doubling time 4 (in hours)" ]]
     [[ "$output" =~ "R3: cannot fit" ]]
     [[ "$output" =~ "mean doubling time over 2 of 3 run groups: 3" ]]
+
+    # A table-qualified name ("r.run") finds the result column "run"; a
+    # name that isn't there lists the columns that are.
+    scripted="$(tool_call_response "stats.fit" '{"sql":"SELECT r.run, r.hours, r.od FROM reading r ORDER BY r.run, r.hours","x_column":"hours","y_column":"od","model":"exponential","group_column":"r.run"}')"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"again\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "R2: doubling time 4 (in hours)" ]]
+    scripted="$(tool_call_response "stats.fit" '{"sql":"SELECT run, hours, od FROM reading","x_column":"hours","y_column":"od","model":"exponential","group_column":"sample"}')"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"once more\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "actual columns: hours, od, run" ]]
 }
 
 @test "document.search gives each result a ready-made link to cite" {

@@ -802,14 +802,26 @@ end
 -- in one call -- fitting each separately took one call per series and
 -- ran a per-medium question out of turns (eval mean-per-medium).
 function fit_groups(args, series)
+    -- A result column is named without its table alias ("e.id" comes
+    -- back as "id"); take the name after the dot when that's what exists.
+    group_column = args.group_column
+    first = series.rows[1]
+    if first[group_column] == nil and string.find(group_column, ".", 1, true) != nil then
+        group_column = string.match(group_column, "%.([^%.]+)$")
+    end
+    if first[group_column] == nil then
+        names = {}
+        for name, _ in pairs(first) do
+            table.insert(names, tostring(name))
+        end
+        table.sort(names)
+        return nil, "query result has no column named \"" .. tostring(args.group_column) ..
+            "\" for group_column -- actual columns: " .. table.concat(names, ", ")
+    end
     order = {}
     groups = {}
     for i, row in ipairs(series.rows) do
-        key = row[args.group_column]
-        if key == nil then
-            return nil, "query result has no column named \"" .. tostring(args.group_column) .. "\" for group_column"
-        end
-        key = tostring(key)
+        key = tostring(row[group_column])
         if groups[key] == nil then
             groups[key] = {x = {}, y = {}}
             table.insert(order, key)
@@ -852,7 +864,7 @@ function fit_groups(args, series)
             total = total + v
         end
         table.insert(lines, string.format("mean %s over %d of %d %s groups: %.4g", measure, #values, #order,
-            args.group_column, total / #values))
+            group_column, total / #values))
     end
     return table.concat(lines, "\n")
 end
