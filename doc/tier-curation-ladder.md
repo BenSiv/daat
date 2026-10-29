@@ -88,6 +88,34 @@ Status:
   - A reference that passes is created at tier 2 (`source_type = 'reference'`, `source_ref = 'tag:<id>'`) and links every note it was made from; it is rewritten in place when the tag's notes change.
   - `daat repair synthesize [--limit N] [--dry-run] [--recheck]` runs it; a runner claims a tag before writing, as curate does. The jobs worker runs `daat knowledge synthesize-due 1` every 2 minutes: one tag whose notes changed, or that newly holds enough notes.
 
+## Tier 3 design (proposal, 2026-10-29)
+
+Where it starts: 16 tier-2 references in production, 147 tier-1 notes, and 132 legacy distilled facts (`source_type = 'distilled'`, about 300 characters each, 3 ever retrieved, some near-duplicates: #210426 and #204996 both say C.COT.M-1D is best for ICS 39 callus).
+
+**What a record is.** One claim a reader can use on its own: a finding with its numbers and conditions, a protocol parameter, a definition. Self-contained (it names the organism, line, medium or method it's about), 1-3 sentences, titled with the claim itself, not a topic. It cites the tier-1 note(s) it comes from and links to the reference it was distilled from.
+
+**The step (`src/distill.lua`, replacing the legacy distill path):**
+
+1. **Trigger.** A tier-2 reference that is new or was rewritten (`knowledge_distillation`, one row per reference with its content hash, like `knowledge_curation`). Run by `daat repair distill` and the jobs worker, after synthesize.
+2. **Extract.** One call reads the reference plus the notes it cites and lists up to 12 claims, the ones a team member would look up: results with numbers, conditions that worked or failed, definitions. Each with the note(s) it rests on.
+3. **Dedup by embedding.** Each candidate is embedded and compared with active records and legacy facts (cosine, the same vectors search uses):
+   - below 0.80: new;
+   - 0.80 and up: one judge call over the candidate and its nearest matches answers SAME (keep the existing record, add the new note as a source), UPDATE (the candidate is more complete or more exact: rewrite the existing record in place), or NEW.
+   A legacy fact matched SAME or UPDATE is archived with `merged_into` the record, so the legacy set shrinks as tier 3 grows.
+4. **Check.** One call checks every new or rewritten record against the note(s) it cites, as curate and synthesize do. A record that fails is dropped with its reason recorded; the others are kept.
+5. **Write.** `source_type = 'record'`, tier 3, `source_ref = 'reference:<id>'`, links to its notes and reference.
+
+**When a reference is rewritten,** its records are re-checked against the new text: still supported stays, no longer supported is archived, new claims go through dedup. Records are never duplicated across references: dedup sees all of them.
+
+**Cost.** Per reference: one extract, one check, one embedding per claim, and a judge call only for near matches. About 16 x 2-4 calls for the backfill.
+
+**Search.** Records are short and weighted highest (`TIER_WEIGHT` 0.35), so a precise question should hit a record first and follow its links down to the note and the source.
+
+**Decisions needed:**
+1. Records only from references, or also from tier-1 notes in tags without one (147 notes, 16 references today)? Proposed: references only at first; notes later if records stay thin.
+2. Legacy facts: archive them as records cover them (proposed), or leave them all as they are?
+3. Dedup threshold: start at 0.80 cosine with the agent judging every pair above it (proposed), measured on prod before trusting it.
+
 Each phase comes with scorecard scenarios (a chat transcript never rises; a curated note cites its source; a reference covers its notes) and a check on production: `daat knowledge stats` by tier and type, before and after.
 
 ## Decisions (2026-10-28)
