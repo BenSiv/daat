@@ -357,9 +357,25 @@ end
 -- merge i leaves m - i groups, living for h[i+1] - h[i]. The range's floor
 -- scales with the pool -- a tag per BUILD_DOCS_PER_TAG documents at least,
 -- up to BUILD_TAG_RANGE's -- so a small pool can have a few tags.
+-- The range's top: `--max-tags N`, else platform.lua's tag_build_max,
+-- else BUILD_TAG_RANGE's (Ben, 2026-10-29: 50 tags were too many).
+BUILD_MAX_TAGS = nil
+
+function build_max_tags()
+    if BUILD_MAX_TAGS != nil then
+        return BUILD_MAX_TAGS
+    end
+    configured = tonumber(config.platform_config().tag_build_max)
+    if configured != nil then
+        return configured
+    end
+    return BUILD_TAG_RANGE[2]
+end
+
 function build_choose(merges, m, n)
     low = math.min(BUILD_TAG_RANGE[1], math.max(2, math.floor(n / BUILD_DOCS_PER_TAG)))
-    high = math.min(BUILD_TAG_RANGE[2], m - 1)
+    high = math.min(build_max_tags(), m - 1)
+    low = math.min(low, high)
     best, best_life = nil, -1.0
     for i = 1, #merges - 1 do
         groups = m - i
@@ -774,8 +790,9 @@ function build_archive_computed(db_path, report)
     end
 end
 
--- `daat tag build [--dry-run [--name]] [--replace]`.
+-- `daat tag build [--dry-run [--name]] [--replace] [--max-tags N]`.
 function tag_build.run(db_path, opts)
+    BUILD_MAX_TAGS = opts.max_tags
     function report(line)
         print(line)
         io.flush()

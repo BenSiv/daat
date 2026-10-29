@@ -1644,6 +1644,43 @@ function build_history_messages(messages)
     return pair_tool_results(result)
 end
 
+MALFORMED_CALL_NOTE = "[Automated note, not the real user: your previous reply was a tool call that could not be parsed (MALFORMED_FUNCTION_CALL). Make the call again with valid arguments -- every string, including long markdown content, properly escaped.]"
+
+-- A copy of `history_messages` with MALFORMED_CALL_NOTE appended to its
+-- last message, for the one retry after a malformed tool call. Appended
+-- to that message rather than sent as a message of its own: the last
+-- one is usually a tool result, and Gemini needs a tool call's
+-- responses kept together in one turn. Never stored -- it exists only
+-- in that retry's request (and its audit row).
+function agent.with_malformed_call_note(history_messages)
+    result = {}
+    for i, msg in ipairs(history_messages) do
+        result[i] = msg
+    end
+    last = result[#result]
+    if last == nil then
+        return result
+    end
+    copy = {}
+    for key, value in pairs(last) do
+        copy[key] = value
+    end
+    if type(copy.content) == "string" then
+        copy.content = copy.content .. "\n\n" .. MALFORMED_CALL_NOTE
+    elseif type(copy.content) == "table" and copy.content[1] != nil and copy.content[1].text != nil then
+        -- Into the first text block itself, not a block of its own: a
+        -- tool result's providers read only content[1].text.
+        blocks = {}
+        for i, block in ipairs(copy.content) do
+            blocks[i] = block
+        end
+        blocks[1] = {type = "text", text = tostring(blocks[1].text) .. "\n\n" .. MALFORMED_CALL_NOTE}
+        copy.content = blocks
+    end
+    result[#result] = copy
+    return result
+end
+
 -- Every toolCall block in a reply, in the order the model proposed
 -- them -- Gemini/Vertex can and does emit more than one per turn, and
 -- every one needs to actually run to get a real result: multi-step
@@ -2396,16 +2433,20 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
 
             response, err, usage = agent_provider.converse(model, system_prompt, history_messages, agent.tool_declarations(db_path))
             -- Gemini sometimes emits a tool call it can't encode
-            -- (finishReason MALFORMED_FUNCTION_CALL); asking again usually
-            -- works, so the first one in a turn is retried before it's an
-            -- error.
+            -- (finishReason MALFORMED_FUNCTION_CALL), typically a write
+            -- with a long content argument. The first one in a turn is
+            -- retried before it's an error -- with a note saying what
+            -- went wrong: resending the identical request failed the
+            -- same way twice in a row on daat-test (2026-10-29).
             if response != nil and response.stopReason == "error" and malformed_retried == false
                     and string.find(tostring(response.errorMessage), "MALFORMED_FUNCTION_CALL", 1, true) != nil then
                 malformed_retried = true
                 -- The failed attempt was a real, billed call: record it
                 -- before its usage is replaced by the retry's.
                 agent.record_model_call(db_path, session_id, nil, audit_prompt, model, nil, usage, {kind = "chat", number = step_number})
-                response, err, usage = agent_provider.converse(model, system_prompt, history_messages, agent.tool_declarations(db_path))
+                retry_messages = agent.with_malformed_call_note(history_messages)
+                audit_prompt = json.encode(retry_messages)
+                response, err, usage = agent_provider.converse(model, system_prompt, retry_messages, agent.tool_declarations(db_path))
             end
             if response == nil then
                 -- Persisted, not just returned -- so a provider failure is

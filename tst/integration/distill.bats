@@ -136,3 +136,36 @@ CLAIM=$'CLAIM: Cocoa cells in medium B reach 12 g/L dry weight\nTEXT: Cocoa cell
     run db "SELECT COUNT(*) FROM document_link WHERE from_document_id = $record AND archived_at IS NULL;"
     [ "$output" -eq 2 ]
 }
+
+@test "a legacy fact two new records both match is absorbed once, into the first" {
+    ref=$(reference)
+    legacy=$(existing distilled "Medium B 12 g/L" "Cocoa cells in medium B reached 12 g/L dry weight.")
+    second=$'CLAIM: Cocoa cells in medium B reach 12 g/L dry weight in culture\nTEXT: Cocoa cells in medium B reached 12 g/L dry weight in culture.\nNOTES: Run B'
+    # Extract; the first candidate's judge; the second's, which sees the
+    # first candidate nearest and the fact second, and names the fact;
+    # the check.
+    export AGENT_TEST_GENERATE_RESPONSES="$CLAIM"$'\n\n'"$second"$'\1'"SAME 1"$'\1'"SAME 2"$'\1'$'1: PASS\n2: PASS'
+
+    run "$BIN" repair distill
+    [[ "$output" =~ "1 legacy absorbed" ]]
+    first=$(db "SELECT id FROM document WHERE title = 'Cocoa cells in medium B reach 12 g/L dry weight';")
+    run db "SELECT merged_into FROM document WHERE id = $legacy;"
+    [ "$output" = "$first" ]
+}
+
+@test "a record is embedded as it's written, so the next reference's dedup sees it before the quiet period ends" {
+    write_platform_config ", embedding_quiet_minutes = 10"
+    ref=$(reference)
+    export AGENT_TEST_GENERATE_RESPONSES="$CLAIM"$'\1'"1: PASS"
+    "$BIN" repair distill >/dev/null
+    record=$(db "SELECT id FROM document WHERE source_type = 'record';")
+    run db "SELECT COUNT(*) FROM document_embedding WHERE document_id = $record;"
+    [ "$output" -eq 1 ]
+
+    # A second reference with the same claim: the judge is asked, and the
+    # claim isn't written twice.
+    db "UPDATE document SET content = content || ' Rewritten.', content_hash = 'changed' WHERE id = $ref;"
+    export AGENT_TEST_GENERATE_RESPONSES="$CLAIM"$'\1'"SAME 1"
+    run "$BIN" repair distill
+    [[ "$output" =~ "0 new, 0 updated, 1 already there" ]]
+}
