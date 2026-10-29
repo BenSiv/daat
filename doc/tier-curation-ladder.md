@@ -86,7 +86,7 @@ Status:
   - The agent writes one structured reference from up to 12 of the tag's notes, most central first: sections by theme, duplicates merged, disagreements stated, every statement cited `[[Note title]]`. A few notes off the tag's subject are left out and named in a closing `Left out:` line; it answers `NOTHING: <reason>` only when most notes share no subject, or the subject is outside the team's field (2026-10-29: one coffee note had sunk a tag of nine cocoa fermentation notes). It reads each note without its `Source:` line, so the reference cites notes, not the raw sources behind them.
   - A second call checks every statement against the note it cites, and that no note's main point was dropped silently.
   - A reference that passes is created at tier 2 (`source_type = 'reference'`, `source_ref = 'tag:<id>'`) and links every note it was made from; it is rewritten in place when the tag's notes change.
-  - `daat repair synthesize [--limit N] [--dry-run] [--recheck]` runs it; a runner claims a tag before writing, as curate does. The jobs worker doesn't run it yet.
+  - `daat repair synthesize [--limit N] [--dry-run] [--recheck]` runs it; a runner claims a tag before writing, as curate does. The jobs worker runs `daat knowledge synthesize-due 1` every 2 minutes: one tag whose notes changed, or that newly holds enough notes.
 
 Each phase comes with scorecard scenarios (a chat transcript never rises; a curated note cites its source; a reference covers its notes) and a check on production: `daat knowledge stats` by tier and type, before and after.
 
