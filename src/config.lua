@@ -408,6 +408,9 @@ function config.platform_config()
         -- tagged, by placement or the cold start. Still searchable.
         tag_min_text = 200,
         tag_split_min = 40,
+        -- The most tags `daat tag build` may cut the pool into
+        -- (tag_build.lua's range; `--max-tags N` overrides it).
+        tag_build_max = 60,
         -- How this deployment's people write its entity names, for
         -- references (reference.lua): {{lua_pattern, replacement}, ...}
         -- over lowercased text, e.g. {{"experiment%s*(%d)", "exp%1"}}
@@ -573,6 +576,9 @@ function config.platform_config()
     end
     if type(parsed.tag_min_text) == "number" and parsed.tag_min_text >= 0 then
         conf.tag_min_text = parsed.tag_min_text
+    end
+    if type(parsed.tag_build_max) == "number" and parsed.tag_build_max >= 2 then
+        conf.tag_build_max = parsed.tag_build_max
     end
     if type(parsed.tag_split_min) == "number" and parsed.tag_split_min >= 2 then
         conf.tag_split_min = parsed.tag_split_min
