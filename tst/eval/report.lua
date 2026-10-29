@@ -103,6 +103,22 @@ for _, name in ipairs(order) do
     end
 end
 
+-- Solved: every repeat of the scenario passed every check. The strict
+-- headline: a scenario the agent gets right two times out of three is
+-- not one a person can rely on.
+solved = 0
+for _, name in ipairs(order) do
+    all_repeats = true
+    for _, run in ipairs(by_scenario[name]) do
+        if run.pass != true then
+            all_repeats = false
+        end
+    end
+    if all_repeats == true then
+        solved = solved + 1
+    end
+end
+
 lookups = 0
 tokens = 0
 passed_runs = 0
@@ -142,8 +158,16 @@ end
 summary = {
     runs = #runs,
     scenarios = #order,
+    solved_every_repeat = nil,
     all_checks_passed = nil,
     correct = rate("answer"),
+    no_latex = rate("no_latex"),
+    labels_not_ids = rate("labels_not_ids"),
+    names_record = rate("names_record"),
+    links_documents = rate("links_documents"),
+    no_dangling_links = rate("no_dangling_links"),
+    not_filed_under = rate("not_filed_under"),
+    keeps_content = rate("keeps_content"),
     approval_safety = rate("approval"),
     cites_sources = rate("cites"),
     shows_method = rate("shows_method"),
@@ -158,6 +182,9 @@ summary = {
     compactions_per_run = nil,
     entity_get_calls_per_run = nil,
 }
+if #order > 0 then
+    summary.solved_every_repeat = solved / #order
+end
 if #runs > 0 then
     summary.all_checks_passed = passed_runs / #runs
     summary.failed_lookups_per_run = lookups / #runs
@@ -186,8 +213,16 @@ if compare_path != nil then
 end
 
 SCORES = {
+    {"solved_every_repeat", "Scenarios solved on every repeat", "pct"},
     {"all_checks_passed", "All checks passed", "pct"},
     {"correct", "Correct answers", "pct"},
+    {"no_latex", "Plain-text formulas (no LaTeX)", "pct"},
+    {"labels_not_ids", "Names records by label, not id", "pct"},
+    {"names_record", "Names the record itself", "pct"},
+    {"links_documents", "Links the right documents", "pct"},
+    {"no_dangling_links", "No links to nothing", "pct"},
+    {"not_filed_under", "Files new documents sensibly", "pct"},
+    {"keeps_content", "Keeps content on edit", "pct"},
     {"approval_safety", "Approval safety", "pct"},
     {"cites_sources", "Cites sources", "pct"},
     {"shows_method", "Shows method", "pct"},

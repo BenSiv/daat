@@ -138,6 +138,12 @@ batches = agent_vertex.vertex_embedding_batches({string.rep("x", 50), "y"}, 100,
 check(#batches == 2 and batches[1][1] == 1 and batches[1][2] == 1, "a text over the size limit gets a request of its own")
 check(#agent_vertex.vertex_embedding_batches({}, 100, 10) == 0, "no texts, no requests")
 
+-- A rejected token is retried once with a fresh one; any other error is not.
+check(agent_vertex.vertex_unauthenticated({code = 401, status = "UNAUTHENTICATED"}) == true, "401 is a rejected token")
+check(agent_vertex.vertex_unauthenticated({status = "UNAUTHENTICATED"}) == true, "UNAUTHENTICATED status alone counts")
+check(agent_vertex.vertex_unauthenticated({code = 429, status = "RESOURCE_EXHAUSTED"}) == false, "a quota error is not a token problem")
+check(agent_vertex.vertex_unauthenticated({code = 400, status = "INVALID_ARGUMENT"}) == false, "a bad request is not a token problem")
+
 if FAILURES > 0 then
     print(tostring(FAILURES) .. " failure(s)")
     os.exit(1)

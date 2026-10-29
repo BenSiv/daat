@@ -34,6 +34,7 @@ return function(f, s)
         },
         checks = {
             {kind = "answer", date = e.started_on},
+            {kind = "names_record", label = e.lab_number},
             {kind = "no_failed_lookup"},
             {kind = "finished"},
         },

@@ -286,18 +286,28 @@ function generate(opts)
     facts.replicate_series = series
 
     -- Three weekly meeting notes share one title; only the middle one
-    -- records the media decision (the duplicate-title trap).
+    -- records the media decision (the duplicate-title trap). The first
+    -- and last disagree on how often to read OD600, and the last one
+    -- replaces the first (the conflicting-sources trap: the answer is the
+    -- latest decision, not whichever note a search returns first).
     meetings = {"2026-02-02", "2026-02-09", "2026-02-16"}
     decision_medium = MEDIA[4][1]
     for i, day in ipairs(meetings) do
         body = "# Weekly lab meeting\n\nDate: " .. day .. "\n\n- Status round, no blockers.\n"
-        if i == 2 then
+        if i == 1 then
+            body = body .. "- Decision: during growth runs, read OD600 every 3 hours.\n"
+        elseif i == 2 then
             body = body .. "- Decision: all new screening runs use " .. decision_medium ..
                 " from March, to cut media cost.\n"
+        elseif i == 3 then
+            body = body .. "- Decision: read OD600 every 2 hours during growth runs from now on; " ..
+                "the 3-hour schedule missed the end of the exponential phase.\n"
         end
         table.insert(out.documents, {key = "doc-meeting-" .. i, title = "Weekly lab meeting", content = body})
     end
     facts.media_decision = {medium = decision_medium, meeting_date = meetings[2], doc_key = "doc-meeting-2"}
+    facts.od_interval = {hours = 2, replaced_hours = 3, meeting_date = meetings[3], doc_key = "doc-meeting-3",
+        replaced_doc_key = "doc-meeting-1"}
 
     -- A long, multi-section protocol (the distillation trap).
     table.insert(out.documents, {
