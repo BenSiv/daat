@@ -132,3 +132,14 @@ NAMES=$'GROUP 1: Alpha area | The first area.\nGROUP 2: Beta area | The second.\
     run db "SELECT archived_at IS NOT NULL AND archived_at != '' FROM document WHERE id = $record;"
     [ "$output" = "1" ]
 }
+
+@test "the agent can add a subject group and move tags into it; groups left empty are dropped" {
+    moves=$'\nGROUP 5: Epsilon subject | Gathered by subject.\nMOVE Area1 tag 1 -> 5\nMOVE Area2 tag 1 -> 5'
+    for t in 1 2 3 4; do moves="$moves"$'\nMOVE Area4 tag '"$t"$' -> 5'; done
+    export AGENT_TEST_GENERATE_RESPONSES="$NAMES$moves"
+    run "$BIN" tag broaden
+    [[ "$output" =~ "Wrote 4 broad tags over 16 tags" ]]
+    epsilon=$(db "SELECT id FROM tag WHERE label = 'Epsilon subject' AND source = 'broader';")
+    [ "$(db "SELECT COUNT(*) FROM tag WHERE parent = '$epsilon';")" = "6" ]
+    [ "$(db "SELECT COUNT(*) FROM tag WHERE label = 'Delta area';")" = "0" ]
+}

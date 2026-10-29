@@ -30,11 +30,16 @@ tag_broader = {}
 BROADER_RANGE = {4, 12}
 BROADER_TAGS_PER_GROUP = 5
 
-BROADER_PROMPT = """You organise the subject tags of a lab's knowledge base into a few broad areas, for browsing.
-You get the tags already grouped by how close their documents are. For each group, reply with one line:
-GROUP <n>: <label> | <one-sentence description of the broad area>
-Labels are 1-4 words, broader than any tag in the group, and distinct from each other.
-If a tag clearly belongs in another group, add one line per tag:
+-- Ben, 2026-10-29: broad tags by subject. The first prod dry run
+-- grouped by kind of document (literature, protocols, internal
+-- records), since that's what document similarity mostly follows; the
+-- agent now regroups by subject and may add groups.
+BROADER_PROMPT = """You organise the subject tags of a lab's knowledge base into broad subject areas, for browsing.
+Group by what the documents are about, not by the kind of document: literature, protocols, data and meeting notes on the same subject belong in the same area. Tags whose subject is outside the lab's field can share one area.
+You get a first grouping by document similarity. It often groups by kind of document, so move tags freely, and add new groups, numbered after the last, where a subject needs one. Aim for 5 to 12 areas.
+Reply with one line for every group that keeps or gets tags:
+GROUP <n>: <label> | <one-sentence description of the subject area>
+Labels are 1-4 words, broader than any tag in the group, and distinct from each other. Then one line for each tag you move:
 MOVE <tag label> -> <group number>
 Reply with those lines only."""
 
@@ -110,7 +115,7 @@ function tag_broader.parse(answer, groups)
             end
         end
         from, to = string.match(line, "^%s*MOVE%s+(.-)%s*%->%s*(%d+)%s*$")
-        if from != nil and tonumber(to) != nil and tonumber(to) >= 1 and tonumber(to) <= groups then
+        if from != nil and tonumber(to) != nil and tonumber(to) >= 1 and tonumber(to) <= math.max(groups, BROADER_RANGE[2]) then
             from = string.gsub(from, "^[\"'%s%*]+", "")
             from = string.gsub(from, "[\"'%s%*]+$", "")
             moves[string.lower(from)] = tonumber(to)
@@ -154,6 +159,12 @@ function tag_broader.run(db_path, opts)
         return lines
     end
     names, moves = tag_broader.parse(answer, count)
+    -- Groups the agent added.
+    for _, to in pairs(moves) do
+        if to > count then
+            count = to
+        end
+    end
     for i, t in ipairs(tags) do
         to = moves[string.lower(tostring(t.label))]
         if to != nil and to != group_of[i] then
@@ -162,6 +173,7 @@ function tag_broader.run(db_path, opts)
         end
     end
 
+    used = 0
     for g = 1, count do
         if names[g] == nil then
             names[g] = {label = "Group " .. g, description = nil}
@@ -173,11 +185,12 @@ function tag_broader.run(db_path, opts)
             end
         end
         if #members > 0 then
+            used = used + 1
             table.insert(lines, string.format("%s (%d tags): %s", names[g].label, #members, table.concat(members, "; ")))
         end
     end
     if opts.dry_run == true then
-        table.insert(lines, string.format("Dry run: %d broad tags over %d tags, nothing written", count, #tags))
+        table.insert(lines, string.format("Dry run: %d broad tags over %d tags, nothing written", used, #tags))
         return lines
     end
 
