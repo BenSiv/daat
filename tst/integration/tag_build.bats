@@ -91,3 +91,24 @@ NAMES=$'Alpha notes | Notes of the first group.\1Beta notes | Notes of the secon
     [[ "$output" =~ "5 left out with under 200 characters of text" ]]
     [ "$(printf '%s\n' "$output" | grep -c '^tag [0-9]*: 30 documents')" = "3" ]
 }
+
+@test "--replace archives the computed tags and their memberships, then writes the new build" {
+    AGENT_TEST_RESPONSES="$NAMES" "$BIN" tag build >/dev/null
+    old=$(db "SELECT GROUP_CONCAT(id) FROM tag;")
+    AGENT_TEST_RESPONSES=$'Delta notes | d\1Epsilon notes | e\1Zeta notes | z' run "$BIN" tag build --replace
+    [[ "$output" =~ "archived tag #" ]]
+    [[ "$output" =~ "wrote tag #" ]]
+    [ "$(db "SELECT COUNT(*) FROM tag WHERE archived_at IS NOT NULL AND archived_at != '' AND id IN ($old);")" = "3" ]
+    [ "$(db "SELECT GROUP_CONCAT(label, ',') FROM (SELECT label FROM tag WHERE archived_at IS NULL OR archived_at = '' ORDER BY label);")" = "Delta notes,Epsilon notes,Zeta notes" ]
+    [ "$(db "SELECT COUNT(*) FROM document_tag WHERE archived_at IS NULL OR archived_at = '';")" = "90" ]
+    [ "$(db "SELECT COUNT(*) FROM document_tag WHERE tag IN ($old) AND (archived_at IS NULL OR archived_at = '');")" = "0" ]
+    [ "$(db "SELECT SUM(members) FROM tag_centre c JOIN tag t ON t.id = c.tag_id WHERE t.archived_at IS NULL OR t.archived_at = '';")" = "90" ]
+}
+
+@test "--replace is refused while a computed tag holds a membership a person pinned" {
+    AGENT_TEST_RESPONSES="$NAMES" "$BIN" tag build >/dev/null
+    db "UPDATE document_tag SET decision = 'pinned' WHERE id = (SELECT MIN(id) FROM document_tag);"
+    run "$BIN" tag build --replace
+    [[ "$output" =~ "Refused: 1 membership(s) a person set are on computed tags" ]]
+    [ "$(db "SELECT COUNT(*) FROM tag WHERE archived_at IS NULL OR archived_at = '';")" = "3" ]
+}

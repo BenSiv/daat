@@ -854,14 +854,15 @@ end
 -- (a person asked for it); the merged tag's baselines start over.
 function tag_upkeep.do_tag(cmd_args, db_path)
     usage = "Usage: daat tag merge <into_id> <from_id>... [--label <label>] [--description <text>]\n" ..
-        "       daat tag build [--dry-run [--name]]"
+        "       daat tag build [--dry-run [--name]] [--replace]"
     if cmd_args[1] == "build" then
         flags = {}
         for i = 2, #cmd_args do
             flags[cmd_args[i]] = true
         end
         -- Required here, not at the top: tag_build.lua requires this file.
-        require("tag_build").run(db_path, {dry_run = flags["--dry-run"] == true, name = flags["--name"] == true})
+        require("tag_build").run(db_path, {dry_run = flags["--dry-run"] == true, name = flags["--name"] == true,
+            replace = flags["--replace"] == true})
         return
     end
     if cmd_args[1] != "merge" then

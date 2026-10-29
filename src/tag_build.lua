@@ -29,7 +29,11 @@
 -- and -- when the deployment has tags -- how the build agrees with them
 -- (the check before cluster_tags.py is retired); `--name` adds the
 -- agent's labels; without --dry-run it writes, refused while computed
--- tags exist.
+-- tags exist unless `--replace`: then the computed tags and their
+-- memberships are archived (ledgered, never deleted) once the new tags
+-- are planned and named, just before they're written. Refused while a
+-- computed tag holds a membership a person set (pinned, excluded, or a
+-- #tag in the text) -- a person's choice wins.
 
 db = require("database")
 entity = require("entity")
@@ -735,7 +739,42 @@ function build_write(db_path, plan, report)
     return true
 end
 
--- `daat tag build [--dry-run [--name]]`.
+-- Memberships a person set on computed tags: what --replace won't drop.
+function build_person_memberships(db_path)
+    rows = db.query(db_path, """
+        SELECT COUNT(*) AS n FROM document_tag dt JOIN tag t ON t.id = dt.tag
+        WHERE t.source = 'computed' AND (t.archived_at IS NULL OR t.archived_at = '')
+          AND (dt.archived_at IS NULL OR dt.archived_at = '')
+          AND (dt.decision != 'computed' OR (dt.via IS NOT NULL AND dt.via != ''));""")
+    if rows == nil or rows[1] == nil then
+        return 0
+    end
+    return tonumber(rows[1].n)
+end
+
+-- Archives every computed tag and its memberships, for --replace.
+function build_archive_computed(db_path, report)
+    author = "system"
+    reason = "replaced by tag build"
+    tags = db.query(db_path, "SELECT id, label FROM tag WHERE source = 'computed' AND (archived_at IS NULL OR archived_at = '') ORDER BY id;")
+    if tags == nil then
+        return
+    end
+    for _, t in ipairs(tags) do
+        members = db.query(db_path, string.format(
+            "SELECT id FROM document_tag WHERE tag = %d AND (archived_at IS NULL OR archived_at = '');", tonumber(t.id)))
+        if members == nil then
+            members = {}
+        end
+        for _, m in ipairs(members) do
+            entity.archive(db_path, "document_tag", tonumber(m.id), author, nil, reason)
+        end
+        entity.archive(db_path, "tag", tonumber(t.id), author, nil, reason)
+        report(string.format("archived tag #%d %q: %d memberships", tonumber(t.id), tostring(t.label), #members))
+    end
+end
+
+-- `daat tag build [--dry-run [--name]] [--replace]`.
 function tag_build.run(db_path, opts)
     function report(line)
         print(line)
@@ -743,8 +782,13 @@ function tag_build.run(db_path, opts)
     end
     if opts.dry_run != true then
         rows = db.query(db_path, "SELECT COUNT(*) AS n FROM tag WHERE source = 'computed' AND (archived_at IS NULL OR archived_at = '');")
-        if rows != nil and rows[1] != nil and tonumber(rows[1].n) > 0 then
-            report("Refused: this deployment already has computed tags -- a cold start builds the first ones (--dry-run compares with them)")
+        if rows != nil and rows[1] != nil and tonumber(rows[1].n) > 0 and opts.replace != true then
+            report("Refused: this deployment already has computed tags -- a cold start builds the first ones (--dry-run compares with them; --replace archives them for a rebuild)")
+            return
+        end
+        held = build_person_memberships(db_path)
+        if opts.replace == true and held > 0 then
+            report(string.format("Refused: %d membership(s) a person set are on computed tags -- move or drop them first", held))
             return
         end
     end
@@ -791,6 +835,9 @@ function tag_build.run(db_path, opts)
     if opts.dry_run then
         report("Dry run: nothing written")
         return
+    end
+    if opts.replace == true then
+        build_archive_computed(db_path, report)
     end
     ok, err = build_write(db_path, plan, report)
     if ok == nil then
