@@ -1,0 +1,10 @@
+# Builds dev/demo/Dockerfile from the repo root; see dev/demo/deploy.sh.
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: ['build', '-f', 'dev/demo/Dockerfile', '-t', '${_IMAGE_URI}', '-t', '${_LATEST_URI}', '.']
+    env:
+      - 'DOCKER_BUILDKIT=1'
+
+images:
+  - ${_IMAGE_URI}
+  - ${_LATEST_URI}
