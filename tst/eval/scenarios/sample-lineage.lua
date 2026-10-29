@@ -24,6 +24,7 @@ return function(f, s)
         },
         checks = {
             {kind = "answer", expected = e.sample_label},
+            {kind = "labels_not_ids"},
             {kind = "no_failed_lookup"},
             {kind = "finished"},
         },

@@ -24,6 +24,8 @@ return function(f, s)
         checks = {
             {kind = "answer", number = series.mean_doubling_time_hours, tolerance = 0.05},
             {kind = "shows_method"},
+            {kind = "no_latex"},
+            {kind = "labels_not_ids"},
             {kind = "no_tool_names"},
             {kind = "finished"},
         },

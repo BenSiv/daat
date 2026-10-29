@@ -26,6 +26,9 @@ return function(f, s)
         checks = {
             {kind = "answer", number = e.doubling_time_hours, tolerance = 0.05},
             {kind = "shows_method"},
+            {kind = "no_latex"},
+            {kind = "names_record", label = e.lab_number},
+            {kind = "labels_not_ids"},
             {kind = "no_failed_lookup"},
             {kind = "finished"},
         },
