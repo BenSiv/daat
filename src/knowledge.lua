@@ -1853,6 +1853,20 @@ function knowledge.do_knowledge(cmd_args, db_path)
         return
     end
 
+    -- The synthesize step (src/synthesize.lua), run by the jobs worker:
+    -- up to N tags (default 1) whose notes changed since their
+    -- reference, or that newly hold enough notes.
+    if action == "synthesize-due" then
+        limit = tonumber(cmd_args[2])
+        if limit == nil then
+            limit = 1
+        end
+        for _, line in ipairs(require("synthesize").repair(db_path, limit, false, "system", false)) do
+            print(line)
+        end
+        return
+    end
+
     if action == "promote" then
         document_id = tonumber(cmd_args[2])
         tier = tonumber(cmd_args[3])
@@ -1931,7 +1945,7 @@ function knowledge.do_knowledge(cmd_args, db_path)
         return
     end
 
-    print("Usage: daat knowledge <stats|list [tier]|show <document_id>|promote <document_id> <tier>|curate-pending [N]|link-score <id> <id>|distill>")
+    print("Usage: daat knowledge <stats|list [tier]|show <document_id>|promote <document_id> <tier>|curate-pending [N]|synthesize-due [N]|link-score <id> <id>|distill>")
 end
 
 return knowledge

@@ -160,3 +160,17 @@ THEME
     [[ "$output" =~ "Left out: [[Note title]]" ]]
     unset AGENT_TEST_CAPTURE_SYSTEM_PROMPT AGENT_TEST_CAPTURE_PROMPT
 }
+
+@test "knowledge synthesize-due runs one due tag at a time, the one with the most notes first" {
+    big=$(new_tag "Medium B")
+    for n in A B C D; do note_in "$big" "Run $n" >/dev/null; done
+    small=$(new_tag "Callus")
+    for n in E F G; do note_in "$small" "Run $n" >/dev/null; done
+    export AGENT_TEST_GENERATE_RESPONSES="$REFERENCE"$'\1'"PASS"
+
+    run "$BIN" knowledge synthesize-due
+    [[ "$output" =~ "tag #$big referenced" ]]
+    [[ ! "$output" =~ "tag #$small" ]]
+    run db "SELECT COUNT(*) FROM knowledge_reference WHERE tag_id = $small;"
+    [ "$output" -eq 0 ]
+}
