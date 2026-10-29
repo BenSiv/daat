@@ -248,18 +248,17 @@ end
 -- file (curl -d @file) rather than shell-interpolating the payload
 -- directly -- the only shell-interpolated values are the URL and a
 -- path this process generated itself, never prompt/response content.
-function vertex_post(model_and_method_path, payload_table)
-    project, region, config_err = vertex_config()
-    if project == nil then
-        return nil, config_err
-    end
+function vertex_unauthenticated(err)
+    return tonumber(err.code) == 401 or err.status == "UNAUTHENTICATED"
+end
+
+-- One request: the decoded response (which may carry .error), or nil
+-- and why it couldn't be had at all.
+function vertex_post_once(url, payload_table)
     token, token_err = vertex_access_token()
     if token == nil then
         return nil, token_err
     end
-
-    url = vertex_url(project, region, model_and_method_path)
-
     response_text, _ = external_tool.with_temp_file(json.encode(payload_table), "w", function(tmp_path)
         cmd = "curl -s --max-time " .. tostring(REQUEST_TIMEOUT_SECONDS) .. " -X POST " .. external_tool.shell_quote(url) ..
             " -H " .. external_tool.shell_quote("Authorization: Bearer " .. token) ..
@@ -267,14 +266,34 @@ function vertex_post(model_and_method_path, payload_table)
             " -d @" .. external_tool.shell_quote(tmp_path)
         return external_tool.capture(cmd)
     end)
-
     if response_text == nil then
         return nil, "no response from Vertex AI (curl/network failure)"
     end
-
     response, _, decode_err = json.decode(response_text)
     if response == nil then
         return nil, "invalid JSON response from Vertex AI: " .. tostring(decode_err)
+    end
+    return response
+end
+
+function vertex_post(model_and_method_path, payload_table)
+    project, region, config_err = vertex_config()
+    if project == nil then
+        return nil, config_err
+    end
+    url = vertex_url(project, region, model_and_method_path)
+    response, err = vertex_post_once(url, payload_table)
+    -- A rejected token: off GCE, `gcloud auth print-access-token` hands
+    -- back gcloud's own cached token, which may have minutes left, not
+    -- the GCLOUD_TOKEN_LIFETIME_SECONDS the cache records -- found when
+    -- a live eval run (2026-10-29) failed every call after the first few
+    -- minutes. Drop the cache and try once more with a fresh token.
+    if response != nil and response.error != nil and vertex_unauthenticated(response.error) == true then
+        os.remove(vertex_token_cache_path())
+        response, err = vertex_post_once(url, payload_table)
+    end
+    if response == nil then
+        return nil, err
     end
     if response.error != nil then
         return nil, "Vertex AI error: " .. tostring(response.error.message)
@@ -648,6 +667,7 @@ end
 -- across the require() boundary -- see the matching comment in
 -- agent_claude.lua.
 agent_vertex.vertex_url = vertex_url
+agent_vertex.vertex_unauthenticated = vertex_unauthenticated
 agent_vertex.vertex_blocks_from_parts = vertex_blocks_from_parts
 agent_vertex.vertex_contents_from_messages = vertex_contents_from_messages
 agent_vertex.vertex_token_cache_expired = vertex_token_cache_expired
