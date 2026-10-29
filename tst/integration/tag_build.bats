@@ -112,3 +112,12 @@ NAMES=$'Alpha notes | Notes of the first group.\1Beta notes | Notes of the secon
     [[ "$output" =~ "Refused: 1 membership(s) a person set are on computed tags" ]]
     [ "$(db "SELECT COUNT(*) FROM tag WHERE archived_at IS NULL OR archived_at = '';")" = "3" ]
 }
+
+@test "--max-tags, or tag_build_max, caps how many tags the build cuts the pool into" {
+    run "$BIN" tag build --dry-run --max-tags 2
+    [[ "$output" =~ "cut: 2 tags" ]]
+    [[ "$output" =~ "range 2-2)" ]]
+    write_platform_config ", tag_build_max = 2"
+    run "$BIN" tag build --dry-run
+    [[ "$output" =~ "cut: 2 tags" ]]
+}
