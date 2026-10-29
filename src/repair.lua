@@ -87,6 +87,11 @@ function repair_tags(cmd_args, db_path)
             pairs_above = tonumber(cmd_args[i + 1])
         end
     end
+    if flags["--place-untagged"] == true then
+        placed, left = tag.place_untagged(db_path)
+        print(string.format("Placed %d untagged document(s); %d had no tag close enough", placed, left))
+        return
+    end
     if flags["--restructure"] == true then
         -- --dry-run: proposals only; --judge with it: the agent's
         -- verdicts too; neither: judge and apply (doc/tag-ontology.md).
@@ -226,8 +231,8 @@ REPAIRS = {
      description = "Embed documents whose embedding is missing, from another model, or of changed text (--all: every document; one provider call each)."},
     {name = "embeddings-packed", usage = "embeddings-packed", run = repair_embeddings_packed,
      description = "Pack stored embeddings into the binary form search reads (no provider calls)."},
-    {name = "tags", usage = "tags [document_id | --restructure [--dry-run [--judge] [--pairs-above C]]]", run = repair_tags,
-     description = "Rebuild tag centres from memberships (and the upkeep baselines), re-place one document by nearest tag, or split/merge/re-check tags with the agent's judgment."},
+    {name = "tags", usage = "tags [document_id | --place-untagged | --restructure [--dry-run [--judge] [--pairs-above C]]]", run = repair_tags,
+     description = "Rebuild tag centres from memberships (and the upkeep baselines), re-place one document by nearest tag, place every untagged document that has a subject (--place-untagged), or split/merge/re-check tags with the agent's judgment."},
     {name = "tag-evidence", usage = "tag-evidence", run = repair_tag_evidence,
      description = "Recompute core tag evidence (link, connection) from links and memberships."},
     {name = "references", usage = "references", run = repair_references,

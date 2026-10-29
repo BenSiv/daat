@@ -278,12 +278,22 @@ function tag.on_document_archived(db_path, document_id, archived)
     end
 end
 
+-- Documents the tier ladder wrote (doc/tier-curation-ladder.md): short
+-- on purpose -- a tier-3 record is one to three sentences -- so they
+-- always have a subject. Found 2026-10-29: 33 of 141 new records fell
+-- under tag_min_text and stayed out of every tag.
+TAG_LADDER_SOURCE_TYPES = {curated = true, reference = true, record = true}
+
 -- Too little text of its own to have a subject (tag_min_text): the
 -- embedding's body_chars, or nil when not known yet.
 function tag_too_short(db_path, document_id)
     rows = db.query(db_path, string.format(
-        "SELECT body_chars FROM document_embedding WHERE document_id = %d;", tonumber(document_id)))
+        "SELECT e.body_chars, d.source_type FROM document_embedding e JOIN document d ON d.id = e.document_id WHERE e.document_id = %d;",
+        tonumber(document_id)))
     if rows == nil or rows[1] == nil then
+        return false
+    end
+    if rows[1].source_type != nil and TAG_LADDER_SOURCE_TYPES[rows[1].source_type] == true then
         return false
     end
     body_chars = tonumber(rows[1].body_chars)
@@ -299,6 +309,36 @@ end
 -- memberships are this function's to change: a `pinned` tag stays and
 -- isn't duplicated, an `excluded` one is never chosen. Returns the
 -- chosen tag ids (empty when there are no tags or no vector yet).
+-- `daat repair tags --place-untagged`: places every active document
+-- with an embedding and no tag that has a subject (enough text, or a
+-- ladder document) -- the ones a save placed before any tag existed, or
+-- while tags were being rebuilt. -> placed, left (still no tag: no
+-- centre close enough).
+function tag.place_untagged(db_path)
+    rows = db.query(db_path, """
+        SELECT d.id FROM document d JOIN document_embedding e ON e.document_id = d.id
+        WHERE (d.archived_at IS NULL OR d.archived_at = '') AND (d.merged_into IS NULL OR d.merged_into = '')
+          AND NOT EXISTS (SELECT 1 FROM document_tag dt JOIN tag t ON t.id = dt.tag
+                          AND (t.archived_at IS NULL OR t.archived_at = '')
+                          WHERE dt.document = d.id AND (dt.archived_at IS NULL OR dt.archived_at = '')
+                            AND dt.decision != 'excluded')
+        ORDER BY d.id;""")
+    placed, left = 0, 0
+    if rows == nil then
+        return placed, left
+    end
+    for _, row in ipairs(rows) do
+        if not tag_too_short(db_path, tonumber(row.id)) then
+            if #tag.place_document(db_path, tonumber(row.id)) > 0 then
+                placed = placed + 1
+            else
+                left = left + 1
+            end
+        end
+    end
+    return placed, left
+end
+
 function tag.place_document(db_path, document_id)
     chosen = {}
     vector = tag.document_vector(db_path, document_id)
