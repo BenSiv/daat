@@ -854,19 +854,23 @@ end
 -- (a person asked for it); the merged tag's baselines start over.
 function tag_upkeep.do_tag(cmd_args, db_path)
     usage = "Usage: daat tag merge <into_id> <from_id>... [--label <label>] [--description <text>]\n" ..
-        "       daat tag build [--dry-run [--name]] [--replace] [--max-tags N]"
+        "       daat tag build [--dry-run [--name]] [--replace] [--max-tags N] [--coarseness C]"
     if cmd_args[1] == "build" then
         flags = {}
         max_tags = nil
+        coarseness = nil
         for i = 2, #cmd_args do
             flags[cmd_args[i]] = true
             if cmd_args[i] == "--max-tags" then
                 max_tags = tonumber(cmd_args[i + 1])
             end
+            if cmd_args[i] == "--coarseness" then
+                coarseness = tonumber(cmd_args[i + 1])
+            end
         end
         -- Required here, not at the top: tag_build.lua requires this file.
         require("tag_build").run(db_path, {dry_run = flags["--dry-run"] == true, name = flags["--name"] == true,
-            replace = flags["--replace"] == true, max_tags = max_tags})
+            replace = flags["--replace"] == true, max_tags = max_tags, coarseness = coarseness})
         return
     end
     if cmd_args[1] != "merge" then

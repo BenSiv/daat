@@ -116,8 +116,21 @@ NAMES=$'Alpha notes | Notes of the first group.\1Beta notes | Notes of the secon
 @test "--max-tags, or tag_build_max, caps how many tags the build cuts the pool into" {
     run "$BIN" tag build --dry-run --max-tags 2
     [[ "$output" =~ "cut: 2 tags" ]]
-    [[ "$output" =~ "range 2-2)" ]]
+    [[ "$output" =~ "range 2-2;" ]]
     write_platform_config ", tag_build_max = 2"
     run "$BIN" tag build --dry-run
     [[ "$output" =~ "cut: 2 tags" ]]
+}
+
+@test "--coarseness, or tag_build_coarseness, leans the cut to fewer tags, still by the levels' life; the dry run lists the best levels" {
+    run "$BIN" tag build --dry-run
+    [[ "$output" =~ "cut: 4 tags (level lives 0.098; range 2-8; coarseness 0)" ]]
+    [[ "$output" =~ "  level 4 tags: lives 0.098" ]]
+    [[ "$output" =~ "  level 3 tags: lives 0.053" ]]
+    # life / tags^3: 0.053 / 27 beats 0.098 / 64.
+    run "$BIN" tag build --dry-run --coarseness 3
+    [[ "$output" =~ "cut: 3 tags (level lives 0.053; range 2-8; coarseness 3)" ]]
+    write_platform_config ", tag_build_coarseness = 3"
+    run "$BIN" tag build --dry-run
+    [[ "$output" =~ "cut: 3 tags" ]]
 }
