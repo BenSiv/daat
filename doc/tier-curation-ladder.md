@@ -88,7 +88,12 @@ Status:
   - A reference that passes is created at tier 2 (`source_type = 'reference'`, `source_ref = 'tag:<id>'`) and links every note it was made from; it is rewritten in place when the tag's notes change.
   - `daat repair synthesize [--limit N] [--dry-run] [--recheck]` runs it; a runner claims a tag before writing, as curate does. The jobs worker runs `daat knowledge synthesize-due 1` every 2 minutes: one tag whose notes changed, or that newly holds enough notes.
 
-## Tier 3 design (proposal, 2026-10-29)
+- **Phase 4's distill step** is built (`src/distill.lua`, 2026-10-29) as designed below, with the three decisions as proposed: records from references only; a legacy fact a record covers is archived into it; 0.80 cosine with the agent judging every pair above it.
+  - `daat repair distill [--limit N] [--dry-run] [--recheck]`, and `daat knowledge distill-due [N]` for the jobs worker; `knowledge_distillation` keeps one row per reference.
+  - Reactive distillation (`knowledge.maybe_distill`, one legacy fact per raw source, written inside the search request) no longer runs.
+  - Not yet: re-checking a rewritten reference's existing records against its new text (a rewrite distills again and dedup keeps records from repeating, but a record the new text no longer supports stays).
+
+## Tier 3 design (2026-10-29)
 
 Where it starts: 16 tier-2 references in production, 147 tier-1 notes, and 132 legacy distilled facts (`source_type = 'distilled'`, about 300 characters each, 3 ever retrieved, some near-duplicates: #210426 and #204996 both say C.COT.M-1D is best for ICS 39 callus).
 

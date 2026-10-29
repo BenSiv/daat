@@ -111,6 +111,18 @@ CREATE TABLE IF NOT EXISTS knowledge_curation (
 -- (src/synthesize.lua): the hash of the notes it last saw, and how that
 -- went -- pending, running, referenced (document_id is the tier-2
 -- reference), nothing, rejected, failed.
+-- The distill step's outcomes, one row per tier-2 reference
+-- (src/distill.lua): the reference's content hash when last distilled,
+-- and how that went -- pending, running, distilled (reason counts what
+-- it wrote), nothing, failed.
+CREATE TABLE IF NOT EXISTS knowledge_distillation (
+    reference_id INTEGER PRIMARY KEY,
+    reference_hash VARCHAR(64) NOT NULL,
+    status VARCHAR(32) NOT NULL,
+    reason TEXT,
+    queued_at TEXT DEFAULT (%s)
+);
+
 CREATE TABLE IF NOT EXISTS knowledge_reference (
     tag_id INTEGER PRIMARY KEY,
     notes_hash VARCHAR(64) NOT NULL,
@@ -125,6 +137,7 @@ CREATE TABLE IF NOT EXISTS knowledge_reference (
 function knowledge_schema_sql(db_path)
     return string.format(KNOWLEDGE_SCHEMA,
         db.autoincrement_keyword(db_path), db.now_expr(db_path),
+        db.now_expr(db_path),
         db.now_expr(db_path),
         db.now_expr(db_path),
         db.now_expr(db_path),
@@ -501,9 +514,10 @@ function knowledge.review_retrieval(db_path, retrieval_id, author)
             -- this is a direct one-shot model call rather than a full
             -- agent session, and why its own guard keeps this a rare,
             -- at-most-once-per-document cost, not a per-search tax.
-            if content_shape == "developed" then
-                knowledge.maybe_distill(db_path, author, doc, content_shape)
-            end
+            -- Reactive distillation (knowledge.maybe_distill) no longer
+            -- runs here: records come from the distill step over tier-2
+            -- references (src/distill.lua, 2026-10-29), not one card per
+            -- raw source written inside the search request.
         end
     end
 
@@ -1867,6 +1881,19 @@ function knowledge.do_knowledge(cmd_args, db_path)
         return
     end
 
+    -- The distill step (src/distill.lua), run by the jobs worker: up to
+    -- N references (default 1) that are new or were rewritten.
+    if action == "distill-due" then
+        limit = tonumber(cmd_args[2])
+        if limit == nil then
+            limit = 1
+        end
+        for _, line in ipairs(require("distill").repair(db_path, limit, false, "system", false)) do
+            print(line)
+        end
+        return
+    end
+
     if action == "promote" then
         document_id = tonumber(cmd_args[2])
         tier = tonumber(cmd_args[3])
@@ -1945,7 +1972,7 @@ function knowledge.do_knowledge(cmd_args, db_path)
         return
     end
 
-    print("Usage: daat knowledge <stats|list [tier]|show <document_id>|promote <document_id> <tier>|curate-pending [N]|synthesize-due [N]|link-score <id> <id>|distill>")
+    print("Usage: daat knowledge <stats|list [tier]|show <document_id>|promote <document_id> <tier>|curate-pending [N]|synthesize-due [N]|distill-due [N]|link-score <id> <id>|distill>")
 end
 
 return knowledge
