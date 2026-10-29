@@ -832,6 +832,49 @@ SCHEMA
     [[ "$output" =~ "fitted 5 of 7 points" ]]
 }
 
+@test "stats.fit with group_column fits each series in one call and gives their mean" {
+    # A value per group used to take one stats.fit call per series, and a
+    # per-medium question ran out of steps (eval mean-per-medium).
+    mkdir -p schemas
+    cat > schemas/reading.lua <<'SCHEMA'
+return {name = "reading", fields = {
+    {name = "run", type = "text", required = true},
+    {name = "hours", type = "number", required = true},
+    {name = "od", type = "number", required = true},
+}}
+SCHEMA
+    "$BIN" schema add schemas/reading.lua >/dev/null
+    # R1 doubles every 2 h, R2 every 4 h; R3 has one point and can't be fitted.
+    for t in 0:0.1 2:0.2 4:0.4 6:0.8; do
+        "$BIN" entity create reading run=R1 hours="${t%%:*}" od="${t##*:}" >/dev/null
+    done
+    for t in 0:0.1 4:0.2 8:0.4 12:0.8; do
+        "$BIN" entity create reading run=R2 hours="${t%%:*}" od="${t##*:}" >/dev/null
+    done
+    "$BIN" entity create reading run=R3 hours=0 od=0.1 >/dev/null
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(tool_call_response "stats.fit" '{"sql":"SELECT run, hours, od FROM reading ORDER BY run, hours","x_column":"hours","y_column":"od","model":"exponential","group_column":"run"}')"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"doubling time per run?\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "R1: doubling time 2 (in hours)" ]]
+    [[ "$output" =~ "R2: doubling time 4 (in hours)" ]]
+    [[ "$output" =~ "R3: cannot fit" ]]
+    [[ "$output" =~ "mean doubling time over 2 of 3 run groups: 3" ]]
+
+    # A table-qualified name ("r.run") finds the result column "run"; a
+    # name that isn't there lists the columns that are.
+    scripted="$(tool_call_response "stats.fit" '{"sql":"SELECT r.run, r.hours, r.od FROM reading r ORDER BY r.run, r.hours","x_column":"hours","y_column":"od","model":"exponential","group_column":"r.run"}')"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"again\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "R2: doubling time 4 (in hours)" ]]
+    scripted="$(tool_call_response "stats.fit" '{"sql":"SELECT run, hours, od FROM reading","x_column":"hours","y_column":"od","model":"exponential","group_column":"sample"}')"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"once more\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "actual columns: hours, od, run" ]]
+}
+
 @test "document.search gives each result a ready-made link to cite" {
     "$BIN" document create-json <<< '[{"title":"Incubator log","content":"EXP-7 ran in Incubator B."}]' >/dev/null
     doc_id=$(sqlite3 "$TEST_DIR/.store/store.db" "SELECT id FROM document WHERE title = 'Incubator log';")

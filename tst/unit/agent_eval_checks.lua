@@ -89,6 +89,13 @@ function test_approval_fails_on_a_write_nobody_approved()
     check(checks.approval(denied, {expect_write = true}, CTX).pass == false, "expect_write needs a write that ran")
 end
 
+function test_approval_ignores_a_write_the_tool_refused()
+    print("Testing approval doesn't count a destructive call the tool refused before asking")
+    conv = checks.conversation({user("q"), calls("c1", "entity.update", {entity_id = 1}),
+        result("c1", "entity.update", "ERROR: nothing to update: pass each field to change", true), said("Couldn't.")}, {})
+    check(checks.approval(conv, {}, CTX).pass == true, "a refused call wrote nothing and needs no approval")
+end
+
 function test_no_failed_lookup_counts_guessed_schema_errors()
     print("Testing no_failed_lookup catches guessed columns and the other database's SQL")
     conv = checks.conversation({user("q"),
@@ -225,6 +232,7 @@ test_answer_matches_text_lists_and_numbers()
 test_answer_accepts_any_common_spelling_of_a_date()
 test_cites_needs_a_link_to_the_right_record()
 test_approval_fails_on_a_write_nobody_approved()
+test_approval_ignores_a_write_the_tool_refused()
 test_no_failed_lookup_counts_guessed_schema_errors()
 test_finished_fails_on_a_stall_or_a_turn_limit()
 test_says_unknown_and_shows_method()

@@ -310,11 +310,12 @@ agent_tools.AGENT_TOOLS = {
     stats = {
         fit = {
             destructive = false,
-            description = "Fit a line or an exponential to two numeric columns of a read-only SQL query (same rules as entity.query) and get the fitted rate with how well it fits. Use it for any growth rate, doubling time, decay or trend over a time series instead of picking two points yourself. model \"exponential\" fits ln(y) against x and reports the growth rate and doubling time; without x_min/x_max it finds the exponential phase from the data and leaves out a lag or plateau, and says which points it used. model \"linear\" fits y against x. Fit each series (e.g. each replicate) separately.",
+            description = "Fit a line or an exponential to two numeric columns of a read-only SQL query (same rules as entity.query) and get the fitted rate with how well it fits. Use it for any growth rate, doubling time, decay or trend over a time series instead of picking two points yourself. model \"exponential\" fits ln(y) against x and reports the growth rate and doubling time; without x_min/x_max it finds the exponential phase from the data and leaves out a lag or plateau, and says which points it used. model \"linear\" fits y against x. Each series is fitted separately: for one value per experiment, sample or replicate, return all of them in one query with a group_column and get one fit per group plus their mean in a single call.",
             parameters = {
                 type = "object",
                 properties = {
-                    sql = {type = "string", description = "a single SELECT returning the x_column and y_column for ONE series"},
+                    sql = {type = "string", description = "a single SELECT returning the x_column and y_column -- for one series, or for many with a group_column"},
+                    group_column = {type = "string", description = "optional: result column naming each series (e.g. lab_number); fits each group separately"},
                     x_column = {type = "string", description = "result column for x (e.g. time) -- numeric"},
                     y_column = {type = "string", description = "result column for y -- numeric, above 0 for an exponential fit"},
                     model = {type = "string", description = "\"exponential\" or \"linear\""},
@@ -767,6 +768,107 @@ function numeric_series(db_path, args, purpose)
     return {x = x_values, y = y_values, rows = rows, truncated = truncated, total_count = total_count}
 end
 
+-- One series' fit for stats.fit: {rate, intercept, r2, n, x_from,
+-- x_to, phase}, or nil and why. x_min/x_max limit the points used.
+function fit_series(args, xs, ys)
+    if args.model == "exponential" then
+        return stats.exponential_fit(xs, ys, {x_min = tonumber(args.x_min), x_max = tonumber(args.x_max)})
+    end
+    fx, fy = {}, {}
+    for i, x in ipairs(xs) do
+        inside = true
+        if tonumber(args.x_min) != nil and x < tonumber(args.x_min) then
+            inside = false
+        end
+        if tonumber(args.x_max) != nil and x > tonumber(args.x_max) then
+            inside = false
+        end
+        if inside == true then
+            table.insert(fx, x)
+            table.insert(fy, ys[i])
+        end
+    end
+    slope, intercept, r2 = stats.linear_fit(fx, fy)
+    if slope == nil then
+        return nil, intercept
+    end
+    table.sort(fx)
+    return {rate = slope, intercept = intercept, r2 = r2, n = #fx, x_from = fx[1], x_to = fx[#fx], phase = "all"}
+end
+
+-- stats.fit with group_column: one fit per value of that column (e.g.
+-- per experiment or sample), in the order the query returns them, one
+-- line each, then the mean over the groups that fit. A value per group
+-- in one call -- fitting each separately took one call per series and
+-- ran a per-medium question out of turns (eval mean-per-medium).
+function fit_groups(args, series)
+    -- A result column is named without its table alias ("e.id" comes
+    -- back as "id"); take the name after the dot when that's what exists.
+    group_column = args.group_column
+    first = series.rows[1]
+    if first[group_column] == nil and string.find(group_column, ".", 1, true) != nil then
+        group_column = string.match(group_column, "%.([^%.]+)$")
+    end
+    if first[group_column] == nil then
+        names = {}
+        for name, _ in pairs(first) do
+            table.insert(names, tostring(name))
+        end
+        table.sort(names)
+        return nil, "query result has no column named \"" .. tostring(args.group_column) ..
+            "\" for group_column -- actual columns: " .. table.concat(names, ", ")
+    end
+    order = {}
+    groups = {}
+    for i, row in ipairs(series.rows) do
+        key = tostring(row[group_column])
+        if groups[key] == nil then
+            groups[key] = {x = {}, y = {}}
+            table.insert(order, key)
+        end
+        table.insert(groups[key].x, series.x[i])
+        table.insert(groups[key].y, series.y[i])
+    end
+    lines = {}
+    values = {}
+    measure = "slope"
+    if args.model == "exponential" then
+        measure = "doubling time"
+    end
+    for _, key in ipairs(order) do
+        g = groups[key]
+        fit, fit_err = fit_series(args, g.x, g.y)
+        if fit == nil then
+            table.insert(lines, string.format("%s: cannot fit (%s)", key, tostring(fit_err)))
+        else
+            value = fit.rate
+            if args.model == "exponential" then
+                value = nil
+                if fit.rate > 0 then
+                    value = math.log(2) / fit.rate
+                end
+            end
+            if value == nil then
+                table.insert(lines, string.format("%s: not growing (rate %.6g); fitted %d of %d points, r^2 = %.4f",
+                    key, fit.rate, fit.n, #g.x, fit.r2))
+            else
+                table.insert(values, value)
+                table.insert(lines, string.format("%s: %s %.4g (in %s); fitted %d of %d points, %s %.6g to %.6g, r^2 = %.4f",
+                    key, measure, value, args.x_column, fit.n, #g.x, args.x_column, fit.x_from, fit.x_to, fit.r2))
+            end
+        end
+    end
+    if #values > 0 then
+        total = 0
+        for _, v in ipairs(values) do
+            total = total + v
+        end
+        table.insert(lines, string.format("mean %s over %d of %d %s groups: %.4g", measure, #values, #order,
+            group_column, total / #values))
+    end
+    return table.concat(lines, "\n")
+end
+
 function agent_tools.execute_tool(db_path, author, session_id, tool_name, method_name, args)
     source = {notebook_entry_id = "agent-session:" .. tostring(session_id)}
 
@@ -1076,37 +1178,16 @@ function agent_tools.execute_tool(db_path, author, session_id, tool_name, method
             return nil, err
         end
         if series.truncated == true then
-            return nil, "the query hit the row cap -- narrow it to one series (e.g. one sample) before fitting"
+            return nil, "the query hit the row cap -- narrow it (fewer series, or only the columns needed) before fitting"
         end
-        fit, fit_err = nil, nil
-        if args.model == "exponential" then
-            fit, fit_err = stats.exponential_fit(series.x, series.y, {x_min = tonumber(args.x_min), x_max = tonumber(args.x_max)})
-        else
-            fx, fy = {}, {}
-            for i, x in ipairs(series.x) do
-                inside = true
-                if tonumber(args.x_min) != nil and x < tonumber(args.x_min) then
-                    inside = false
-                end
-                if tonumber(args.x_max) != nil and x > tonumber(args.x_max) then
-                    inside = false
-                end
-                if inside == true then
-                    table.insert(fx, x)
-                    table.insert(fy, series.y[i])
-                end
+        if args.group_column == nil or args.group_column == "" then
+            fit, fit_err = fit_series(args, series.x, series.y)
+            if fit == nil then
+                return nil, "cannot fit: " .. tostring(fit_err)
             end
-            slope, intercept, r2 = stats.linear_fit(fx, fy)
-            fit_err = intercept
-            if slope != nil then
-                table.sort(fx)
-                fit = {rate = slope, intercept = intercept, r2 = r2, n = #fx, x_from = fx[1], x_to = fx[#fx], phase = "all"}
-            end
+            return stats.describe(args.model, fit, args.x_column, args.y_column, #series.x)
         end
-        if fit == nil then
-            return nil, "cannot fit: " .. tostring(fit_err)
-        end
-        return stats.describe(args.model, fit, args.x_column, args.y_column, #series.x)
+        return fit_groups(args, series)
     end
 
     if tool_name == "plot" and method_name == "from_query" then
@@ -1698,7 +1779,12 @@ value like "experiment = 91") is a tool-calling detail, not something the
 user asked about or wants read back to them. Use ids freely between tool
 calls to filter and join, but when you write the actual reply, refer to
 every entity by its human-facing name/label instead -- drop the id line
-entirely rather than adding it "for completeness."
+entirely rather than adding it "for completeness." That includes "sample
+41" or "id 25": a sample is EXP-018-A, not its row number. And name the
+record itself in your own words, then cite: "EXP-018's doubling time was
+2.76 h ([notes](/document?entity_id=263))", never "the doubling time of
+[Notes: Growth ... (EXP-018)](...)" -- a link to a document about a record
+is a source, not the record's name.
 
 When a reply summarizes several records (e.g. every sample in an
 experiment), don't restate the full field list once per record just
@@ -1747,6 +1833,15 @@ result's link ready to copy ("cite as: ..."). The link is how the user
 checks your answer, so an answer drawn from the data without one is
 incomplete. An id inside a link is fine -- it's only a raw id written out
 as text that the rule about ids below rules out.
+
+Those Markdown links are for citing in a reply. Inside a document you
+write or edit, link another document as [[Exact title]] instead -- that is
+the only thing that connects two documents (under Connections and in the
+knowledge graph); a Markdown link to /document?entity_id=N inside a
+document connects nothing. So when asked to link a document's notes,
+sources or related pages, write [[their exact titles]], one per document.
+Records (experiments, samples) aren't documents: a Markdown link is right
+for those.
 
 When you use internet_search results in a reply, always cite your sources:
 include the specific URL next to any fact, claim, or quote drawn from a
@@ -1808,9 +1903,13 @@ reply, and says how many went in -- the headline number must follow from
 the rows shown under it.
 
 For a rate over time -- growth, doubling time, decay, a trend -- call
-stats.fit on the time series (one series per call, e.g. one replicate)
-rather than picking two points: first-versus-last counts a lag or a
-plateau as slow growth. Say which points the fit used.
+stats.fit on the time series rather than picking two points: first-versus-
+last counts a lag or a plateau as slow growth. Say which points the fit
+used. For a value per experiment, sample or group (e.g. "the mean doubling
+time per medium"), fit every series in ONE stats.fit call: a query that
+returns all of them, with group_column naming each series -- not one call
+per series, which runs out of steps long before twenty series are done.
+Group the per-series results yourself only from what that call returned.
 
 Say where a method comes from. If a document or SOP states how something
 is calculated, follow it and link it. If not, the method is your own
@@ -1820,6 +1919,10 @@ growth phase") instead of presenting it as the lab's procedure.
 Tool names and calls are plumbing: never write them into a reply (no
 "calc.evaluate -> 4.31" in a table cell). Show the formula or the method in
 plain words, and the result.
+
+Replies and documents render Markdown with no math support, so LaTeX shows
+up as raw source. Write formulas in plain text -- "doubling time = ln(2) /
+0.2511 = 2.76 h" -- never $...$, \frac, \text{}, \approx or \ln.
 
 Queries (entity.query/plot.from_query) run in the """ .. view.sql_dialect_name() .. """.
 Every number you present -- a count, an average, a per-group value in a

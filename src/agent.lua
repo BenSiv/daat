@@ -1644,7 +1644,7 @@ function build_history_messages(messages)
     return pair_tool_results(result)
 end
 
-MALFORMED_CALL_NOTE = "[Automated note, not the real user: your previous reply was a tool call that could not be parsed (MALFORMED_FUNCTION_CALL). Make the call again with valid arguments -- every string, including long markdown content, properly escaped.]"
+MALFORMED_CALL_NOTE = "[Automated note, not the real user: your previous reply could not be parsed (MALFORMED_FUNCTION_CALL / MALFORMED_RESPONSE). Reply again -- a tool call with valid arguments, every string (including long markdown content) properly escaped, or a plain answer.]"
 
 -- A copy of `history_messages` with MALFORMED_CALL_NOTE appended to its
 -- last message, for the one retry after a malformed tool call. Appended
@@ -2433,13 +2433,14 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
 
             response, err, usage = agent_provider.converse(model, system_prompt, history_messages, agent.tool_declarations(db_path))
             -- Gemini sometimes emits a tool call it can't encode
-            -- (finishReason MALFORMED_FUNCTION_CALL), typically a write
+            -- (finishReason MALFORMED_FUNCTION_CALL, or MALFORMED_RESPONSE
+            -- -- both seen in live eval runs), typically a write
             -- with a long content argument. The first one in a turn is
             -- retried before it's an error -- with a note saying what
             -- went wrong: resending the identical request failed the
             -- same way twice in a row on daat-test (2026-10-29).
             if response != nil and response.stopReason == "error" and malformed_retried == false
-                    and string.find(tostring(response.errorMessage), "MALFORMED_FUNCTION_CALL", 1, true) != nil then
+                    and string.find(tostring(response.errorMessage), "MALFORMED_", 1, true) != nil then
                 malformed_retried = true
                 -- The failed attempt was a real, billed call: record it
                 -- before its usage is replaced by the retry's.

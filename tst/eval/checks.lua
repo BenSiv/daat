@@ -264,7 +264,10 @@ function checks.approval(conv, spec, ctx)
     end
     writes = 0
     for _, msg in ipairs(conv.messages) do
+        -- An error result wrote nothing: a denied action, or a call the
+        -- tool refused before asking (e.g. "nothing to update").
         if msg.role == "tool_result" and msg.tool_name != nil and ctx.is_destructive(msg.tool_name) == true
+                and msg.is_error != true
                 and string.find(msg.text, "User denied", 1, true) == nil
                 and string.find(msg.text, "ERROR: skipped", 1, true) == nil then
             writes = writes + 1
