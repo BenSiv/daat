@@ -185,6 +185,28 @@ function repair_synthesize(cmd_args, db_path)
     end
 end
 
+function repair_distill(cmd_args, db_path)
+    distill = require("distill")
+    limit = nil
+    dry_run = false
+    recheck = false
+    i = 2
+    while i <= #cmd_args do
+        if cmd_args[i] == "--dry-run" then
+            dry_run = true
+        elseif cmd_args[i] == "--recheck" then
+            recheck = true
+        elseif cmd_args[i] == "--limit" then
+            limit = tonumber(cmd_args[i + 1])
+            i = i + 1
+        end
+        i = i + 1
+    end
+    for _, line in ipairs(distill.repair(db_path, limit, dry_run, "system", recheck)) do
+        print(line)
+    end
+end
+
 function repair_connections(cmd_args, db_path)
     knowledge = require("knowledge")
     flags = {}
@@ -220,6 +242,8 @@ REPAIRS = {
      description = "Curate the sources already in use (retrieved twice or more), most used first, into checked tier-1 notes -- one model call to write and one to check each (--dry-run: list them, no model calls; --recheck: try again the sources that came to nothing, were rejected or failed)."},
     {name = "synthesize", usage = "synthesize [--limit N] [--dry-run] [--recheck]", run = repair_synthesize,
      description = "Write a tier-2 reference for each tag holding three or more curated notes, from those notes -- one model call to write and one to check each; rewritten in place when the notes change (--dry-run: list the tags, no model calls; --recheck: try again the tags that came to nothing, were rejected or failed)."},
+    {name = "distill", usage = "distill [--limit N] [--dry-run] [--recheck]", run = repair_distill,
+     description = "Split each tier-2 reference into tier-3 records -- single claims citing their notes -- deduplicated by embedding against existing records and legacy distilled facts (an agent judges near matches; a covered legacy fact is archived into its record); one call to extract, one to check, one per near match (--dry-run: list the references, no model calls; --recheck: try again the ones that came to nothing or failed)."},
     {name = "pool-count", usage = "pool-count", run = repair_pool_count,
      description = "Recount active documents into knowledge_pool_state.document_count."},
 }
