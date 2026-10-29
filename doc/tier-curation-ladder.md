@@ -80,6 +80,13 @@ Status:
   - A runner claims a queued source (pending -> running, with its own token) before curating it, so a `repair curate` batch and the jobs worker never curate the same source twice. A row left running by a process that died is retried by `--recheck`.
   - A note that passes the check is created at tier 1 with a `Source: [[...]]` link. A source edited later gets its note rewritten in place.
   - Moving the rest of review out of the search request is still to do.
+  - Review no longer judges the tier of a document the curation wrote: it keeps the tier its step gave it. Found 2026-10-29 before it happened in production: the old judge path would have reset a fresh tier-1 note to 0 on its second retrieval (never "revised"), or moved a revised one to any tier.
+- **Phase 3's synthesize step** is built (`src/synthesize.lua`, 2026-10-29), on the tags rebuilt that day (`daat tag build --name --replace`: 50 tags).
+  - A tag is due once it holds 3 or more curated notes and has no reference, or its notes changed since (`knowledge_reference`, one row per tag, with the notes' hash).
+  - The agent writes one structured reference from up to 12 of the tag's notes, most central first: sections by theme, duplicates merged, disagreements stated, every statement cited `[[Note title]]`. It answers `NOTHING: <reason>` when the notes don't share a subject or the subject is outside the team's field.
+  - A second call checks every statement against the note it cites, and that no note's main point was dropped silently.
+  - A reference that passes is created at tier 2 (`source_type = 'reference'`, `source_ref = 'tag:<id>'`) and links every note it was made from; it is rewritten in place when the tag's notes change.
+  - `daat repair synthesize [--limit N] [--dry-run] [--recheck]` runs it; a runner claims a tag before writing, as curate does. The jobs worker doesn't run it yet.
 
 Each phase comes with scorecard scenarios (a chat transcript never rises; a curated note cites its source; a reference covers its notes) and a check on production: `daat knowledge stats` by tier and type, before and after.
 

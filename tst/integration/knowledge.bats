@@ -220,41 +220,22 @@ Assistant: Rinse, then autoclave."
     [[ ! "$output" =~ "Chat: bioreactor cleaning" ]]
 }
 
-@test "the agent's tier judgment can place a curated document at tier 3, and records what it judged" {
+@test "a curated note keeps the tier its step gave it through review and edits, with no judge call" {
     "$BIN" entity create document title="Bioreactor Notes" content="cleaning steps for the bioreactor procedure"
     mark_curated 1
-    long_content=$(printf 'word %.0s' $(seq 1 130))
-    "$BIN" entity update document 1 content="$long_content"
+    sqlite3 .store/store.db "UPDATE document SET tier = 1 WHERE id = 1;"
     search_for_bioreactor
     search_for_bioreactor_extra "3"
+    run sqlite3 .store/store.db "SELECT tier FROM document WHERE id = 1;"
+    [ "$output" -eq 1 ]
 
-    run "$BIN" knowledge list 3
-    [[ "$output" =~ "Bioreactor Notes" ]]
-    content_hash=$(sqlite3 .store/store.db "SELECT content_hash FROM document WHERE id = 1;")
-    run sqlite3 .store/store.db "SELECT judged_tier, judged_hash FROM document_tier_judgment WHERE document_id = 1;"
-    [[ "$output" =~ "3|${content_hash}" ]]
-}
-
-@test "a curated document's tier judgment isn't re-asked when its content hasn't changed, but is re-asked (and can move either direction) after a real edit" {
-    "$BIN" entity create document title="Bioreactor Notes" content="cleaning steps for the bioreactor procedure"
-    mark_curated 1
     long_content=$(printf 'word %.0s' $(seq 1 130))
     "$BIN" entity update document 1 content="$long_content"
-    search_for_bioreactor
     search_for_bioreactor_extra "3"
-    run "$BIN" knowledge list 3
-    [[ "$output" =~ "Bioreactor Notes" ]]
-
-    search_for_bioreactor
-    run "$BIN" knowledge list 3
-    [[ "$output" =~ "Bioreactor Notes" ]]
-
-    "$BIN" entity update document 1 content="a short revised note"
-    search_for_bioreactor_extra "1"
-    run "$BIN" knowledge list 1
-    [[ "$output" =~ "Bioreactor Notes" ]]
-    run "$BIN" knowledge list 3
-    [[ ! "$output" =~ "Bioreactor Notes" ]]
+    run sqlite3 .store/store.db "SELECT tier FROM document WHERE id = 1;"
+    [ "$output" -eq 1 ]
+    run sqlite3 .store/store.db "SELECT COUNT(*) FROM document_tier_judgment;"
+    [ "$output" -eq 0 ]
 }
 
 @test "daat knowledge show prints a document's full pool detail" {

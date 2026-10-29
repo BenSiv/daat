@@ -163,6 +163,28 @@ function repair_curate(cmd_args, db_path)
     end
 end
 
+function repair_synthesize(cmd_args, db_path)
+    synthesize = require("synthesize")
+    limit = nil
+    dry_run = false
+    recheck = false
+    i = 2
+    while i <= #cmd_args do
+        if cmd_args[i] == "--dry-run" then
+            dry_run = true
+        elseif cmd_args[i] == "--recheck" then
+            recheck = true
+        elseif cmd_args[i] == "--limit" then
+            limit = tonumber(cmd_args[i + 1])
+            i = i + 1
+        end
+        i = i + 1
+    end
+    for _, line in ipairs(synthesize.repair(db_path, limit, dry_run, "system", recheck)) do
+        print(line)
+    end
+end
+
 function repair_connections(cmd_args, db_path)
     knowledge = require("knowledge")
     flags = {}
@@ -196,6 +218,8 @@ REPAIRS = {
      description = "Fold copies of the same synced file (same text past the sync header, or the same title and most of the text) into one copy (the lowest id with a real title): links move to it, the copies are archived as its duplicates (--dry-run: list them)."},
     {name = "curate", usage = "curate [--limit N] [--dry-run] [--recheck]", run = repair_curate,
      description = "Curate the sources already in use (retrieved twice or more), most used first, into checked tier-1 notes -- one model call to write and one to check each (--dry-run: list them, no model calls; --recheck: try again the sources that came to nothing, were rejected or failed)."},
+    {name = "synthesize", usage = "synthesize [--limit N] [--dry-run] [--recheck]", run = repair_synthesize,
+     description = "Write a tier-2 reference for each tag holding three or more curated notes, from those notes -- one model call to write and one to check each; rewritten in place when the notes change (--dry-run: list the tags, no model calls; --recheck: try again the tags that came to nothing, were rejected or failed)."},
     {name = "pool-count", usage = "pool-count", run = repair_pool_count,
      description = "Recount active documents into knowledge_pool_state.document_count."},
 }
