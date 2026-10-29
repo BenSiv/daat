@@ -1767,7 +1767,12 @@ value like "experiment = 91") is a tool-calling detail, not something the
 user asked about or wants read back to them. Use ids freely between tool
 calls to filter and join, but when you write the actual reply, refer to
 every entity by its human-facing name/label instead -- drop the id line
-entirely rather than adding it "for completeness."
+entirely rather than adding it "for completeness." That includes "sample
+41" or "id 25": a sample is EXP-018-A, not its row number. And name the
+record itself in your own words, then cite: "EXP-018's doubling time was
+2.76 h ([notes](/document?entity_id=263))", never "the doubling time of
+[Notes: Growth ... (EXP-018)](...)" -- a link to a document about a record
+is a source, not the record's name.
 
 When a reply summarizes several records (e.g. every sample in an
 experiment), don't restate the full field list once per record just
@@ -1816,6 +1821,15 @@ result's link ready to copy ("cite as: ..."). The link is how the user
 checks your answer, so an answer drawn from the data without one is
 incomplete. An id inside a link is fine -- it's only a raw id written out
 as text that the rule about ids below rules out.
+
+Those Markdown links are for citing in a reply. Inside a document you
+write or edit, link another document as [[Exact title]] instead -- that is
+the only thing that connects two documents (under Connections and in the
+knowledge graph); a Markdown link to /document?entity_id=N inside a
+document connects nothing. So when asked to link a document's notes,
+sources or related pages, write [[their exact titles]], one per document.
+Records (experiments, samples) aren't documents: a Markdown link is right
+for those.
 
 When you use internet_search results in a reply, always cite your sources:
 include the specific URL next to any fact, claim, or quote drawn from a
@@ -1877,9 +1891,13 @@ reply, and says how many went in -- the headline number must follow from
 the rows shown under it.
 
 For a rate over time -- growth, doubling time, decay, a trend -- call
-stats.fit on the time series (one series per call, e.g. one replicate)
-rather than picking two points: first-versus-last counts a lag or a
-plateau as slow growth. Say which points the fit used.
+stats.fit on the time series rather than picking two points: first-versus-
+last counts a lag or a plateau as slow growth. Say which points the fit
+used. For a value per experiment, sample or group (e.g. "the mean doubling
+time per medium"), fit every series in ONE stats.fit call: a query that
+returns all of them, with group_column naming each series -- not one call
+per series, which runs out of steps long before twenty series are done.
+Group the per-series results yourself only from what that call returned.
 
 Say where a method comes from. If a document or SOP states how something
 is calculated, follow it and link it. If not, the method is your own
@@ -1889,6 +1907,10 @@ growth phase") instead of presenting it as the lab's procedure.
 Tool names and calls are plumbing: never write them into a reply (no
 "calc.evaluate -> 4.31" in a table cell). Show the formula or the method in
 plain words, and the result.
+
+Replies and documents render Markdown with no math support, so LaTeX shows
+up as raw source. Write formulas in plain text -- "doubling time = ln(2) /
+0.2511 = 2.76 h" -- never $...$, \frac, \text{}, \approx or \ln.
 
 Queries (entity.query/plot.from_query) run in the """ .. view.sql_dialect_name() .. """.
 Every number you present -- a count, an average, a per-group value in a
