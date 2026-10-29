@@ -31,6 +31,11 @@ view = require("view")
 
 agent_tools = {}
 
+-- How a document links another, for the tools that write content. A
+-- link exists only as [[...]] in the text: saving reindexes it
+-- (document.sync_links), so this is the only way to connect documents.
+DOCUMENT_LINK_HELP = "To connect documents, link them in the content as [[Exact title]] -- that's what makes a connection (shown under Connections and in the knowledge graph); a Markdown link to /document or /detail does not. When several documents share a title, write [[Parent title/Exact title]]. A link to a title that doesn't exist yet stays a placeholder until that document is created. Say why next to the link, e.g. \"Grown in the medium chosen at [[Weekly lab meeting]].\" Records (experiments, samples, ...) are not documents: link those with Markdown links as before."
+
 agent_tools.AGENT_TOOLS = {
     document = {
         search = {
@@ -47,27 +52,27 @@ agent_tools.AGENT_TOOLS = {
         },
         create = {
             destructive = true,
-            description = "Create a new document.",
+            description = "Create a new document. " .. DOCUMENT_LINK_HELP,
             parameters = {
                 type = "object",
                 properties = {
                     title = {type = "string"},
                     parent_id = {type = "integer", description = "optional parent document id"},
-                    content = {type = "string", description = "markdown content"},
+                    content = {type = "string", description = "markdown content; link other documents as [[Exact title]]"},
                 },
                 required = {"title"},
             },
         },
         update = {
             destructive = true,
-            description = "Update an existing document.",
+            description = "Update an existing document. " .. DOCUMENT_LINK_HELP,
             parameters = {
                 type = "object",
                 properties = {
                     entity_id = {type = "integer", description = "document id"},
                     title = {type = "string", description = "optional new title"},
                     parent_id = {type = "integer", description = "optional new parent id"},
-                    content = {type = "string", description = "optional new content -- replaces the whole field, does not append"},
+                    content = {type = "string", description = "optional new content -- replaces the whole field, does not append; link other documents as [[Exact title]]"},
                 },
                 required = {"entity_id"},
             },
@@ -1835,6 +1840,11 @@ ROLE_LABELS = {user = "User", assistant = "Assistant", tool_result = "Tool resul
 -- display_content cleanup (strips the [Current user:...]/[Current
 -- page:...] annotations, renders a tool call as "-> tool.method(...)")
 -- rather than a second rendering path.
+--
+-- [[...]] in the conversation is escaped (\[\[...\]\]): it still reads as
+-- written, but the transcript makes no links. Otherwise every title the
+-- agent or the person typed -- even "use [[title]] links" -- became a
+-- link from the chat, and a chat turned into a hub in the graph.
 function build_session_transcript(messages)
     lines = {}
     for _, msg in ipairs(messages) do
@@ -1842,7 +1852,9 @@ function build_session_transcript(messages)
         if label == nil then
             label = msg.role
         end
-        table.insert(lines, label .. ": " .. tostring(msg.content))
+        text = string.gsub(tostring(msg.content), "%[%[", "\\[\\[")
+        text = string.gsub(text, "%]%]", "\\]\\]")
+        table.insert(lines, label .. ": " .. text)
     end
     return table.concat(lines, "\n\n")
 end
