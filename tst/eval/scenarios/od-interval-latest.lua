@@ -1,6 +1,7 @@
 -- Conflicting sources: two notes with the same title disagree, and the
 -- later one replaces the earlier. The answer is the latest decision,
--- with the note it comes from.
+-- with the note it comes from (cited -- the question doesn't ask for
+-- its date, so the answer needn't give it).
 return function(f, s)
     d = f.od_interval
     doc_id = s.id(d.doc_key)
@@ -18,7 +19,6 @@ return function(f, s)
         },
         checks = {
             {kind = "answer", any = {d.hours .. " hours", d.hours .. " h", "two hours", d.hours .. "-hour", d.hours .. "h"}},
-            {kind = "answer", date = d.meeting_date},
             {kind = "cites", ids = {doc_id}},
             {kind = "finished"},
         },
