@@ -223,3 +223,28 @@ members() {
     "$BIN" entity update document "$d" content="Totals #pending-review, #checked" >/dev/null
     [ "$(db "SELECT t.label FROM document_tag dt JOIN tag t ON t.id = dt.tag WHERE dt.document = $d AND dt.via = 'text' AND dt.archived_at IS NULL;")" = "Checked" ]
 }
+
+@test "repair tags --place-untagged places untagged documents with a subject: short sources stay out, short ladder documents go in" {
+    write_platform_config ", tag_min_text = 200"
+    a=$(new_document "Leaf callus")
+    embed "$a" '[1, 0, 0, 0, 0, 0, 0, 0]'
+    callus=$(new_tag "Callus induction")
+    "$BIN" entity create document_tag document="$a" tag="$callus" decision=computed >/dev/null
+
+    long=$(new_document "Callus from flowers")
+    short=$(new_document "Callus memo")
+    record=$(new_document "Callus forms in 3 weeks")
+    db "UPDATE document SET source_type = 'record' WHERE id = $record;"
+    for d in $long $short $record; do
+        db "DELETE FROM document_tag WHERE document = $d;"
+        embed "$d" '[0.95, 0.2, 0, 0, 0, 0, 0, 0]'
+    done
+    db "UPDATE document_embedding SET body_chars = 500 WHERE document_id = $long;"
+    db "UPDATE document_embedding SET body_chars = 40 WHERE document_id IN ($short, $record);"
+
+    run "$BIN" repair tags --place-untagged
+    [[ "$output" =~ "Placed 2 untagged document(s); 0 had no tag close enough" ]]
+    [ "$(db "SELECT COUNT(*) FROM document_tag WHERE document = $long AND tag = $callus AND archived_at IS NULL;")" = "1" ]
+    [ "$(db "SELECT COUNT(*) FROM document_tag WHERE document = $record AND tag = $callus AND archived_at IS NULL;")" = "1" ]
+    [ "$(db "SELECT COUNT(*) FROM document_tag WHERE document = $short AND archived_at IS NULL;")" = "0" ]
+}
