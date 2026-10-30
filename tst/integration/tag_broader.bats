@@ -36,27 +36,39 @@ db() {
     sqlite3 .store/store.db "$1"
 }
 
-area() {
-    local out=$'AREA: '"$1"$' | '"$2"
+# An agent reply line block: a NEW AREA with Area<n>'s four tags.
+new_area() {
+    local out=$'NEW AREA: '"$1"$' | '"$2"$' | nothing in the library fits'
     for t in 1 2 3 4; do out="$out"$'\n- Area'"$3"$' tag '"$t"; done
     printf '%s' "$out"
 }
-NAMES="$(area 'Alpha area' 'The first area.' 1)"$'\n'"$(area 'Beta area' 'The second.' 2)"$'\n'"$(area 'Gamma area' 'The third.' 3)"$'\n'"$(area 'Delta area' 'The fourth.' 4)"
+# The same for a library area picked by label.
+library_area() {
+    local out=$'AREA: '"$1"
+    for t in 1 2 3 4; do out="$out"$'\n- Area'"$2"$' tag '"$t"; done
+    printf '%s' "$out"
+}
+NAMES="$(new_area 'Alpha area' 'The first area.' 1)"$'\n'"$(new_area 'Beta area' 'The second.' 2)"$'\n'"$(new_area 'Gamma area' 'The third.' 3)"$'\n'"$(new_area 'Delta area' 'The fourth.' 4)"
 
-@test "a dry run groups the tags into their four areas, named by the agent, and writes nothing" {
+@test "with an empty library the agent proposes new areas, each with why; a dry run lists them and writes nothing" {
+    export AGENT_TEST_CAPTURE_PROMPT="$TEST_DIR/prompt.txt"
     export AGENT_TEST_GENERATE_RESPONSES="$NAMES"
     run "$BIN" tag broaden --dry-run
-    [[ "$output" =~ "Alpha area (4 tags): Area1 tag 1; Area1 tag 2; Area1 tag 3; Area1 tag 4" ]]
-    [[ "$output" =~ "Delta area (4 tags): Area4 tag 1; Area4 tag 2; Area4 tag 3; Area4 tag 4" ]]
+    [[ "$output" =~ "NEW Alpha area (4 tags): Area1 tag 1; Area1 tag 2; Area1 tag 3; Area1 tag 4" ]]
+    [[ "$output" =~ "    why new: nothing in the library fits" ]]
     [[ "$output" =~ "Dry run: 4 broad tags over 16 tags, nothing written" ]]
     [ "$(db "SELECT COUNT(*) FROM tag WHERE source = 'broader';")" = "0" ]
+    run cat "$TEST_DIR/prompt.txt"
+    [[ "$output" =~ "(empty: add new areas)" ]]
+    [[ "$output" =~ "- Area3 tag 2" ]]
+    unset AGENT_TEST_CAPTURE_PROMPT
 }
 
 @test "broaden writes the broad tags and points each tag at its own; documents and centres don't change" {
     before=$(db "SELECT COUNT(*) || '|' || SUM(members) FROM tag_centre;")
     export AGENT_TEST_GENERATE_RESPONSES="$NAMES"
     run "$BIN" tag broaden
-    [[ "$output" =~ "Wrote 4 broad tags over 16 tags" ]]
+    [[ "$output" =~ "Wrote 4 broad tags over 16 tags (4 new to the library)" ]]
     beta=$(db "SELECT id FROM tag WHERE label = 'Beta area' AND source = 'broader';")
     [ "$(db "SELECT COUNT(*) FROM tag WHERE parent = '$beta' AND label LIKE 'Area2 %';")" = "4" ]
     [ "$(db "SELECT description FROM tag WHERE id = $beta;")" = "The second." ]
@@ -64,36 +76,56 @@ NAMES="$(area 'Alpha area' 'The first area.' 1)"$'\n'"$(area 'Beta area' 'The se
     [ "$(db "SELECT COUNT(*) || '|' || SUM(members) FROM tag_centre;")" = "$before" ]
 }
 
-@test "the agent groups by subject across what similarity would separate; a tag it leaves out joins the nearest area" {
-    # One subject area takes Area1 and Area4 together; Area2 tag 4 is left out.
-    reply=$'AREA: Joined subject | Areas one and four.'
-    for a in 1 4; do for t in 1 2 3 4; do reply="$reply"$'\n- Area'"$a"$' tag '"$t"; done; done
-    reply="$reply"$'\n'"$(area 'Beta area' 'The second.' 2 | grep -v 'Area2 tag 4')"$'\n'"$(area 'Gamma area' 'The third.' 3)"
+@test "library areas are picked by label and keep their tag id, from run to run; an unused one is archived, and restored when picked again" {
+    run "$BIN" tag library add "Alpha area" "The first area."
+    [[ "$output" =~ "Added \"Alpha area\" to the library" ]]
+    "$BIN" tag library add "Beta area" "The second." >/dev/null
+    run "$BIN" tag library add "beta AREA"
+    [[ "$output" =~ "Not added: already in the library: Beta area" ]]
+    run "$BIN" tag library
+    [[ "$output" =~ "Alpha area (not in use): The first area." ]]
+    alpha=$(db "SELECT id FROM tag WHERE label = 'Alpha area';")
+    beta=$(db "SELECT id FROM tag WHERE label = 'Beta area';")
+
+    # Alpha takes areas 1 and 2; Beta isn't used; Gamma is new.
+    reply="$(library_area 'Alpha area' 1)"$'\n'"$(library_area 'Alpha area' 2 | tail -n 4)"$'\n'"$(new_area 'Gamma area' 'The third.' 3)"$'\n'"$(new_area 'Delta area' 'The fourth.' 4)"
+    export AGENT_TEST_GENERATE_RESPONSES="$reply"
+    run "$BIN" tag broaden
+    [[ "$output" =~ "(2 new to the library)" ]]
+    [ "$(db "SELECT COUNT(*) FROM tag WHERE parent = '$alpha';")" = "8" ]
+    [ "$(db "SELECT archived_at IS NULL OR archived_at = '' FROM tag WHERE id = $alpha;")" = "1" ]
+    [ "$(db "SELECT archived_at IS NULL OR archived_at = '' FROM tag WHERE id = $beta;")" = "0" ]
+
+    # Next run: Beta is picked again -- the same tag, restored; Delta,
+    # unused now, is archived.
+    reply="$(library_area 'Alpha area' 1)"$'\n'"$(library_area 'Beta area' 2)"$'\n'"$(library_area 'Gamma area' 3)"$'\n'"$(library_area 'Gamma area' 4 | tail -n 4)"
+    export AGENT_TEST_GENERATE_RESPONSES="$reply"
+    run "$BIN" tag broaden
+    [[ "$output" =~ "(0 new to the library)" ]]
+    [ "$(db "SELECT archived_at IS NULL OR archived_at = '' FROM tag WHERE id = $beta;")" = "1" ]
+    [ "$(db "SELECT COUNT(*) FROM tag WHERE parent = '$beta';")" = "4" ]
+    [ "$(db "SELECT archived_at IS NULL OR archived_at = '' FROM tag WHERE label = 'Delta area';")" = "0" ]
+    [ "$(db "SELECT COUNT(*) FROM tag WHERE source = 'broader';")" = "4" ]
+}
+
+@test "a tag the agent leaves out joins the nearest area" {
+    reply="$NAMES"
+    reply=$(printf '%s' "$reply" | grep -v '^- Area2 tag 4$')
     export AGENT_TEST_GENERATE_RESPONSES="$reply"
     run "$BIN" tag broaden
     [[ "$output" =~ "\"Area2 tag 4\" was left out; placed in Beta area, the nearest area" ]]
-    [[ "$output" =~ "Wrote 3 broad tags over 16 tags" ]]
-    joined=$(db "SELECT id FROM tag WHERE label = 'Joined subject';")
-    [ "$(db "SELECT COUNT(*) FROM tag WHERE parent = '$joined';")" = "8" ]
     beta=$(db "SELECT id FROM tag WHERE label = 'Beta area';")
     [ "$(db "SELECT parent FROM tag WHERE label = 'Area2 tag 4';")" = "$beta" ]
 }
 
-@test "broad tags are refused a second time unless --replace, which archives the old ones; a person's own nesting stays" {
-    export AGENT_TEST_GENERATE_RESPONSES="$NAMES"
-    "$BIN" tag broaden >/dev/null
-    old=$(db "SELECT GROUP_CONCAT(id) FROM tag WHERE source = 'broader';")
+@test "a person's own nesting stays out of the broad level" {
     "$BIN" entity create tag label="Hand-made group" source=manual >/dev/null
     mine=$(db "SELECT id FROM tag WHERE label = 'Hand-made group';")
     t=$(db "SELECT id FROM tag WHERE label = 'Area3 tag 1';")
     "$BIN" entity update tag "$t" parent="$mine" >/dev/null
-
-    run "$BIN" tag broaden
-    [[ "$output" =~ "Refused: broad tags exist" ]]
     export AGENT_TEST_GENERATE_RESPONSES="$NAMES"
-    run "$BIN" tag broaden --replace
+    run "$BIN" tag broaden
     [[ "$output" =~ "over 15 tags" ]]
-    [ "$(db "SELECT COUNT(*) FROM tag WHERE id IN ($old) AND archived_at IS NOT NULL AND archived_at != '';")" = "4" ]
     [ "$(db "SELECT parent FROM tag WHERE id = $t;")" = "$mine" ]
 }
 

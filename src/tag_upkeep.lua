@@ -855,7 +855,8 @@ end
 function tag_upkeep.do_tag(cmd_args, db_path)
     usage = "Usage: daat tag merge <into_id> <from_id>... [--label <label>] [--description <text>]\n" ..
         "       daat tag build [--dry-run [--name]] [--replace] [--max-tags N] [--coarseness C]\n" ..
-        "       daat tag broaden [--dry-run] [--replace]\n" ..
+        "       daat tag broaden [--dry-run]\n" ..
+        "       daat tag library [add \"<label>\" [\"<description>\"]]\n" ..
         "       daat tag define [--dry-run] [--limit N]"
     if cmd_args[1] == "build" then
         flags = {}
@@ -894,7 +895,35 @@ function tag_upkeep.do_tag(cmd_args, db_path)
         for i = 2, #cmd_args do
             flags[cmd_args[i]] = true
         end
-        for _, line in ipairs(require("tag_broader").run(db_path, {dry_run = flags["--dry-run"] == true, replace = flags["--replace"] == true})) do
+        for _, line in ipairs(require("tag_broader").run(db_path, {dry_run = flags["--dry-run"] == true})) do
+            print(line)
+        end
+        return
+    end
+    if cmd_args[1] == "library" then
+        broader = require("tag_broader")
+        if cmd_args[2] == "add" then
+            if cmd_args[3] == nil or cmd_args[3] == "" then
+                print("Usage: daat tag library add \"<label>\" [\"<description>\"]")
+                return
+            end
+            id, err = broader.library_add(db_path, cmd_args[3], cmd_args[4], "system")
+            if id == nil then
+                print("Not added: " .. tostring(err))
+            else
+                print(string.format("Added %q to the library (tag #%d, not in use yet)", cmd_args[3], id))
+            end
+            return
+        end
+        for _, entry in ipairs(broader.library(db_path)) do
+            state = "in use"
+            if entry.archived then
+                state = "not in use"
+            end
+            line = string.format("#%d %s (%s)", entry.id, entry.label, state)
+            if entry.description != nil and entry.description != "" then
+                line = line .. ": " .. entry.description
+            end
             print(line)
         end
         return
