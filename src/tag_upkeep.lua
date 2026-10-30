@@ -922,7 +922,7 @@ function tag_upkeep.do_tag(cmd_args, db_path)
         "       daat tag build [--dry-run [--name]] [--replace] [--max-tags N] [--coarseness C]\n" ..
         "       daat tag broaden [--dry-run]\n" ..
         "       daat tag library [add \"<label>\" [\"<description>\"]]\n" ..
-        "       daat tag define [--dry-run] [--limit N]"
+        "       daat tag define [--dry-run] [--limit N] [--recheck]"
     if cmd_args[1] == "build" then
         flags = {}
         max_tags = nil
@@ -942,15 +942,17 @@ function tag_upkeep.do_tag(cmd_args, db_path)
         return
     end
     if cmd_args[1] == "define" then
-        dry_run, limit = false, nil
+        dry_run, limit, recheck = false, nil, false
         for i = 2, #cmd_args do
             if cmd_args[i] == "--dry-run" then
                 dry_run = true
+            elseif cmd_args[i] == "--recheck" then
+                recheck = true
             elseif cmd_args[i] == "--limit" then
                 limit = tonumber(cmd_args[i + 1])
             end
         end
-        for _, line in ipairs(require("tag_define").repair(db_path, limit, dry_run, "system")) do
+        for _, line in ipairs(require("tag_define").repair(db_path, limit, dry_run, "system", recheck)) do
             print(line)
         end
         return

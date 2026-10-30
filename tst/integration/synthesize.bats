@@ -174,3 +174,21 @@ THEME
     run db "SELECT COUNT(*) FROM knowledge_reference WHERE tag_id = $small;"
     [ "$output" -eq 0 ]
 }
+
+@test "a reference whose tag was archived is archived on the next run, so a rebuild's new tags don't sit beside stale references" {
+    t=$(new_tag "Medium B")
+    for n in A B C; do note_in "$t" "Run $n" >/dev/null; done
+    export AGENT_TEST_GENERATE_RESPONSES="$REFERENCE"$'\1'"PASS"
+    "$BIN" repair synthesize >/dev/null
+    ref=$(db "SELECT document_id FROM knowledge_reference WHERE tag_id = $t;")
+    "$BIN" entity archive tag "$t" >/dev/null
+
+    run "$BIN" repair synthesize --dry-run
+    [[ "$output" =~ "would archive 1 reference(s) whose tag was archived" ]]
+    run "$BIN" knowledge synthesize-due
+    [[ "$output" =~ "archived 1 reference(s) whose tag was archived" ]]
+    run db "SELECT archived_at IS NOT NULL AND archived_at != '' FROM document WHERE id = $ref;"
+    [ "$output" = "1" ]
+    run db "SELECT COUNT(*) FROM knowledge_reference WHERE tag_id = $t;"
+    [ "$output" -eq 0 ]
+}

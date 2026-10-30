@@ -194,3 +194,18 @@ NAMES="$(new_area 'Alpha area' 'The first area.' 1)"$'\n'"$(new_area 'Beta area'
     [ "$(db "SELECT parent FROM tag WHERE id = $t;")" = "$alpha" ]
     [ "$(db "SELECT archived_at IS NULL OR archived_at = '' FROM tag WHERE id = $alpha;")" = "1" ]
 }
+
+@test "tag define --recheck tries a rejected definition again; without it, it stays rejected" {
+    t=$(db "SELECT id FROM tag WHERE label = 'Area1 tag 1';")
+    export AGENT_TEST_GENERATE_RESPONSES=$'Wrong.\1FAIL: too narrow'
+    "$BIN" tag define --limit 1 >/dev/null
+    [ "$(db "SELECT status FROM knowledge_tag_definition WHERE tag_id = $t;")" = "rejected" ]
+
+    run "$BIN" tag define --dry-run
+    [[ ! "$output" =~ "would define tag #$t " ]]
+    run "$BIN" tag define --dry-run --recheck
+    [[ "$output" =~ "would define tag #$t Area1 tag 1" ]]
+    export AGENT_TEST_GENERATE_RESPONSES=$'Area one tag.\1PASS'
+    "$BIN" tag define --recheck --limit 1 >/dev/null
+    [ "$(db "SELECT status FROM knowledge_tag_definition WHERE tag_id = $t;")" = "defined" ]
+}
