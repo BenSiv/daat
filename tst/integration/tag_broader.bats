@@ -36,7 +36,12 @@ db() {
     sqlite3 .store/store.db "$1"
 }
 
-NAMES=$'GROUP 1: Alpha area | The first area.\nGROUP 2: Beta area | The second.\nGROUP 3: Gamma area | The third.\nGROUP 4: Delta area | The fourth.'
+area() {
+    local out=$'AREA: '"$1"$' | '"$2"
+    for t in 1 2 3 4; do out="$out"$'\n- Area'"$3"$' tag '"$t"; done
+    printf '%s' "$out"
+}
+NAMES="$(area 'Alpha area' 'The first area.' 1)"$'\n'"$(area 'Beta area' 'The second.' 2)"$'\n'"$(area 'Gamma area' 'The third.' 3)"$'\n'"$(area 'Delta area' 'The fourth.' 4)"
 
 @test "a dry run groups the tags into their four areas, named by the agent, and writes nothing" {
     export AGENT_TEST_GENERATE_RESPONSES="$NAMES"
@@ -59,12 +64,19 @@ NAMES=$'GROUP 1: Alpha area | The first area.\nGROUP 2: Beta area | The second.\
     [ "$(db "SELECT COUNT(*) || '|' || SUM(members) FROM tag_centre;")" = "$before" ]
 }
 
-@test "the agent can move a tag that doesn't fit its group" {
-    export AGENT_TEST_GENERATE_RESPONSES="$NAMES"$'\nMOVE Area1 tag 4 -> 2'
+@test "the agent groups by subject across what similarity would separate; a tag it leaves out joins the nearest area" {
+    # One subject area takes Area1 and Area4 together; Area2 tag 4 is left out.
+    reply=$'AREA: Joined subject | Areas one and four.'
+    for a in 1 4; do for t in 1 2 3 4; do reply="$reply"$'\n- Area'"$a"$' tag '"$t"; done; done
+    reply="$reply"$'\n'"$(area 'Beta area' 'The second.' 2 | grep -v 'Area2 tag 4')"$'\n'"$(area 'Gamma area' 'The third.' 3)"
+    export AGENT_TEST_GENERATE_RESPONSES="$reply"
     run "$BIN" tag broaden
-    [[ "$output" =~ "moved \"Area1 tag 4\" from group 1 to 2" ]]
+    [[ "$output" =~ "\"Area2 tag 4\" was left out; placed in Beta area, the nearest area" ]]
+    [[ "$output" =~ "Wrote 3 broad tags over 16 tags" ]]
+    joined=$(db "SELECT id FROM tag WHERE label = 'Joined subject';")
+    [ "$(db "SELECT COUNT(*) FROM tag WHERE parent = '$joined';")" = "8" ]
     beta=$(db "SELECT id FROM tag WHERE label = 'Beta area';")
-    [ "$(db "SELECT parent FROM tag WHERE label = 'Area1 tag 4';")" = "$beta" ]
+    [ "$(db "SELECT parent FROM tag WHERE label = 'Area2 tag 4';")" = "$beta" ]
 }
 
 @test "broad tags are refused a second time unless --replace, which archives the old ones; a person's own nesting stays" {
@@ -131,15 +143,4 @@ NAMES=$'GROUP 1: Alpha area | The first area.\nGROUP 2: Beta area | The second.\
     [[ "$output" =~ "1 definition(s) of archived tags archived" ]]
     run db "SELECT archived_at IS NOT NULL AND archived_at != '' FROM document WHERE id = $record;"
     [ "$output" = "1" ]
-}
-
-@test "the agent can add a subject group and move tags into it; groups left empty are dropped" {
-    moves=$'\nGROUP 5: Epsilon subject | Gathered by subject.\nMOVE Area1 tag 1 -> 5\nMOVE Area2 tag 1 -> 5'
-    for t in 1 2 3 4; do moves="$moves"$'\nMOVE Area4 tag '"$t"$' -> 5'; done
-    export AGENT_TEST_GENERATE_RESPONSES="$NAMES$moves"
-    run "$BIN" tag broaden
-    [[ "$output" =~ "Wrote 4 broad tags over 16 tags" ]]
-    epsilon=$(db "SELECT id FROM tag WHERE label = 'Epsilon subject' AND source = 'broader';")
-    [ "$(db "SELECT COUNT(*) FROM tag WHERE parent = '$epsilon';")" = "6" ]
-    [ "$(db "SELECT COUNT(*) FROM tag WHERE label = 'Delta area';")" = "0" ]
 }

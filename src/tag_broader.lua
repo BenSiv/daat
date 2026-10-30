@@ -6,10 +6,13 @@
 -- it, "Colour by sub-tag" by the specific tags (Ben, 2026-10-29: 50
 -- tags were too many to see, without changing the clustering).
 --
--- The data proposes, the agent decides, as elsewhere in tag upkeep:
--- average linkage over the tags' centred centres (tag_upkeep.lua) cut at
--- the level that lives longest within BROADER_RANGE; then one agent call
--- names each group and may move a tag that doesn't fit its group.
+-- The agent groups by subject: one call gets every tag (label and
+-- description) and puts each in a subject area it names. Document
+-- similarity can't do this -- on prod it grouped by kind of document
+-- (literature, protocols, internal records), and given that grouping as
+-- a starting point the agent only renamed it (2026-10-30). The data
+-- comes in where the agent leaves a tag out: it joins the area whose
+-- tags' centred centres (tag_upkeep.lua) are nearest its own.
 --
 -- A broad tag holds no documents of its own and has no centre, so a new
 -- document is never placed in one. A person's parent (on a manual tag,
@@ -20,28 +23,17 @@ entity = require("entity")
 config = require("config")
 tag = require("tag")
 tag_upkeep = require("tag_upkeep")
-tag_build = require("tag_build")
 agent_provider = require("agent_provider")
 
 tag_broader = {}
 
--- Broad tags: a tag per BROADER_TAGS_PER_GROUP specific ones, between
--- these bounds.
-BROADER_RANGE = {4, 12}
-BROADER_TAGS_PER_GROUP = 5
-
--- Ben, 2026-10-29: broad tags by subject. The first prod dry run
--- grouped by kind of document (literature, protocols, internal
--- records), since that's what document similarity mostly follows; the
--- agent now regroups by subject and may add groups.
 BROADER_PROMPT = """You organise the subject tags of a lab's knowledge base into broad subject areas, for browsing.
 Group by what the documents are about, not by the kind of document: literature, protocols, data and meeting notes on the same subject belong in the same area. Tags whose subject is outside the lab's field can share one area.
-You get a first grouping by document similarity. It often groups by kind of document, so move tags freely, and add new groups, numbered after the last, where a subject needs one. Aim for 5 to 12 areas.
-Reply with one line for every group that keeps or gets tags:
-GROUP <n>: <label> | <one-sentence description of the subject area>
-Labels are 1-4 words, broader than any tag in the group, and distinct from each other. Then one line for each tag you move:
-MOVE <tag label> -> <group number>
-Reply with those lines only."""
+Make 5 to 12 areas, and put every tag in exactly one. For each area reply:
+AREA: <label> | <one-sentence description of the subject area>
+- <tag label, exactly as given>
+- <tag label>
+Labels are 1-4 words, broader than any tag in the area, and distinct from each other. Reply with those lines only."""
 
 -- The specific tags to group: every active tag with a centre whose
 -- parent is empty or a broad tag (a person's nesting stays).
@@ -62,66 +54,54 @@ function tag_broader.specific_tags(db_path)
     return out
 end
 
--- Groups the tags by average linkage over 1 - cosine of their centred
--- centres, cut at the longest-lived level in range. -> group per tag
--- index, the number of groups.
-function tag_broader.group(tags)
-    n = #tags
-    distance = {}
-    sizes = {}
-    for i = 1, n do
-        distance[i] = {}
-        sizes[i] = 1
-        for j = 1, n do
-            if i == j then
-                distance[i][j] = 0.0
-            else
-                distance[i][j] = 1.0 - tag.dot(tags[i].centred, tags[j].centred)
-            end
-        end
-    end
-    merges = tag_build.average_linkage(distance, sizes)
-    low = math.max(2, math.min(BROADER_RANGE[1], n - 1))
-    high = math.max(low, math.min(BROADER_RANGE[2], math.floor(n / 2)))
-    target = math.floor(n / BROADER_TAGS_PER_GROUP + 0.5)
-    best, best_life = nil, -1.0
-    for i = 1, #merges - 1 do
-        groups = n - i
-        life = merges[i + 1][3] - merges[i][3]
-        if groups >= low and groups <= high and life >= best_life then
-            best, best_life = groups, life
-        end
-    end
-    if best == nil then
-        best = math.max(1, math.min(high, target))
-    end
-    return tag_build.cut(merges, n, best), best
-end
-
--- The agent's reply: names per group number, and moves by tag label.
-function tag_broader.parse(answer, groups)
-    names, moves = {}, {}
+-- The agent's reply: {{label, description, members = {lowercased tag
+-- label -> true}}, ...}, in order.
+function tag_broader.parse(answer)
+    areas = {}
+    current = nil
     for line in string.gmatch(tostring(answer), "[^\n]+") do
-        n, rest = string.match(line, "^%s*GROUP%s+(%d+)%s*:%s*(.-)%s*$")
-        if n != nil then
+        rest = string.match(line, "^%s*AREA%s*:%s*(.-)%s*$")
+        member = string.match(line, "^%s*[%-%*]%s*(.-)%s*$")
+        if rest != nil then
             label, description = string.match(rest, "^(.-)%s*|%s*(.*)$")
             if label == nil then
                 label, description = rest, nil
             end
             label = string.gsub(label, "^[\"'%s%*]+", "")
             label = string.gsub(label, "[\"'%.%s%*]+$", "")
-            if label != "" then
-                names[tonumber(n)] = {label = string.sub(label, 1, 80), description = description}
-            end
-        end
-        from, to = string.match(line, "^%s*MOVE%s+(.-)%s*%->%s*(%d+)%s*$")
-        if from != nil and tonumber(to) != nil and tonumber(to) >= 1 and tonumber(to) <= math.max(groups, BROADER_RANGE[2]) then
-            from = string.gsub(from, "^[\"'%s%*]+", "")
-            from = string.gsub(from, "[\"'%s%*]+$", "")
-            moves[string.lower(from)] = tonumber(to)
+            current = {label = string.sub(label, 1, 80), description = description, members = {}}
+            table.insert(areas, current)
+        elseif member != nil and current != nil then
+            member = string.gsub(member, "^[\"'%*]+", "")
+            member = string.gsub(member, "[\"'%*]+$", "")
+            current.members[string.lower(member)] = true
         end
     end
-    return names, moves
+    return areas
+end
+
+-- The area whose assigned tags' centred centres are, on average, nearest
+-- the tag's own. -> area index, or nil.
+function broader_nearest(t, tags, area_of)
+    best, best_score = nil, -2.0
+    sums, counts = {}, {}
+    for i, other in ipairs(tags) do
+        a = area_of[i]
+        if a != nil and other.centred != nil and t.centred != nil then
+            if sums[a] == nil then
+                sums[a], counts[a] = 0, 0
+            end
+            sums[a] = sums[a] + tag.dot(t.centred, other.centred)
+            counts[a] = counts[a] + 1
+        end
+    end
+    for a, total in pairs(sums) do
+        score = total / counts[a]
+        if score > best_score then
+            best, best_score = a, score
+        end
+    end
+    return best
 end
 
 -- `daat tag broaden [--dry-run] [--replace]`.
@@ -137,39 +117,46 @@ function tag_broader.run(db_path, opts)
         table.insert(lines, "Nothing to group: " .. #tags .. " tag(s)")
         return lines
     end
-    group_of, count = tag_broader.group(tags)
-
     prompt = {}
-    for g = 1, count do
-        members = {}
-        for i, t in ipairs(tags) do
-            if group_of[i] == g then
-                entry = "- " .. tostring(t.label)
-                if t.description != nil and t.description != "" then
-                    entry = entry .. ": " .. t.description
-                end
-                table.insert(members, entry)
-            end
+    for _, t in ipairs(tags) do
+        entry = "- " .. tostring(t.label)
+        if t.description != nil and t.description != "" then
+            entry = entry .. ": " .. t.description
         end
-        table.insert(prompt, "Group " .. g .. ":\n" .. table.concat(members, "\n"))
+        table.insert(prompt, entry)
     end
-    answer, err = agent_provider.generate(nil, tag_upkeep.context() .. BROADER_PROMPT, table.concat(prompt, "\n\n"))
+    answer, err = agent_provider.generate(nil, tag_upkeep.context() .. BROADER_PROMPT, table.concat(prompt, "\n"))
     if answer == nil then
         table.insert(lines, "Stopped: " .. tostring(err))
         return lines
     end
-    names, moves = tag_broader.parse(answer, count)
-    -- Groups the agent added.
-    for _, to in pairs(moves) do
-        if to > count then
-            count = to
-        end
+    areas = tag_broader.parse(answer)
+    if #areas == 0 then
+        table.insert(lines, "Stopped: no area could be read from the agent's reply")
+        return lines
+    end
+    count = #areas
+    names = {}
+    group_of = {}
+    for a, area in ipairs(areas) do
+        names[a] = {label = area.label, description = area.description}
     end
     for i, t in ipairs(tags) do
-        to = moves[string.lower(tostring(t.label))]
-        if to != nil and to != group_of[i] then
-            table.insert(lines, string.format("moved %q from group %d to %d", tostring(t.label), group_of[i], to))
-            group_of[i] = to
+        for a, area in ipairs(areas) do
+            if group_of[i] == nil and area.members[string.lower(tostring(t.label))] == true then
+                group_of[i] = a
+            end
+        end
+    end
+    -- Tags the agent left out join their nearest area.
+    for i, t in ipairs(tags) do
+        if group_of[i] == nil then
+            a = broader_nearest(t, tags, group_of)
+            if a == nil then
+                a = 1
+            end
+            group_of[i] = a
+            table.insert(lines, string.format("%q was left out; placed in %s, the nearest area", tostring(t.label), names[a].label))
         end
     end
 
