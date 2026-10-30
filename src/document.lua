@@ -2544,6 +2544,9 @@ for _, word in ipairs({
     SEARCH_STOPWORDS[word] = true
 end
 
+-- For tag_terms.lua's distinctive words.
+document.search_stopwords = SEARCH_STOPWORDS
+
 SEARCH_MAX_TERMS = 8
 
 -- Lowercased query words, edge punctuation stripped (quotes, brackets,

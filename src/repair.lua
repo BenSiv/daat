@@ -87,6 +87,16 @@ function repair_tags(cmd_args, db_path)
             pairs_above = tonumber(cmd_args[i + 1])
         end
     end
+    if flags["--relabel"] == true then
+        -- --dry-run: the agent's verdicts and proposed names, nothing
+        -- written; without it, renames applied.
+        dry_run = flags["--dry-run"] == true
+        report = tag_upkeep.run(db_path, {judge = true, apply = not dry_run, relabel = true})
+        for _, line in ipairs(report) do
+            print(line)
+        end
+        return
+    end
     if flags["--place-untagged"] == true then
         placed, left = tag.place_untagged(db_path)
         print(string.format("Placed %d untagged document(s); %d had no tag close enough", placed, left))
@@ -231,8 +241,8 @@ REPAIRS = {
      description = "Embed documents whose embedding is missing, from another model, or of changed text (--all: every document; one provider call each)."},
     {name = "embeddings-packed", usage = "embeddings-packed", run = repair_embeddings_packed,
      description = "Pack stored embeddings into the binary form search reads (no provider calls)."},
-    {name = "tags", usage = "tags [document_id | --place-untagged | --restructure [--dry-run [--judge] [--pairs-above C]]]", run = repair_tags,
-     description = "Rebuild tag centres from memberships (and the upkeep baselines), re-place one document by nearest tag, place every untagged document that has a subject (--place-untagged), or split/merge/re-check tags with the agent's judgment."},
+    {name = "tags", usage = "tags [document_id | --place-untagged | --relabel [--dry-run] | --restructure [--dry-run [--judge] [--pairs-above C]]]", run = repair_tags,
+     description = "Rebuild tag centres from memberships (and the upkeep baselines), re-place one document by nearest tag, place every untagged document that has a subject (--place-untagged), re-check every computed tag's label with its distinctive words and neighbours (--relabel), or split/merge/re-check tags with the agent's judgment."},
     {name = "tag-evidence", usage = "tag-evidence", run = repair_tag_evidence,
      description = "Recompute core tag evidence (link, connection) from links and memberships."},
     {name = "references", usage = "references", run = repair_references,
