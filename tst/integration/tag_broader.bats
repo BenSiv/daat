@@ -176,3 +176,21 @@ NAMES="$(new_area 'Alpha area' 'The first area.' 1)"$'\n'"$(new_area 'Beta area'
     run db "SELECT archived_at IS NOT NULL AND archived_at != '' FROM document WHERE id = $record;"
     [ "$output" = "1" ]
 }
+
+@test "a tag a person placed stays where they put it, and its area stays in use, when broaden runs again" {
+    export AGENT_TEST_GENERATE_RESPONSES="$NAMES"
+    "$BIN" tag broaden >/dev/null
+    alpha=$(db "SELECT id FROM tag WHERE label = 'Alpha area';")
+    t=$(db "SELECT id FROM tag WHERE label = 'Area4 tag 1';")
+    USER="ben" "$BIN" entity update tag "$t" parent="$alpha" >/dev/null
+
+    # The next run puts every tag elsewhere and leaves Alpha out.
+    reply="$(new_area 'Beta area' 'The second.' 2)"
+    for a in 1 3 4; do reply="$reply"$'\n'"$(library_area 'Beta area' $a | tail -n 4)"; done
+    export AGENT_TEST_GENERATE_RESPONSES="$reply"
+    run "$BIN" tag broaden
+    [[ "$output" =~ "1 tag(s) placed by a person kept where they are" ]]
+    [[ "$output" =~ "over 15 tags" ]]
+    [ "$(db "SELECT parent FROM tag WHERE id = $t;")" = "$alpha" ]
+    [ "$(db "SELECT archived_at IS NULL OR archived_at = '' FROM tag WHERE id = $alpha;")" = "1" ]
+}
