@@ -22,8 +22,12 @@
 -- a start the agent only renamed it (2026-10-30).
 --
 -- A broad tag holds no documents of its own and has no centre, so a new
--- document is never placed in one. A person's parent (on a manual tag,
--- or pointing at a tag that isn't broader) is left as it is.
+-- document is never placed in one. A person's parent is left as it is:
+-- one pointing at a tag that isn't broader (their own nesting), and one
+-- a person set to a broad tag -- the last ledger change to the tag's
+-- parent by an author other than "system" (Ben, 2026-10-30: hand moves
+-- stick; a rerun is a fresh judgment and moved tags back). A broad tag
+-- such a hand placement points to counts as in use.
 
 db = require("database")
 entity = require("entity")
@@ -88,9 +92,40 @@ function tag_broader.library_add(db_path, label, description, author)
     return id
 end
 
+-- Tags whose parent a person set last: {tag id -> parent id}. The
+-- ledger is the record, so no flag of its own: an author other than
+-- "system" (or none, for very old rows) on the latest parent change.
+function tag_broader.hand_placed(db_path)
+    rows = db.query(db_path, """
+        SELECT entity_id, author FROM entity_event
+        WHERE entity_type = 'tag' AND field_changes LIKE '%"parent"%'
+        ORDER BY event_id;""")
+    last = {}
+    if rows != nil then
+        for _, row in ipairs(rows) do
+            last[tostring(tonumber(row.entity_id))] = row.author
+        end
+    end
+    out = {}
+    parents = db.query(db_path, "SELECT id, parent FROM tag WHERE archived_at IS NULL OR archived_at = '';")
+    if parents == nil then
+        return out
+    end
+    for _, row in ipairs(parents) do
+        key = tostring(tonumber(row.id))
+        author = last[key]
+        if author != nil and author != "" and author != "system" and row.parent != nil and row.parent != "" then
+            out[key] = tostring(row.parent)
+        end
+    end
+    return out
+end
+
 -- The specific tags to group: every active tag with a centre whose
--- parent is empty or a broad tag (a person's nesting stays).
+-- parent is empty or a broad tag the system set (a person's nesting,
+-- and a person's placement, stay).
 function tag_broader.specific_tags(db_path)
+    hand = tag_broader.hand_placed(db_path)
     broad = {}
     rows = db.query(db_path, "SELECT id FROM tag WHERE source = 'broader';")
     if rows != nil then
@@ -100,7 +135,8 @@ function tag_broader.specific_tags(db_path)
     end
     out = {}
     for _, t in ipairs(tag_upkeep.tags(db_path)) do
-        if t.source != "broader" and t.centred != nil and (t.parent == nil or broad[tostring(t.parent)] == true) then
+        if t.source != "broader" and t.centred != nil and (t.parent == nil or broad[tostring(t.parent)] == true)
+            and hand[tostring(t.id)] == nil then
             table.insert(out, t)
         end
     end
@@ -267,6 +303,18 @@ function tag_broader.run(db_path, opts)
         if used[a] == true and area.entry != nil then
             picked[area.entry.id] = true
         end
+    end
+    -- Areas a person placed tags in stay in use.
+    hand = tag_broader.hand_placed(db_path)
+    held = 0
+    for _, parent in pairs(hand) do
+        if tonumber(parent) != nil then
+            picked[tonumber(parent)] = true
+        end
+        held = held + 1
+    end
+    if held > 0 then
+        table.insert(lines, string.format("%d tag(s) placed by a person kept where they are", held))
     end
     unused = {}
     for _, entry in ipairs(library) do
