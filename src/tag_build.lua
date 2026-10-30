@@ -63,6 +63,7 @@ BUILD_MICRO_MAX = 150
 BUILD_DOCS_PER_TAG = 60
 
 NAMING_PROMPT = """You name one group of documents from a lab's knowledge base, built as a tag.
+You get its most central documents, and the words that set it apart from the other groups (most distinctive first). Name the subject the documents share, made specific by those words -- a subject, not a list of the words, and not the kind of file (spreadsheet, template, notes).
 Reply with one line: <label> | <one-sentence description of what the documents are about>.
 The label is 2-5 words, a subject: specific (organism, method, material) rather than generic ("Research", "Science").
 Never name publishing or access boilerplate (open access, licences, journals, downloads). No quotes, no preamble."""
@@ -713,8 +714,22 @@ end
 -- or that a manual tag has, asked again together.
 function build_name(db_path, plan, report)
     context = tag_upkeep.context()
+    -- Distinctive words per planned tag, against all the others
+    -- (tag_terms.lua; decision log 2026-10-30 in doc/tag-ontology.md).
+    groups = {}
+    for t, _ in ipairs(plan.tags) do
+        docs = {}
+        for _, m in ipairs(build_members_for_titles(plan, t)) do
+            table.insert(docs, m.document)
+        end
+        groups[t] = docs
+    end
+    words = require("tag_terms").distinctive(db_path, groups)
     for t, tg in ipairs(plan.tags) do
         titles = tag_upkeep.titles(db_path, build_members_for_titles(plan, t), tg.centre, false)
+        if words[t] != nil and #words[t] > 0 then
+            titles = titles .. "\n\nDistinctive words: " .. table.concat(words[t], ", ")
+        end
         answer, err = agent_provider.generate(nil, context .. NAMING_PROMPT, titles)
         tg.titles = titles
         if answer == nil then

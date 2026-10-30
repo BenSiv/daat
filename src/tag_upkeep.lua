@@ -99,8 +99,8 @@ If SAME, add one line naming the merged tag (keep the first tag's label if it fi
 NAME: <label> | <one-sentence description>
 Labels are 2-5 words, specific (organism, method, material) rather than generic, no quotes."""
 
-FIT_PROMPT = """You review one tag in a lab's knowledge base after it took in new documents. You get its label, its description, its most central titles and its newest titles.
-Answer FITS if the label and description still describe all of them, or RENAME if they no longer do.
+FIT_PROMPT = """You review one tag in a lab's knowledge base. You get its label, its description, its most central titles, its newest titles, the words that set it apart from the other tags (most distinctive first), and the labels of its nearest neighbouring tags.
+Answer FITS if the label and description describe its documents as a subject and tell it apart from its neighbours, or RENAME if they don't -- too generic, naming the kind of file (spreadsheet, template, notes) rather than the subject, or no longer what the documents are about.
 Reply on the first line with FITS or RENAME, then " -- " and one short reason.
 If RENAME, add one line:
 NAME: <label> | <one-sentence description>
@@ -406,8 +406,20 @@ end
 -- review: tags built elsewhere can start closer than the build baseline
 -- assumes), every pair above that cosine is proposed as a merge, and
 -- nothing else.
-function tag_upkeep.proposals(db_path, dry_run, pairs_above)
+function tag_upkeep.proposals(db_path, dry_run, pairs_above, relabel)
     tags = tag_upkeep.tags(db_path)
+    -- `repair tags --relabel`: a label check on every computed tag, now
+    -- (decision log 2026-10-30: the 50 tags named before distinctive
+    -- words existed are re-checked once with them).
+    if relabel == true then
+        out = {}
+        for _, t in ipairs(tags) do
+            if t.source == "computed" then
+                table.insert(out, {kind = "fit", a = t, fit_members = t.members})
+            end
+        end
+        return out
+    end
     baselines, merge_cosine = upkeep_baselines(db_path, tags, dry_run)
     review = pairs_above != nil
     if review then
@@ -590,6 +602,48 @@ function tag_upkeep.parse(answer, verdicts)
     return parsed
 end
 
+-- Neighbouring tags shown to the label check.
+UPKEEP_NEIGHBOURS = 5
+-- Computed once per process: every active tag's distinctive words
+-- (tag_terms.lua, against all the others) and the tags themselves.
+UPKEEP_EVIDENCE = nil
+
+function upkeep_naming_evidence(db_path)
+    if UPKEEP_EVIDENCE != nil then
+        return UPKEEP_EVIDENCE
+    end
+    tags = tag_upkeep.tags(db_path)
+    groups = {}
+    for _, t in ipairs(tags) do
+        docs = {}
+        for _, m in ipairs(upkeep_members(db_path, t.id)) do
+            table.insert(docs, m.document)
+        end
+        groups[t.id] = docs
+    end
+    UPKEEP_EVIDENCE = {tags = tags, words = require("tag_terms").distinctive(db_path, groups)}
+    return UPKEEP_EVIDENCE
+end
+
+-- The labels of the `n` tags nearest `t` by centred centre.
+function upkeep_neighbours(tags, t, n)
+    near = {}
+    for _, other in ipairs(tags) do
+        if other.id != t.id and other.source != "broader" then
+            cosine = upkeep_closeness(t, other)
+            if cosine != nil then
+                table.insert(near, {label = tostring(other.label), cosine = cosine})
+            end
+        end
+    end
+    table.sort(near, function(a, b) return a.cosine > b.cosine end)
+    out = {}
+    for i = 1, math.min(n, #near) do
+        table.insert(out, near[i].label)
+    end
+    return out
+end
+
 function upkeep_ask(db_path, p)
     if p.kind == "split" then
         members = upkeep_members(db_path, p.a.id)
@@ -612,6 +666,14 @@ function upkeep_ask(db_path, p)
     members = upkeep_members(db_path, p.a.id)
     prompt = upkeep_tag_header(p.a) .. "\nMost central\n" .. upkeep_titles(db_path, members, p.a.centre, false) ..
         "\n\nNewest\n" .. upkeep_titles(db_path, members, p.a.centre, true)
+    evidence = upkeep_naming_evidence(db_path)
+    if evidence.words[p.a.id] != nil and #evidence.words[p.a.id] > 0 then
+        prompt = prompt .. "\n\nDistinctive words: " .. table.concat(evidence.words[p.a.id], ", ")
+    end
+    neighbours = upkeep_neighbours(evidence.tags, p.a, UPKEEP_NEIGHBOURS)
+    if #neighbours > 0 then
+        prompt = prompt .. "\n\nNearest tags: " .. table.concat(neighbours, "; ")
+    end
     answer, err = agent_provider.generate(nil, upkeep_context() .. FIT_PROMPT, prompt)
     return answer, err, {"FITS", "RENAME"}
 end
@@ -811,10 +873,13 @@ function tag_upkeep.run(db_path, opts)
     if opts.pairs_above != nil and opts.apply then
         return {"--pairs-above is a review: run it with --dry-run"}
     end
-    proposals = tag_upkeep.proposals(db_path, not opts.apply, opts.pairs_above)
+    proposals = tag_upkeep.proposals(db_path, not opts.apply, opts.pairs_above, opts.relabel)
     limit = TAG_JUDGMENTS_PER_RUN
     if opts.pairs_above != nil then
         limit = TAG_REVIEW_PAIRS
+    end
+    if opts.relabel == true then
+        limit = #proposals
     end
     asked = 0
     for _, p in ipairs(proposals) do
