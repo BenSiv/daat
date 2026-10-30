@@ -276,9 +276,49 @@ function synthesize.run_pending(db_path, limit, author)
     return lines
 end
 
+-- References whose tag was archived (a rebuild archives every computed
+-- tag): the reference is archived and its row dropped, so the new tags'
+-- references don't sit beside stale ones (found 2026-10-30: the rebuild
+-- left 15 references on archived tags). -> how many.
+function synthesize.archive_orphans(db_path, author, dry_run)
+    rows = db.query(db_path, """
+        SELECT k.tag_id, k.document_id FROM knowledge_reference k JOIN tag t ON t.id = k.tag_id
+        WHERE t.archived_at IS NOT NULL AND t.archived_at != '';""")
+    if rows == nil then
+        return 0
+    end
+    if dry_run then
+        return #rows
+    end
+    entity = require("entity")
+    archived = 0
+    for _, row in ipairs(rows) do
+        if row.document_id != nil and row.document_id != "" then
+            doc = knowledge.get_document(db_path, tonumber(row.document_id))
+            if doc != nil and (doc.archived_at == nil or doc.archived_at == "") then
+                archived_id = entity.archive(db_path, "document", tonumber(row.document_id), author, nil, "its tag was archived")
+                if archived_id != nil then
+                    document.on_entity_archived(db_path, "document", archived_id)
+                    archived = archived + 1
+                end
+            end
+        end
+        db.exec(db_path, string.format("DELETE FROM knowledge_reference WHERE tag_id = %d;", tonumber(row.tag_id)))
+    end
+    return archived
+end
+
 -- `daat repair synthesize [--limit N] [--dry-run] [--recheck]`.
 function synthesize.repair(db_path, limit, dry_run, author, recheck)
     lines = {}
+    orphans = synthesize.archive_orphans(db_path, author, dry_run)
+    if orphans > 0 then
+        if dry_run then
+            table.insert(lines, string.format("would archive %d reference(s) whose tag was archived", orphans))
+        else
+            table.insert(lines, string.format("archived %d reference(s) whose tag was archived", orphans))
+        end
+    end
     due = synthesize.due_tags(db_path, recheck)
     if limit == nil then
         limit = #due

@@ -192,15 +192,18 @@ function tag_define.run(db_path, t, author)
     return "defined", record_id
 end
 
--- `daat tag define [--dry-run] [--limit N]`: every tag whose inputs
--- changed since its definition (or that has none), and the definitions
--- of archived tags archived.
-function tag_define.repair(db_path, limit, dry_run, author)
+-- `daat tag define [--dry-run] [--limit N] [--recheck]`: every tag
+-- whose inputs changed since its definition (or that has none) -- with
+-- --recheck also those whose last try was rejected or failed -- and the
+-- definitions of archived tags archived. Found on prod 2026-10-30: 10 of
+-- 65 definitions rejected, and nothing would ever try them again.
+function tag_define.repair(db_path, limit, dry_run, author, recheck)
     lines = {}
     due = {}
     for _, t in ipairs(tag_define.inputs(db_path)) do
         row = define_row(db_path, t.id)
-        if row == nil or row.input_hash != document.content_hash(t.structure) then
+        retry = recheck == true and row != nil and row.status != "defined"
+        if row == nil or row.input_hash != document.content_hash(t.structure) or retry then
             table.insert(due, t)
         end
     end
