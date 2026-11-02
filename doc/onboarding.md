@@ -118,4 +118,4 @@ Everything else in `doc/` (`architecture.md`, `schema.md`, `extensibility.md`, `
 - `api.md` -- the HTTP API surface.
 - `agent-protocol.md` -- the LLM-provider protocol every `agent_provider_*.lua` backend implements.
 - `glossary.md` -- terminology, keep it open while writing docs or UI copy.
-- `../README.md` -- project status, CLI reference, build/test basics.
+- `../README.md` -- overview, build/test basics, links to the docs.
