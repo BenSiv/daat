@@ -68,6 +68,10 @@ Shared rules, and why:
 - **Setting a password through a link ends all sessions** (via `set_password`).
 - **`/forgot-password` answers the same whether or not anything matched**, is limited to one link per account per 5 minutes, and only mails verified addresses. A send failure is logged, never shown. Otherwise the form would reveal which logins and emails exist.
 
+**Turning it on.** All of this is off until `platform.lua` sets `mail_provider`, `mail_from` and `public_url`. Until then `/forgot-password` and `/reset-password` return 404, and `daat user add` and the `/admin-users` form take a password directly. Two backends send real mail:
+- `mail_provider = "smtp"` takes `smtp_url` (e.g. `"smtp://smtp.gmail.com:587"`; TLS is always required), an optional `smtp_user`, and the password in the `PLATFORM_SMTP_PASSWORD` environment variable.
+- `mail_provider = "graph"` sends as `mail_from` through Microsoft Graph as an Entra app, for Microsoft 365 tenants where password SMTP is off. It takes `graph_tenant_id`, `graph_client_id` and the client secret in `PLATFORM_GRAPH_CLIENT_SECRET`. The app needs the Graph `Mail.Send` application permission, scoped by the tenant admin to that one mailbox.
+
 **Why `verify` is separate from `setup`.** Before this split, setting an email on any account mailed a link that could set the password. Whoever read that unverified, possibly mistyped, address could take over an existing account, an Admin's included. A `verify` link now needs the account's current password, so it proves two things: the reader has the mailbox, and the reader owns the account. Only then does the address become a place reset links can go.
 
 ## Admin accounts
