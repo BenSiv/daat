@@ -313,6 +313,11 @@ function ensure_agent_pending_action_columns(db_path)
     if have["tool_call_id"] == nil then
         db.exec(db_path, "ALTER TABLE agent_pending_action ADD COLUMN tool_call_id VARCHAR(255);")
     end
+    -- Which request won the right to resolve this action -- see
+    -- agent.claim_pending_action.
+    if have["claim_token"] == nil then
+        db.exec(db_path, "ALTER TABLE agent_pending_action ADD COLUMN claim_token VARCHAR(32);")
+    end
 end
 
 -- Lets a human interrupt an in-progress turn loop between steps -- see
@@ -1463,6 +1468,33 @@ function agent.get_pending_action(db_path, pending_id, login)
         return nil
     end
     return rows[1]
+end
+
+-- Takes a pending action out of 'pending' for this request alone,
+-- before anything acts on it: true when this request won it, false when
+-- another got there first. Each web request is its own CGI process, and
+-- approve_pending used to check status = 'pending', run the tool, and
+-- only then mark the row -- so approvals arriving together (a double
+-- click, two tabs, a retried request) all passed the check and all ran
+-- the write, and an approve racing a deny could do both (#16).
+--
+-- The UPDATE only matches a row still 'pending', so exactly one request
+-- moves it, and each writes its own random token; reading the row back
+-- says whose token stuck. Read back rather than counting changed rows:
+-- database.exec reports affected rows on MariaDB but not on SQLite.
+function agent.claim_pending_action(db_path, pending_id, claimed_status)
+    token, err = random_session_token()
+    if token == nil then
+        return false, err
+    end
+    db.exec(db_path, string.format(
+        "UPDATE agent_pending_action SET status = %s, claim_token = %s WHERE id = %d AND status = 'pending';",
+        db.quote(claimed_status), db.quote(token), tonumber(pending_id)
+    ))
+    rows = db.query(db_path, string.format(
+        "SELECT claim_token FROM agent_pending_action WHERE id = %d;", tonumber(pending_id)
+    ))
+    return rows != nil and rows[1] != nil and rows[1].claim_token == token
 end
 
 function agent.resolve_pending_action(db_path, pending_id, status)
@@ -2684,6 +2716,13 @@ function agent.approve_pending(db_path, pending_id, login, system_prompt, model,
     if pending.status != "pending" then
         return nil, "action already " .. tostring(pending.status)
     end
+    -- 'running' until the tool has returned. A process that dies in
+    -- between leaves the row there on purpose: the write may or may not
+    -- have happened, so nothing runs it again on its own, and it's no
+    -- longer offered for approval (agent.latest_pending reads 'pending').
+    if agent.claim_pending_action(db_path, pending_id, "running") == false then
+        return nil, "action already " .. tostring(agent.get_pending_action(db_path, pending_id, login).status)
+    end
 
     args, _, _ = json.decode(pending.args_json)
     if args == nil then
@@ -2717,6 +2756,11 @@ function agent.deny_pending(db_path, pending_id, login, system_prompt, model, re
     end
     if pending.status != "pending" then
         return nil, "action already " .. tostring(pending.status)
+    end
+    -- Claimed the same way as an approval, so an approve and a deny
+    -- arriving together can't both win.
+    if agent.claim_pending_action(db_path, pending_id, "denied") == false then
+        return nil, "action already " .. tostring(agent.get_pending_action(db_path, pending_id, login).status)
     end
 
     agent.add_tool_result_message(db_path, pending.session_id, pending.tool_call_id, pending.tool .. "." .. pending.method, "User denied execution of this action.", true)
