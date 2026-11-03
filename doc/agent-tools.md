@@ -35,12 +35,15 @@ Every tool, built-in or from an extension, is one record:
     handler = function(ctx, args) -> result, err,
     in_research = true,            -- a research sub-agent may call it
     control = nil,                 -- nil | "clarify" | "research" | "background"
+    precheck = nil,                -- optional, destructive only: function(ctx, args) -> err | nil
     recover = nil,                 -- optional: function(ctx, args, err) -> hint | nil
     repeat_safe = false,           -- an exact repeat may be answered from context
     pin_on_compaction = false,     -- the result is kept verbatim through compaction
     result_cap = nil,              -- nil: agent_tool_result_cap applies
 }
 ```
+
+`precheck` refuses a destructive call that can't do anything before it becomes a pending action, so a person is never asked to approve a no-op. It returns the error text, or `nil` when the call may go to approval. It replaces `agent_tools.reject_before_approval`: `entity.update` and `document.update`, the two tools with a case there today, get it as their `precheck`, with the same messages. `document.update`'s handler already repeats that check when it runs, and keeps doing so by calling its own `precheck`.
 
 `recover`, `repeat_safe`, `pin_on_compaction` and `result_cap` are explained in "Recovery hints" and "Repeat calls and result size" below.
 
@@ -62,6 +65,7 @@ Rules for the fields, checked when the registry is built:
 - `destructive` and `in_research` are booleans. A missing `in_research` means `false`, so a new tool is hidden from sub-agents until someone decides otherwise.
 - `control` is `nil` or one of the three kinds. A tool with a `control` kind is never visible to a sub-agent, whatever `in_research` says.
 - `repeat_safe` and `pin_on_compaction` are booleans, default `false`, and only allowed on a non-destructive tool: answering a write with "same as before" would skip the write.
+- `precheck` is `nil` or a function, and only allowed on a destructive tool: it runs on the way to approval, which only destructive tools take.
 - `recover` is `nil` or a function. `result_cap` is `nil` or a positive number.
 
 ### Where the records live
@@ -97,7 +101,7 @@ Every reader goes through it:
 | `REPEAT_SAFE_TOOLS` | records with `repeat_safe = true` |
 | `PINNED_SCHEMA_TOOLS` | records with `pin_on_compaction = true` |
 | hints written inside handlers | the record's `recover`, using shared hint helpers |
-| `reject_before_approval` | stays a function for now; see "Open questions" |
+| `reject_before_approval` | the record's `precheck` |
 
 `agent.research_may_call(record)` is `record.in_research == true and record.destructive != true and record.control == nil`.
 
@@ -137,7 +141,7 @@ The per-call classification in `run_turn` becomes, in this order:
 
 1. no record: "unknown tool" error result;
 2. `CONTROL_KINDS[record.control].ends_turn`: the first such call wins, later ones get the existing "only one ... per turn" result, and the turn ends with `needs_clarification` as now;
-3. `record.destructive`: the existing `reject_before_approval` check, then pause for approval, first one wins;
+3. `record.destructive`: `record.precheck`, if it has one (an error goes back to the model and nobody is asked), then pause for approval, first one wins;
 4. a pending call earlier in the turn: "deferred";
 5. otherwise: run the handler.
 
@@ -201,9 +205,9 @@ The declarations sent to the provider stay byte-identical until a separate PR ch
 
 One PR per group, each small enough to review on its own:
 
-0. **Scaffold.** `agent.tool_registry`, `agent.research_may_call`, the pending-action check in `run_tool`, `CONTROL_KINDS`, the declaration fixture and the registry tests (invariants above, plus "every record has a handler unless it is `clarify`"). `RESERVED_TOOL_NAMES` becomes `AGENT_TOOLS`' keys, which fixes the `calc`/`stats`/`result` gap. `agent_tools` already requires `extension`, so manifest validation requires `agent_tools` inside the function, the way `agent.lua` reaches `agent_tools`. It also adds the `recover` call in the dispatcher and the shared hint helpers (`hint_entity_type` takes over from `unknown_entity_type_message`), sets `repeat_safe` and `pin_on_compaction` on today's tools, and derives `REPEAT_SAFE_TOOLS` and `PINNED_SCHEMA_TOOLS` from them, with a test that the derived sets equal today's lists. No tool moves yet.
-1. `document` (6 methods).
-2. `entity` (11 methods), the largest.
+0. **Scaffold.** `agent.tool_registry`, `agent.research_may_call`, the pending-action check in `run_tool`, `CONTROL_KINDS`, the declaration fixture and the registry tests (invariants above, plus the field rules: every record has a handler unless it is `clarify`, flags are booleans, `control` is a known kind, and `precheck`, `repeat_safe` and `pin_on_compaction` sit only where they're allowed). `run_turn` calls `record.precheck` where it calls `reject_before_approval` today, falling back to `reject_before_approval` for a record that hasn't moved yet. `RESERVED_TOOL_NAMES` becomes `AGENT_TOOLS`' keys, which fixes the `calc`/`stats`/`result` gap. `agent_tools` already requires `extension`, so manifest validation requires `agent_tools` inside the function, the way `agent.lua` reaches `agent_tools`. It also adds the `recover` call in the dispatcher and the shared hint helpers (`hint_entity_type` takes over from `unknown_entity_type_message`), sets `repeat_safe` and `pin_on_compaction` on today's tools, and derives `REPEAT_SAFE_TOOLS` and `PINNED_SCHEMA_TOOLS` from them, with a test that the derived sets equal today's lists. No tool moves yet.
+1. `document` (6 methods). `document.update` gets its `precheck`.
+2. `entity` (11 methods), the largest. `entity.update` gets its `precheck`, and `reject_before_approval`, now empty, is deleted.
 3. `knowledge`, `view`, `template`.
 4. `result`, `calc`, `stats`, `plot`.
 5. `research`, `background`, `clarify`: the control tools. Removes the per-name checks in `run_turn` and `run_research_loop`.
@@ -303,11 +307,16 @@ That's all. What the contributor no longer has to touch, and what checks it for 
 
 A wrong `entity_type` such as `"tasks"` then comes back as `unknown entity type: tasks -- did you mean 'task'?`, worded exactly like every other `entity.*` tool.
 
-The registry tests fail if the record has no handler, a non-boolean flag, an unknown `control` kind, or `repeat_safe` on a destructive tool. The declaration fixture test fails as well, since the model now sees one more tool. A PR that adds a tool updates the fixture on purpose; one that only moves code must leave it unchanged.
+The registry tests fail if the record has no handler, a non-boolean flag, an unknown `control` kind, `repeat_safe` on a destructive tool, or a `precheck` on a read-only one. The declaration fixture test fails as well, since the model now sees one more tool. A PR that adds a tool updates the fixture on purpose; one that only moves code must leave it unchanged.
 
-## Open questions for review
+## Decisions (2026-11-03)
 
-1. **`reject_before_approval`.** It's a third place with per-tool logic (`entity.update` and `document.update` refuse a call with nothing to change before it reaches approval). Should the record get an optional `precheck = function(args) -> err`, so the migration removes it too? It's not in the proposed shape, so it's left as a function here.
-2. **`in_research` for the 21 read-only built-ins a sub-agent sees today** (25 non-destructive methods, less the 4 control-tool methods). Migrating with `in_research = true` on all 21 keeps that behaviour exactly. Should any of them be hidden from sub-agents, for example `plot.from_query` or `result.read`, whose output is meant for the main conversation? Changing that would be a separate, measured PR.
-3. **`recover` per tool, or hints per argument?** Most hints are about one kind of argument (an entity type, a column, a document id), whichever tool it's passed to. An alternative is a record field naming what each argument is, kept out of `parameters` so declarations don't change (`arg_kinds = {entity_type = "entity_type", group_column = "result_column"}`), with the dispatcher checking and hinting before the handler runs. That moves the checks out of the handlers too, but it's a bigger change. This design proposes `recover` first, since it can move today's hints without changing them.
-4. **More `repeat_safe` tools.** The migration copies today's six. `entity.list`, `entity.query`, `template.get` and `view.run` are read-only and would qualify by the same rule. Turning them on changes what the model reads after a repeat, so it's a separate PR measured with `daat agent context-report` (exact repeat calls per run) and the scorecard.
+1. **`precheck` is part of the record.** `reject_before_approval` was a third place with per-tool logic (`entity.update` and `document.update` refuse a call with nothing to change before it reaches approval). Its cases move into those records' `precheck`, the field rules allow it only on destructive tools, and the function is deleted once both groups have moved.
+2. **`in_research = true` for the same 21 tools during the migration.** Those are the read-only built-ins a sub-agent sees today (25 non-destructive methods, less the 4 control-tool methods), so the migration keeps that behaviour exactly. Hiding any of them, for example `plot.from_query` or `result.read`, is a separate, measured PR.
+3. **`recover` per tool first.** It moves today's hints without changing their text. Hints per kind of argument (`arg_kinds = {entity_type = "entity_type", group_column = "result_column"}`, kept out of `parameters` so declarations don't change, with the dispatcher checking and hinting before the handler runs) are a possible follow-up once the migration is stable.
+4. **The six `repeat_safe` tools stay as they are.** The migration copies today's set. `entity.list`, `entity.query`, `template.get` and `view.run` would qualify by the same rule, but adding them changes what the model reads after a repeat, so expanding the set is its own PR, measured with `daat agent context-report` (exact repeat calls per run) and the scorecard.
+
+Settled while drafting, before review:
+
+5. **No `dialect_note` field.** The proposal listed it as optional, but no tool needs one: the SQL dialect is named in the system prompt and in every SQL error. Moving it onto tool descriptions would change what the model sees.
+6. **A destructive tool runs only against an `agent_pending_action` row,** not with an `approved` flag that any caller could pass. See "Invariants", rule 1.
