@@ -315,8 +315,3 @@ The registry tests fail if the record has no handler, a non-boolean flag, an unk
 2. **`in_research = true` for the same 21 tools during the migration.** Those are the read-only built-ins a sub-agent sees today (25 non-destructive methods, less the 4 control-tool methods), so the migration keeps that behaviour exactly. Hiding any of them, for example `plot.from_query` or `result.read`, is a separate, measured PR.
 3. **`recover` per tool first.** It moves today's hints without changing their text. Hints per kind of argument (`arg_kinds = {entity_type = "entity_type", group_column = "result_column"}`, kept out of `parameters` so declarations don't change, with the dispatcher checking and hinting before the handler runs) are a possible follow-up once the migration is stable.
 4. **The six `repeat_safe` tools stay as they are.** The migration copies today's set. `entity.list`, `entity.query`, `template.get` and `view.run` would qualify by the same rule, but adding them changes what the model reads after a repeat, so expanding the set is its own PR, measured with `daat agent context-report` (exact repeat calls per run) and the scorecard.
-
-Settled while drafting, before review:
-
-5. **No `dialect_note` field.** The proposal listed it as optional, but no tool needs one: the SQL dialect is named in the system prompt and in every SQL error. Moving it onto tool descriptions would change what the model sees.
-6. **A destructive tool runs only against an `agent_pending_action` row,** not with an `approved` flag that any caller could pass. See "Invariants", rule 1.
