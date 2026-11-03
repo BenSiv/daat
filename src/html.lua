@@ -4809,6 +4809,31 @@ function html.render_knowledge_graph(nonce)
         // never change on pan/zoom, only how they're projected to the
         // canvas (draw()'s ctx.setTransform below).
         var camera = { x: 0, y: 0, scale: 1 };
+        // The view opens zoomed out to the whole graph and keeps it in
+        // frame while the layout settles, until the viewer pans, zooms
+        // or drags; Reset view goes back to that. MIN_SCALE is low so a
+        // large pool still fits.
+        var MIN_SCALE = 0.02, MAX_SCALE = 4;
+        var autoFit = true;
+        function fitView() {
+            var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            nodes.forEach(function(n) {
+                if (!isVisible(n) || typeof n.x !== 'number') { return; }
+                var r = nodeRadius(n.heat);
+                minX = Math.min(minX, n.x - r); maxX = Math.max(maxX, n.x + r);
+                minY = Math.min(minY, n.y - r); maxY = Math.max(maxY, n.y + r);
+            });
+            if (minX === Infinity) { camera = { x: 0, y: 0, scale: 1 }; return; }
+            var pad = 24;
+            var scale = Math.min((canvas.width - 2 * pad) / Math.max(1, maxX - minX),
+                                 (canvas.height - 2 * pad) / Math.max(1, maxY - minY));
+            scale = Math.max(MIN_SCALE, Math.min(1, scale));
+            camera = {
+                scale: scale,
+                x: canvas.width / 2 - (minX + maxX) / 2 * scale,
+                y: canvas.height / 2 - (minY + maxY) / 2 * scale
+            };
+        }
 
         // Full height by default: fill the viewport from the canvas's own
         // top edge down, leaving room for the legend row. The Forces panel
@@ -4852,6 +4877,7 @@ function html.render_knowledge_graph(nonce)
         // colour, one path each, instead of one stroke/fill per element --
         // and anything outside the visible world rectangle is skipped.
         function draw() {
+            if (autoFit) { fitView(); }
             ctx.setTransform(1, 0, 0, 1, 0, 0);
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             ctx.setTransform(camera.scale, 0, 0, camera.scale, camera.x, camera.y);
@@ -5009,6 +5035,7 @@ function html.render_knowledge_graph(nonce)
             var n = nodeAt(w.x, w.y);
             if (n) {
                 dragNode = n;
+                autoFit = false;
                 // Pinned while held -- the live simulation skips force
                 // integration for it (simStep below), so the mouse is
                 // the only thing moving it, but its neighbors still
@@ -5021,6 +5048,7 @@ function html.render_knowledge_graph(nonce)
                 return;
             }
             isPanning = true;
+            autoFit = false;
             panStart = { x: mx, y: my };
             camStart = { x: camera.x, y: camera.y };
             canvas.style.cursor = 'grabbing';
@@ -5065,7 +5093,8 @@ function html.render_knowledge_graph(nonce)
             var mx = ev.clientX - rect.left, my = ev.clientY - rect.top;
             var before = screenToWorld(mx, my);
             var zoomFactor = Math.exp(-ev.deltaY * 0.001);
-            camera.scale = Math.max(0.2, Math.min(4, camera.scale * zoomFactor));
+            autoFit = false;
+            camera.scale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, camera.scale * zoomFactor));
             camera.x = mx - before.x * camera.scale;
             camera.y = my - before.y * camera.scale;
             hideTooltip();
@@ -5073,7 +5102,7 @@ function html.render_knowledge_graph(nonce)
         }, { passive: false });
 
         resetBtn.addEventListener('click', function() {
-            camera = { x: 0, y: 0, scale: 1 };
+            autoFit = true;
             draw();
         });
 
