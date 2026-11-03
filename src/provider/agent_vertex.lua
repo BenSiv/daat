@@ -672,5 +672,6 @@ agent_vertex.vertex_blocks_from_parts = vertex_blocks_from_parts
 agent_vertex.vertex_contents_from_messages = vertex_contents_from_messages
 agent_vertex.vertex_token_cache_expired = vertex_token_cache_expired
 agent_vertex.vertex_embedding_batches = vertex_embedding_batches
+agent_vertex.vertex_tools_from_canonical = vertex_tools_from_canonical
 
 return agent_vertex
