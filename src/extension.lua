@@ -81,14 +81,18 @@ function extension.names(ext_dir)
     return names
 end
 
--- Every top-level AGENT_TOOLS group name (src/agent.lua) -- an
--- extension's own name can never collide with one of these, since
+-- True when `name` is a top-level AGENT_TOOLS group (src/agent_tools.lua)
+-- -- an extension's own name can never collide with one of these, since
 -- capabilities.tools entries dispatch under tool_name = manifest.name.
-RESERVED_TOOL_NAMES = {
-    document = true, entity = true, plot = true, template = true,
-    knowledge = true, view = true, research = true, clarify = true,
-    background = true, internet_search = true,
-}
+-- Read from AGENT_TOOLS itself rather than kept as a copy: the copy this
+-- replaces missed calc, stats and result, added to AGENT_TOOLS after it
+-- was written, so an extension named "stats" passed validation and then
+-- had every tool it declared answered as unknown (#15). A group is now
+-- reserved the moment it exists. Required lazily, inside the function,
+-- because agent_tools requires this module at its own top level.
+function extension.is_reserved_tool_name(name)
+    return require("agent_tools").AGENT_TOOLS[name] != nil
+end
 
 -- An owned name becomes a file name (<kind>/<name>.lua) and, for a
 -- schema, a table name -- the schema pattern is schema.valid_name_syntax's
@@ -136,9 +140,13 @@ function extension.validate_manifest(manifest)
     -- AGENT_TOOLS entry already uses, with no separate namespace. That
     -- only works if an extension's own name can never collide with one
     -- of those built-in top-level groups, so it's rejected here, once,
-    -- rather than needing a remapping table at dispatch time.
+    -- rather than needing a remapping table at dispatch time. "Once"
+    -- covers extensions approved earlier too: load_manifest runs this on
+    -- every load, and a manifest that fails it is skipped by
+    -- approved_with_tools, so an extension whose name a later built-in
+    -- group takes simply stops loading, with this message as the reason.
     if manifest.capabilities != nil and manifest.capabilities.tools != nil then
-        if RESERVED_TOOL_NAMES[manifest.name] == true then
+        if extension.is_reserved_tool_name(manifest.name) then
             return "manifest '" .. tostring(manifest.name) .. "': extension name collides with a built-in tool group"
         end
         if type(manifest.capabilities.tools) != "table" then
@@ -183,7 +191,7 @@ function extension.validate_manifest(manifest)
     -- a dedicated /admin-triggers route (cgi.lua) -- never the chat
     -- agent, never an ordinary user's own request. Unlike
     -- capabilities.tools there's no shared dispatch namespace to worry
-    -- about (no RESERVED_TOOL_NAMES-style check needed): the route path
+    -- about (no is_reserved_tool_name-style check needed): the route path
     -- is always /admin-triggers/<extension name>/<trigger name>, scoped
     -- by construction, so two extensions' trigger names can never
     -- collide with each other or with anything else.

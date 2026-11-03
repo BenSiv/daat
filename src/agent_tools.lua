@@ -506,7 +506,7 @@ agent_tools.AGENT_TOOLS = {
 -- brex 278013129): an approved extension's capabilities.tools entries
 -- are dispatched under tool_name = the extension's own manifest.name
 -- (validated collision-free against AGENT_TOOLS' own top-level keys at
--- manifest-validate time, see extension.lua's RESERVED_TOOL_NAMES), so
+-- manifest-validate time, see extension.is_reserved_tool_name), so
 -- they slot into the exact same tool_name.method_name lookup built-ins
 -- use, with no remapping table at all. Returns the matching manifest
 -- and tool spec, or nil if tool_name isn't an approved extension's own

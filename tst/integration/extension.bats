@@ -334,6 +334,50 @@ peek() {
     [[ "$output" =~ "status:       approved" ]]
 }
 
+# A tools extension named after a built-in group (#15). stats was added
+# to AGENT_TOOLS after the hand-kept reserved list, and was never
+# reserved: an extension named stats was approved, then had every tool
+# it declared answered as unknown, since the built-in group is looked up
+# first.
+write_stats_extension() {
+    mkdir -p extensions/stats
+    cat > extensions/stats/manifest.lua <<'EOF'
+return {
+    name = "stats",
+    events = {},
+    entity_types = {},
+    capabilities = {
+        read = {},
+        write = {},
+        net = "none",
+        tools = {
+            {name = "summary", description = "Summarises a column.", destructive = false,
+             parameters = {type = "object", properties = {}}},
+        },
+    },
+}
+EOF
+    cat > extensions/stats/main.lua <<'EOF'
+return {tools = {summary = function(ctx, args) return "summary" end}}
+EOF
+}
+
+@test "a tools extension named after a built-in group added later (stats) can't be approved (#15)" {
+    write_stats_extension
+    run "$BIN" extension approve stats
+    [[ "$output" =~ "collides with a built-in tool group" ]]
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM system_approval WHERE kind = 'extension' AND name = 'stats';"
+    [ "$output" -eq 0 ]
+}
+
+@test "a stats tools extension approved before #15 stops loading, with the collision as the reason" {
+    write_stats_extension
+    # The row an approve would have written before the fix.
+    sqlite3 "$TEST_DIR/.store/store.db" "INSERT INTO system_approval (kind, name, approved_content, approved_by) VALUES ('extension', 'stats', '{\"read\":[],\"write\":[],\"net\":\"none\",\"tools\":[{\"name\":\"summary\",\"description\":\"Summarises a column.\",\"destructive\":false,\"parameters\":{\"type\":\"object\",\"properties\":{}}}]}', 'test');"
+    run "$BIN" extension list
+    [[ "$output" =~ stats[[:space:]]+ERROR:.*"collides with a built-in tool group" ]]
+}
+
 # Manual-trigger admin surface (brex 925561615) -- see setup()'s
 # trigger-demo extension above.
 

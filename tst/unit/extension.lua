@@ -134,6 +134,56 @@ function test_extension_name_colliding_with_builtin_tool_group_is_rejected()
     check(err != nil, "expected a validation error for a reserved extension name")
 end
 
+-- Every group, not a sample: a hand-kept copy of the group names once
+-- missed calc, stats and result, added to AGENT_TOOLS after it (#15).
+function test_every_builtin_tool_group_name_is_rejected()
+    print("Testing every AGENT_TOOLS group name is rejected as a tools extension's name")
+    agent_tools = require("agent_tools")
+    for group, _ in pairs(agent_tools.AGENT_TOOLS) do
+        manifest = base_manifest(group)
+        manifest.capabilities = {tools = {
+            {name = "lookup", description = "x", parameters = {}},
+        }}
+        err = extension.validate_manifest(manifest)
+        check(err != nil, "expected a validation error for the built-in group name '" .. group .. "'")
+    end
+end
+
+-- An extension approved before its name became a built-in group's (a
+-- stats extension from before AGENT_TOOLS had stats) must stop being
+-- offered as a tool source. load_manifest validates on every load, so
+-- its manifest fails and approved_with_tools skips it -- without even
+-- reaching the approval lookup, which is why this needs no database.
+function test_tools_extension_named_after_a_builtin_group_is_never_listed()
+    print("Testing a tools extension named after a built-in group is left out of approved_with_tools")
+    ext_dir = os.tmpname()
+    os.remove(ext_dir)
+    lfs.mkdir(ext_dir)
+    lfs.mkdir(paths.joinpath(ext_dir, "stats"))
+    f = io.open(paths.joinpath(ext_dir, "stats", "manifest.lua"), "w")
+    io.write(f, """
+return {
+    name = "stats",
+    events = {},
+    entity_types = {},
+    capabilities = {tools = {
+        {name = "summary", description = "x", parameters = {type = "object", properties = {}}},
+    }},
+}
+""")
+    io.close(f)
+    -- extension.names only lists a directory holding both files.
+    f = io.open(paths.joinpath(ext_dir, "stats", "main.lua"), "w")
+    io.write(f, "return {tools = {summary = function(ctx, args) return \"summary\" end}}")
+    io.close(f)
+
+    entries = extension.all(ext_dir)
+    check(#entries == 1 and entries[1].manifest == nil, "expected the manifest to fail loading")
+    check(entries[1].err != nil and string.find(entries[1].err, "collides with a built-in tool group", 1, true) != nil,
+        "expected the collision as the load error, got: " .. tostring(entries[1].err))
+    check(#extension.approved_with_tools("unused.db", ext_dir) == 0, "expected no tool source from a colliding extension")
+end
+
 function test_extension_without_tools_can_still_use_a_reserved_name()
     print("Testing the reserved-name check only fires once an extension actually declares capabilities.tools")
     manifest = base_manifest("entity")
@@ -226,6 +276,8 @@ test_valid_tools_capability_passes_validation()
 test_tools_entry_missing_description_is_rejected()
 test_tools_entry_missing_parameters_is_rejected()
 test_extension_name_colliding_with_builtin_tool_group_is_rejected()
+test_every_builtin_tool_group_name_is_rejected()
+test_tools_extension_named_after_a_builtin_group_is_never_listed()
 test_extension_without_tools_can_still_use_a_reserved_name()
 test_valid_manual_triggers_capability_passes_validation()
 test_manual_trigger_entry_missing_label_is_rejected()
