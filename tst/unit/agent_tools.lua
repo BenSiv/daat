@@ -33,7 +33,7 @@ NOT_IN_EXECUTE_TOOL = {
 -- top-level assignment is local to its file in luam. So these go out
 -- with no parameters at all (Vertex accepts that; Claude needs an
 -- input_schema). Fixing it changes what the model sees, so it's its own
--- measured PR; remove each name here when it lands.
+-- measured PR (#20); remove each name here when it lands.
 KNOWN_WITHOUT_PARAMETERS = {
     ["entity.list_types"] = true,
     ["entity.relationships"] = true,
