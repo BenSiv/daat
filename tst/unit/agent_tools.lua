@@ -88,13 +88,14 @@ function tests.every_declared_method_reaches_a_handler(db_path)
     end)
 end
 
--- Every `tool_name == "x" and method_name == "y"` branch in execute_tool's
--- own body names a declared tool. Reads only execute_tool:
--- reject_before_approval uses the same pattern. Once #6 has moved every
--- handler into its record there are no branches left, and this passes
--- vacuously; delete it then.
+-- Every `tool_name == "x" and method_name == "y"` branch in the old
+-- dispatch chain (execute_tool_chain, which execute_tool falls back to for
+-- a tool whose record has no handler yet) names a declared tool. Reads
+-- only that function: reject_before_approval uses the same pattern. Once
+-- #6 has moved every handler into its record the chain is gone; delete
+-- this then.
 function tests.every_handler_in_execute_tool_is_declared()
-    print("Testing every branch in execute_tool is a declared tool")
+    print("Testing every branch in execute_tool_chain is a declared tool")
     f = io.open("src/agent_tools.lua", "r")
     check(f != nil, "can't open src/agent_tools.lua (run from the repo root)")
     if f == nil then
@@ -102,8 +103,8 @@ function tests.every_handler_in_execute_tool_is_declared()
     end
     source = io.read(f, "*a")
     io.close(f)
-    start = string.find(source, "\nfunction agent_tools.execute_tool(", 1, true)
-    check(start != nil, "execute_tool not found in src/agent_tools.lua")
+    start = string.find(source, "\nfunction execute_tool_chain(", 1, true)
+    check(start != nil, "execute_tool_chain not found in src/agent_tools.lua")
     if start == nil then
         return
     end
@@ -141,6 +142,52 @@ function tests.declarations_translate_for_both_providers(db_path)
             if encoded_ok == true then
                 check(string.find(encoded, "\"properties\":[]", 1, true) == nil,
                     provider .. ": an empty properties object encodes as [] instead of {}")
+            end
+        end
+    end
+end
+
+-- What the model is shown, byte for byte (#6): moving tools into records
+-- must not change a single declaration, and a change that should is its
+-- own measured PR. One declaration per line, so a diff of a fixture
+-- names the tool that changed. The order is pairs() over AGENT_TOOLS,
+-- which is the same from run to run. After an intended change,
+-- regenerate with DAAT_UPDATE_SNAPSHOT=1 and say why in the PR.
+-- The research sub-agent's list is pinned the same way: it is what that
+-- model is shown, and #6 keeps it to the same 21 tools.
+SNAPSHOTS = {
+    {path = "tst/unit/fixtures/tool_declarations.json", name = "agent.tool_declarations", list = function(db_path)
+        return agent.tool_declarations(db_path)
+    end},
+    {path = "tst/unit/fixtures/research_tool_declarations.json", name = "agent_tools.research_tool_declarations", list = function(db_path)
+        return agent_tools.research_tool_declarations(db_path)
+    end},
+}
+
+function declarations_snapshot(declarations)
+    lines = {}
+    for _, declaration in ipairs(declarations) do
+        table.insert(lines, json.encode(declaration))
+    end
+    return table.concat(lines, "\n") .. "\n"
+end
+
+function tests.declarations_match_the_snapshots(db_path)
+    for _, snapshot in ipairs(SNAPSHOTS) do
+        current = declarations_snapshot(snapshot.list(db_path))
+        if os.getenv("DAAT_UPDATE_SNAPSHOT") == "1" then
+            f = io.open(snapshot.path, "w")
+            io.write(f, current)
+            io.close(f)
+            print("  wrote " .. snapshot.path)
+        else
+            f = io.open(snapshot.path, "r")
+            check(f != nil, "can't open " .. snapshot.path .. " (run from the repo root)")
+            if f != nil then
+                expected = io.read(f, "*a")
+                io.close(f)
+                check(current == expected, snapshot.name .. " no longer matches " .. snapshot.path ..
+                    ": what the model sees changed. If that's intended, regenerate it with DAAT_UPDATE_SNAPSHOT=1 and say why in the PR")
             end
         end
     end
