@@ -1707,12 +1707,7 @@ EOF
     cat > "${TEST_DIR}/platform.lua" <<EOF
 return {agent_provider = "vertex", vertex_project = "${VERTEX_PROJECT}", vertex_region = "${VERTEX_REGION:-global}"}
 EOF
-    if [ -z "${LUAM_DIR:-}" ]; then
-        LUAM_DIR=$(cd "${PROJECT_ROOT}/../luam" && pwd)
-    fi
-    run env LUA_PATH="${PROJECT_ROOT}/src/?.lua;${LUAM_DIR}/lib/?.lua;${LUAM_DIR}/lib/?/init.lua;;" \
-        LUA_CPATH="${LUAM_DIR}/bin/?.so;${LUAM_DIR}/lib/lfs/?.so;;" \
-        "${LUAM_DIR}/bin/luam" "${TEST_DIR}/vertex_check.lua"
+    run_luam "${TEST_DIR}/vertex_check.lua"
     [ "$status" -eq 0 ]
     [[ "$output" =~ "ERR:	nil" ]]
     [[ ! "$output" =~ "RESULT:	nil" ]]
@@ -1740,12 +1735,7 @@ EOF
     cat > "${TEST_DIR}/platform.lua" <<EOF
 return {agent_provider = "vertex", vertex_project = "${VERTEX_PROJECT}", vertex_region = "${VERTEX_REGION:-global}"}
 EOF
-    if [ -z "${LUAM_DIR:-}" ]; then
-        LUAM_DIR=$(cd "${PROJECT_ROOT}/../luam" && pwd)
-    fi
-    run env LUA_PATH="${PROJECT_ROOT}/src/?.lua;${LUAM_DIR}/lib/?.lua;${LUAM_DIR}/lib/?/init.lua;;" \
-        LUA_CPATH="${LUAM_DIR}/bin/?.so;${LUAM_DIR}/lib/lfs/?.so;;" \
-        "${LUAM_DIR}/bin/luam" "${TEST_DIR}/vertex_converse_check.lua"
+    run_luam "${TEST_DIR}/vertex_converse_check.lua"
     [ "$status" -eq 0 ]
     [[ "$output" =~ "ERR:	nil" ]]
     [[ "$output" =~ "STOP:	stop" ]]
@@ -1837,12 +1827,7 @@ EOF
     cat > "${TEST_DIR}/platform.lua" <<EOF
 return {agent_provider = "vertex", vertex_project = "${VERTEX_PROJECT}", vertex_region = "${VERTEX_REGION:-global}"}
 EOF
-    if [ -z "${LUAM_DIR:-}" ]; then
-        LUAM_DIR=$(cd "${PROJECT_ROOT}/../luam" && pwd)
-    fi
-    run env LUA_PATH="${PROJECT_ROOT}/src/?.lua;${LUAM_DIR}/lib/?.lua;${LUAM_DIR}/lib/?/init.lua;;" \
-        LUA_CPATH="${LUAM_DIR}/bin/?.so;${LUAM_DIR}/lib/lfs/?.so;;" \
-        "${LUAM_DIR}/bin/luam" "${TEST_DIR}/vertex_tool_check.lua"
+    run_luam "${TEST_DIR}/vertex_tool_check.lua"
     [ "$status" -eq 0 ]
     [[ "$output" =~ "STOP1:	toolUse" ]]
     [[ "$output" =~ "TOOL_NAME:	add" ]]
@@ -1925,12 +1910,7 @@ EOF
     cat > "${TEST_DIR}/platform.lua" <<EOF
 return {agent_provider = "vertex", vertex_project = "${VERTEX_PROJECT}", vertex_region = "${VERTEX_REGION:-global}"}
 EOF
-    if [ -z "${LUAM_DIR:-}" ]; then
-        LUAM_DIR=$(cd "${PROJECT_ROOT}/../luam" && pwd)
-    fi
-    run env LUA_PATH="${PROJECT_ROOT}/src/?.lua;${LUAM_DIR}/lib/?.lua;${LUAM_DIR}/lib/?/init.lua;;" \
-        LUA_CPATH="${LUAM_DIR}/bin/?.so;${LUAM_DIR}/lib/lfs/?.so;;" \
-        "${LUAM_DIR}/bin/luam" "${TEST_DIR}/vertex_parallel_tool_check.lua"
+    run_luam "${TEST_DIR}/vertex_parallel_tool_check.lua"
     [ "$status" -eq 0 ]
     [[ "$output" =~ "NUM_TOOL_CALLS:	2" ]]
     [[ "$output" =~ "ERR2:	nil" ]]

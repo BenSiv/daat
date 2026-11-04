@@ -19,6 +19,22 @@ setup_test_env() {
     write_platform_config
 }
 
+# run_luam <script.lua> [args...]: bats-`run`s a Lua script against the
+# source tree (src/ and tst/lib/ on the path) with the same luam build
+# and C modules bld/test.sh uses -- for a test that has to call a
+# module function directly rather than through the binary. LUAM_DIR is
+# the luam checkout, ../luam beside the repo unless set (a worktree
+# sets it, since ../luam isn't there).
+run_luam() {
+    local luam_dir="${LUAM_DIR:-}"
+    if [ -z "$luam_dir" ]; then
+        luam_dir=$(cd "${PROJECT_ROOT}/../luam" && pwd)
+    fi
+    run env LUA_PATH="${PROJECT_ROOT}/src/?.lua;${PROJECT_ROOT}/tst/lib/?.lua;${luam_dir}/lib/?.lua;${luam_dir}/lib/?/init.lua;;" \
+        LUA_CPATH="${luam_dir}/bin/?.so;${luam_dir}/lib/lfs/?.so;${luam_dir}/lib/hmac/?.so;${luam_dir}/lib/bcrypt/?.so;;" \
+        "${luam_dir}/bin/luam" "$@"
+}
+
 # Writes platform.lua into TEST_DIR (config.platform_config() resolves
 # it relative to DOCUMENT_ROOT, which falls back to "." -- the real
 # CGI/CLI cwd every raw_get/raw_post/"$BIN" call in these tests already
