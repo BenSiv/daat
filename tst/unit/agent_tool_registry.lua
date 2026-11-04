@@ -243,7 +243,7 @@ end
 -- The groups #6 has moved so far, one step at a time: every tool in them
 -- runs from its record. A step adds its groups here, in the same commit
 -- that deletes their branches from execute_tool_chain.
-MOVED_GROUPS = {"document", "entity", "knowledge", "view", "template"}
+MOVED_GROUPS = {"document", "entity", "knowledge", "view", "template", "result", "calc", "stats", "plot"}
 
 function tests.every_tool_in_a_moved_group_has_a_handler()
     print("Testing every tool in a moved group runs from its record")
