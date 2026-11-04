@@ -244,7 +244,7 @@ end
 -- runs from its record. A step adds its groups here, in the same commit
 -- that deletes their branches from execute_tool_chain.
 MOVED_GROUPS = {"document", "entity", "knowledge", "view", "template", "result", "calc", "stats", "plot",
-    "research", "background", "clarify"}
+    "research", "background", "clarify", "internet_search"}
 
 -- The one tool without a handler is one whose control kind ends the turn
 -- (clarify.ask): run_turn does that from its CONTROL_KINDS row, so a
