@@ -1723,60 +1723,72 @@ agent_tools.AGENT_TOOLS.calc.evaluate.handler = calc_evaluate
 agent_tools.AGENT_TOOLS.stats.fit.handler = stats_fit
 agent_tools.AGENT_TOOLS.plot.from_query.handler = plot_from_query
 
+-- The control tools' handlers (#6, step 5). research and background run
+-- like any other tool; their `control` kind only keeps them from a
+-- research sub-agent. clarify.ask has no handler: asking ends the turn,
+-- which run_turn does from its CONTROL_KINDS row.
+
+-- agent.default_model() here, not a model threaded through this
+-- whole call chain -- every real call site (cgi.lua's chat routes,
+-- main.lua's knowledge distillation) already resolves `model` the
+-- exact same way before ever calling agent.run_turn, so this is the
+-- same model the outer turn is already using in every real case,
+-- without widening agent.execute_tool's own signature for it.
+function research_investigate(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    if args.question == nil then
+        return nil, "investigate requires question"
+    end
+    finding, err = agent.run_research_loop(db_path, author, session_id, agent.default_model(), args.question)
+    if finding == nil then
+        return nil, tostring(err)
+    end
+    return finding
+end
+
+function background_start(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    if args.question == nil then
+        return nil, "start requires question"
+    end
+    task_id = agent.enqueue_background_task(db_path, session_id, args.question)
+    return "Started background task #" .. tostring(task_id) ..
+        " -- its finding will be added to this conversation once it's ready; check with background.status(" ..
+        tostring(task_id) .. ") or just ask again later."
+end
+
+-- Ownership checked against the CURRENT session (not the task's own
+-- login) -- same "not found" wording either way a mismatch could
+-- happen (unknown id, or a real id belonging to someone else's
+-- session), so a guessed/incremented task_id can't be used to read
+-- another user's background task.
+function background_status(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    target_id = tonumber(args.task_id)
+    if target_id == nil then
+        return nil, "status requires task_id"
+    end
+    task = agent.get_background_task(db_path, target_id)
+    if task == nil or task.session_id != session_id then
+        return nil, "no such background task #" .. tostring(target_id)
+    end
+    if task.status == "done" then
+        return "Task #" .. tostring(target_id) .. " (done): " .. tostring(task.result)
+    elseif task.status == "failed" then
+        return "Task #" .. tostring(target_id) .. " (failed after " .. tostring(task.attempts) .. " attempts): " .. tostring(task.last_error)
+    end
+    return "Task #" .. tostring(target_id) .. " is still " .. tostring(task.status) .. "."
+end
+
+agent_tools.AGENT_TOOLS.research.investigate.handler = research_investigate
+agent_tools.AGENT_TOOLS.background.start.handler = background_start
+agent_tools.AGENT_TOOLS.background.status.handler = background_status
+
 -- Every built-in tool's handler until #6 moves it into its record, then
 -- the extension fallback; agent_tools.execute_tool, below, is the entry
 -- point. Shrinks one group per #6 step and is deleted in step 8.
 function execute_tool_chain(db_path, author, session_id, tool_name, method_name, args)
     source = {notebook_entry_id = "agent-session:" .. tostring(session_id)}
-
-    -- agent.default_model() here, not a model threaded through this
-    -- whole call chain -- every real call site (cgi.lua's chat routes,
-    -- main.lua's knowledge distillation) already resolves `model` the
-    -- exact same way before ever calling agent.run_turn, so this is the
-    -- same model the outer turn is already using in every real case,
-    -- without widening agent.execute_tool's own signature for it.
-    if tool_name == "research" and method_name == "investigate" then
-        if args.question == nil then
-            return nil, "investigate requires question"
-        end
-        finding, err = agent.run_research_loop(db_path, author, session_id, agent.default_model(), args.question)
-        if finding == nil then
-            return nil, tostring(err)
-        end
-        return finding
-    end
-
-    if tool_name == "background" and method_name == "start" then
-        if args.question == nil then
-            return nil, "start requires question"
-        end
-        task_id = agent.enqueue_background_task(db_path, session_id, args.question)
-        return "Started background task #" .. tostring(task_id) ..
-            " -- its finding will be added to this conversation once it's ready; check with background.status(" ..
-            tostring(task_id) .. ") or just ask again later."
-    end
-
-    -- Ownership checked against the CURRENT session (not the task's own
-    -- login) -- same "not found" wording either way a mismatch could
-    -- happen (unknown id, or a real id belonging to someone else's
-    -- session), so a guessed/incremented task_id can't be used to read
-    -- another user's background task.
-    if tool_name == "background" and method_name == "status" then
-        target_id = tonumber(args.task_id)
-        if target_id == nil then
-            return nil, "status requires task_id"
-        end
-        task = agent.get_background_task(db_path, target_id)
-        if task == nil or task.session_id != session_id then
-            return nil, "no such background task #" .. tostring(target_id)
-        end
-        if task.status == "done" then
-            return "Task #" .. tostring(target_id) .. " (done): " .. tostring(task.result)
-        elseif task.status == "failed" then
-            return "Task #" .. tostring(target_id) .. " (failed after " .. tostring(task.attempts) .. " attempts): " .. tostring(task.last_error)
-        end
-        return "Task #" .. tostring(target_id) .. " is still " .. tostring(task.status) .. "."
-    end
 
     if tool_name == "internet_search" and method_name == "search" then
         if args.query == nil or args.query == "" then
