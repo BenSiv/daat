@@ -10,16 +10,11 @@
 
 search_provider = require("search_provider")
 
-FAILURES = 0
+unit = require("unit")
+check = unit.check
+tests = unit.suite()
 
-function check(condition, message)
-    if condition != true then
-        FAILURES = FAILURES + 1
-        print("FAIL: " .. message)
-    end
-end
-
-function test_format_results_puts_url_in_every_result_header()
+function tests.format_results_puts_url_in_every_result_header()
     print("Testing format_results puts each result's URL right in its own header, not buried in a blob")
     response = {
         items = {
@@ -36,7 +31,7 @@ function test_format_results_puts_url_in_every_result_header()
         "expected second result's title+URL header")
 end
 
-function test_format_results_blank_line_separates_results()
+function tests.format_results_blank_line_separates_results()
     print("Testing format_results joins multiple results with a blank line")
     response = {
         items = {
@@ -49,41 +44,30 @@ function test_format_results_blank_line_separates_results()
         "expected a blank line between the first result's snippet and the second result's header, got:\n" .. tostring(out))
 end
 
-function test_format_results_handles_missing_snippet()
+function tests.format_results_handles_missing_snippet()
     print("Testing format_results doesn't error when a result has no snippet")
     response = {items = {{title = "No Snippet", link = "https://example.net/"}}}
     ok = pcall(search_provider.format_results, response)
     check(ok == true, "a result with no snippet field should not error")
 end
 
-function test_format_results_empty_items()
+function tests.format_results_empty_items()
     print("Testing format_results reports no results found for an empty items list")
     out = search_provider.format_results({items = {}})
     check(out == "No results found.", "expected the no-results message, got: " .. tostring(out))
 end
 
-function test_format_results_nil_items()
+function tests.format_results_nil_items()
     print("Testing format_results reports no results found when items is entirely absent (a real CSE zero-result response)")
     out = search_provider.format_results({})
     check(out == "No results found.", "expected the no-results message, got: " .. tostring(out))
 end
 
-function test_format_results_nil_response()
+function tests.format_results_nil_response()
     print("Testing format_results doesn't error on a nil response")
     ok, out = pcall(search_provider.format_results, nil)
     check(ok == true, "a nil response should not error")
     check(out == "No results found.", "expected the no-results message for a nil response, got: " .. tostring(out))
 end
 
-test_format_results_puts_url_in_every_result_header()
-test_format_results_blank_line_separates_results()
-test_format_results_handles_missing_snippet()
-test_format_results_empty_items()
-test_format_results_nil_items()
-test_format_results_nil_response()
-
-if FAILURES > 0 then
-    print(FAILURES .. " test(s) failed")
-    os.exit(1)
-end
-print("All search_provider.lua tests passed")
+unit.run(tests)

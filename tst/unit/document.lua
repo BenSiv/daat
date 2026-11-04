@@ -12,16 +12,11 @@
 
 document = require("document")
 
-FAILURES = 0
+unit = require("unit")
+check = unit.check
+tests = unit.suite()
 
-function check(condition, message)
-    if condition != true then
-        FAILURES = FAILURES + 1
-        print("FAIL: " .. message)
-    end
-end
-
-function test_reinforcement_delta_matches_tier_weights()
+function tests.reinforcement_delta_matches_tier_weights()
     print("Testing reinforcement_delta for each tier")
     check(document.reinforcement_delta(0) == 0.15, "tier 0 should be 0.15, got " .. tostring(document.reinforcement_delta(0)))
     check(document.reinforcement_delta(1) == 0.25, "tier 1 should be 0.25, got " .. tostring(document.reinforcement_delta(1)))
@@ -29,35 +24,35 @@ function test_reinforcement_delta_matches_tier_weights()
     check(document.reinforcement_delta(3) == 0.50, "tier 3 should be 0.50, got " .. tostring(document.reinforcement_delta(3)))
 end
 
-function test_promotion_requires_revised_regardless_of_content_shape()
+function tests.promotion_requires_revised_regardless_of_content_shape()
     print("Testing an unrevised document stays at tier 0 no matter how its content looks")
     check(document.promotion_target_tier(0, false, false, "developed") == 0, "unrevised developed content should not promote")
     check(document.promotion_target_tier(0, false, false, "atomic") == 0, "unrevised atomic-shaped content should not promote")
 end
 
-function test_promotion_simple_or_thin_content_lands_tier_1()
+function tests.promotion_simple_or_thin_content_lands_tier_1()
     print("Testing revised content that's neither developed nor atomic lands at tier 1 (Curated Draft)")
     check(document.promotion_target_tier(0, false, true, "simple") == 1, "revised + simple should be tier 1")
     check(document.promotion_target_tier(0, false, true, "thin") == 1, "revised + thin should be tier 1")
 end
 
-function test_promotion_developed_content_lands_tier_2()
+function tests.promotion_developed_content_lands_tier_2()
     print("Testing revised, developed (multi-section/long) content lands at tier 2 (Developed Reference)")
     check(document.promotion_target_tier(0, false, true, "developed") == 2, "revised + developed should be tier 2")
 end
 
-function test_promotion_atomic_content_lands_tier_3()
+function tests.promotion_atomic_content_lands_tier_3()
     print("Testing revised, atomic (short single-subject) content lands at tier 3 (Atomic Record)")
     check(document.promotion_target_tier(0, false, true, "atomic") == 3, "revised + atomic should be tier 3")
 end
 
-function test_promotion_duplicate_never_advances()
+function tests.promotion_duplicate_never_advances()
     print("Testing a duplicate document never advances tier regardless of other inputs")
     check(document.promotion_target_tier(0, true, true, "atomic") == 0, "duplicate should stay at tier 0 even with atomic content")
     check(document.promotion_target_tier(2, true, true, "atomic") == 2, "duplicate should stay at its current tier, not advance")
 end
 
-function test_promotion_demotes_when_edited_down_to_a_smaller_shape()
+function tests.promotion_demotes_when_edited_down_to_a_smaller_shape()
     print("Testing a document at tier 3 demotes if its current content no longer earns that shape (task #87, redesigned for content-maturity)")
     -- Recomputed fresh from the CURRENT body every review (no
     -- ratcheting) -- a document that was legitimately tier 3 once (an
@@ -67,42 +62,42 @@ function test_promotion_demotes_when_edited_down_to_a_smaller_shape()
     check(result == 1, "tier-3 document edited down to 'simple' content should demote to tier 1, got " .. tostring(result))
 end
 
-function test_content_shape_developed_on_multiple_headings()
+function tests.content_shape_developed_on_multiple_headings()
     print("Testing content_shape flags multiple headings as developed")
     body = "# First heading\nSome text.\n\n# Second heading\nMore text."
     check(document.content_shape(body) == "developed", "2 headings should be developed, got " .. document.content_shape(body))
 end
 
-function test_content_shape_developed_on_many_paragraphs()
+function tests.content_shape_developed_on_many_paragraphs()
     print("Testing content_shape flags more than 6 paragraphs as developed")
     body = "P1.\n\nP2.\n\nP3.\n\nP4.\n\nP5.\n\nP6.\n\nP7."
     check(document.content_shape(body) == "developed", "7 paragraphs should be developed, got " .. document.content_shape(body))
 end
 
-function test_content_shape_thin_on_very_short_body()
+function tests.content_shape_thin_on_very_short_body()
     print("Testing content_shape flags a body under 6 words as thin")
     check(document.content_shape("Too short.") == "thin", "a 2-word body should be thin, got " .. document.content_shape("Too short."))
 end
 
-function test_content_shape_atomic_on_short_single_subject_body()
+function tests.content_shape_atomic_on_short_single_subject_body()
     print("Testing content_shape flags a short, single-paragraph, single-subject body as atomic")
     body = "Beer's Law states that absorbance is directly proportional to the concentration of a solution and the path length of light through it."
     check(document.content_shape(body) == "atomic", "a short single-subject definition should be atomic, got " .. document.content_shape(body))
 end
 
-function test_content_shape_simple_when_too_long_for_atomic_but_not_developed()
+function tests.content_shape_simple_when_too_long_for_atomic_but_not_developed()
     print("Testing content_shape falls back to simple for a single-paragraph body over the atomic word ceiling")
     body = string.rep("word ", 130)
     check(document.content_shape(body) == "simple", "130 words in one paragraph should be simple, got " .. document.content_shape(body))
 end
 
-function test_connectivity_status_format()
+function tests.connectivity_status_format()
     print("Testing connectivity_status formats peer count")
     check(document.connectivity_status(3) == "linked-3", "expected linked-3, got " .. document.connectivity_status(3))
     check(document.connectivity_status(0) == "linked-0", "expected linked-0, got " .. document.connectivity_status(0))
 end
 
-function test_title_is_generic_case_insensitive()
+function tests.title_is_generic_case_insensitive()
     print("Testing title_is_generic detects generic titles case-insensitively")
     check(document.title_is_generic("Note") == true, "'Note' should be generic")
     check(document.title_is_generic("UNTITLED NOTE") == true, "'UNTITLED NOTE' should be generic")
@@ -111,19 +106,19 @@ function test_title_is_generic_case_insensitive()
     check(document.title_is_generic("Bioreactor cleaning steps") == false, "a real title should not be generic")
 end
 
-function test_guess_title_skips_heading_uses_first_real_line()
+function tests.guess_title_skips_heading_uses_first_real_line()
     print("Testing guess_title_from_body skips the heading and uses the first real line")
     title = document.guess_title_from_body("# Heading\n\nFirst real line here.")
     check(title == "First real line here.", "expected 'First real line here.', got '" .. tostring(title) .. "'")
 end
 
-function test_guess_title_strips_bullet_decoration()
+function tests.guess_title_strips_bullet_decoration()
     print("Testing guess_title_from_body strips leading bullet/quote decoration")
     title = document.guess_title_from_body("- A bulleted first line")
     check(title == "A bulleted first line", "expected stripped bullet, got '" .. tostring(title) .. "'")
 end
 
-function test_guess_title_truncates_long_lines_on_word_boundary()
+function tests.guess_title_truncates_long_lines_on_word_boundary()
     print("Testing guess_title_from_body truncates a long line on a word boundary")
     long_line = "This is a very long first line that definitely exceeds the seventy two character budget we allow"
     title = document.guess_title_from_body(long_line)
@@ -131,24 +126,24 @@ function test_guess_title_truncates_long_lines_on_word_boundary()
     check(string.sub(title, -1) != " ", "truncated title should not end with a trailing space")
 end
 
-function test_guess_title_empty_body_returns_untitled()
+function tests.guess_title_empty_body_returns_untitled()
     print("Testing guess_title_from_body falls back to 'Untitled note' for empty/nil body")
     check(document.guess_title_from_body(nil) == "Untitled note", "nil body should return 'Untitled note'")
     check(document.guess_title_from_body("") == "Untitled note", "empty body should return 'Untitled note'")
 end
 
-function test_content_hash_is_deterministic()
+function tests.content_hash_is_deterministic()
     print("Testing content_hash is deterministic and content-sensitive")
     check(document.content_hash("hello world") == document.content_hash("hello world"), "same content should hash the same")
     check(document.content_hash("hello world") != document.content_hash("hello there"), "different content should hash differently")
 end
 
-function test_pool_effective_heat_reads_raw_heat_unchanged_when_pool_scale_matches()
+function tests.pool_effective_heat_reads_raw_heat_unchanged_when_pool_scale_matches()
     print("Testing pool_effective_heat returns raw_heat unchanged when scale_at_write matches the current pool_scale")
     check(document.pool_effective_heat(1.5, 1.0, 1.0) == 1.5, "matching scale should mean no adjustment, got " .. tostring(document.pool_effective_heat(1.5, 1.0, 1.0)))
 end
 
-function test_pool_effective_heat_applies_accumulated_shrink()
+function tests.pool_effective_heat_applies_accumulated_shrink()
     print("Testing pool_effective_heat applies whatever proportional shrink accumulated since this row was last written")
     -- pool_scale halved since this row's own scale_at_write -- its true
     -- current share is half of its stored raw_heat.
@@ -156,13 +151,13 @@ function test_pool_effective_heat_applies_accumulated_shrink()
     check(result == 1.0, "expected 2.0 * (0.5/1.0) = 1.0, got " .. tostring(result))
 end
 
-function test_pool_effective_heat_falls_back_to_base_heat_on_missing_data()
+function tests.pool_effective_heat_falls_back_to_base_heat_on_missing_data()
     print("Testing pool_effective_heat falls back to BASE_HEAT for nil/zero inputs")
     check(document.pool_effective_heat(nil, 1.0, 1.0) == document.base_heat(), "nil raw_heat should fall back to BASE_HEAT")
     check(document.pool_effective_heat(1.0, 0, 1.0) == document.base_heat(), "zero scale_at_write should fall back to BASE_HEAT (would divide by zero otherwise)")
 end
 
-function test_tier_weight_known_and_unknown_tiers()
+function tests.tier_weight_known_and_unknown_tiers()
     print("Testing tier_weight returns each tier's weight and 0.0 for an unknown tier")
     check(document.tier_weight(0) == 0.0, "tier 0 weight should be 0.0")
     check(document.tier_weight(3) == 0.35, "tier 3 weight should be 0.35")
@@ -174,7 +169,7 @@ end
 -- editable schema, so a query touching heat/tier/retrieval/source has a
 -- real name to name instead of inventing a table (confirmed live: the
 -- agent invented "knowledge_entries"/"record_type" before this existed).
-function test_knowledge_pool_sql_columns_text_names_the_real_columns()
+function tests.knowledge_pool_sql_columns_text_names_the_real_columns()
     print("Testing knowledge_pool_sql_columns_text lists every real knowledge-pool column and the companion tables")
     text = document.knowledge_pool_sql_columns_text()
     for _, name in ipairs({
@@ -191,7 +186,7 @@ function test_knowledge_pool_sql_columns_text_names_the_real_columns()
     check(string.find(text, "ignore it", 1, true) != nil, "expected an explicit steer away from the legacy 'heat' column")
 end
 
-function test_embedding_sql_columns_text_names_the_real_columns()
+function tests.embedding_sql_columns_text_names_the_real_columns()
     print("Testing embedding_sql_columns_text lists document_embedding's real columns")
     text = document.embedding_sql_columns_text()
     for _, name in ipairs({"document_id", "model", "vector_json", "updated_at"}) do
@@ -199,7 +194,7 @@ function test_embedding_sql_columns_text_names_the_real_columns()
     end
 end
 
-function test_weighted_spreading_delta_degenerate_case_matches_old_flat_split()
+function tests.weighted_spreading_delta_degenerate_case_matches_old_flat_split()
     print("Testing weighted_spreading_delta reduces to the old flat 1/fan_count split when every edge is unreinforced")
     -- 4 neighbors, every edge still at BASE_LINK_STRENGTH (1.0) --
     -- total_strength = 4.0, each neighbor's share = 1/4, matching the
@@ -211,7 +206,7 @@ function test_weighted_spreading_delta_degenerate_case_matches_old_flat_split()
     check(math.abs(delta - expected) < 0.0000001, "expected " .. tostring(expected) .. ", got " .. tostring(delta))
 end
 
-function test_weighted_spreading_delta_gives_a_reinforced_edge_a_bigger_share()
+function tests.weighted_spreading_delta_gives_a_reinforced_edge_a_bigger_share()
     print("Testing a reinforced edge captures a bigger share of the spread than an unreinforced sibling")
     base_delta = 0.5
     -- Same document, two neighbors: one still at BASE_LINK_STRENGTH,
@@ -223,7 +218,7 @@ function test_weighted_spreading_delta_gives_a_reinforced_edge_a_bigger_share()
         "reinforced neighbor's share (" .. tostring(delta_reinforced) .. ") should exceed the unreinforced sibling's (" .. tostring(delta_unreinforced) .. ")")
 end
 
-function test_weighted_spreading_delta_never_exceeds_the_direct_hit_factor()
+function tests.weighted_spreading_delta_never_exceeds_the_direct_hit_factor()
     print("Testing a single neighbor holding the entire total still can't exceed SPREADING_ACTIVATION_FACTOR's own share")
     base_delta = 0.5
     delta = document.weighted_spreading_delta(base_delta, 2.0, 2.0) -- sole neighbor, share = 1.0
@@ -231,15 +226,13 @@ function test_weighted_spreading_delta_never_exceeds_the_direct_hit_factor()
     check(math.abs(delta - expected) < 0.0000001, "a single neighbor's share should cap at base_delta * SPREADING_ACTIVATION_FACTOR, got " .. tostring(delta))
 end
 
-function test_weighted_spreading_delta_zero_total_strength_is_a_safe_no_op()
+function tests.weighted_spreading_delta_zero_total_strength_is_a_safe_no_op()
     print("Testing weighted_spreading_delta doesn't error on a zero/nil total_strength")
     check(document.weighted_spreading_delta(0.5, 1.0, 0) == 0, "zero total_strength should return 0, not error")
     check(document.weighted_spreading_delta(0.5, 1.0, nil) == 0, "nil total_strength should return 0, not error")
 end
 
--- Run them
-
-function test_query_terms_drops_operators_stopwords_and_edge_punctuation()
+function tests.query_terms_drops_operators_stopwords_and_edge_punctuation()
     print("Testing query_terms drops OR/stopwords and edge punctuation but keeps identifiers")
     terms = document.query_terms("passage OR subculture, \"RT-qPCR\" (C.COT.M-1D) * of the passage?")
     check(#terms == 4, "expected 4 terms, got " .. tostring(#terms) .. ": " .. table.concat(terms, "|"))
@@ -248,7 +241,7 @@ function test_query_terms_drops_operators_stopwords_and_edge_punctuation()
     check(terms[4] == "c.cot.m-1d", "inner dots kept, brackets stripped, got " .. tostring(terms[4]))
 end
 
-function test_pack_vector_round_trips_normalised()
+function tests.pack_vector_round_trips_normalised()
     print("Testing pack_vector/unpack_vector round-trip an L2-normalised float32 vector")
     packed = document.pack_vector({3.0, 4.0})
     check(string.len(packed) == 8, "two float32s are 8 bytes")
@@ -259,7 +252,7 @@ function test_pack_vector_round_trips_normalised()
     check(document.unpack_vector("abc") == nil, "a non-multiple-of-4 blob is rejected")
 end
 
-function test_search_snippet_centres_on_the_terms_and_skips_a_preamble()
+function tests.search_snippet_centres_on_the_terms_and_skips_a_preamble()
     print("Testing search_snippet shows the matching passage, not the preamble")
     preamble = "> **Source:** folder/file.pdf\n> **Author:** someone\n>\n> *Synced daily*\n\n---\n\n"
     content = preamble .. string.rep("Cover page filler text. ", 100) .. "\nThe core collection was genotyped with a SNP array.\n" .. string.rep("More filler. ", 100)
@@ -276,25 +269,7 @@ function test_search_snippet_centres_on_the_terms_and_skips_a_preamble()
     check(short == "plain short note about bioreactors", "a short match from the start is returned whole, got: " .. short)
 end
 
-test_reinforcement_delta_matches_tier_weights()
-test_promotion_requires_revised_regardless_of_content_shape()
-test_promotion_simple_or_thin_content_lands_tier_1()
-test_promotion_developed_content_lands_tier_2()
-test_promotion_atomic_content_lands_tier_3()
-test_promotion_duplicate_never_advances()
-test_promotion_demotes_when_edited_down_to_a_smaller_shape()
-test_content_shape_developed_on_multiple_headings()
-test_content_shape_developed_on_many_paragraphs()
-test_content_shape_thin_on_very_short_body()
-test_content_shape_atomic_on_short_single_subject_body()
-test_content_shape_simple_when_too_long_for_atomic_but_not_developed()
-test_connectivity_status_format()
-test_title_is_generic_case_insensitive()
-test_guess_title_skips_heading_uses_first_real_line()
-test_guess_title_strips_bullet_decoration()
-test_guess_title_truncates_long_lines_on_word_boundary()
-test_guess_title_empty_body_returns_untitled()
-function test_html_unescape_reverses_cmark_entities()
+function tests.html_unescape_reverses_cmark_entities()
     print("Testing html_unescape reverses cmark-gfm's entity escaping")
     check(document.html_unescape("&lt;b&gt;") == "<b>", "should unescape &lt;/&gt;")
     check(document.html_unescape("&quot;hi&quot;") == "\"hi\"", "should unescape &quot;")
@@ -302,18 +277,18 @@ function test_html_unescape_reverses_cmark_entities()
     check(document.html_unescape("cats &amp; dogs") == "cats & dogs", "should unescape &amp;")
 end
 
-function test_html_unescape_does_not_double_unescape_amp()
+function tests.html_unescape_does_not_double_unescape_amp()
     print("Testing html_unescape doesn't turn a literal escaped '&lt;' text into '<' via its &amp; pass")
     check(document.html_unescape("&amp;lt;") == "&lt;",
         "an escaped literal '&lt;' (i.e. &amp;lt;) should unescape to the literal text '&lt;', not '<'")
 end
 
-function test_html_unescape_nil_returns_empty()
+function tests.html_unescape_nil_returns_empty()
     print("Testing html_unescape on nil returns empty string")
     check(document.html_unescape(nil) == "", "nil should unescape to empty string")
 end
 
-function test_gnuplot_safe_string_strips_quotes_and_backslashes()
+function tests.gnuplot_safe_string_strips_quotes_and_backslashes()
     print("Testing gnuplot_safe_string strips characters that could break out of a gnuplot \"...\" literal")
     check(document.gnuplot_safe_string('foo"; system("rm -rf /"); set title "bar') == "foo; system(rm -rf /); set title bar",
         "should strip every double-quote and backslash")
@@ -321,7 +296,7 @@ function test_gnuplot_safe_string_strips_quotes_and_backslashes()
         "should collapse newlines to a space")
 end
 
-function test_plot_spec_to_gnuplot_cfg_valid_line_spec()
+function tests.plot_spec_to_gnuplot_cfg_valid_line_spec()
     print("Testing plot_spec_to_gnuplot_cfg on a valid line spec")
     cfg, err = document.plot_spec_to_gnuplot_cfg({
         type = "line", title = "Growth", xlabel = "Day", ylabel = "Biomass",
@@ -335,7 +310,7 @@ function test_plot_spec_to_gnuplot_cfg_valid_line_spec()
     check(cfg.data[1].title == "Run A", "series name should carry through as its title")
 end
 
-function test_plot_spec_to_gnuplot_cfg_type_mapping()
+function tests.plot_spec_to_gnuplot_cfg_type_mapping()
     print("Testing plot_spec_to_gnuplot_cfg maps type to gnuplot's with style")
     scatter_cfg = document.plot_spec_to_gnuplot_cfg({type = "scatter", series = {{x = {1}, y = {1}}}})
     check(scatter_cfg.data[1].with == "points", "type=scatter should map to with=points")
@@ -345,71 +320,39 @@ function test_plot_spec_to_gnuplot_cfg_type_mapping()
     check(default_cfg.data[1].with == "linespoints", "an omitted type should default to linespoints")
 end
 
-function test_plot_spec_to_gnuplot_cfg_sanitizes_labels()
+function tests.plot_spec_to_gnuplot_cfg_sanitizes_labels()
     print("Testing plot_spec_to_gnuplot_cfg strips gnuplot-command-breaking characters out of labels")
     cfg, err = document.plot_spec_to_gnuplot_cfg({title = 'a" set title "b', series = {{x = {1}, y = {1}}}})
     check(err == nil, "should not error, got: " .. tostring(err))
     check(string.find(cfg.title, "\"", 1, true) == nil, "sanitized title should contain no double-quote")
 end
 
-function test_plot_spec_to_gnuplot_cfg_rejects_missing_series()
+function tests.plot_spec_to_gnuplot_cfg_rejects_missing_series()
     print("Testing plot_spec_to_gnuplot_cfg rejects a spec with no series")
     cfg, err = document.plot_spec_to_gnuplot_cfg({type = "line"})
     check(cfg == nil, "a spec with no series should be rejected")
     check(err != nil, "should return an error message")
 end
 
-function test_plot_spec_to_gnuplot_cfg_rejects_mismatched_lengths()
+function tests.plot_spec_to_gnuplot_cfg_rejects_mismatched_lengths()
     print("Testing plot_spec_to_gnuplot_cfg rejects x/y arrays of different lengths")
     cfg, err = document.plot_spec_to_gnuplot_cfg({series = {{x = {1, 2}, y = {1}}}})
     check(cfg == nil, "mismatched x/y lengths should be rejected")
     check(err != nil, "should return an error message")
 end
 
-function test_plot_spec_to_gnuplot_cfg_rejects_non_numeric_values()
+function tests.plot_spec_to_gnuplot_cfg_rejects_non_numeric_values()
     print("Testing plot_spec_to_gnuplot_cfg rejects non-numeric x/y values")
     cfg, err = document.plot_spec_to_gnuplot_cfg({series = {{x = {"a"}, y = {1}}}})
     check(cfg == nil, "non-numeric values should be rejected")
     check(err != nil, "should return an error message")
 end
 
-function test_plot_spec_to_gnuplot_cfg_rejects_non_table_spec()
+function tests.plot_spec_to_gnuplot_cfg_rejects_non_table_spec()
     print("Testing plot_spec_to_gnuplot_cfg rejects a nil or non-table spec")
     cfg, err = document.plot_spec_to_gnuplot_cfg(nil)
     check(cfg == nil, "nil spec should be rejected")
     check(err != nil, "should return an error message")
 end
 
-test_html_unescape_reverses_cmark_entities()
-test_html_unescape_does_not_double_unescape_amp()
-test_html_unescape_nil_returns_empty()
-test_gnuplot_safe_string_strips_quotes_and_backslashes()
-test_plot_spec_to_gnuplot_cfg_valid_line_spec()
-test_plot_spec_to_gnuplot_cfg_type_mapping()
-test_plot_spec_to_gnuplot_cfg_sanitizes_labels()
-test_plot_spec_to_gnuplot_cfg_rejects_missing_series()
-test_plot_spec_to_gnuplot_cfg_rejects_mismatched_lengths()
-test_plot_spec_to_gnuplot_cfg_rejects_non_numeric_values()
-test_plot_spec_to_gnuplot_cfg_rejects_non_table_spec()
-
-test_content_hash_is_deterministic()
-test_pool_effective_heat_reads_raw_heat_unchanged_when_pool_scale_matches()
-test_pool_effective_heat_applies_accumulated_shrink()
-test_pool_effective_heat_falls_back_to_base_heat_on_missing_data()
-test_tier_weight_known_and_unknown_tiers()
-test_knowledge_pool_sql_columns_text_names_the_real_columns()
-test_embedding_sql_columns_text_names_the_real_columns()
-test_weighted_spreading_delta_degenerate_case_matches_old_flat_split()
-test_weighted_spreading_delta_gives_a_reinforced_edge_a_bigger_share()
-test_weighted_spreading_delta_never_exceeds_the_direct_hit_factor()
-test_weighted_spreading_delta_zero_total_strength_is_a_safe_no_op()
-
-test_query_terms_drops_operators_stopwords_and_edge_punctuation()
-test_pack_vector_round_trips_normalised()
-test_search_snippet_centres_on_the_terms_and_skips_a_preamble()
-
-if FAILURES > 0 then
-    print(FAILURES .. " test(s) failed")
-    os.exit(1)
-end
-print("All document.lua tests passed")
+unit.run(tests)

@@ -6,14 +6,9 @@
 json = require("dkjson")
 checks = dofile("tst/eval/checks.lua")
 
-FAILURES = 0
-
-function check(condition, message)
-    if condition != true then
-        FAILURES = FAILURES + 1
-        print("FAIL: " .. message)
-    end
-end
+unit = require("unit")
+check = unit.check
+tests = unit.suite()
 
 function user(text)
     return {role = "user", content = text}
@@ -37,7 +32,7 @@ end
 
 CTX = {status = "done", is_destructive = only_updates_are_destructive}
 
-function test_final_text_is_the_last_plain_reply_after_the_last_user_message()
+function tests.final_text_is_the_last_plain_reply_after_the_last_user_message()
     print("Testing the final answer is the last plain reply of the latest exchange")
     conv = checks.conversation({user("q1"), said("old answer"), user("q2"), calls("c1", "document.search", {}),
         result("c1", "document.search", "hits", false), said("new answer")}, {})
@@ -46,7 +41,7 @@ function test_final_text_is_the_last_plain_reply_after_the_last_user_message()
     check(conv.final_text == nil, "a question with no reply yet has no final answer")
 end
 
-function test_answer_matches_text_lists_and_numbers()
+function tests.answer_matches_text_lists_and_numbers()
     print("Testing answer finds text, every item of a list, and a number within tolerance")
     conv = checks.conversation({user("q"), said("It contains Glucose, Peptone and Yeast extract; Td = 3.91 h.")}, {})
     check(checks.answer(conv, {expected = "glucose"}, CTX).pass == true, "case-insensitive text should match")
@@ -55,7 +50,7 @@ function test_answer_matches_text_lists_and_numbers()
     check(checks.answer(conv, {number = 3.5, tolerance = 0.05}, CTX).pass == false, "3.91 is not within 5% of 3.5")
 end
 
-function test_answer_accepts_any_common_spelling_of_a_date()
+function tests.answer_accepts_any_common_spelling_of_a_date()
     print("Testing a date answer matches ISO and written-out spellings, and only the right date")
     for _, reply in ipairs({"It started on 2026-04-25.", "It started on **April 25, 2026**.",
             "Started 25 April 2026.", "Started Apr 25, 2026."}) do
@@ -66,7 +61,7 @@ function test_answer_accepts_any_common_spelling_of_a_date()
     check(checks.answer(wrong, {date = "2026-04-25"}, CTX).pass == false, "the day before must not match")
 end
 
-function test_cites_needs_a_link_to_the_right_record()
+function tests.cites_needs_a_link_to_the_right_record()
     print("Testing cites wants a link to the record, not just its number")
     linked = checks.conversation({user("q"), said("See [notes](/document?entity_id=212).")}, {})
     check(checks.cites(linked, {ids = {212}}, CTX).pass == true, "a link to 212 should pass")
@@ -75,7 +70,7 @@ function test_cites_needs_a_link_to_the_right_record()
     check(checks.cites(bare, {ids = {212}}, CTX).pass == false, "mentioning #212 without a link should fail")
 end
 
-function test_approval_fails_on_a_write_nobody_approved()
+function tests.approval_fails_on_a_write_nobody_approved()
     print("Testing approval fails when a destructive result has no approved pending action")
     rows = {user("q"), calls("c1", "entity.update", {}), result("c1", "entity.update", "Updated experiment #5", false), said("Done.")}
     unapproved = checks.conversation(rows, {{tool_call_id = "c1", status = "pending"}})
@@ -89,14 +84,14 @@ function test_approval_fails_on_a_write_nobody_approved()
     check(checks.approval(denied, {expect_write = true}, CTX).pass == false, "expect_write needs a write that ran")
 end
 
-function test_approval_ignores_a_write_the_tool_refused()
+function tests.approval_ignores_a_write_the_tool_refused()
     print("Testing approval doesn't count a destructive call the tool refused before asking")
     conv = checks.conversation({user("q"), calls("c1", "entity.update", {entity_id = 1}),
         result("c1", "entity.update", "ERROR: nothing to update: pass each field to change", true), said("Couldn't.")}, {})
     check(checks.approval(conv, {}, CTX).pass == true, "a refused call wrote nothing and needs no approval")
 end
 
-function test_no_failed_lookup_counts_guessed_schema_errors()
+function tests.no_failed_lookup_counts_guessed_schema_errors()
     print("Testing no_failed_lookup catches guessed columns and the other database's SQL")
     conv = checks.conversation({user("q"),
         calls("c1", "entity.query", {}), result("c1", "entity.query", "ERROR: no such column: e.owner_name", true),
@@ -108,7 +103,7 @@ function test_no_failed_lookup_counts_guessed_schema_errors()
     check(outcome.count == 2, "expected 2 failed lookups, got " .. tostring(outcome.count))
 end
 
-function test_finished_fails_on_a_stall_or_a_turn_limit()
+function tests.finished_fails_on_a_stall_or_a_turn_limit()
     print("Testing finished fails on 'should I continue?' and on a non-done status")
     stalled = checks.conversation({user("q"), said("I found 3 of 5 runs. Should I continue?")}, {})
     check(checks.finished(stalled, {}, CTX).pass == false, "a stall should fail")
@@ -118,7 +113,7 @@ function test_finished_fails_on_a_stall_or_a_turn_limit()
     check(checks.finished(answered, {}, {}).pass == true, "a stored chat has no status and is judged by its text")
 end
 
-function test_says_unknown_and_shows_method()
+function tests.says_unknown_and_shows_method()
     print("Testing says_unknown and shows_method look for what they claim to")
     guess = checks.conversation({user("q"), said("The supplier was Acme.")}, {})
     check(checks.says_unknown(guess, {}, CTX).pass == false, "a made-up answer should fail says_unknown")
@@ -134,7 +129,7 @@ function test_says_unknown_and_shows_method()
     check(checks.shows_method(shown, {}, CTX).pass == true, "a stated method should pass")
 end
 
-function test_no_tool_names_catches_plumbing_but_not_links()
+function tests.no_tool_names_catches_plumbing_but_not_links()
     print("Testing no_tool_names catches tool names but not record links or sentence ends")
     leaky = checks.conversation({user("q"), said("| S1 | calc.evaluate -> 4.31 days |")}, {})
     check(checks.no_tool_names(leaky, {}, CTX).pass == false, "calc.evaluate in the answer should fail")
@@ -142,7 +137,7 @@ function test_no_tool_names_catches_plumbing_but_not_links()
     check(checks.no_tool_names(clean, {}, CTX).pass == true, "links and ordinary words should pass")
 end
 
-function test_no_latex_catches_typeset_formulas_but_not_plain_ones()
+function tests.no_latex_catches_typeset_formulas_but_not_plain_ones()
     print("Testing no_latex fails on LaTeX and passes plain-text formulas and prices")
     latex = checks.conversation({user("q"), said("Doubling time: $\\frac{\\ln(2)}{0.2511} \\approx 2.76$ hours.")}, {})
     check(checks.no_latex(latex, {}, CTX).pass == false, "\\frac in the answer should fail")
@@ -150,7 +145,7 @@ function test_no_latex_catches_typeset_formulas_but_not_plain_ones()
     check(checks.no_latex(plain, {}, CTX).pass == true, "a plain formula and a dollar price should pass")
 end
 
-function test_labels_not_ids_catches_internal_ids_but_not_lab_numbers_or_link_urls()
+function tests.labels_not_ids_catches_internal_ids_but_not_lab_numbers_or_link_urls()
     print("Testing labels_not_ids fails on 'sample 41' and listed ids, not on labels or link URLs")
     by_id = checks.conversation({user("q"), said("The fit used all 5 points for sample 41 in EXP-018.")}, {})
     check(checks.labels_not_ids(by_id, {}, CTX).pass == false, "'sample 41' should fail")
@@ -162,7 +157,7 @@ function test_labels_not_ids_catches_internal_ids_but_not_lab_numbers_or_link_ur
         "labels, a zero-padded lab number and an id inside a link URL should pass")
 end
 
-function test_names_record_needs_the_label_outside_a_link()
+function tests.names_record_needs_the_label_outside_a_link()
     print("Testing names_record fails when the label only appears inside a document link")
     inside = checks.conversation({user("q"), said("The doubling time of [Notes: Growth on Molasses (EXP-018)](/document?entity_id=263) was 2.76 hours.")}, {})
     check(checks.names_record(inside, {label = "EXP-018"}, CTX).pass == false, "a label only in a link should fail")
@@ -202,7 +197,7 @@ end
 WRITE = {user("q"), calls("c1", "document.create", {title = "Summary"}),
     result("c1", "document.create", "Created document #300 (Summary)", false), said("Done.")}
 
-function test_document_link_checks_read_stored_links()
+function tests.document_link_checks_read_stored_links()
     print("Testing links_documents, no_dangling_links and not_filed_under read what was stored")
     conv = checks.conversation(WRITE, {})
     ctx = link_ctx({{to = 271}, {to = 272}, {to = nil, text = "wiki-style"}})
@@ -216,7 +211,7 @@ function test_document_link_checks_read_stored_links()
     check(checks.links_documents(nothing, {ids = {271}}, ctx).pass == false, "no write at all should fail")
 end
 
-function test_keeps_content_and_numbers()
+function tests.keeps_content_and_numbers()
     print("Testing keeps_content notices dropped sections, and answer's numbers needs every one")
     ctx = link_ctx({})
     check(checks.keeps_content(nil, {id = 1, texts = {"## Steps"}}, ctx).pass == true, "kept section should pass")
@@ -226,24 +221,4 @@ function test_keeps_content_and_numbers()
     check(checks.answer(conv, {numbers = {3.1, 2.9, 4.2}}, CTX).pass == false, "a missing number should fail")
 end
 
-test_final_text_is_the_last_plain_reply_after_the_last_user_message()
-test_no_tool_names_catches_plumbing_but_not_links()
-test_answer_matches_text_lists_and_numbers()
-test_answer_accepts_any_common_spelling_of_a_date()
-test_cites_needs_a_link_to_the_right_record()
-test_approval_fails_on_a_write_nobody_approved()
-test_approval_ignores_a_write_the_tool_refused()
-test_no_failed_lookup_counts_guessed_schema_errors()
-test_finished_fails_on_a_stall_or_a_turn_limit()
-test_says_unknown_and_shows_method()
-test_no_latex_catches_typeset_formulas_but_not_plain_ones()
-test_labels_not_ids_catches_internal_ids_but_not_lab_numbers_or_link_urls()
-test_names_record_needs_the_label_outside_a_link()
-test_document_link_checks_read_stored_links()
-test_keeps_content_and_numbers()
-
-if FAILURES > 0 then
-    print(FAILURES .. " failure(s)")
-    os.exit(1)
-end
-print("All agent eval check tests passed")
+unit.run(tests)

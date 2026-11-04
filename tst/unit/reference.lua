@@ -3,14 +3,9 @@
 
 reference = require("reference")
 
-FAILURES = 0
-
-function check(condition, message)
-    if condition != true then
-        FAILURES = FAILURES + 1
-        print("FAIL: " .. message)
-    end
-end
+unit = require("unit")
+check = unit.check
+tests = unit.suite()
 
 function has(list, value)
     for _, v in ipairs(list) do
@@ -21,7 +16,7 @@ function has(list, value)
     return false
 end
 
-function test_only_distinctive_names_are_targets()
+function tests.only_distinctive_names_are_targets()
     print("Testing a name is a target only with 4+ characters, a letter, and a digit or inner punctuation")
     check(reference.name_key("Exp185") == "exp185", "Exp185 -> exp185")
     check(reference.name_key("C.COT.IN-1.2") == "ccotin12", "C.COT.IN-1.2 -> ccotin12, got " .. tostring(reference.name_key("C.COT.IN-1.2")))
@@ -34,7 +29,7 @@ function test_only_distinctive_names_are_targets()
     check(reference.name_key("B2") == nil, "B2 is under 4 characters")
 end
 
-function test_text_offers_spacing_insensitive_keys()
+function tests.text_offers_spacing_insensitive_keys()
     print("Testing a text's keys ignore case, spacing and separators, and keep shorter runs inside longer ones")
     keys = reference.candidate_keys("Callus from exp 227 sample 96, then EXP-185 on c.cot.in-1.2.", nil)
     check(has(keys, "exp227sample96"), "'exp 227 sample 96' should offer exp227sample96")
@@ -44,19 +39,11 @@ function test_text_offers_spacing_insensitive_keys()
     check(not has(keys, "callusfrom"), "word runs with no digit or inner punctuation aren't looked up")
 end
 
-function test_aliases_rewrite_how_people_write_names()
+function tests.aliases_rewrite_how_people_write_names()
     print("Testing a deployment alias turns 'Experiment 185' into exp185")
     keys = reference.candidate_keys("Results of Experiment 185.", {{"experiment%s*(%d)", "exp%1"}})
     check(has(keys, "exp185"), "alias should give exp185")
     check(not has(reference.candidate_keys("Results of Experiment 185.", nil), "exp185"), "without it, no exp185")
 end
 
-test_only_distinctive_names_are_targets()
-test_text_offers_spacing_insensitive_keys()
-test_aliases_rewrite_how_people_write_names()
-
-if FAILURES > 0 then
-    print(FAILURES .. " test(s) failed")
-    os.exit(1)
-end
-print("All reference.lua tests passed")
+unit.run(tests)

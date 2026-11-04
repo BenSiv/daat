@@ -10,20 +10,15 @@
 
 page = require("page")
 
-FAILURES = 0
-
-function check(condition, message)
-    if condition != true then
-        FAILURES = FAILURES + 1
-        print("FAIL: " .. message)
-    end
-end
+unit = require("unit")
+check = unit.check
+tests = unit.suite()
 
 function contains(haystack, needle)
     return string.find(haystack, needle, 1, true) != nil
 end
 
-function test_validate_accepts_a_realistic_page()
+function tests.validate_accepts_a_realistic_page()
     print("Testing validate accepts a realistic, well-formed page")
     sections = {
         {type = "message", css_class = "platform-error-banner", text = "Invalid login."},
@@ -40,13 +35,13 @@ function test_validate_accepts_a_realistic_page()
     check(err == nil, "a realistic page should validate cleanly: " .. tostring(err))
 end
 
-function test_validate_rejects_unknown_section_type()
+function tests.validate_rejects_unknown_section_type()
     print("Testing validate rejects an unrecognized section type")
     err = page.validate({{type = "not_a_real_type"}})
     check(err != nil, "an invalid section type should be rejected")
 end
 
-function test_validate_rejects_missing_required_section_fields()
+function tests.validate_rejects_missing_required_section_fields()
     print("Testing validate rejects each section type's own missing required field")
     check(page.validate({{type = "subheading"}}) != nil, "subheading needs text")
     check(page.validate({{type = "message", css_class = "x"}}) != nil, "message needs text")
@@ -73,7 +68,7 @@ end
 -- empty string would have silently rendered a blank <h2></h2> instead
 -- of being rejected. See doc/templating.md's "A consistency pass found
 -- two real gaps" section.
-function test_validate_rejects_empty_string_optional_form_and_table_fields()
+function tests.validate_rejects_empty_string_optional_form_and_table_fields()
     print("Testing validate rejects an empty-string (not nil) optional field on form/table")
     base_form = {method = "POST", action = "/x", fields = {}, submit_label = "Go"}
 
@@ -103,7 +98,7 @@ function test_validate_rejects_empty_string_optional_form_and_table_fields()
         "omitting these optional fields entirely must still validate cleanly")
 end
 
-function test_validate_rejects_bad_form_fields()
+function tests.validate_rejects_bad_form_fields()
     print("Testing validate rejects a form field's own mistakes")
     function form_with(fields)
         return {type = "form", method = "POST", action = "/x", fields = fields, submit_label = "Go"}
@@ -116,7 +111,7 @@ function test_validate_rejects_bad_form_fields()
     check(page.validate({form_with({{type = "text", name = "x", wrapper_class = ""}})}) != nil, "empty-string wrapper_class should be rejected")
 end
 
-function test_validate_rejects_bad_groups()
+function tests.validate_rejects_bad_groups()
     print("Testing validate rejects a form group's own mistakes")
     function form_with_group(group)
         return {type = "form", method = "POST", action = "/x", fields = {}, submit_label = "Go", groups = {group}}
@@ -135,7 +130,7 @@ function test_validate_rejects_bad_groups()
     )
 end
 
-function test_validate_table_cells_only_nest_form_or_html_fragment()
+function tests.validate_table_cells_only_nest_form_or_html_fragment()
     print("Testing validate restricts table cell items to a string, a 'form' section, or an 'html_fragment' item")
     good_table = {type = "table", columns = {"A"}, rows = {{{"plain text"}}}}
     check(page.validate({good_table}) == nil, "a plain string cell item should validate")
@@ -164,7 +159,7 @@ end
 -- columns, render_reference_value) must appear as a real <a> tag, not
 -- get HTML-escaped into visible "&lt;a href..." markup the way a plain
 -- string item would.
-function test_render_html_fragment_cell_item_is_not_escaped()
+function tests.render_html_fragment_cell_item_is_not_escaped()
     print("Testing render inserts an html_fragment cell item's HTML verbatim, not escaped")
     sections = {{
         type = "table",
@@ -178,7 +173,7 @@ function test_render_html_fragment_cell_item_is_not_escaped()
     check(not contains(html, "&lt;a href"), "an html_fragment item must never be HTML-escaped")
 end
 
-function test_render_escapes_user_text()
+function tests.render_escapes_user_text()
     print("Testing render HTML-escapes text content by default")
     sections = {{type = "subheading", text = "<script>alert(1)</script>"}}
     err = page.validate(sections)
@@ -190,7 +185,7 @@ end
 
 -- Regression lock for the attr_fragment fix this session: nil and ""
 -- are not the same "absent" -- only nil should omit an attribute.
-function test_render_distinguishes_nil_from_empty_string_value()
+function tests.render_distinguishes_nil_from_empty_string_value()
     print("Testing render renders value=\"\" for an empty string, omits the attribute entirely for nil")
     sections = {{
         type = "form", method = "POST", action = "/x", submit_label = "Go",
@@ -206,7 +201,7 @@ function test_render_distinguishes_nil_from_empty_string_value()
     check(not contains(html, "name=\"unset_field\" value"), "an absent (nil) value must not render a value attribute at all")
 end
 
-function test_render_checkbox_label_after_input()
+function tests.render_checkbox_label_after_input()
     print("Testing render puts a checkbox's label after its input, not before")
     sections = {{
         type = "form", method = "POST", action = "/x", submit_label = "Go",
@@ -219,7 +214,7 @@ function test_render_checkbox_label_after_input()
     check(contains(html, "checked"), "a checked checkbox should render the checked attribute")
 end
 
-function test_render_textarea_value_is_inner_content_not_attribute()
+function tests.render_textarea_value_is_inner_content_not_attribute()
     print("Testing render puts a textarea's value as escaped inner content, not a value= attribute")
     sections = {{
         type = "form", method = "POST", action = "/x", submit_label = "Go",
@@ -231,7 +226,7 @@ function test_render_textarea_value_is_inner_content_not_attribute()
     check(not contains(html, "value=\"line one\""), "a textarea's value must never appear as a value= attribute")
 end
 
-function test_render_table_with_nested_form_cell()
+function tests.render_table_with_nested_form_cell()
     print("Testing render produces a real table with a nested form inside one cell")
     sections = {{
         type = "table",
@@ -247,7 +242,7 @@ function test_render_table_with_nested_form_cell()
     check(contains(html, "<form class=\"inline\""), "the nested form should render as a real <form> inside its cell")
 end
 
-function test_render_form_groups_produce_headed_sections()
+function tests.render_form_groups_produce_headed_sections()
     print("Testing render splits a form's groups into their own headed sections")
     sections = {{
         type = "form", method = "POST", action = "/settings-save", submit_label = "Save",
@@ -274,7 +269,7 @@ function test_render_form_groups_produce_headed_sections()
     check(form_count == 1, "groups must stay inside exactly one real <form>, got " .. tostring(form_count))
 end
 
-function test_validate_rejects_empty_string_actions_style()
+function tests.validate_rejects_empty_string_actions_style()
     print("Testing validate rejects an empty-string (not nil) actions.style")
     good_buttons = {{label = "Go", id = "btn-go", css_class = "btn btn-primary"}}
     check(page.validate({{type = "actions", buttons = good_buttons, style = ""}}) != nil,
@@ -289,7 +284,7 @@ end
 -- a script fills in later. See doc/templating.md's registration-grid
 -- scope-boundary note for why only these two pieces of that page
 -- convert, not the rest of it.
-function test_render_actions_produces_button_group_in_order()
+function tests.render_actions_produces_button_group_in_order()
     print("Testing render produces a plain (non-submit) button group in declared order")
     sections = {{
         type = "actions",
@@ -308,7 +303,7 @@ function test_render_actions_produces_button_group_in_order()
     check(not contains(html, "type=\"submit\""), "an actions button must never be a real submit button")
 end
 
-function test_render_actions_style_attribute_is_optional()
+function tests.render_actions_style_attribute_is_optional()
     print("Testing render only emits actions' style attribute when given")
     with_style = page.render({{type = "actions", style = "margin-top: 20px;", buttons = {{label = "Save", id = "btn-save", css_class = "btn btn-primary"}}}})
     check(contains(with_style, "style=\"margin-top: 20px;\""), "a given style should render verbatim")
@@ -317,35 +312,11 @@ function test_render_actions_style_attribute_is_optional()
     check(not contains(without_style, "style="), "an omitted style should render no style attribute at all")
 end
 
-function test_render_status_placeholder_is_an_empty_div()
+function tests.render_status_placeholder_is_an_empty_div()
     print("Testing render produces an empty, id/class-only status placeholder div")
     html = page.render({{type = "status_placeholder", id = "status-message", css_class = "status-msg"}})
     check(contains(html, "<div id=\"status-message\" class=\"status-msg\"></div>"),
         "should render exactly one empty div with the given id and class")
 end
 
--- Run them
-test_validate_accepts_a_realistic_page()
-test_validate_rejects_unknown_section_type()
-test_validate_rejects_missing_required_section_fields()
-test_validate_rejects_empty_string_optional_form_and_table_fields()
-test_validate_rejects_bad_form_fields()
-test_validate_rejects_bad_groups()
-test_validate_table_cells_only_nest_form_or_html_fragment()
-test_render_html_fragment_cell_item_is_not_escaped()
-test_render_escapes_user_text()
-test_render_distinguishes_nil_from_empty_string_value()
-test_render_checkbox_label_after_input()
-test_render_textarea_value_is_inner_content_not_attribute()
-test_render_table_with_nested_form_cell()
-test_render_form_groups_produce_headed_sections()
-test_validate_rejects_empty_string_actions_style()
-test_render_actions_produces_button_group_in_order()
-test_render_actions_style_attribute_is_optional()
-test_render_status_placeholder_is_an_empty_div()
-
-if FAILURES > 0 then
-    print(FAILURES .. " test(s) failed")
-    os.exit(1)
-end
-print("All page.lua tests passed")
+unit.run(tests)
