@@ -151,6 +151,53 @@ function test_declarations_translate_for_both_providers(db_path)
     end
 end
 
+-- What the model is shown, byte for byte (#6): moving tools into records
+-- must not change a single declaration, and a change that should is its
+-- own measured PR. One declaration per line, so a diff of a fixture
+-- names the tool that changed. The order is pairs() over AGENT_TOOLS,
+-- which is the same from run to run. After an intended change,
+-- regenerate with DAAT_UPDATE_SNAPSHOT=1 and say why in the PR.
+-- The research sub-agent's list is pinned the same way: it is what that
+-- model is shown, and #6 keeps it to the same 21 tools.
+SNAPSHOTS = {
+    {path = "tst/unit/fixtures/tool_declarations.json", name = "agent.tool_declarations", list = function(db_path)
+        return agent.tool_declarations(db_path)
+    end},
+    {path = "tst/unit/fixtures/research_tool_declarations.json", name = "agent_tools.research_tool_declarations", list = function(db_path)
+        return agent_tools.research_tool_declarations(db_path)
+    end},
+}
+
+function declarations_snapshot(declarations)
+    lines = {}
+    for _, declaration in ipairs(declarations) do
+        table.insert(lines, json.encode(declaration))
+    end
+    return table.concat(lines, "\n") .. "\n"
+end
+
+function test_declarations_match_the_snapshots(db_path)
+    for _, snapshot in ipairs(SNAPSHOTS) do
+        print("Testing " .. snapshot.name .. " is byte-identical to " .. snapshot.path)
+        current = declarations_snapshot(snapshot.list(db_path))
+        if os.getenv("DAAT_UPDATE_SNAPSHOT") == "1" then
+            f = io.open(snapshot.path, "w")
+            io.write(f, current)
+            io.close(f)
+            print("  wrote " .. snapshot.path)
+        else
+            f = io.open(snapshot.path, "r")
+            check(f != nil, "can't open " .. snapshot.path .. " (run from the repo root)")
+            if f != nil then
+                expected = io.read(f, "*a")
+                io.close(f)
+                check(current == expected, snapshot.name .. " no longer matches " .. snapshot.path ..
+                    ": what the model sees changed. If that's intended, regenerate it with DAAT_UPDATE_SNAPSHOT=1 and say why in the PR")
+            end
+        end
+    end
+end
+
 dir = os.tmpname()
 os.remove(dir)
 lfs.mkdir(dir)
@@ -161,6 +208,7 @@ test_every_declaration_is_well_formed()
 test_every_declared_method_reaches_a_handler(db_path)
 test_every_handler_in_execute_tool_is_declared()
 test_declarations_translate_for_both_providers(db_path)
+test_declarations_match_the_snapshots(db_path)
 
 os.execute("rm -rf '" .. dir .. "'")
 
