@@ -610,15 +610,26 @@ for name, _ in pairs(HAND_ROLLED_ENTITY_FIELDS) do
     end
 end
 
-function unknown_entity_type_message(db_path, entity_type)
-    message = "unknown entity type: " .. tostring(entity_type)
-    suggestion = schema.suggest_type(db_path, entity_type)
+-- Shared recovery hints (doc/agent-tools.md, "Recovery hints"; #6): what
+-- to tell the model when an argument is wrong, worded once so every tool
+-- says it the same way. A record's recover returns one of these, and the
+-- dispatcher appends it to the error as " -- <hint>". Each takes over a
+-- hint that one tool used to write out by hand, with the same text.
+function agent_tools.hint_entity_type(ctx, entity_type)
+    suggestion = schema.suggest_type(ctx.db_path, entity_type)
     if suggestion != nil then
-        message = message .. " -- did you mean '" .. suggestion .. "'?"
-    else
-        message = message .. " -- call entity.list_types for the full list"
+        return "did you mean '" .. suggestion .. "'?"
     end
-    return message
+    return "call entity.list_types for the full list"
+end
+
+-- `names`: the columns a query actually returned, in the order to show.
+function agent_tools.hint_result_columns(names)
+    return "actual columns: " .. table.concat(names, ", ")
+end
+
+function unknown_entity_type_message(db_path, entity_type)
+    return "unknown entity type: " .. tostring(entity_type) .. " -- " .. agent_tools.hint_entity_type({db_path = db_path}, entity_type)
 end
 
 -- A multi_reference field's raw value is a plain array of ids (schema.
@@ -776,7 +787,7 @@ function numeric_series(db_path, args, purpose)
     end
     if has_x == false or has_y == false then
         return nil, "query result has no column named \"" .. tostring(args.x_column) .. "\" and/or \"" .. tostring(args.y_column) ..
-            "\" -- actual columns: " .. table.concat(column_names, ", ")
+            "\" -- " .. agent_tools.hint_result_columns(column_names)
     end
     x_values, y_values = {}, {}
     for i, row in ipairs(rows) do
@@ -841,7 +852,7 @@ function fit_groups(args, series)
         end
         table.sort(names)
         return nil, "query result has no column named \"" .. tostring(args.group_column) ..
-            "\" for group_column -- actual columns: " .. table.concat(names, ", ")
+            "\" for group_column -- " .. agent_tools.hint_result_columns(names)
     end
     order = {}
     groups = {}
@@ -894,7 +905,10 @@ function fit_groups(args, series)
     return table.concat(lines, "\n")
 end
 
-function agent_tools.execute_tool(db_path, author, session_id, tool_name, method_name, args)
+-- Every built-in tool's handler until #6 moves it into its record, then
+-- the extension fallback; agent_tools.execute_tool, below, is the entry
+-- point. Shrinks one group per #6 step and is deleted in step 8.
+function execute_tool_chain(db_path, author, session_id, tool_name, method_name, args)
     source = {notebook_entry_id = "agent-session:" .. tostring(session_id)}
 
     if tool_name == "document" and method_name == "search" then
@@ -1705,6 +1719,29 @@ function agent_tools.execute_tool(db_path, author, session_id, tool_name, method
     end
 
     return nil, "unknown tool: " .. tostring(tool_name) .. "." .. tostring(method_name)
+end
+
+-- Runs one tool call: the record's own handler when its group has moved
+-- into records (#6), otherwise execute_tool_chain above. Either way, a
+-- failed call gets the record's recover hint, if it has one: run under
+-- pcall, only after a failure, and only ever added to the error, never
+-- replacing it, so the real cause is always in the result.
+function agent_tools.execute_tool(db_path, author, session_id, tool_name, method_name, args)
+    record = agent.tool_record(db_path, tool_name, method_name)
+    ctx = agent.tool_ctx(db_path, author, session_id)
+    result, err = nil, nil
+    if record != nil and record.handler != nil then
+        result, err = record.handler(ctx, args)
+    else
+        result, err = execute_tool_chain(db_path, author, session_id, tool_name, method_name, args)
+    end
+    if result == nil and err != nil and record != nil and record.recover != nil then
+        ok, hint = pcall(record.recover, ctx, args, err)
+        if ok == true and type(hint) == "string" and hint != "" then
+            err = tostring(err) .. " -- " .. hint
+        end
+    end
+    return result, err
 end
 
 -- The default system prompt: domain/behavior guidance only -- the

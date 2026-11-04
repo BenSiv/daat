@@ -8,6 +8,8 @@
 
 agent = require("agent")
 agent_tools = require("agent_tools")
+init = require("init")
+lfs = require("lfs")
 
 FAILURES = 0
 
@@ -152,6 +154,86 @@ function test_an_extension_declaring_a_tool_twice_is_refused()
     check(registry.gadgets != nil and registry.gadgets.peek != nil, "other extensions are unaffected")
     check(#ordered == 1 and ordered[1].group == "gadgets", "only the other extension's tool is declared")
 end
+
+-- The dispatcher (agent_tools.execute_tool): a record's own handler runs
+-- before the old chain, and a failed call gets its recover hint. A fake
+-- group is added to AGENT_TOOLS for the call and removed after; the
+-- registry is built per call, so it sees it.
+function with_fake_tool(record, fn)
+    agent_tools.AGENT_TOOLS.zz_test = {probe = record}
+    ok, err = pcall(fn)
+    agent_tools.AGENT_TOOLS.zz_test = nil
+    check(ok, "the test itself raised: " .. tostring(err))
+end
+
+function fake_record(handler, recover)
+    return {destructive = false, description = "probe", parameters = {type = "object"}, handler = handler, recover = recover}
+end
+
+function test_a_record_handler_runs_before_the_chain(db_path)
+    print("Testing a record's handler is called with ctx and args, before the old chain")
+    with_fake_tool(fake_record(function(ctx, args)
+        return "handled by " .. ctx.author .. " in " .. ctx.session_id .. ": " .. tostring(args.n)
+    end), function()
+        result, err = agent_tools.execute_tool(db_path, "alice", "s1", "zz_test", "probe", {n = 7})
+        check(result == "handled by alice in s1: 7", "expected the handler's result, got " .. tostring(result) .. " / " .. tostring(err))
+    end)
+end
+
+function test_recover_adds_to_a_failed_call(db_path)
+    print("Testing recover adds its hint to a failed call's error, and only then")
+    with_fake_tool(fake_record(function(ctx, args) return nil, "bad input" end,
+        function(ctx, args, err) return "try " .. tostring(args.n + 1) end), function()
+        result, err = agent_tools.execute_tool(db_path, "alice", "s1", "zz_test", "probe", {n = 1})
+        check(result == nil and err == "bad input -- try 2", "expected the error with the hint, got " .. tostring(err))
+    end)
+
+    called = false
+    with_fake_tool(fake_record(function(ctx, args) return "fine" end,
+        function(ctx, args, err)
+            called = true
+            return "never"
+        end), function()
+        result, err = agent_tools.execute_tool(db_path, "alice", "s1", "zz_test", "probe", {})
+        check(result == "fine" and err == nil, "a successful call is returned as it is")
+    end)
+    check(called == false, "recover must not run after a success")
+
+    for _, broken in ipairs({
+        function(ctx, args, err) return nil end,
+        function(ctx, args, err) return "" end,
+        function(ctx, args, err) error("recover itself failed") end,
+    }) do
+        with_fake_tool(fake_record(function(ctx, args) return nil, "bad input" end, broken), function()
+            result, err = agent_tools.execute_tool(db_path, "alice", "s1", "zz_test", "probe", {})
+            check(err == "bad input", "a recover with no hint, or one that fails, leaves the error as it was; got " .. tostring(err))
+        end)
+    end
+end
+
+-- The hints that moved into shared helpers still read exactly as before:
+-- what the model is told must not change during the migration.
+function test_moved_hints_keep_their_text(db_path)
+    print("Testing the shared hints produce the texts tools wrote out before")
+    result, err = agent_tools.execute_tool(db_path, "test", 0, "entity", "list", {entity_type = "zz_nope"})
+    check(err == "unknown entity type: zz_nope -- call entity.list_types for the full list",
+        "entity.list's unknown-type error changed: " .. tostring(err))
+    check(agent_tools.hint_result_columns({"id", "od"}) == "actual columns: id, od", "hint_result_columns changed")
+    check(agent_tools.hint_entity_type({db_path = db_path}, "zz_nope") == "call entity.list_types for the full list",
+        "hint_entity_type without a near match changed")
+end
+
+dir = os.tmpname()
+os.remove(dir)
+lfs.mkdir(dir)
+init.do_init({}, dir)
+db_path = dir .. "/.store/store.db"
+
+test_a_record_handler_runs_before_the_chain(db_path)
+test_recover_adds_to_a_failed_call(db_path)
+test_moved_hints_keep_their_text(db_path)
+
+os.execute("rm -rf '" .. dir .. "'")
 
 test_every_builtin_record_follows_the_field_rules()
 test_control_tools_are_the_three_kinds()

@@ -93,13 +93,14 @@ function test_every_declared_method_reaches_a_handler(db_path)
     end)
 end
 
--- Every `tool_name == "x" and method_name == "y"` branch in execute_tool's
--- own body names a declared tool. Reads only execute_tool:
--- reject_before_approval uses the same pattern. Once #6 has moved every
--- handler into its record there are no branches left, and this passes
--- vacuously; delete it then.
+-- Every `tool_name == "x" and method_name == "y"` branch in the old
+-- dispatch chain (execute_tool_chain, which execute_tool falls back to for
+-- a tool whose record has no handler yet) names a declared tool. Reads
+-- only that function: reject_before_approval uses the same pattern. Once
+-- #6 has moved every handler into its record the chain is gone; delete
+-- this then.
 function test_every_handler_in_execute_tool_is_declared()
-    print("Testing every branch in execute_tool is a declared tool")
+    print("Testing every branch in execute_tool_chain is a declared tool")
     f = io.open("src/agent_tools.lua", "r")
     check(f != nil, "can't open src/agent_tools.lua (run from the repo root)")
     if f == nil then
@@ -107,8 +108,8 @@ function test_every_handler_in_execute_tool_is_declared()
     end
     source = io.read(f, "*a")
     io.close(f)
-    start = string.find(source, "\nfunction agent_tools.execute_tool(", 1, true)
-    check(start != nil, "execute_tool not found in src/agent_tools.lua")
+    start = string.find(source, "\nfunction execute_tool_chain(", 1, true)
+    check(start != nil, "execute_tool_chain not found in src/agent_tools.lua")
     if start == nil then
         return
     end
