@@ -1415,6 +1415,172 @@ agent_tools.AGENT_TOOLS.entity.archive.handler = entity_archive
 agent_tools.AGENT_TOOLS.entity.unarchive.handler = entity_unarchive
 agent_tools.AGENT_TOOLS.entity.update.precheck = entity_update_precheck
 
+-- The knowledge, view and template groups' handlers (#6, step 3), moved
+-- the same way as the document group's above.
+
+function knowledge_stats(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    stats = knowledge.stats(db_path)
+    return string.format(
+        "tier0=%d tier1=%d tier2=%d tier3=%d notes=%d retrievals=%d reviewed=%d sessions=%d",
+        stats.tier_counts[0], stats.tier_counts[1], stats.tier_counts[2], stats.tier_counts[3],
+        stats.note_count, stats.retrieval_count, stats.reviewed_note_count, stats.session_count
+    )
+end
+
+function knowledge_list(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    rows = knowledge.list_documents(db_path, tonumber(args.tier))
+    if #rows == 0 then
+        return "No knowledge pool documents found."
+    end
+    -- One page at a time: listing the whole pool was ~50k characters
+    -- per call in prod (doc/context-management-research.md).
+    page = config.platform_config().agent_knowledge_list_page
+    first = tonumber(args.offset)
+    if first == nil or first < 0 then
+        first = 0
+    end
+    if first >= #rows then
+        return "No more knowledge pool documents (there are " .. tostring(#rows) .. ")."
+    end
+    last = math.min(first + page, #rows)
+    lines = {}
+    for i = first + 1, last do
+        row = rows[i]
+        body = row.content
+        if body == nil then
+            body = ""
+        end
+        table.insert(lines, string.format(
+            "#%s [tier %s, %s] %s (heat=%.2f, retrievals=%s)",
+            tostring(row.id), tostring(row.tier), document.content_shape(body), tostring(row.title),
+            row.effective_heat, tostring(row.retrieval_count)
+        ))
+    end
+    footer = string.format("(documents %d-%d of %d", first + 1, last, #rows)
+    if last < #rows then
+        footer = footer .. string.format(" -- next page: offset = %d", last)
+    end
+    return table.concat(lines, "\n") .. "\n\n" .. footer .. ")"
+end
+
+function knowledge_distill(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    if args.title == nil or args.content == nil then
+        return nil, "distill requires title and content"
+    end
+    document_id, err = knowledge.distill_document(db_path, author, tonumber(args.source_document_id), args.title, args.content)
+    if document_id == nil then
+        return nil, tostring(err)
+    end
+    return "Distilled document #" .. tostring(document_id) .. " (source #" .. tostring(args.source_document_id) .. ")"
+end
+
+function view_list(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    entries = view.all(db_path)
+    if #entries == 0 then
+        return "No views defined."
+    end
+    lines = {}
+    for _, e in ipairs(entries) do
+        if e.def != nil then
+            approved_note = "not approved"
+            if view.is_approved(db_path, e.def) == true then
+                approved_note = "approved, runnable"
+            end
+            param_note = ""
+            if e.def.param != nil then
+                param_note = " (takes param: " .. e.def.param.name .. ")"
+            end
+            table.insert(lines, e.name .. " -- " .. tostring(e.def.title) .. param_note .. " [" .. approved_note .. "]")
+        end
+    end
+    return table.concat(lines, "\n")
+end
+
+function view_run(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    if args.name == nil then
+        return nil, "run requires name"
+    end
+    view_def, view_err = view.load(db_path, args.name)
+    if view_def == nil then
+        return nil, "no such view: " .. tostring(args.name) .. " (" .. tostring(view_err) .. ")"
+    end
+    if view.is_approved(db_path, view_def) == false then
+        return nil, "view '" .. args.name .. "' is not approved -- ask the user to approve it via /view first"
+    end
+    rows, run_err = view.run(db_path, view_def, args.param_value)
+    if rows == nil then
+        return nil, run_err
+    end
+    if #rows == 0 then
+        return "No rows."
+    end
+    cap = config.platform_config().agent_query_row_cap
+    lines = {}
+    for i = 1, math.min(cap, #rows) do
+        parts = {}
+        for k, v in pairs(rows[i]) do
+            table.insert(parts, tostring(k) .. "=" .. tostring(v))
+        end
+        table.insert(lines, table.concat(parts, ", "))
+    end
+    result = table.concat(lines, "\n")
+    if #rows > cap then
+        result = result .. "\n\n(truncated at " .. tostring(cap) .. " of " .. tostring(#rows) .. " rows -- add your own LIMIT or narrow the query for a complete result)"
+    end
+    return result
+end
+
+function template_list(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    templates_dir = config.templates_dir()
+    names = template.names(templates_dir)
+    if #names == 0 then
+        return "No templates available."
+    end
+    lines = {}
+    for _, name in ipairs(names) do
+        def, err = template.load(templates_dir, name)
+        if def != nil then
+            description = def.description
+            if description == nil then
+                description = ""
+            end
+            table.insert(lines, name .. " (" .. tostring(def.label) .. "): " .. description)
+        end
+    end
+    return table.concat(lines, "\n")
+end
+
+function template_get(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    if args.name == nil then
+        return nil, "get requires name"
+    end
+    def, err = template.load(config.templates_dir(), args.name)
+    if def == nil then
+        return nil, "no such template: " .. tostring(args.name) .. " (" .. tostring(err) .. ")"
+    end
+    rendered = template.render(def)
+    default_path = def.default_path
+    if default_path == nil then
+        default_path = def.label
+    end
+    return "Suggested document name: " .. tostring(default_path) .. "\n\n" .. rendered
+end
+
+agent_tools.AGENT_TOOLS.knowledge.stats.handler = knowledge_stats
+agent_tools.AGENT_TOOLS.knowledge.list.handler = knowledge_list
+agent_tools.AGENT_TOOLS.knowledge.distill.handler = knowledge_distill
+agent_tools.AGENT_TOOLS.view.list.handler = view_list
+agent_tools.AGENT_TOOLS.view.run.handler = view_run
+agent_tools.AGENT_TOOLS.template.list.handler = template_list
+agent_tools.AGENT_TOOLS.template.get.handler = template_get
+
 -- Every built-in tool's handler until #6 moves it into its record, then
 -- the extension fallback; agent_tools.execute_tool, below, is the entry
 -- point. Shrinks one group per #6 step and is deleted in step 8.
@@ -1538,51 +1704,6 @@ function execute_tool_chain(db_path, author, session_id, tool_name, method_name,
         return fence
     end
 
-    if tool_name == "template" and method_name == "list" then
-        templates_dir = config.templates_dir()
-        names = template.names(templates_dir)
-        if #names == 0 then
-            return "No templates available."
-        end
-        lines = {}
-        for _, name in ipairs(names) do
-            def, err = template.load(templates_dir, name)
-            if def != nil then
-                description = def.description
-                if description == nil then
-                    description = ""
-                end
-                table.insert(lines, name .. " (" .. tostring(def.label) .. "): " .. description)
-            end
-        end
-        return table.concat(lines, "\n")
-    end
-
-    if tool_name == "template" and method_name == "get" then
-        if args.name == nil then
-            return nil, "get requires name"
-        end
-        def, err = template.load(config.templates_dir(), args.name)
-        if def == nil then
-            return nil, "no such template: " .. tostring(args.name) .. " (" .. tostring(err) .. ")"
-        end
-        rendered = template.render(def)
-        default_path = def.default_path
-        if default_path == nil then
-            default_path = def.label
-        end
-        return "Suggested document name: " .. tostring(default_path) .. "\n\n" .. rendered
-    end
-
-    if tool_name == "knowledge" and method_name == "stats" then
-        stats = knowledge.stats(db_path)
-        return string.format(
-            "tier0=%d tier1=%d tier2=%d tier3=%d notes=%d retrievals=%d reviewed=%d sessions=%d",
-            stats.tier_counts[0], stats.tier_counts[1], stats.tier_counts[2], stats.tier_counts[3],
-            stats.note_count, stats.retrieval_count, stats.reviewed_note_count, stats.session_count
-        )
-    end
-
     -- Read-only listing -- surfaces the pool's real document ids/tiers/
     -- content shape to the model. Content shape is what the
     -- distillation pass reads to decide what's actually worth
@@ -1590,115 +1711,12 @@ function execute_tool_chain(db_path, author, session_id, tool_name, method_name,
     -- has something worth extracting; an already-"atomic"/"thin"/
     -- "simple" document doesn't. Optional args.tier filters, same as
     -- the CLI.
-    if tool_name == "knowledge" and method_name == "list" then
-        rows = knowledge.list_documents(db_path, tonumber(args.tier))
-        if #rows == 0 then
-            return "No knowledge pool documents found."
-        end
-        -- One page at a time: listing the whole pool was ~50k characters
-        -- per call in prod (doc/context-management-research.md).
-        page = config.platform_config().agent_knowledge_list_page
-        first = tonumber(args.offset)
-        if first == nil or first < 0 then
-            first = 0
-        end
-        if first >= #rows then
-            return "No more knowledge pool documents (there are " .. tostring(#rows) .. ")."
-        end
-        last = math.min(first + page, #rows)
-        lines = {}
-        for i = first + 1, last do
-            row = rows[i]
-            body = row.content
-            if body == nil then
-                body = ""
-            end
-            table.insert(lines, string.format(
-                "#%s [tier %s, %s] %s (heat=%.2f, retrievals=%s)",
-                tostring(row.id), tostring(row.tier), document.content_shape(body), tostring(row.title),
-                row.effective_heat, tostring(row.retrieval_count)
-            ))
-        end
-        footer = string.format("(documents %d-%d of %d", first + 1, last, #rows)
-        if last < #rows then
-            footer = footer .. string.format(" -- next page: offset = %d", last)
-        end
-        return table.concat(lines, "\n") .. "\n\n" .. footer .. ")"
-    end
-
     -- Destructive: writes a new, concise, single-idea document
     -- distilled from a source the agent has read -- the real
     -- counterpart to knowledge.create_document_note's reasoning-note
     -- path. A genuine write (a new document/entity_event row), so this
     -- goes through the same pending-action approval flow as
     -- document.create/entity.create.
-    if tool_name == "knowledge" and method_name == "distill" then
-        if args.title == nil or args.content == nil then
-            return nil, "distill requires title and content"
-        end
-        document_id, err = knowledge.distill_document(db_path, author, tonumber(args.source_document_id), args.title, args.content)
-        if document_id == nil then
-            return nil, tostring(err)
-        end
-        return "Distilled document #" .. tostring(document_id) .. " (source #" .. tostring(args.source_document_id) .. ")"
-    end
-
-    if tool_name == "view" and method_name == "list" then
-        entries = view.all(db_path)
-        if #entries == 0 then
-            return "No views defined."
-        end
-        lines = {}
-        for _, e in ipairs(entries) do
-            if e.def != nil then
-                approved_note = "not approved"
-                if view.is_approved(db_path, e.def) == true then
-                    approved_note = "approved, runnable"
-                end
-                param_note = ""
-                if e.def.param != nil then
-                    param_note = " (takes param: " .. e.def.param.name .. ")"
-                end
-                table.insert(lines, e.name .. " -- " .. tostring(e.def.title) .. param_note .. " [" .. approved_note .. "]")
-            end
-        end
-        return table.concat(lines, "\n")
-    end
-
-    if tool_name == "view" and method_name == "run" then
-        if args.name == nil then
-            return nil, "run requires name"
-        end
-        view_def, view_err = view.load(db_path, args.name)
-        if view_def == nil then
-            return nil, "no such view: " .. tostring(args.name) .. " (" .. tostring(view_err) .. ")"
-        end
-        if view.is_approved(db_path, view_def) == false then
-            return nil, "view '" .. args.name .. "' is not approved -- ask the user to approve it via /view first"
-        end
-        rows, run_err = view.run(db_path, view_def, args.param_value)
-        if rows == nil then
-            return nil, run_err
-        end
-        if #rows == 0 then
-            return "No rows."
-        end
-        cap = config.platform_config().agent_query_row_cap
-        lines = {}
-        for i = 1, math.min(cap, #rows) do
-            parts = {}
-            for k, v in pairs(rows[i]) do
-                table.insert(parts, tostring(k) .. "=" .. tostring(v))
-            end
-            table.insert(lines, table.concat(parts, ", "))
-        end
-        result = table.concat(lines, "\n")
-        if #rows > cap then
-            result = result .. "\n\n(truncated at " .. tostring(cap) .. " of " .. tostring(#rows) .. " rows -- add your own LIMIT or narrow the query for a complete result)"
-        end
-        return result
-    end
-
     -- agent.default_model() here, not a model threaded through this
     -- whole call chain -- every real call site (cgi.lua's chat routes,
     -- main.lua's knowledge distillation) already resolves `model` the

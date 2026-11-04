@@ -240,14 +240,27 @@ function tests.recover_adds_to_a_failed_call(db_path)
     end
 end
 
--- #6, step 1: the document group runs from its records. Its precheck says
--- what reject_before_approval used to, word for word.
-function tests.the_document_group_runs_from_its_records()
-    print("Testing every document tool has a handler, and document.update its precheck")
-    for _, method in ipairs({"search", "create", "update", "children", "links", "breadcrumbs"}) do
-        record = agent_tools.AGENT_TOOLS.document[method]
-        check(type(record.handler) == "function", "document." .. method .. " has no handler")
+-- The groups #6 has moved so far, one step at a time: every tool in them
+-- runs from its record. A step adds its groups here, in the same commit
+-- that deletes their branches from execute_tool_chain.
+MOVED_GROUPS = {"document", "entity", "knowledge", "view", "template"}
+
+function tests.every_tool_in_a_moved_group_has_a_handler()
+    print("Testing every tool in a moved group runs from its record")
+    for _, group in ipairs(MOVED_GROUPS) do
+        check(agent_tools.AGENT_TOOLS[group] != nil, "no tool group " .. group)
+        if agent_tools.AGENT_TOOLS[group] != nil then
+            for method, record in pairs(agent_tools.AGENT_TOOLS[group]) do
+                check(type(record.handler) == "function", group .. "." .. method .. " has no handler")
+            end
+        end
     end
+end
+
+-- Step 1: document.update's precheck says what reject_before_approval
+-- used to, word for word.
+function tests.document_update_has_its_precheck()
+    print("Testing document.update's precheck")
     update = agent_tools.AGENT_TOOLS.document.update
     check(type(update.precheck) == "function", "document.update has no precheck")
     check(update.precheck({}, {}) == "nothing to update: pass title, content or parent_id",
@@ -255,14 +268,10 @@ function tests.the_document_group_runs_from_its_records()
     check(update.precheck({}, {title = "New title"}) == nil, "a document.update with a field to change goes to approval")
 end
 
--- #6, step 2: the entity group runs from its records, and entity.update's
--- precheck takes the last case reject_before_approval had, which is gone.
-function tests.the_entity_group_runs_from_its_records()
-    print("Testing every entity tool has a handler, and entity.update its precheck")
-    for _, method in ipairs({"list_types", "fields", "relationships", "query", "list", "get", "validate", "create", "update", "archive", "unarchive"}) do
-        record = agent_tools.AGENT_TOOLS.entity[method]
-        check(type(record.handler) == "function", "entity." .. method .. " has no handler")
-    end
+-- Step 2: entity.update's precheck takes the last case
+-- reject_before_approval had, which is gone.
+function tests.entity_update_has_its_precheck()
+    print("Testing entity.update's precheck")
     update = agent_tools.AGENT_TOOLS.entity.update
     check(type(update.precheck) == "function", "entity.update has no precheck")
     check(update.precheck({}, {entity_type = "task", entity_id = 1}) ==
