@@ -4,7 +4,7 @@ How search decides what to show of each document it finds, and why. The agent's 
 
 ## Two stages
 
-1. **Narrow by whole document.** Documents are ranked by keyword relevance fused with whole-document embedding similarity (`document.search`), with tier and heat as a bounded multiplier. Documents are embedded whole on purpose. They are not cut into chunks: they are meant to shrink and cohere as the knowledge pool distills them.
+1. **Narrow by whole document.** Documents are ranked by keyword relevance fused with whole-document embedding similarity (`document.search`), with tier and heat as a bounded multiplier. Documents are embedded whole on purpose. They are not cut into chunks: they are meant to shrink and cohere as the knowledge pool distills them. The embedding model reads only a document's first 2,048 tokens (about 7-10k characters), so a long document's own vector covers its start. With `search_aspects`, a long document is also matched by its **aspects**, a few vectors from its passages grouped by meaning, and scores by the best of them (`src/aspect.lua`, `doc/aspect-retrieval-plan.md`).
 2. **Concentrate within the shortlist** (`src/passage.lua`, when `search_passages` is on). Each shortlisted document is split along its own structure, its passages are scored against the question, and only the best are shown, within the same character budget an excerpt has.
 
 A document no longer than the budget is shown whole. With `search_passages` off, or whenever stage 2 can't run (no query embedding, a provider failure), each document shows the keyword window (`document.search_snippet`): the stretch with the most of the query's words. Stage 2 never makes search worse than that.

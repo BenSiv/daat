@@ -192,10 +192,23 @@ function ensure_link_review_reason_column(db_path)
     end
 end
 
+-- Which aspect of the document found it (src/aspect.lua; NULL: its own
+-- vector or its words did). Postdates the table, so retrofitted.
+function ensure_retrieval_hit_aspect_column(db_path)
+    have = {}
+    for _, name in ipairs(db.get_columns(db_path, "knowledge_retrieval_hit")) do
+        have[name] = true
+    end
+    if have["aspect"] == nil then
+        db.exec(db_path, "ALTER TABLE knowledge_retrieval_hit ADD COLUMN aspect INTEGER DEFAULT NULL;")
+    end
+end
+
 function knowledge.init_schema(db_path)
     db.exec(db_path, knowledge_schema_sql(db_path))
     ensure_knowledge_indexes(db_path)
     ensure_link_review_reason_column(db_path)
+    ensure_retrieval_hit_aspect_column(db_path)
 end
 
 -- Same treatment as document.lua's KNOWLEDGE_POOL_SQL_COLUMNS: these are
@@ -224,6 +237,7 @@ HAND_ROLLED_TABLE_COLUMNS = {
         {name = "duplication_status", note = "rule-based review outcome: does this document duplicate another"},
         {name = "title_status", note = "rule-based review outcome: is the title specific, not generic"},
         {name = "reviewed_at", note = "when the hit was reviewed (NULL: not reviewed)"},
+        {name = "aspect", note = "which of the document's aspects found it (document_aspect.aspect; NULL: its own vector or its words)"},
     },
 }
 
@@ -373,7 +387,7 @@ end
 -- document.reinforcement_delta). content_hash is refreshed on every hit
 -- (not just at creation) so dedup review stays accurate even as a
 -- document's content is edited over time.
-function knowledge.record_retrieval_hit(db_path, retrieval_id, document_id, tier, rank, score, content_hash)
+function knowledge.record_retrieval_hit(db_path, retrieval_id, document_id, tier, rank, score, content_hash, aspect)
     delta = document.reinforcement_delta(tier)
     tier_weight = document.tier_weight(tier)
     db.exec(db_path, string.format(
@@ -385,11 +399,15 @@ function knowledge.record_retrieval_hit(db_path, retrieval_id, document_id, tier
     -- pool is now the only heat model -- the old `heat`/
     -- `last_retrieved_at` wall-clock columns are no longer written.
     document.reinforce_pool_heat(db_path, document_id, delta)
+    aspect_literal = "NULL"
+    if aspect != nil then
+        aspect_literal = tostring(tonumber(aspect))
+    end
     db.exec(db_path, string.format(
-        "%s knowledge_retrieval_hit (retrieval_id, document_id, `rank`, score, tier_weight, reinforcement_delta) " ..
-        "VALUES (%d, %d, %d, %.17g, %.17g, %.17g);",
+        "%s knowledge_retrieval_hit (retrieval_id, document_id, `rank`, score, tier_weight, reinforcement_delta, aspect) " ..
+        "VALUES (%d, %d, %d, %.17g, %.17g, %.17g, %s);",
         db.replace_into(db_path),
-        tonumber(retrieval_id), tonumber(document_id), tonumber(rank), tonumber(score), tier_weight, delta
+        tonumber(retrieval_id), tonumber(document_id), tonumber(rank), tonumber(score), tier_weight, delta, aspect_literal
     ))
     return delta
 end
@@ -1565,7 +1583,7 @@ function knowledge.search_and_log(db_path, query_text, limit, use_semantic, sess
         if tier == nil then
             tier = 0
         end
-        delta = knowledge.record_retrieval_hit(db_path, retrieval_id, r.id, tier, rank, r.score, document.content_hash(r.content))
+        delta = knowledge.record_retrieval_hit(db_path, retrieval_id, r.id, tier, rank, r.score, document.content_hash(r.content), r.aspect)
         knowledge.spread_activation(db_path, retrieval_id, r.id, delta, hit_ids)
     end
     if #results > 0 then

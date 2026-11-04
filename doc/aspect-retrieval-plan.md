@@ -67,7 +67,7 @@ Table document_aspect {          // derived; safe to empty, rebuilt by the embed
   document_id integer [pk]
   model varchar(128) [pk]        // embedding model, as document_embedding
   aspect integer [pk]            // 1..k
-  vector_packed longblob [not null]  // L2-normalised; float32, or int8 if the gate shows no loss
+  vector_packed blob [not null]  // int8, scaled by its largest component; renormalised on read
   passage_offset integer [not null]  // first character of the medoid passage
   passage_count integer [not null]   // passages in the group
   text_hash varchar(64) [not null]   // of the embedding text it was built from
@@ -108,11 +108,15 @@ This also fixes the 40k cut for long sources: parts past it become reachable one
 
 | Setting | Default | |
 |---|---|---|
+| `build_aspects` | `false` | the embedding job keeps aspects current (`daat repair aspects` builds them regardless, for the backfill) |
 | `search_aspects` | `false` until the gate, then the gate's result | aspects in stage 1, for the agent and the page alike |
-| `aspect_min_chars` | 7000 | documents longer than this get aspects |
-| `aspect_max` | from the gate (4-16) | most aspects per document |
-| `aspect_dims` | from the gate (768 or 256) | dimensions stored per aspect |
-| `curate_aspects` | `true` with `search_aspects` | aspect hits queue curation of that part |
+| `aspect_min_chars` | 7000 | documents whose embedding text is longer than this get aspects |
+| `aspect_max` | 8 until the gate (4-16) | most aspects per document |
+| `aspect_dims` | 0 (all) until the gate (256 if it holds) | dimensions stored per aspect |
+| `aspect_vector` | `medoid` until the gate | an aspect's vector: its most central passage (`medoid`) or the group's mean (`centroid`) |
+| `curate_aspects` | `true` with `search_aspects` | aspect hits queue curation of that part (commit 5) |
+
+Rollout: `build_aspects` on, `daat repair aspects --limit N` until the backfill is done, then `search_aspects` on. Changing `aspect_max`, `aspect_dims`, `aspect_vector` or the passage sizes makes every document's aspects stale (they're hashed with the content), and `daat repair aspects` rebuilds them; passage vectors come from the cache, so a rebuild embeds only passages whose cache entries have expired (`passage_cache_days`).
 
 ## Gate: a recall test on prod data, before building
 
