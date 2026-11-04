@@ -1637,7 +1637,12 @@ function agent.claim_pending_action(db_path, pending_id, claimed_status)
     rows = db.query(db_path, string.format(
         "SELECT claim_token FROM agent_pending_action WHERE id = %d;", tonumber(pending_id)
     ))
-    return rows != nil and rows[1] != nil and rows[1].claim_token == token
+    -- The winner also gets its token: agent.run_tool runs a destructive
+    -- tool only against a row claimed with it (#6).
+    if rows != nil and rows[1] != nil and rows[1].claim_token == token then
+        return true, token
+    end
+    return false
 end
 
 function agent.resolve_pending_action(db_path, pending_id, status)
@@ -2507,10 +2512,53 @@ function agent.find_repeat(messages, full_name, args, is_write)
     return found
 end
 
+-- The arguments a destructive call may run with: those of the
+-- agent_pending_action row this request claimed (`approval` = {id,
+-- token}, from agent.claim_pending_action), for this session and this
+-- tool. Read from the row, not taken from the caller, so what runs is
+-- exactly what the user saw and approved. nil and the reason otherwise.
+function approved_arguments(db_path, session_id, tool_name, method_name, approval)
+    full_name = tostring(tool_name) .. "." .. tostring(method_name)
+    if approval == nil or approval.id == nil or approval.token == nil then
+        return nil, full_name .. " changes data, so it runs only as an approved pending action"
+    end
+    rows = db.query(db_path, string.format(
+        "SELECT session_id, tool, method, args_json, status, claim_token FROM agent_pending_action WHERE id = %d;",
+        tonumber(approval.id)
+    ))
+    if rows == nil or rows[1] == nil then
+        return nil, "no such pending action #" .. tostring(approval.id)
+    end
+    row = rows[1]
+    if row.status != "running" or row.claim_token != approval.token then
+        return nil, "pending action #" .. tostring(approval.id) .. " isn't claimed by this request"
+    end
+    if row.session_id != session_id or row.tool != tool_name or row.method != method_name then
+        return nil, "pending action #" .. tostring(approval.id) .. " is for a different call than " .. full_name
+    end
+    approved, _, _ = json.decode(row.args_json)
+    if approved == nil then
+        approved = {}
+    end
+    return approved
+end
+
 -- `context_messages` (optional): the canonical history the model saw
 -- when it made this call, for the repeat check above.
-function agent.run_tool(db_path, author, session_id, tool_name, method_name, args, context_messages)
+-- `approval` (destructive tools only): see approved_arguments. A
+-- destructive tool always goes through the approval gate (doc/agent-
+-- tools.md, "Invariants", rule 1): that used to hold because every
+-- caller checked is_destructive first; here it holds for a caller that
+-- forgets.
+function agent.run_tool(db_path, author, session_id, tool_name, method_name, args, context_messages, approval)
     agent_tools = require("agent_tools")
+    record = agent.tool_record(db_path, tool_name, method_name)
+    if record != nil and record.destructive == true then
+        args, gate_err = approved_arguments(db_path, session_id, tool_name, method_name, approval)
+        if args == nil then
+            return nil, gate_err
+        end
+    end
     if context_messages != nil and config.platform_config().agent_dedupe_repeat_calls == true then
         earlier = agent.find_repeat(context_messages, tostring(tool_name) .. "." .. tostring(method_name), args, function(name)
             dot = string.find(name, ".", 1, true)
@@ -2873,20 +2921,17 @@ function agent.approve_pending(db_path, pending_id, login, system_prompt, model,
     -- between leaves the row there on purpose: the write may or may not
     -- have happened, so nothing runs it again on its own, and it's no
     -- longer offered for approval (agent.latest_pending reads 'pending').
-    claimed, claim_err = agent.claim_pending_action(db_path, pending_id, "running")
+    claimed, claim_token = agent.claim_pending_action(db_path, pending_id, "running")
     if claimed == nil then
-        return nil, claim_err
+        return nil, claim_token
     end
     if claimed == false then
         return nil, "action already " .. tostring(agent.get_pending_action(db_path, pending_id, login).status)
     end
 
-    args, _, _ = json.decode(pending.args_json)
-    if args == nil then
-        args = {}
-    end
-
-    tool_result, tool_err = agent.run_tool(db_path, login, pending.session_id, pending.tool, pending.method, args)
+    -- run_tool reads the arguments from the claimed row itself.
+    tool_result, tool_err = agent.run_tool(db_path, login, pending.session_id, pending.tool, pending.method, nil, nil,
+        {id = pending_id, token = claim_token})
     summary = tostring(tool_result)
     is_error = false
     if tool_err != nil then

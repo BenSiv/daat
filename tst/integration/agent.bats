@@ -1280,6 +1280,24 @@ EOF
     [[ "$output" =~ "status:	running" ]]
 }
 
+# The approval gate at its seam (#6): run_tool, not each of its callers,
+# refuses a destructive tool without a row this request claimed, and runs
+# it with that row's arguments.
+@test "agent.run_tool runs a destructive tool only against a pending action this request claimed" {
+    run run_lua_script run_tool_gate.lua
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "no approval: nil | document.create changes data, so it runs only as an approved pending action" ]]
+    [[ "$output" =~ "not our claim: nil | pending action #"[0-9]+" isn't claimed by this request" ]]
+    [[ "$output" =~ "other tool: nil | pending action #"[0-9]+" is for a different call than document.create" ]]
+    [[ "$output" =~ "claimed: "[^\|]*" | nil" ]]
+    [[ ! "$output" =~ "read-only: nil" ]]
+
+    for title in "no approval" "someone else" "other tool" "from the caller"; do
+        [ "$(sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM document WHERE title = '${title}';")" -eq 0 ]
+    done
+    [ "$(sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM document WHERE title = 'from the row';")" -eq 1 ]
+}
+
 # An approve and a deny racing: whichever wins, the other does nothing --
 # never a recorded denial with the write done anyway.
 @test "an approve and a deny for the same pending action at once: exactly one of them takes effect" {

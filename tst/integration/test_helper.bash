@@ -52,6 +52,19 @@ latest_tool_result() {
         "SELECT content FROM agent_message WHERE session_id = '${session_id}' AND role = 'tool_result' ORDER BY id DESC LIMIT 1;"
 }
 
+# Runs a Lua script from tst/integration/lua/ with daat's own src/ on the
+# path, from TEST_DIR, so config.db_path(".") is this test's store. For
+# checking a function at its seam, where a request can't reach it
+# deterministically. Use with `run`.
+run_lua_script() {
+    local script="$1"
+    shift
+    local luam_dir="${LUAM_DIR:-$(cd "${PROJECT_ROOT}/../luam" && pwd)}"
+    env LUA_PATH="${PROJECT_ROOT}/src/?.lua;${luam_dir}/lib/?.lua;${luam_dir}/lib/?/init.lua;;" \
+        LUA_CPATH="${luam_dir}/bin/?.so;${luam_dir}/lib/lfs/?.so;${luam_dir}/lib/hmac/?.so;${luam_dir}/lib/bcrypt/?.so;;" \
+        "${luam_dir}/bin/luam" "${PROJECT_ROOT}/tst/integration/lua/${script}" "$@"
+}
+
 cleanup_test_env() {
     cd "$PROJECT_ROOT"
     rm -rf "$TEST_DIR"
