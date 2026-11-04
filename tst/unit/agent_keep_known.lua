@@ -6,14 +6,9 @@
 agent = require("agent")
 json = require("dkjson")
 
-FAILURES = 0
-
-function check(condition, message)
-    if condition != true then
-        FAILURES = FAILURES + 1
-        print("FAIL: " .. message)
-    end
-end
+unit = require("unit")
+check = unit.check
+tests = unit.suite()
 
 function call(id, name, args)
     return {role = "assistant", content = {{type = "toolCall", id = id, name = name, arguments = args}}}
@@ -31,13 +26,13 @@ function writes_documents(name)
     return name == "document.create"
 end
 
-function test_canonical_json_ignores_key_order()
+function tests.canonical_json_ignores_key_order()
     print("Testing canonical_json sorts keys at every level")
     check(agent.canonical_json({b = 1, a = {d = 2, c = 3}}) == agent.canonical_json({a = {c = 3, d = 2}, b = 1}), "same arguments in another key order should compare equal")
     check(agent.canonical_json({a = 1}) != agent.canonical_json({a = 2}), "different values should differ")
 end
 
-function test_find_repeat()
+function tests.find_repeat()
     print("Testing find_repeat: exact repeat of an answered read-only call")
     history = {
         {role = "user", content = "fields of sample?"},
@@ -73,7 +68,7 @@ function stored_result(id, name, text)
     return {role = "tool_result", content = json.encode({tool_call_id = id, tool_name = name, text = text, is_error = false})}
 end
 
-function test_pinned_schema_block()
+function tests.pinned_schema_block()
     print("Testing pinned_schema_block keeps the latest schema result per call, newest first")
     rows = {
         stored_call("a", "entity.fields", {entity_type = "sample"}), stored_result("a", "entity.fields", "OLD sample fields"),
@@ -102,12 +97,4 @@ function test_pinned_schema_block()
     check(carried == nil or string.find(carried, "(not kept", 1, true) == nil, "a names-only line isn't carried as if it were a result")
 end
 
-test_canonical_json_ignores_key_order()
-test_find_repeat()
-test_pinned_schema_block()
-
-if FAILURES > 0 then
-    print(FAILURES .. " test(s) failed")
-    os.exit(1)
-end
-print("All agent_keep_known.lua tests passed")
+unit.run(tests)

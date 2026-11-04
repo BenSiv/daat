@@ -9,16 +9,11 @@
 agent_claude = require("provider.agent_claude")
 json = require("dkjson")
 
-FAILURES = 0
+unit = require("unit")
+check = unit.check
+tests = unit.suite()
 
-function check(condition, message)
-    if condition != true then
-        FAILURES = FAILURES + 1
-        print("FAIL: " .. message)
-    end
-end
-
-function test_tools_from_canonical_passes_lowercase_schema_through()
+function tests.tools_from_canonical_passes_lowercase_schema_through()
     print("Testing claude_tools_from_canonical keeps standard JSON Schema as-is")
     tools = {
         {name = "document.search", description = "Search pages.",
@@ -31,7 +26,7 @@ function test_tools_from_canonical_passes_lowercase_schema_through()
     check(out[1].input_schema.properties.query.type == "string", "expected lowercase 'string' for nested property")
 end
 
-function test_messages_from_canonical_user_and_assistant()
+function tests.messages_from_canonical_user_and_assistant()
     print("Testing claude_messages_from_canonical translates user/assistant roles")
     messages = {
         {role = "user", content = "hello"},
@@ -44,7 +39,7 @@ function test_messages_from_canonical_user_and_assistant()
     check(out[2].content[1].type == "text" and out[2].content[1].text == "hi there", "expected text block preserved")
 end
 
-function test_messages_from_canonical_tool_call_and_result()
+function tests.messages_from_canonical_tool_call_and_result()
     print("Testing a toolCall block becomes tool_use, and toolResult becomes a tool_result message keyed by the real id")
     messages = {
         {role = "assistant", content = {{type = "toolCall", id = "toolu_abc123", name = "document.search", arguments = {query = "x"}}}},
@@ -62,7 +57,7 @@ function test_messages_from_canonical_tool_call_and_result()
     check(out[2].content[1].is_error == false, "expected is_error false for a successful result")
 end
 
-function test_blocks_from_content_all_three_types()
+function tests.blocks_from_content_all_three_types()
     print("Testing claude_blocks_from_content translates text/tool_use/thinking blocks to canonical shape")
     content = {
         {type = "text", text = "here's my answer"},
@@ -78,7 +73,7 @@ function test_blocks_from_content_all_three_types()
     check(blocks[3].thinking_signature == "sig123", "expected Claude's signature preserved as thinking_signature")
 end
 
-function test_stop_reason_mapping()
+function tests.stop_reason_mapping()
     print("Testing claude_stop_reason_to_canonical maps every real stop_reason value")
     check(agent_claude.claude_stop_reason_to_canonical("end_turn") == "stop", "expected 'end_turn' -> 'stop'")
     check(agent_claude.claude_stop_reason_to_canonical("tool_use") == "toolUse", "expected 'tool_use' -> 'toolUse'")
@@ -93,15 +88,4 @@ function test_stop_reason_mapping()
     check(agent_claude.claude_stop_reason_to_canonical(nil) == "error", "expected nil -> 'error'")
 end
 
--- Run them
-test_tools_from_canonical_passes_lowercase_schema_through()
-test_messages_from_canonical_user_and_assistant()
-test_messages_from_canonical_tool_call_and_result()
-test_blocks_from_content_all_three_types()
-test_stop_reason_mapping()
-
-if FAILURES > 0 then
-    print(FAILURES .. " test(s) failed")
-    os.exit(1)
-end
-print("All agent_claude.lua tests passed")
+unit.run(tests)

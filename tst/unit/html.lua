@@ -8,28 +8,23 @@
 
 html = require("html")
 
-FAILURES = 0
+unit = require("unit")
+check = unit.check
+tests = unit.suite()
 
-function check(condition, message)
-    if condition != true then
-        FAILURES = FAILURES + 1
-        print("FAIL: " .. message)
-    end
-end
-
-function test_validate_rejects_unknown_element_type()
+function tests.validate_rejects_unknown_element_type()
     print("Testing validate_canvas rejects an unrecognized element type")
     err = html.validate_canvas({{type = "not_a_real_type"}})
     check(err != nil, "an invalid element type should be rejected")
 end
 
-function test_validate_rejects_non_list()
+function tests.validate_rejects_non_list()
     print("Testing validate_canvas rejects a non-table argument")
     err = html.validate_canvas("not a table")
     check(err != nil, "a non-table canvas should be rejected")
 end
 
-function test_validate_heading_and_text_require_text()
+function tests.validate_heading_and_text_require_text()
     print("Testing validate_canvas rejects heading/text elements missing 'text'")
     check(html.validate_canvas({{type = "heading"}}) != nil, "heading with no text should be rejected")
     check(html.validate_canvas({{type = "heading", text = ""}}) != nil, "heading with empty text should be rejected")
@@ -38,7 +33,7 @@ function test_validate_heading_and_text_require_text()
     check(html.validate_canvas({{type = "text", text = "Describe the goal."}}) == nil, "well-formed text should be accepted")
 end
 
-function test_validate_table_requires_columns_and_rows()
+function tests.validate_table_requires_columns_and_rows()
     print("Testing validate_canvas rejects a table element missing columns/rows")
     check(html.validate_canvas({{type = "table", rows = {}}}) != nil, "table with no columns should be rejected")
     check(html.validate_canvas({{type = "table", columns = {}, rows = {}}}) != nil, "table with empty columns should be rejected")
@@ -46,14 +41,14 @@ function test_validate_table_requires_columns_and_rows()
     check(html.validate_canvas({{type = "table", columns = {"Name"}, rows = {}}}) == nil, "well-formed (empty) table should be accepted")
 end
 
-function test_validate_button_requires_label_and_action()
+function tests.validate_button_requires_label_and_action()
     print("Testing validate_canvas rejects a button element missing label/action")
     check(html.validate_canvas({{type = "button", action = "do_thing"}}) != nil, "button with no label should be rejected")
     check(html.validate_canvas({{type = "button", label = "Run"}}) != nil, "button with no action should be rejected")
     check(html.validate_canvas({{type = "button", label = "Run", action = "do_thing"}}) == nil, "well-formed button should be accepted")
 end
 
-function test_render_heading_and_text_escape_html()
+function tests.render_heading_and_text_escape_html()
     print("Testing render_canvas escapes heading/text content")
     rendered = html.render_canvas({
         {type = "heading", text = "<script>alert(1)</script>"},
@@ -66,7 +61,7 @@ function test_render_heading_and_text_escape_html()
     check(string.find(rendered, "plain text", 1, true) != nil, "plain text element should render its own text")
 end
 
-function test_render_table_emits_columns_and_rows()
+function tests.render_table_emits_columns_and_rows()
     print("Testing render_canvas renders a table element's columns and rows")
     rendered = html.render_canvas({
         {type = "table", columns = {"Name", "Count"}, rows = {{"widgets", 3}, {"gadgets", 5}}},
@@ -77,7 +72,7 @@ function test_render_table_emits_columns_and_rows()
     check(string.find(rendered, "gadgets", 1, true) != nil, "every row should appear, not just the first")
 end
 
-function test_render_button_carries_action_and_args_as_data_attributes()
+function tests.render_button_carries_action_and_args_as_data_attributes()
     print("Testing render_canvas renders a button's action/args as data attributes, not inline JS")
     rendered = html.render_canvas({
         {type = "button", label = "Run", action = "do_thing", args = {sample_id = 12}},
@@ -88,7 +83,7 @@ function test_render_button_carries_action_and_args_as_data_attributes()
     check(string.find(rendered, "<script", 1, true) == nil, "a button must never emit inline <script> of its own: " .. rendered)
 end
 
-function test_render_mixed_elements_in_order()
+function tests.render_mixed_elements_in_order()
     print("Testing render_canvas renders a mix of element types in order")
     rendered = html.render_canvas({
         {type = "heading", text = "Samples"},
@@ -125,7 +120,7 @@ function keys_of(items)
     return keys
 end
 
-function test_apply_nav_hidden_removes_only_listed_keys()
+function tests.apply_nav_hidden_removes_only_listed_keys()
     print("Testing apply_nav_hidden removes exactly the listed keys, keeps the rest")
     result = html.apply_nav_hidden(nav_items_fixture(), {"data"})
     check(#result == 3, "expected 3 remaining items, got " .. tostring(#result))
@@ -134,20 +129,20 @@ function test_apply_nav_hidden_removes_only_listed_keys()
         "expected home/documents/system in original order, got " .. table.concat(keys, ","))
 end
 
-function test_apply_nav_hidden_nil_or_empty_is_a_no_op()
+function tests.apply_nav_hidden_nil_or_empty_is_a_no_op()
     print("Testing apply_nav_hidden with nil or an empty list changes nothing")
     original = nav_items_fixture()
     check(#html.apply_nav_hidden(original, nil) == 4, "nil hidden list should keep all items")
     check(#html.apply_nav_hidden(original, {}) == 4, "empty hidden list should keep all items")
 end
 
-function test_apply_nav_hidden_unrecognized_key_is_a_silent_no_op()
+function tests.apply_nav_hidden_unrecognized_key_is_a_silent_no_op()
     print("Testing apply_nav_hidden ignores a key that doesn't match any real item")
     result = html.apply_nav_hidden(nav_items_fixture(), {"not_a_real_key"})
     check(#result == 4, "an unrecognized hidden key should drop nothing, got " .. tostring(#result))
 end
 
-function test_apply_nav_order_moves_named_keys_to_the_front()
+function tests.apply_nav_order_moves_named_keys_to_the_front()
     print("Testing apply_nav_order places listed keys first, in the given order")
     result = html.apply_nav_order(nav_items_fixture(), {"data", "home"})
     keys = keys_of(result)
@@ -156,7 +151,7 @@ function test_apply_nav_order_moves_named_keys_to_the_front()
         "unlisted items should keep their original relative order, appended after -- got " .. table.concat(keys, ","))
 end
 
-function test_apply_nav_order_nil_or_empty_is_a_no_op()
+function tests.apply_nav_order_nil_or_empty_is_a_no_op()
     print("Testing apply_nav_order with nil or an empty list changes nothing")
     original = nav_items_fixture()
     check(table.concat(keys_of(html.apply_nav_order(original, nil)), ",") == table.concat(keys_of(original), ","),
@@ -165,7 +160,7 @@ function test_apply_nav_order_nil_or_empty_is_a_no_op()
         "empty order should leave the list unchanged")
 end
 
-function test_apply_nav_order_unrecognized_key_is_a_silent_no_op()
+function tests.apply_nav_order_unrecognized_key_is_a_silent_no_op()
     print("Testing apply_nav_order ignores a key that doesn't match any real item")
     result = html.apply_nav_order(nav_items_fixture(), {"not_a_real_key", "data"})
     keys = keys_of(result)
@@ -173,7 +168,7 @@ function test_apply_nav_order_unrecognized_key_is_a_silent_no_op()
     check(keys[1] == "data", "the real key in the order list should still move to the front, got " .. table.concat(keys, ","))
 end
 
-function test_apply_nav_order_duplicate_key_is_only_placed_once()
+function tests.apply_nav_order_duplicate_key_is_only_placed_once()
     print("Testing apply_nav_order doesn't duplicate an item whose key is repeated in order")
     result = html.apply_nav_order(nav_items_fixture(), {"data", "data", "home"})
     check(#result == 4, "a repeated order key should not duplicate the item, got " .. tostring(#result))
@@ -184,13 +179,13 @@ end
 -- edit, making a real change in a long field like a document's content
 -- unreadable). LCS word diff -- exercised directly, same reasoning as
 -- apply_nav_hidden/apply_nav_order above.
-function test_word_diff_runs_identical_text_is_all_same()
+function tests.word_diff_runs_identical_text_is_all_same()
     print("Testing word_diff_runs treats identical text as a single 'same' run")
     runs = html.word_diff_runs("the quick fox", "the quick fox")
     check(#runs == 1 and runs[1].kind == "same", "identical text should produce one 'same' run")
 end
 
-function test_word_diff_runs_detects_a_single_word_change()
+function tests.word_diff_runs_detects_a_single_word_change()
     print("Testing word_diff_runs isolates a single changed word, keeping the rest as 'same'")
     runs = html.word_diff_runs("the quick fox jumps", "the slow fox jumps")
     -- "the"/"fox jumps" must stay 'same'; "quick"/"slow" must show up as
@@ -214,7 +209,7 @@ function test_word_diff_runs_detects_a_single_word_change()
     check(added_words[1] == "slow", "expected an added run carrying 'slow', got " .. tostring(added_words[1]))
 end
 
-function test_word_diff_runs_pure_insertion_and_deletion()
+function tests.word_diff_runs_pure_insertion_and_deletion()
     print("Testing word_diff_runs handles a pure insertion and a pure deletion")
     added_runs = html.word_diff_runs("a b", "a b c")
     check(added_runs[#added_runs].kind == "added" and added_runs[#added_runs].words[1] == "c",
@@ -224,7 +219,7 @@ function test_word_diff_runs_pure_insertion_and_deletion()
         "dropping a trailing word should show up as a trailing 'removed' run")
 end
 
-function test_word_diff_html_highlights_only_the_changed_word()
+function tests.word_diff_html_highlights_only_the_changed_word()
     print("Testing word_diff_html wraps only the changed words, leaving the rest plain")
     rendered = html.word_diff_html("the quick fox jumps", "the slow fox jumps")
     check(string.find(rendered, "<del", 1, true) != nil and string.find(rendered, "quick", 1, true) != nil,
@@ -235,7 +230,7 @@ function test_word_diff_html_highlights_only_the_changed_word()
         "an unchanged word must not be wrapped: " .. rendered)
 end
 
-function test_word_diff_html_escapes_html_in_diffed_text()
+function tests.word_diff_html_escapes_html_in_diffed_text()
     print("Testing word_diff_html HTML-escapes both old and new words")
     rendered = html.word_diff_html("<script>old", "<script>new")
     check(string.find(rendered, "<script>", 1, true) == nil,
@@ -243,7 +238,7 @@ function test_word_diff_html_escapes_html_in_diffed_text()
     check(string.find(rendered, "&lt;script&gt;", 1, true) != nil, "the escaped form should be present instead: " .. rendered)
 end
 
-function test_word_diff_html_returns_nil_past_the_word_cap()
+function tests.word_diff_html_returns_nil_past_the_word_cap()
     print("Testing word_diff_html falls back to nil (caller shows plain old -> new) past DIFF_MAX_WORDS")
     huge_old = {}
     huge_new = {}
@@ -256,32 +251,4 @@ function test_word_diff_html_returns_nil_past_the_word_cap()
         "a diff over DIFF_MAX_WORDS words should return nil, not attempt the O(n*m) LCS")
 end
 
--- Run them
-test_validate_rejects_unknown_element_type()
-test_validate_rejects_non_list()
-test_validate_heading_and_text_require_text()
-test_validate_table_requires_columns_and_rows()
-test_validate_button_requires_label_and_action()
-test_render_heading_and_text_escape_html()
-test_render_table_emits_columns_and_rows()
-test_render_button_carries_action_and_args_as_data_attributes()
-test_render_mixed_elements_in_order()
-test_apply_nav_hidden_removes_only_listed_keys()
-test_apply_nav_hidden_nil_or_empty_is_a_no_op()
-test_apply_nav_hidden_unrecognized_key_is_a_silent_no_op()
-test_apply_nav_order_moves_named_keys_to_the_front()
-test_apply_nav_order_nil_or_empty_is_a_no_op()
-test_apply_nav_order_unrecognized_key_is_a_silent_no_op()
-test_apply_nav_order_duplicate_key_is_only_placed_once()
-test_word_diff_runs_identical_text_is_all_same()
-test_word_diff_runs_detects_a_single_word_change()
-test_word_diff_runs_pure_insertion_and_deletion()
-test_word_diff_html_highlights_only_the_changed_word()
-test_word_diff_html_escapes_html_in_diffed_text()
-test_word_diff_html_returns_nil_past_the_word_cap()
-
-if FAILURES > 0 then
-    print(FAILURES .. " test(s) failed")
-    os.exit(1)
-end
-print("All html.lua tests passed")
+unit.run(tests)

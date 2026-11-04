@@ -21,14 +21,9 @@ entity = require("entity")
 -- file is about pool heat only.
 entity.get = function() return nil end
 
-FAILURES = 0
-
-function check(condition, message)
-    if condition != true then
-        FAILURES = FAILURES + 1
-        print("FAIL: " .. message)
-    end
-end
+unit = require("unit")
+check = unit.check
+tests = unit.suite()
 
 function close_enough(a, b, tolerance)
     if tolerance == nil then
@@ -76,7 +71,7 @@ function pool_total(db_path, document_ids)
     return total
 end
 
-function test_reinforcement_conserves_total_across_the_pool()
+function tests.reinforcement_conserves_total_across_the_pool()
     print("Testing a single reinforcement leaves the pool's total heat unchanged")
     db_path = new_test_db(3)
     before = pool_total(db_path, {1, 2, 3})
@@ -94,7 +89,7 @@ end
 -- indistinguishable; this test deliberately uses a large delta against
 -- a small pool (denominator = 2.0) to make the gap visible, and asserts
 -- against the documented formula rather than the old linear shortcut.
-function test_reinforcement_gives_the_reinforced_document_the_extracted_amount()
+function tests.reinforcement_gives_the_reinforced_document_the_extracted_amount()
     print("Testing the reinforced document gains exactly the extracted amount, not the raw nominal delta")
     db_path = new_test_db(3)
     delta = 0.5
@@ -106,7 +101,7 @@ function test_reinforcement_gives_the_reinforced_document_the_extracted_amount()
     os.remove(db_path)
 end
 
-function test_reinforcement_shrinks_every_other_document_by_the_same_factor()
+function tests.reinforcement_shrinks_every_other_document_by_the_same_factor()
     print("Testing every OTHER document shrinks, and by the same proportional factor")
     db_path = new_test_db(3)
     document.reinforce_pool_heat(db_path, 1, 0.6)
@@ -121,7 +116,7 @@ function test_reinforcement_shrinks_every_other_document_by_the_same_factor()
     os.remove(db_path)
 end
 
-function test_repeated_reinforcement_of_different_documents_still_conserves_total()
+function tests.repeated_reinforcement_of_different_documents_still_conserves_total()
     print("Testing a sequence of reinforcements across different documents still conserves the total")
     db_path = new_test_db(3)
     document.reinforce_pool_heat(db_path, 1, 0.3)
@@ -133,7 +128,7 @@ function test_repeated_reinforcement_of_different_documents_still_conserves_tota
     os.remove(db_path)
 end
 
-function test_creation_grows_the_total_by_exactly_base_heat()
+function tests.creation_grows_the_total_by_exactly_base_heat()
     print("Testing registering a newly created document grows the total by exactly BASE_HEAT")
     db_path = new_test_db(2)
     document.ensure_pool_state(db_path) -- seeds document_count=2 from the 2 rows above
@@ -146,7 +141,7 @@ function test_creation_grows_the_total_by_exactly_base_heat()
     os.remove(db_path)
 end
 
-function test_a_new_document_reads_exactly_base_heat_even_after_pool_scale_has_drifted()
+function tests.a_new_document_reads_exactly_base_heat_even_after_pool_scale_has_drifted()
     print("Testing a new document still reads exactly BASE_HEAT even once pool_scale has drifted from 1.0")
     db_path = new_test_db(2)
     document.reinforce_pool_heat(db_path, 1, 0.5) -- drifts pool_scale away from 1.0
@@ -161,7 +156,7 @@ function test_a_new_document_reads_exactly_base_heat_even_after_pool_scale_has_d
     os.remove(db_path)
 end
 
-function test_departure_returns_heat_to_survivors_so_their_new_total_matches_the_smaller_pool()
+function tests.departure_returns_heat_to_survivors_so_their_new_total_matches_the_smaller_pool()
     print("Testing a departing document's heat is returned to survivors, matching the (N-1)*BASE_HEAT invariant")
     db_path = new_test_db(3)
     document.reinforce_pool_heat(db_path, 1, 0.6) -- give document 1 real heat to return on departure
@@ -173,7 +168,7 @@ function test_departure_returns_heat_to_survivors_so_their_new_total_matches_the
     os.remove(db_path)
 end
 
-function test_departure_of_the_last_document_does_not_error()
+function tests.departure_of_the_last_document_does_not_error()
     print("Testing the last document leaving the pool decrements the count without dividing by zero")
     db_path = new_test_db(1)
     status, err = pcall(document.return_pool_heat, db_path, 1)
@@ -183,7 +178,7 @@ function test_departure_of_the_last_document_does_not_error()
     os.remove(db_path)
 end
 
-function test_archiving_a_document_returns_its_heat_same_as_a_merge_departure()
+function tests.archiving_a_document_returns_its_heat_same_as_a_merge_departure()
     print("Testing on_entity_archived returns heat to survivors, same as the merge path")
     db_path = new_test_db(3)
     document.reinforce_pool_heat(db_path, 1, 0.6)
@@ -195,7 +190,7 @@ function test_archiving_a_document_returns_its_heat_same_as_a_merge_departure()
     os.remove(db_path)
 end
 
-function test_on_entity_archived_ignores_non_document_entity_types()
+function tests.on_entity_archived_ignores_non_document_entity_types()
     print("Testing on_entity_archived is a no-op for any entity_type other than document")
     db_path = new_test_db(3)
     document.on_entity_archived(db_path, "sample", 1)
@@ -206,7 +201,7 @@ function test_on_entity_archived_ignores_non_document_entity_types()
     os.remove(db_path)
 end
 
-function test_unarchiving_a_document_rejoins_the_pool_at_exactly_base_heat()
+function tests.unarchiving_a_document_rejoins_the_pool_at_exactly_base_heat()
     print("Testing on_entity_unarchived rejoins a document at exactly BASE_HEAT, not its stale pre-archive heat")
     db_path = new_test_db(3)
     document.reinforce_pool_heat(db_path, 1, 0.6)
@@ -229,7 +224,7 @@ end
 -- calling it twice, which -- being single-threaded Lua -- could never
 -- actually race) so the specific interleaving is under this test's
 -- control.
-function test_racing_reinforcements_of_the_same_document_never_lose_a_delta()
+function tests.racing_reinforcements_of_the_same_document_never_lose_a_delta()
     print("Testing two racing reinforcements of the same document: neither delta is silently lost")
     db_path = new_test_db(50) -- a large-ish pool keeps the shrink factors close to 1
     document.ensure_pool_state(db_path)
@@ -297,7 +292,7 @@ end
 -- small and positive, delta exceeds it); this asserts the replacement
 -- stays well-behaved instead: no error, f-equivalent behavior stays in
 -- bounds, and the invariant still holds exactly.
-function test_reinforcement_stays_well_behaved_when_delta_exceeds_the_rest_of_the_pool()
+function tests.reinforcement_stays_well_behaved_when_delta_exceeds_the_rest_of_the_pool()
     print("Testing reinforcement doesn't break when delta exceeds the room left to redistribute")
     db_path = new_test_db(2) -- total = 2.0 * BASE_HEAT
     -- Concentrate almost all heat onto document 1 first, so document
@@ -325,23 +320,4 @@ function test_reinforcement_stays_well_behaved_when_delta_exceeds_the_rest_of_th
     os.remove(db_path)
 end
 
--- Run them
-test_reinforcement_conserves_total_across_the_pool()
-test_reinforcement_gives_the_reinforced_document_the_extracted_amount()
-test_reinforcement_shrinks_every_other_document_by_the_same_factor()
-test_repeated_reinforcement_of_different_documents_still_conserves_total()
-test_creation_grows_the_total_by_exactly_base_heat()
-test_a_new_document_reads_exactly_base_heat_even_after_pool_scale_has_drifted()
-test_departure_returns_heat_to_survivors_so_their_new_total_matches_the_smaller_pool()
-test_departure_of_the_last_document_does_not_error()
-test_archiving_a_document_returns_its_heat_same_as_a_merge_departure()
-test_on_entity_archived_ignores_non_document_entity_types()
-test_unarchiving_a_document_rejoins_the_pool_at_exactly_base_heat()
-test_racing_reinforcements_of_the_same_document_never_lose_a_delta()
-test_reinforcement_stays_well_behaved_when_delta_exceeds_the_rest_of_the_pool()
-
-if FAILURES > 0 then
-    print(FAILURES .. " test(s) failed")
-    os.exit(1)
-end
-print("All document_pool.lua tests passed")
+unit.run(tests)
