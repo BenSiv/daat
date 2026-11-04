@@ -1428,6 +1428,13 @@ function knowledge_stats(ctx, args)
     )
 end
 
+-- Read-only listing -- surfaces the pool's real document ids/tiers/
+-- content shape to the model. Content shape is what the
+-- distillation pass reads to decide what's actually worth
+-- distilling from -- only "developed" (long/multi-section) content
+-- has something worth extracting; an already-"atomic"/"thin"/
+-- "simple" document doesn't. Optional args.tier filters, same as
+-- the CLI.
 function knowledge_list(ctx, args)
     db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
     rows = knowledge.list_documents(db_path, tonumber(args.tier))
@@ -1465,6 +1472,12 @@ function knowledge_list(ctx, args)
     return table.concat(lines, "\n") .. "\n\n" .. footer .. ")"
 end
 
+-- Destructive: writes a new, concise, single-idea document
+-- distilled from a source the agent has read -- the real
+-- counterpart to knowledge.create_document_note's reasoning-note
+-- path. A genuine write (a new document/entity_event row), so this
+-- goes through the same pending-action approval flow as
+-- document.create/entity.create.
 function knowledge_distill(ctx, args)
     db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
     if args.title == nil or args.content == nil then
@@ -1581,142 +1594,141 @@ agent_tools.AGENT_TOOLS.view.run.handler = view_run
 agent_tools.AGENT_TOOLS.template.list.handler = template_list
 agent_tools.AGENT_TOOLS.template.get.handler = template_get
 
+-- The result, calc, stats and plot groups' handlers (#6, step 4), moved
+-- the same way as the document group's above.
+
+-- The full text of a tool result is always stored (agent_message);
+-- only what the model is shown gets cut (agent.cap_tool_text). Only
+-- this session's own results are readable.
+function result_read(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    result_id = tonumber(args.result_id)
+    if result_id == nil then
+        return nil, "read requires result_id"
+    end
+    rows = db.query(db_path, string.format(
+        "SELECT content FROM agent_message WHERE id = %d AND session_id = %s AND role = 'tool_result';",
+        result_id, db.quote(session_id)))
+    if rows == nil or rows[1] == nil then
+        return nil, "no tool result #" .. tostring(result_id) .. " in this conversation"
+    end
+    decoded, _, _ = json.decode(rows[1].content)
+    text = rows[1].content
+    if decoded != nil and decoded.text != nil then
+        text = decoded.text
+    end
+    start = tonumber(args.offset)
+    if start == nil or start < 0 then
+        start = 0
+    end
+    length = tonumber(args.length)
+    if length == nil or length <= 0 then
+        length = config.platform_config().agent_tool_result_cap
+    end
+    total = string.len(text)
+    out = string.format("result #%d, characters %d-%d of %d:\n", result_id, start, math.min(start + length, total), total) ..
+        string.sub(text, start + 1, start + length)
+    if start + length < total then
+        out = out .. string.format("\n[read on with result.read result_id=%d offset=%d]", result_id, start + length)
+    end
+    return out
+end
+
+function calc_evaluate(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    value, calc_err = calc.evaluate(args.expression)
+    if value == nil then
+        return nil, "cannot evaluate '" .. tostring(args.expression) .. "': " .. tostring(calc_err)
+    end
+    return calc.format(args.expression, value)
+end
+
+function stats_fit(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    if args.sql == nil or args.x_column == nil or args.y_column == nil then
+        return nil, "fit requires sql, x_column, y_column and model"
+    end
+    if args.model != "exponential" and args.model != "linear" then
+        return nil, "model must be \"exponential\" or \"linear\""
+    end
+    series, err = numeric_series(db_path, args, "to fit")
+    if series == nil then
+        return nil, err
+    end
+    if series.truncated == true then
+        return nil, "the query hit the row cap -- narrow it (fewer series, or only the columns needed) before fitting"
+    end
+    if args.group_column == nil or args.group_column == "" then
+        fit, fit_err = fit_series(args, series.x, series.y)
+        if fit == nil then
+            return nil, "cannot fit: " .. tostring(fit_err)
+        end
+        return stats.describe(args.model, fit, args.x_column, args.y_column, #series.x)
+    end
+    return fit_groups(args, series)
+end
+
+function plot_from_query(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    if args.sql == nil or args.x_column == nil or args.y_column == nil then
+        return nil, "from_query requires sql, x_column, and y_column"
+    end
+    series, err = numeric_series(db_path, args, "to plot")
+    if series == nil then
+        return nil, err
+    end
+    x_values, y_values, rows = series.x, series.y, series.rows
+    truncated, total_count = series.truncated, series.total_count
+
+    series_name = args.series_name
+    if series_name == nil then
+        series_name = args.y_column
+    end
+    spec = {series = {{name = series_name, x = x_values, y = y_values}}}
+    if args.type != nil then
+        spec.type = args.type
+    end
+    if args.title != nil then
+        spec.title = args.title
+    end
+    if args.xlabel != nil then
+        spec.xlabel = args.xlabel
+    end
+    if args.ylabel != nil then
+        spec.ylabel = args.ylabel
+    end
+
+    -- Same validation the fence renderer itself runs at reply-render
+    -- time (document.render_plot_fences) -- catching a malformed
+    -- spec here gives the model a clear, actionable tool error
+    -- instead of a reply that only shows a broken chart once sent.
+    cfg, cfg_err = document.plot_spec_to_gnuplot_cfg(spec)
+    if cfg == nil then
+        return nil, "built an invalid plot spec: " .. tostring(cfg_err)
+    end
+
+    fence = "```plot\n" .. json.encode(spec) .. "\n```"
+    if truncated == true then
+        if total_count != nil then
+            fence = fence .. "\n\n(chart shows " .. tostring(#rows) .. " of " .. tostring(total_count) .. " total matching rows -- add your own LIMIT or narrow the query for a complete chart)"
+        else
+            fence = fence .. "\n\n(query truncated at " .. tostring(#rows) .. " rows -- add your own LIMIT or narrow the query for a complete chart)"
+        end
+    end
+    return fence
+end
+
+agent_tools.AGENT_TOOLS.result.read.handler = result_read
+agent_tools.AGENT_TOOLS.calc.evaluate.handler = calc_evaluate
+agent_tools.AGENT_TOOLS.stats.fit.handler = stats_fit
+agent_tools.AGENT_TOOLS.plot.from_query.handler = plot_from_query
+
 -- Every built-in tool's handler until #6 moves it into its record, then
 -- the extension fallback; agent_tools.execute_tool, below, is the entry
 -- point. Shrinks one group per #6 step and is deleted in step 8.
 function execute_tool_chain(db_path, author, session_id, tool_name, method_name, args)
     source = {notebook_entry_id = "agent-session:" .. tostring(session_id)}
 
-    -- The full text of a tool result is always stored (agent_message);
-    -- only what the model is shown gets cut (agent.cap_tool_text). Only
-    -- this session's own results are readable.
-    if tool_name == "result" and method_name == "read" then
-        result_id = tonumber(args.result_id)
-        if result_id == nil then
-            return nil, "read requires result_id"
-        end
-        rows = db.query(db_path, string.format(
-            "SELECT content FROM agent_message WHERE id = %d AND session_id = %s AND role = 'tool_result';",
-            result_id, db.quote(session_id)))
-        if rows == nil or rows[1] == nil then
-            return nil, "no tool result #" .. tostring(result_id) .. " in this conversation"
-        end
-        decoded, _, _ = json.decode(rows[1].content)
-        text = rows[1].content
-        if decoded != nil and decoded.text != nil then
-            text = decoded.text
-        end
-        start = tonumber(args.offset)
-        if start == nil or start < 0 then
-            start = 0
-        end
-        length = tonumber(args.length)
-        if length == nil or length <= 0 then
-            length = config.platform_config().agent_tool_result_cap
-        end
-        total = string.len(text)
-        out = string.format("result #%d, characters %d-%d of %d:\n", result_id, start, math.min(start + length, total), total) ..
-            string.sub(text, start + 1, start + length)
-        if start + length < total then
-            out = out .. string.format("\n[read on with result.read result_id=%d offset=%d]", result_id, start + length)
-        end
-        return out
-    end
-
-    if tool_name == "calc" and method_name == "evaluate" then
-        value, calc_err = calc.evaluate(args.expression)
-        if value == nil then
-            return nil, "cannot evaluate '" .. tostring(args.expression) .. "': " .. tostring(calc_err)
-        end
-        return calc.format(args.expression, value)
-    end
-
-    if tool_name == "stats" and method_name == "fit" then
-        if args.sql == nil or args.x_column == nil or args.y_column == nil then
-            return nil, "fit requires sql, x_column, y_column and model"
-        end
-        if args.model != "exponential" and args.model != "linear" then
-            return nil, "model must be \"exponential\" or \"linear\""
-        end
-        series, err = numeric_series(db_path, args, "to fit")
-        if series == nil then
-            return nil, err
-        end
-        if series.truncated == true then
-            return nil, "the query hit the row cap -- narrow it (fewer series, or only the columns needed) before fitting"
-        end
-        if args.group_column == nil or args.group_column == "" then
-            fit, fit_err = fit_series(args, series.x, series.y)
-            if fit == nil then
-                return nil, "cannot fit: " .. tostring(fit_err)
-            end
-            return stats.describe(args.model, fit, args.x_column, args.y_column, #series.x)
-        end
-        return fit_groups(args, series)
-    end
-
-    if tool_name == "plot" and method_name == "from_query" then
-        if args.sql == nil or args.x_column == nil or args.y_column == nil then
-            return nil, "from_query requires sql, x_column, and y_column"
-        end
-        series, err = numeric_series(db_path, args, "to plot")
-        if series == nil then
-            return nil, err
-        end
-        x_values, y_values, rows = series.x, series.y, series.rows
-        truncated, total_count = series.truncated, series.total_count
-
-        series_name = args.series_name
-        if series_name == nil then
-            series_name = args.y_column
-        end
-        spec = {series = {{name = series_name, x = x_values, y = y_values}}}
-        if args.type != nil then
-            spec.type = args.type
-        end
-        if args.title != nil then
-            spec.title = args.title
-        end
-        if args.xlabel != nil then
-            spec.xlabel = args.xlabel
-        end
-        if args.ylabel != nil then
-            spec.ylabel = args.ylabel
-        end
-
-        -- Same validation the fence renderer itself runs at reply-render
-        -- time (document.render_plot_fences) -- catching a malformed
-        -- spec here gives the model a clear, actionable tool error
-        -- instead of a reply that only shows a broken chart once sent.
-        cfg, cfg_err = document.plot_spec_to_gnuplot_cfg(spec)
-        if cfg == nil then
-            return nil, "built an invalid plot spec: " .. tostring(cfg_err)
-        end
-
-        fence = "```plot\n" .. json.encode(spec) .. "\n```"
-        if truncated == true then
-            if total_count != nil then
-                fence = fence .. "\n\n(chart shows " .. tostring(#rows) .. " of " .. tostring(total_count) .. " total matching rows -- add your own LIMIT or narrow the query for a complete chart)"
-            else
-                fence = fence .. "\n\n(query truncated at " .. tostring(#rows) .. " rows -- add your own LIMIT or narrow the query for a complete chart)"
-            end
-        end
-        return fence
-    end
-
-    -- Read-only listing -- surfaces the pool's real document ids/tiers/
-    -- content shape to the model. Content shape is what the
-    -- distillation pass reads to decide what's actually worth
-    -- distilling from -- only "developed" (long/multi-section) content
-    -- has something worth extracting; an already-"atomic"/"thin"/
-    -- "simple" document doesn't. Optional args.tier filters, same as
-    -- the CLI.
-    -- Destructive: writes a new, concise, single-idea document
-    -- distilled from a source the agent has read -- the real
-    -- counterpart to knowledge.create_document_note's reasoning-note
-    -- path. A genuine write (a new document/entity_event row), so this
-    -- goes through the same pending-action approval flow as
-    -- document.create/entity.create.
     -- agent.default_model() here, not a model threaded through this
     -- whole call chain -- every real call site (cgi.lua's chat routes,
     -- main.lua's knowledge distillation) already resolves `model` the
