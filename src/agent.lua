@@ -971,6 +971,27 @@ function canonical_json(value)
 end
 agent.canonical_json = canonical_json
 
+-- Whether the built-in tool "group.method" has `field` set on its record
+-- (repeat_safe, pin_on_compaction): read from AGENT_TOOLS, not kept as a
+-- second list of names (#6). Built-ins only, and that's the whole answer:
+-- an extension's record never sets either, since its tool may have
+-- effects daat can't see.
+function builtin_tool_has(full_name, field)
+    agent_tools = require("agent_tools")
+    name = tostring(full_name)
+    dot = string.find(name, ".", 1, true)
+    if dot == nil then
+        return false
+    end
+    group = agent_tools.AGENT_TOOLS[string.sub(name, 1, dot - 1)]
+    if group == nil then
+        return false
+    end
+    record = group[string.sub(name, dot + 1)]
+    return record != nil and record[field] == true
+end
+agent.builtin_tool_has = builtin_tool_has
+
 -- Schema lookups survive compaction verbatim (doc/context-management-
 -- plan.md, Phase 1): in prod, 53% of these calls repeated one already
 -- made in the same session, mostly after compaction had summarized the
@@ -978,7 +999,7 @@ agent.canonical_json = canonical_json
 -- they're carried as a block code appends to the summary -- not left
 -- to the summarizer -- latest result per (tool, arguments) first, within
 -- agent_pinned_schema_chars. One that doesn't fit is still named.
-PINNED_SCHEMA_TOOLS = {["entity.list_types"] = true, ["entity.fields"] = true, ["entity.relationships"] = true}
+-- Which tools those are is each record's pin_on_compaction (#6).
 PINNED_SCHEMA_HEADER = "**Confirmed schema (exact earlier tool results, still current -- no need to look these up again):**"
 
 -- Splits a summary into its prose and its pinned entries ({key, text}).
@@ -1044,7 +1065,7 @@ function pinned_schema_block(to_compact, budget)
             decoded, _, _ = json.decode(msg.content)
             if decoded != nil and type(decoded.blocks) == "table" then
                 for _, block in ipairs(decoded.blocks) do
-                    if block.type == "toolCall" and PINNED_SCHEMA_TOOLS[tostring(block.name)] == true then
+                    if block.type == "toolCall" and builtin_tool_has(block.name, "pin_on_compaction") then
                         args = block.arguments
                         if args == nil then
                             args = {}
@@ -2463,11 +2484,8 @@ end
 -- schema files, which also starts a new request). An exact repeat of one
 -- of these, while the earlier result is still in context and no write
 -- has been proposed since, is answered with REPEAT_CALL_NOTE instead of
--- a second copy (doc/context-management-plan.md, Phase 1).
-REPEAT_SAFE_TOOLS = {
-    ["entity.list_types"] = true, ["entity.fields"] = true, ["entity.relationships"] = true,
-    ["entity.get"] = true, ["document.search"] = true, ["document.children"] = true,
-}
+-- a second copy (doc/context-management-plan.md, Phase 1). Which tools
+-- those are is each record's repeat_safe (#6).
 REPEAT_CALL_NOTE = "Same call as one earlier in this conversation (same tool, same arguments), and this conversation hasn't changed anything since: its result is above. Use that result instead of calling again."
 
 -- agent.find_repeat(messages, full_name, args, is_write) -> earlier call id | nil
@@ -2475,7 +2493,7 @@ REPEAT_CALL_NOTE = "Same call as one earlier in this conversation (same tool, sa
 -- `is_write(full_name)` says whether a call can change data (a
 -- destructive tool). Pure, so it's unit-tested on its own.
 function agent.find_repeat(messages, full_name, args, is_write)
-    if REPEAT_SAFE_TOOLS[full_name] != true or messages == nil then
+    if builtin_tool_has(full_name, "repeat_safe") == false or messages == nil then
         return nil
     end
     if args == nil then

@@ -56,7 +56,12 @@ function test_every_builtin_record_follows_the_field_rules()
             end
             if record.destructive == true then
                 check(record.in_research != true, name .. ": a destructive tool can't be in_research")
+                -- Answering a write with "same as before" would skip it.
+                check(record.repeat_safe != true, name .. ": a destructive tool can't be repeat_safe")
+                check(record.pin_on_compaction != true, name .. ": a destructive tool can't be pin_on_compaction")
             end
+            check(optional_flag(record.repeat_safe), name .. ": repeat_safe must be true, false or absent")
+            check(optional_flag(record.pin_on_compaction), name .. ": pin_on_compaction must be true, false or absent")
         end
     end
 end
@@ -80,6 +85,35 @@ function test_control_tools_are_the_three_kinds()
         count = count + 1
     end
     check(count == 4, "expected exactly 4 control tools, found " .. count)
+end
+
+-- The record fields replace two hand-kept lists in agent.lua (Context
+-- Phase 1); the migration copies them as they were, and adding to either
+-- set is its own measured PR (doc/agent-tools.md, "Decisions").
+function names_with(field)
+    names = {}
+    for group, methods in pairs(agent_tools.AGENT_TOOLS) do
+        for method, record in pairs(methods) do
+            if record[field] == true then
+                table.insert(names, group .. "." .. method)
+            end
+        end
+    end
+    table.sort(names)
+    return table.concat(names, ", ")
+end
+
+function test_repeat_safe_and_pinned_are_the_lists_they_replace()
+    print("Testing repeat_safe and pin_on_compaction mark exactly the tools the old lists named")
+    check(names_with("repeat_safe") == "document.children, document.search, entity.fields, entity.get, entity.list_types, entity.relationships",
+        "repeat_safe tools changed: " .. names_with("repeat_safe"))
+    check(names_with("pin_on_compaction") == "entity.fields, entity.list_types, entity.relationships",
+        "pin_on_compaction tools changed: " .. names_with("pin_on_compaction"))
+    check(agent.builtin_tool_has("entity.get", "repeat_safe") == true, "builtin_tool_has reads the record")
+    check(agent.builtin_tool_has("entity.get", "pin_on_compaction") == false, "entity.get isn't pinned")
+    check(agent.builtin_tool_has("entity.create", "repeat_safe") == false, "a write is never repeat_safe")
+    check(agent.builtin_tool_has("widgets.lookup", "repeat_safe") == false, "an unknown or extension tool is never repeat_safe")
+    check(agent.builtin_tool_has("nodot", "repeat_safe") == false, "a name without a dot isn't a tool")
 end
 
 -- run_turn handles a turn-ending kind from its row alone, so the row must
@@ -237,6 +271,7 @@ os.execute("rm -rf '" .. dir .. "'")
 
 test_every_builtin_record_follows_the_field_rules()
 test_control_tools_are_the_three_kinds()
+test_repeat_safe_and_pinned_are_the_lists_they_replace()
 test_turn_ending_kinds_are_complete()
 test_research_may_call()
 test_extension_tools_become_records_in_manifest_order()
