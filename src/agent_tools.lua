@@ -889,7 +889,7 @@ function fit_groups(args, series)
 end
 
 -- The document group's handlers (#6, step 1): each is what its branch in
--- execute_tool_chain was, word for word, as a function of (ctx, args);
+-- execute_tool's old if-chain was, word for word, as a function of (ctx, args);
 -- the first line unpacks ctx into the names the body always used. They're
 -- defined here, after the helpers they call, and attached to their
 -- records below: AGENT_TOOLS is built at the top of the file, before
@@ -1779,29 +1779,21 @@ end
 
 agent_tools.AGENT_TOOLS.internet_search.search.handler = internet_search_search
 
--- What execute_tool falls back to for a tool whose record has no handler.
--- Every built-in tool and, since #6 step 7, every extension tool has one,
--- so all that's left is the answer for a tool nobody declared; step 8
--- deletes this.
-function execute_tool_chain(db_path, author, session_id, tool_name, method_name, args)
-    return nil, "unknown tool: " .. tostring(tool_name) .. "." .. tostring(method_name)
-end
-
--- Runs one tool call: the record's own handler when its group has moved
--- into records (#6), otherwise execute_tool_chain above. Either way, a
--- failed call gets the record's recover hint, if it has one: run under
--- pcall, only after a failure, and only ever added to the error, never
--- replacing it, so the real cause is always in the result.
+-- Runs one tool call: a lookup, not a chain of names (#6). The record's
+-- handler runs; a tool with no record, or a record with no handler
+-- (clarify.ask, whose effect run_turn handles: it ends the turn), is an
+-- unknown tool, in the words the old if-chain used. A failed call gets
+-- the record's recover hint, if it has one: run under pcall, only after
+-- a failure, and only ever added to the error, never replacing it, so
+-- the real cause is always in the result.
 function agent_tools.execute_tool(db_path, author, session_id, tool_name, method_name, args)
     record = agent.tool_record(db_path, tool_name, method_name)
-    ctx = agent.tool_ctx(db_path, author, session_id)
-    result, err = nil, nil
-    if record != nil and record.handler != nil then
-        result, err = record.handler(ctx, args)
-    else
-        result, err = execute_tool_chain(db_path, author, session_id, tool_name, method_name, args)
+    if record == nil or record.handler == nil then
+        return nil, "unknown tool: " .. tostring(tool_name) .. "." .. tostring(method_name)
     end
-    if result == nil and err != nil and record != nil and record.recover != nil then
+    ctx = agent.tool_ctx(db_path, author, session_id)
+    result, err = record.handler(ctx, args)
+    if result == nil and err != nil and record.recover != nil then
         ok, hint = pcall(record.recover, ctx, args, err)
         if ok == true and type(hint) == "string" and hint != "" then
             err = tostring(err) .. " -- " .. hint

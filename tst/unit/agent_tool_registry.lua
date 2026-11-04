@@ -37,8 +37,7 @@ function tests.every_builtin_record_follows_the_field_rules()
             check(optional_flag(record.in_research), name .. ": in_research must be true, false or absent")
             check(record.control == nil or agent.CONTROL_KINDS[record.control] != nil,
                 name .. ": control '" .. tostring(record.control) .. "' isn't a CONTROL_KINDS kind")
-            -- Until #6 moves it, a tool's handler is still execute_tool's
-            -- branch; tst/unit/agent_tools.lua checks every tool reaches one.
+            -- Whether every tool has one is every_builtin_tool_has_a_handler.
             check(record.handler == nil or type(record.handler) == "function", name .. ": handler must be a function")
             -- precheck runs on the way to approval, which only a
             -- destructive tool takes.
@@ -243,26 +242,19 @@ function tests.recover_adds_to_a_failed_call(db_path)
     end
 end
 
--- The groups #6 has moved so far, one step at a time: every tool in them
--- runs from its record. A step adds its groups here, in the same commit
--- that deletes their branches from execute_tool_chain.
-MOVED_GROUPS = {"document", "entity", "knowledge", "view", "template", "result", "calc", "stats", "plot",
-    "research", "background", "clarify", "internet_search"}
-
--- The one tool without a handler is one whose control kind ends the turn
--- (clarify.ask): run_turn does that from its CONTROL_KINDS row, so a
--- handler there would never run.
-function tests.every_tool_in_a_moved_group_has_a_handler()
-    print("Testing every tool in a moved group runs from its record")
-    for _, group in ipairs(MOVED_GROUPS) do
-        check(agent_tools.AGENT_TOOLS[group] != nil, "no tool group " .. group)
-        if agent_tools.AGENT_TOOLS[group] != nil then
-            for method, record in pairs(agent_tools.AGENT_TOOLS[group]) do
-                if agent.turn_ending_kind(record) != nil then
-                    check(record.handler == nil, group .. "." .. method .. " ends the turn, so it has no handler")
-                else
-                    check(type(record.handler) == "function", group .. "." .. method .. " has no handler")
-                end
+-- Every built-in tool runs from its record (#6): execute_tool is a lookup,
+-- so a record without a handler is a tool nothing can run. The one
+-- exception is a tool whose control kind ends the turn (clarify.ask):
+-- run_turn does that from its CONTROL_KINDS row, so a handler there would
+-- never run.
+function tests.every_builtin_tool_has_a_handler()
+    print("Testing every built-in tool runs from its record")
+    for group, methods in pairs(agent_tools.AGENT_TOOLS) do
+        for method, record in pairs(methods) do
+            if agent.turn_ending_kind(record) != nil then
+                check(record.handler == nil, group .. "." .. method .. " ends the turn, so it has no handler")
+            else
+                check(type(record.handler) == "function", group .. "." .. method .. " has no handler")
             end
         end
     end

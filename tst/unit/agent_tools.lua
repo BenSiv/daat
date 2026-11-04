@@ -88,12 +88,12 @@ function tests.every_declared_method_reaches_a_handler(db_path)
     end)
 end
 
--- Every built-in tool runs from its record's handler (#6, steps 1-6):
--- execute_tool_chain, until step 8 deletes it, holds only the extension
--- fallback. A `tool_name == "x"` branch there again would be a tool
--- handled the old way, and possibly in two places.
-function tests.no_builtin_tool_is_dispatched_by_name()
-    print("Testing execute_tool_chain has no built-in tool branches left")
+-- Every tool runs from its record's handler, and execute_tool is a lookup
+-- (#6). A `tool_name == "x" and method_name == "y"` test anywhere in
+-- agent_tools.lua would be a tool dispatched by name again, the way the
+-- old if-chain did, and possibly in two places.
+function tests.no_tool_is_dispatched_by_name()
+    print("Testing agent_tools.lua dispatches no tool by name")
     f = io.open("src/agent_tools.lua", "r")
     check(f != nil, "can't open src/agent_tools.lua (run from the repo root)")
     if f == nil then
@@ -101,15 +101,8 @@ function tests.no_builtin_tool_is_dispatched_by_name()
     end
     source = io.read(f, "*a")
     io.close(f)
-    start = string.find(source, "\nfunction execute_tool_chain(", 1, true)
-    check(start != nil, "execute_tool_chain not found in src/agent_tools.lua")
-    if start == nil then
-        return
-    end
-    finish = string.find(source, "\nend\n", start, true)
-    body = string.sub(source, start, finish)
-    for group, method in string.gmatch(body, "tool_name == \"([%w_]+)\" and method_name == \"([%w_]+)\"") do
-        check(false, "execute_tool_chain dispatches " .. group .. "." .. method .. " by name; give its record a handler instead")
+    for group, method in string.gmatch(source, "tool_name == \"([%w_]+)\" and method_name == \"([%w_]+)\"") do
+        check(false, "agent_tools.lua dispatches " .. group .. "." .. method .. " by name; give its record a handler instead")
     end
 end
 
