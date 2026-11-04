@@ -1267,12 +1267,7 @@ print("second:", agent.claim_pending_action(db_path, id, "running"))
 print("deny:", agent.claim_pending_action(db_path, id, "denied"))
 print("status:", db.query(db_path, "SELECT status FROM agent_pending_action WHERE id = " .. id .. ";")[1].status)
 EOF
-    if [ -z "${LUAM_DIR:-}" ]; then
-        LUAM_DIR=$(cd "${PROJECT_ROOT}/../luam" && pwd)
-    fi
-    run env LUA_PATH="${PROJECT_ROOT}/src/?.lua;${LUAM_DIR}/lib/?.lua;${LUAM_DIR}/lib/?/init.lua;;" \
-        LUA_CPATH="${LUAM_DIR}/bin/?.so;${LUAM_DIR}/lib/lfs/?.so;${LUAM_DIR}/lib/hmac/?.so;${LUAM_DIR}/lib/bcrypt/?.so;;" \
-        "${LUAM_DIR}/bin/luam" "${TEST_DIR}/claim_check.lua"
+    run_luam "${TEST_DIR}/claim_check.lua"
     [ "$status" -eq 0 ]
     [[ "$output" =~ "first:	true" ]]
     [[ "$output" =~ "second:	false" ]]
