@@ -4,21 +4,16 @@
 -- that would shadow a built-in or declare a tool twice is left out whole,
 -- an extension tool becomes a record of the same shape, and what a
 -- research sub-agent may call is one predicate. agent.build_tool_registry
--- is pure, so none of this needs a database.
+-- is pure; only the dispatcher tests, which call execute_tool, use a store.
 
 agent = require("agent")
 agent_tools = require("agent_tools")
 init = require("init")
 lfs = require("lfs")
 
-FAILURES = 0
-
-function check(condition, message)
-    if condition != true then
-        FAILURES = FAILURES + 1
-        print("FAIL: " .. message)
-    end
-end
+unit = require("unit")
+check = unit.check
+tests = unit.suite()
 
 -- Luam's type() calls a boolean a "flag".
 function optional_flag(value)
@@ -33,7 +28,7 @@ function tool(name, destructive)
     return {name = name, description = name .. " does a thing", destructive = destructive, parameters = {type = "object", properties = {}}}
 end
 
-function test_every_builtin_record_follows_the_field_rules()
+function tests.every_builtin_record_follows_the_field_rules()
     print("Testing every built-in record's fields are well-formed")
     for group, methods in pairs(agent_tools.AGENT_TOOLS) do
         for method, record in pairs(methods) do
@@ -66,7 +61,7 @@ function test_every_builtin_record_follows_the_field_rules()
     end
 end
 
-function test_control_tools_are_the_three_kinds()
+function tests.control_tools_are_the_three_kinds()
     print("Testing the control tools are research, clarify and background")
     found = {}
     for group, methods in pairs(agent_tools.AGENT_TOOLS) do
@@ -103,7 +98,7 @@ function names_with(field)
     return table.concat(names, ", ")
 end
 
-function test_repeat_safe_and_pinned_are_the_lists_they_replace()
+function tests.repeat_safe_and_pinned_are_the_lists_they_replace()
     print("Testing repeat_safe and pin_on_compaction mark exactly the tools the old lists named")
     check(names_with("repeat_safe") == "document.children, document.search, entity.fields, entity.get, entity.list_types, entity.relationships",
         "repeat_safe tools changed: " .. names_with("repeat_safe"))
@@ -118,7 +113,7 @@ end
 
 -- run_turn handles a turn-ending kind from its row alone, so the row must
 -- say everything it needs.
-function test_turn_ending_kinds_are_complete()
+function tests.turn_ending_kinds_are_complete()
     print("Testing every turn-ending control kind says what run_turn needs")
     for name, kind in pairs(agent.CONTROL_KINDS) do
         check(type(kind.ends_turn) == "flag", name .. ": ends_turn must be true or false")
@@ -134,7 +129,7 @@ function test_turn_ending_kinds_are_complete()
     check(agent.turn_ending_kind(nil) == nil, "an unknown tool doesn't")
 end
 
-function test_research_may_call()
+function tests.research_may_call()
     print("Testing research_may_call: read-only, in_research, and no control kind")
     check(agent.research_may_call({destructive = false, in_research = true}) == true, "a read-only in_research tool is allowed")
     check(agent.research_may_call({destructive = false}) == false, "a tool without in_research is not")
@@ -143,7 +138,7 @@ function test_research_may_call()
     check(agent.research_may_call(nil) == false, "an unknown tool is not")
 end
 
-function test_extension_tools_become_records_in_manifest_order()
+function tests.extension_tools_become_records_in_manifest_order()
     print("Testing extension tools become records, after the built-ins, in manifest order")
     builtins = {document = {search = {destructive = false, in_research = true, description = "d", parameters = {}}}}
     registry, ordered, refused = agent.build_tool_registry(builtins, {
@@ -165,7 +160,7 @@ function test_extension_tools_become_records_in_manifest_order()
     check(lookup.description == "lookup does a thing" and lookup.parameters.type == "object", "description and parameters come from the manifest")
 end
 
-function test_an_extension_named_after_a_builtin_group_is_refused()
+function tests.an_extension_named_after_a_builtin_group_is_refused()
     print("Testing an extension named after a built-in group is left out whole")
     builtins = {stats = {fit = {destructive = false, in_research = true, description = "d", parameters = {}}}}
     registry, ordered, refused = agent.build_tool_registry(builtins, {
@@ -177,7 +172,7 @@ function test_an_extension_named_after_a_builtin_group_is_refused()
     check(#ordered == 1, "only the built-in tool is declared")
 end
 
-function test_an_extension_declaring_a_tool_twice_is_refused()
+function tests.an_extension_declaring_a_tool_twice_is_refused()
     print("Testing an extension that declares the same tool twice is left out whole")
     registry, ordered, refused = agent.build_tool_registry({}, {
         extension_entry("widgets", {tool("lookup", false), tool("lookup", true)}),
@@ -204,7 +199,7 @@ function fake_record(handler, recover)
     return {destructive = false, description = "probe", parameters = {type = "object"}, handler = handler, recover = recover}
 end
 
-function test_a_record_handler_runs_before_the_chain(db_path)
+function tests.a_record_handler_runs_before_the_chain(db_path)
     print("Testing a record's handler is called with ctx and args, before the old chain")
     with_fake_tool(fake_record(function(ctx, args)
         return "handled by " .. ctx.author .. " in " .. ctx.session_id .. ": " .. tostring(args.n)
@@ -214,7 +209,7 @@ function test_a_record_handler_runs_before_the_chain(db_path)
     end)
 end
 
-function test_recover_adds_to_a_failed_call(db_path)
+function tests.recover_adds_to_a_failed_call(db_path)
     print("Testing recover adds its hint to a failed call's error, and only then")
     with_fake_tool(fake_record(function(ctx, args) return nil, "bad input" end,
         function(ctx, args, err) return "try " .. tostring(args.n + 1) end), function()
@@ -247,7 +242,7 @@ end
 
 -- The hints that moved into shared helpers still read exactly as before:
 -- what the model is told must not change during the migration.
-function test_moved_hints_keep_their_text(db_path)
+function tests.moved_hints_keep_their_text(db_path)
     print("Testing the shared hints produce the texts tools wrote out before")
     result, err = agent_tools.execute_tool(db_path, "test", 0, "entity", "list", {entity_type = "zz_nope"})
     check(err == "unknown entity type: zz_nope -- call entity.list_types for the full list",
@@ -263,23 +258,8 @@ lfs.mkdir(dir)
 init.do_init({}, dir)
 db_path = dir .. "/.store/store.db"
 
-test_a_record_handler_runs_before_the_chain(db_path)
-test_recover_adds_to_a_failed_call(db_path)
-test_moved_hints_keep_their_text(db_path)
-
+-- The dispatcher tests call execute_tool, which needs a store; the rest
+-- ignore the argument. A failure exits inside unit.run and leaves the
+-- temp store behind to look at; a clean run removes it.
+unit.run(tests, db_path)
 os.execute("rm -rf '" .. dir .. "'")
-
-test_every_builtin_record_follows_the_field_rules()
-test_control_tools_are_the_three_kinds()
-test_repeat_safe_and_pinned_are_the_lists_they_replace()
-test_turn_ending_kinds_are_complete()
-test_research_may_call()
-test_extension_tools_become_records_in_manifest_order()
-test_an_extension_named_after_a_builtin_group_is_refused()
-test_an_extension_declaring_a_tool_twice_is_refused()
-
-if FAILURES > 0 then
-    print(FAILURES .. " failure(s)")
-    os.exit(false)
-end
-print("agent tool registry tests passed")

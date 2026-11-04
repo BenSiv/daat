@@ -19,6 +19,22 @@ setup_test_env() {
     write_platform_config
 }
 
+# run_luam <script.lua> [args...]: bats-`run`s a Lua script against the
+# source tree (src/ and tst/lib/ on the path) with the same luam build
+# and C modules bld/test.sh uses -- for a test that has to call a
+# module function directly rather than through the binary. LUAM_DIR is
+# the luam checkout, ../luam beside the repo unless set (a worktree
+# sets it, since ../luam isn't there).
+run_luam() {
+    local luam_dir="${LUAM_DIR:-}"
+    if [ -z "$luam_dir" ]; then
+        luam_dir=$(cd "${PROJECT_ROOT}/../luam" && pwd)
+    fi
+    run env LUA_PATH="${PROJECT_ROOT}/src/?.lua;${PROJECT_ROOT}/tst/lib/?.lua;${luam_dir}/lib/?.lua;${luam_dir}/lib/?/init.lua;;" \
+        LUA_CPATH="${luam_dir}/bin/?.so;${luam_dir}/lib/lfs/?.so;${luam_dir}/lib/hmac/?.so;${luam_dir}/lib/bcrypt/?.so;;" \
+        "${luam_dir}/bin/luam" "$@"
+}
+
 # Writes platform.lua into TEST_DIR (config.platform_config() resolves
 # it relative to DOCUMENT_ROOT, which falls back to "." -- the real
 # CGI/CLI cwd every raw_get/raw_post/"$BIN" call in these tests already
@@ -50,19 +66,6 @@ latest_tool_result() {
     local session_id="$1"
     sqlite3 "$TEST_DIR/.store/store.db" \
         "SELECT content FROM agent_message WHERE session_id = '${session_id}' AND role = 'tool_result' ORDER BY id DESC LIMIT 1;"
-}
-
-# Runs a Lua script from tst/integration/lua/ with daat's own src/ on the
-# path, from TEST_DIR, so config.db_path(".") is this test's store. For
-# checking a function at its seam, where a request can't reach it
-# deterministically. Use with `run`.
-run_lua_script() {
-    local script="$1"
-    shift
-    local luam_dir="${LUAM_DIR:-$(cd "${PROJECT_ROOT}/../luam" && pwd)}"
-    env LUA_PATH="${PROJECT_ROOT}/src/?.lua;${luam_dir}/lib/?.lua;${luam_dir}/lib/?/init.lua;;" \
-        LUA_CPATH="${luam_dir}/bin/?.so;${luam_dir}/lib/lfs/?.so;${luam_dir}/lib/hmac/?.so;${luam_dir}/lib/bcrypt/?.so;;" \
-        "${luam_dir}/bin/luam" "${PROJECT_ROOT}/tst/integration/lua/${script}" "$@"
 }
 
 cleanup_test_env() {

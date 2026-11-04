@@ -9,14 +9,9 @@ config = require("config")
 external_tool = require("external_tool")
 mail_graph = require("provider.mail_graph")
 
-FAILURES = 0
-
-function check(condition, message)
-    if condition != true then
-        FAILURES = FAILURES + 1
-        print("FAIL: " .. message)
-    end
-end
+unit = require("unit")
+check = unit.check
+tests = unit.suite()
 
 function contains(haystack, needle)
     return string.find(tostring(haystack), needle, 1, true) != nil
@@ -74,7 +69,7 @@ end
 
 MESSAGE = {from_address = "noreply@example.com", raw = "From: \"LIMS\" <noreply@example.com>\r\nTo: <a@example.com>\r\nSubject: Hi\r\n\r\nBody"}
 
-function test_send_gets_a_token_then_posts_the_raw_message()
+function tests.send_gets_a_token_then_posts_the_raw_message()
     print("Testing send fetches a client-credentials token, then posts message.raw to the sender's sendMail")
     reset()
     ok, err = mail_graph.send(MESSAGE)
@@ -93,7 +88,7 @@ function test_send_gets_a_token_then_posts_the_raw_message()
     check(contains(send_call.cmd, "--data-binary @-"), "body should come from the base64 pipe")
 end
 
-function test_no_secret_or_token_on_the_command_line()
+function tests.no_secret_or_token_on_the_command_line()
     print("Testing neither the client secret nor the bearer token appears in any command line")
     reset()
     mail_graph.send(MESSAGE)
@@ -103,7 +98,7 @@ function test_no_secret_or_token_on_the_command_line()
     end
 end
 
-function test_token_error_is_reported()
+function tests.token_error_is_reported()
     print("Testing a token endpoint error surfaces its code and description, and nothing is sent")
     reset()
     TOKEN_RESPONSE = "{\"error\":\"invalid_client\",\"error_description\":\"AADSTS7000215: Invalid client secret provided.\"}\nhttp_status=401"
@@ -113,7 +108,7 @@ function test_token_error_is_reported()
     check(#CALLS == 1, "no sendMail call after a failed token request")
 end
 
-function test_send_error_is_reported()
+function tests.send_error_is_reported()
     print("Testing a sendMail error (e.g. the app isn't allowed this mailbox) surfaces Graph's code and message")
     reset()
     SEND_RESPONSE = "{\"error\":{\"code\":\"ErrorAccessDenied\",\"message\":\"Access is denied.\"}}\nhttp_status=403"
@@ -122,7 +117,7 @@ function test_send_error_is_reported()
     check(contains(err, "HTTP 403") and contains(err, "ErrorAccessDenied"), "expected Graph's error detail, got: " .. tostring(err))
 end
 
-function test_missing_secret_and_bad_ids_fail_before_any_call()
+function tests.missing_secret_and_bad_ids_fail_before_any_call()
     print("Testing a missing secret or an unsafe tenant/client id fails before curl runs")
     reset()
     SECRET = ""
@@ -139,14 +134,4 @@ function test_missing_secret_and_bad_ids_fail_before_any_call()
     check(#CALLS == 0, "no curl call for a config error")
 end
 
-test_send_gets_a_token_then_posts_the_raw_message()
-test_no_secret_or_token_on_the_command_line()
-test_token_error_is_reported()
-test_send_error_is_reported()
-test_missing_secret_and_bad_ids_fail_before_any_call()
-
-if FAILURES > 0 then
-    print(tostring(FAILURES) .. " failure(s)")
-    os.exit(1)
-end
-print("All mail_graph tests passed")
+unit.run(tests)

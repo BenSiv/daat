@@ -18,14 +18,9 @@ knowledge = require("knowledge")
 document = require("document")
 db = require("database")
 
-FAILURES = 0
-
-function check(condition, message)
-    if condition != true then
-        FAILURES = FAILURES + 1
-        print("FAIL: " .. message)
-    end
-end
+unit = require("unit")
+check = unit.check
+tests = unit.suite()
 
 function close_enough(a, b, tolerance)
     if tolerance == nil then
@@ -83,7 +78,7 @@ end
 
 -- Link grammar ---------------------------------------------------------
 
-function test_an_unclosed_bracket_is_not_a_link_and_swallows_nothing()
+function tests.an_unclosed_bracket_is_not_a_link_and_swallows_nothing()
     print("Testing an unclosed [[ matches nothing, so the real link after it is still found")
     db_path = new_test_db()
     db.exec(db_path, "INSERT INTO document (id, title) VALUES (2, 'Doc Two');")
@@ -93,7 +88,7 @@ function test_an_unclosed_bracket_is_not_a_link_and_swallows_nothing()
     os.remove(db_path)
 end
 
-function test_a_link_never_spans_lines()
+function tests.a_link_never_spans_lines()
     print("Testing [[ on one line and ]] on another is not a link")
     db_path = new_test_db()
     document.sync_links(db_path, 1, "Starts [[here\nand ends]] there.")
@@ -101,7 +96,7 @@ function test_a_link_never_spans_lines()
     os.remove(db_path)
 end
 
-function test_a_very_long_title_is_an_ordinary_link()
+function tests.a_very_long_title_is_an_ordinary_link()
     print("Testing link text has no length limit (a real paper title overflowed the old VARCHAR(255) key)")
     db_path = new_test_db()
     long_title = string.rep("Bacillus amyloliquefaciens subsp. plantarum", 20, ", ")
@@ -114,7 +109,7 @@ end
 
 -- upsert_link / sync_links -----------------------------------------------
 
-function test_a_title_containing_a_slash_links_as_written()
+function tests.a_title_containing_a_slash_links_as_written()
     print("Testing resolve_link_text: an exact title wins, subject/title is only the fallback")
     db_path = new_test_db()
     db.exec(db_path, "INSERT INTO document (id, title, parent_id) VALUES (1, 'CRISPR/Cas9 in fungi', NULL), (2, 'Notes', NULL), (3, 'Cas9', 2), (4, 'Notes/Cas9', NULL);")
@@ -126,7 +121,7 @@ function test_a_title_containing_a_slash_links_as_written()
     os.remove(db_path)
 end
 
-function test_upsert_link_inserts_a_fresh_row()
+function tests.upsert_link_inserts_a_fresh_row()
     print("Testing document.upsert_link inserts at base strength, with created_at")
     db_path = new_test_db()
     document.upsert_link(db_path, 1, 2, "Doc Two")
@@ -138,7 +133,7 @@ function test_upsert_link_inserts_a_fresh_row()
     os.remove(db_path)
 end
 
-function test_upsert_link_reintroduces_an_archived_row_at_its_old_strength()
+function tests.upsert_link_reintroduces_an_archived_row_at_its_old_strength()
     print("Testing document.upsert_link unarchives and preserves raw_strength on reintroduction")
     db_path = new_test_db()
     insert_link(db_path, 1, 2, "Doc Two", "raw_strength, archived_at", "1.45, '2026-01-01 00:00:00'")
@@ -150,7 +145,7 @@ function test_upsert_link_reintroduces_an_archived_row_at_its_old_strength()
     os.remove(db_path)
 end
 
-function test_upsert_link_heals_a_dangling_row()
+function tests.upsert_link_heals_a_dangling_row()
     print("Testing document.upsert_link resolves a previously-dangling to_document_id")
     db_path = new_test_db()
     insert_link(db_path, 1, nil, "Onboarding")
@@ -160,7 +155,7 @@ function test_upsert_link_heals_a_dangling_row()
     os.remove(db_path)
 end
 
-function test_sync_links_archives_instead_of_deleting_when_removed_from_text()
+function tests.sync_links_archives_instead_of_deleting_when_removed_from_text()
     print("Testing sync_links archives a link whose markup is gone, instead of deleting it")
     db_path = new_test_db()
     db.exec(db_path, "INSERT INTO document (id, title) VALUES (2, 'Doc Two');")
@@ -175,7 +170,7 @@ function test_sync_links_archives_instead_of_deleting_when_removed_from_text()
     os.remove(db_path)
 end
 
-function test_sync_links_reintroduces_an_archived_link_at_its_old_strength()
+function tests.sync_links_reintroduces_an_archived_link_at_its_old_strength()
     print("Testing sync_links unarchives and preserves raw_strength when the author retypes a deleted [[link]]")
     db_path = new_test_db()
     db.exec(db_path, "INSERT INTO document (id, title) VALUES (2, 'Doc Two');")
@@ -189,33 +184,33 @@ end
 
 -- link_context ----------------------------------------------------------
 
-function test_link_context_quotes_the_sentence_around_the_link()
+function tests.link_context_quotes_the_sentence_around_the_link()
     print("Testing link_context returns just the sentence containing the link, links flattened")
     content = "# Protocol\n\nThaw the vial first. Subculture onto [[MS Medium]] every 14 days, per [[SOP 12]]. Record the date.\n"
     context = document.link_context(content, "MS Medium")
     check(context == "Subculture onto MS Medium every 14 days, per SOP 12.", "got " .. tostring(context))
 end
 
-function test_link_context_strips_list_markup_and_keeps_dotted_tokens_together()
+function tests.link_context_strips_list_markup_and_keeps_dotted_tokens_together()
     print("Testing link_context strips a bullet and doesn't split on 'v1.2'")
     context = document.link_context("- Uses [[Buffer v1.2]] from the v1.2 batch, not v1.1\n", "Buffer v1.2")
     check(context == "Uses Buffer v1.2 from the v1.2 batch, not v1.1", "got " .. tostring(context))
 end
 
-function test_link_context_falls_back_to_the_nearest_heading_for_a_bare_link()
+function tests.link_context_falls_back_to_the_nearest_heading_for_a_bare_link()
     print("Testing link_context falls back to the heading above a bare list entry")
     content = "# Notes\n\n## Related meetings\n\n- [[Weekly Kickoff 2025-02-23]]\n- [[R&D Meeting 2025-05-08]]\n"
     context = document.link_context(content, "R&D Meeting 2025-05-08")
     check(context == "Listed under \"Related meetings\"", "got " .. tostring(context))
 end
 
-function test_link_context_is_nil_for_a_bare_link_with_no_heading()
+function tests.link_context_is_nil_for_a_bare_link_with_no_heading()
     print("Testing link_context returns nil when neither a sentence nor a heading says anything")
     check(document.link_context("[[Only A Link]]", "Only A Link") == nil, "expected nil")
     check(document.link_context("no link here", "Missing") == nil, "expected nil for a link not in content")
 end
 
-function test_link_context_reads_a_connection_documents_reason()
+function tests.link_context_reads_a_connection_documents_reason()
     print("Testing a connection document's own sentence is the context on both of its links")
     content = "[[MS Medium]] and [[Subculture]]: the subculture protocol calls for exactly this medium recipe."
     expected = "MS Medium and Subculture: the subculture protocol calls for exactly this medium recipe."
@@ -223,7 +218,7 @@ function test_link_context_reads_a_connection_documents_reason()
     check(document.link_context(content, "Subculture") == expected, "got " .. tostring(document.link_context(content, "Subculture")))
 end
 
-function test_clip_text_trims_blanks_and_never_splits_a_utf8_character()
+function tests.clip_text_trims_blanks_and_never_splits_a_utf8_character()
     print("Testing clip_text: blank -> nil, long -> capped at a UTF-8 boundary")
     check(document.clip_text("   ") == nil, "blank should be nil")
     check(document.clip_text("  hi  ") == "hi", "should trim")
@@ -235,7 +230,7 @@ end
 
 -- Reinforcement, connectedness ----------------------------------------
 
-function test_reinforce_adds_exactly_the_configured_delta()
+function tests.reinforce_adds_exactly_the_configured_delta()
     print("Testing reinforce_link_strength adds exactly 0.15")
     db_path = new_test_db()
     insert_link(db_path, 1, 2, "Doc Two")
@@ -245,7 +240,7 @@ function test_reinforce_adds_exactly_the_configured_delta()
     os.remove(db_path)
 end
 
-function test_reinforce_matches_the_row_regardless_of_which_direction_it_was_written_in()
+function tests.reinforce_matches_the_row_regardless_of_which_direction_it_was_written_in()
     print("Testing reinforce_link_strength finds an edge written in either direction (task: link-strength-redesign Phase 2)")
     db_path = new_test_db()
     -- Row stored as (2 -> 1): document 2's content holds the link.
@@ -258,7 +253,7 @@ function test_reinforce_matches_the_row_regardless_of_which_direction_it_was_wri
     os.remove(db_path)
 end
 
-function test_racing_reinforcements_of_the_same_edge_never_lose_a_delta()
+function tests.racing_reinforcements_of_the_same_edge_never_lose_a_delta()
     print("Testing two racing reinforcements of the same edge: neither delta is silently lost")
     db_path = new_test_db()
     insert_link(db_path, 1, 2, "Doc Two")
@@ -271,7 +266,7 @@ function test_racing_reinforcements_of_the_same_edge_never_lose_a_delta()
     os.remove(db_path)
 end
 
-function test_reinforce_never_unarchives()
+function tests.reinforce_never_unarchives()
     print("Testing reinforce_link_strength leaves an archived link alone -- retrieval doesn't write content")
     db_path = new_test_db()
     insert_link(db_path, 1, 2, "Doc Two", "archived_at", "'2026-01-01 00:00:00'")
@@ -282,7 +277,7 @@ function test_reinforce_never_unarchives()
     os.remove(db_path)
 end
 
-function test_reinforce_is_a_no_op_for_a_pair_with_no_existing_link()
+function tests.reinforce_is_a_no_op_for_a_pair_with_no_existing_link()
     print("Testing reinforce_link_strength doesn't error when no matching row exists")
     db_path = new_test_db()
     ok = pcall(knowledge.reinforce_link_strength, db_path, 1, 2)
@@ -290,7 +285,7 @@ function test_reinforce_is_a_no_op_for_a_pair_with_no_existing_link()
     os.remove(db_path)
 end
 
-function test_documents_connected_directly_through_a_document_or_not_at_all()
+function tests.documents_connected_directly_through_a_document_or_not_at_all()
     print("Testing documents_connected: a direct link either way, a third document linking both, or nil")
     db_path = new_test_db()
     db.exec(db_path, "INSERT INTO document (id, title) VALUES (1, 'A'), (2, 'B'), (3, 'C'), (4, 'D'), (5, 'A and C');")
@@ -305,7 +300,7 @@ function test_documents_connected_directly_through_a_document_or_not_at_all()
     os.remove(db_path)
 end
 
-function test_parse_link_judgment_is_lenient_about_format()
+function tests.parse_link_judgment_is_lenient_about_format()
     print("Testing parse_link_judgment across the formats models actually return")
     v, r = knowledge.parse_link_judgment("YES: B's recipe is A's medium.")
     check(v == "YES" and r == "B's recipe is A's medium.", "plain: " .. tostring(v) .. " / " .. tostring(r))
@@ -319,31 +314,4 @@ function test_parse_link_judgment_is_lenient_about_format()
     check(v == nil, "a word merely starting with YES is not a verdict")
 end
 
-test_an_unclosed_bracket_is_not_a_link_and_swallows_nothing()
-test_a_link_never_spans_lines()
-test_a_very_long_title_is_an_ordinary_link()
-test_a_title_containing_a_slash_links_as_written()
-test_upsert_link_inserts_a_fresh_row()
-test_upsert_link_reintroduces_an_archived_row_at_its_old_strength()
-test_upsert_link_heals_a_dangling_row()
-test_sync_links_archives_instead_of_deleting_when_removed_from_text()
-test_sync_links_reintroduces_an_archived_link_at_its_old_strength()
-test_link_context_quotes_the_sentence_around_the_link()
-test_link_context_strips_list_markup_and_keeps_dotted_tokens_together()
-test_link_context_falls_back_to_the_nearest_heading_for_a_bare_link()
-test_link_context_is_nil_for_a_bare_link_with_no_heading()
-test_link_context_reads_a_connection_documents_reason()
-test_clip_text_trims_blanks_and_never_splits_a_utf8_character()
-test_reinforce_adds_exactly_the_configured_delta()
-test_reinforce_matches_the_row_regardless_of_which_direction_it_was_written_in()
-test_racing_reinforcements_of_the_same_edge_never_lose_a_delta()
-test_reinforce_never_unarchives()
-test_reinforce_is_a_no_op_for_a_pair_with_no_existing_link()
-test_documents_connected_directly_through_a_document_or_not_at_all()
-test_parse_link_judgment_is_lenient_about_format()
-
-if FAILURES > 0 then
-    print(FAILURES .. " test(s) failed")
-    os.exit(1)
-end
-print("All document_link.lua tests passed")
+unit.run(tests)

@@ -14,14 +14,9 @@ init = require("init")
 json = require("dkjson")
 lfs = require("lfs")
 
-FAILURES = 0
-
-function check(condition, message)
-    if condition != true then
-        FAILURES = FAILURES + 1
-        print("FAIL: " .. message)
-    end
-end
+unit = require("unit")
+check = unit.check
+tests = unit.suite()
 
 -- Declared, but deliberately not handled by execute_tool.
 NOT_IN_EXECUTE_TOOL = {
@@ -50,7 +45,7 @@ function each_declared(fn)
     end
 end
 
-function test_every_declaration_is_well_formed()
+function tests.every_declaration_is_well_formed()
     print("Testing every declared tool has a description, an object schema and a boolean destructive")
     each_declared(function(group, method, spec)
         name = group .. "." .. method
@@ -79,7 +74,7 @@ end
 -- anything, so this reaches each handler without side effects. Any
 -- result, error or raised error means a handler exists; only the
 -- fall-through "unknown tool" result means it doesn't.
-function test_every_declared_method_reaches_a_handler(db_path)
+function tests.every_declared_method_reaches_a_handler(db_path)
     print("Testing every declared tool reaches a handler in execute_tool")
     each_declared(function(group, method, spec)
         name = group .. "." .. method
@@ -99,7 +94,7 @@ end
 -- only that function: reject_before_approval uses the same pattern. Once
 -- #6 has moved every handler into its record the chain is gone; delete
 -- this then.
-function test_every_handler_in_execute_tool_is_declared()
+function tests.every_handler_in_execute_tool_is_declared()
     print("Testing every branch in execute_tool_chain is a declared tool")
     f = io.open("src/agent_tools.lua", "r")
     check(f != nil, "can't open src/agent_tools.lua (run from the repo root)")
@@ -128,7 +123,7 @@ end
 -- translation can't handle breaks every tool-calling turn, not just
 -- calls to that tool. Empty `properties` must encode as {}: Vertex
 -- refuses [] (see EMPTY_OBJECT_SCHEMA in agent.lua).
-function test_declarations_translate_for_both_providers(db_path)
+function tests.declarations_translate_for_both_providers(db_path)
     print("Testing every declaration translates and encodes for Claude and Vertex")
     declarations = agent.tool_declarations(db_path)
     check(#declarations > 0, "agent.tool_declarations returned nothing")
@@ -177,9 +172,8 @@ function declarations_snapshot(declarations)
     return table.concat(lines, "\n") .. "\n"
 end
 
-function test_declarations_match_the_snapshots(db_path)
+function tests.declarations_match_the_snapshots(db_path)
     for _, snapshot in ipairs(SNAPSHOTS) do
-        print("Testing " .. snapshot.name .. " is byte-identical to " .. snapshot.path)
         current = declarations_snapshot(snapshot.list(db_path))
         if os.getenv("DAAT_UPDATE_SNAPSHOT") == "1" then
             f = io.open(snapshot.path, "w")
@@ -205,16 +199,7 @@ lfs.mkdir(dir)
 init.do_init({}, dir)
 db_path = dir .. "/.store/store.db"
 
-test_every_declaration_is_well_formed()
-test_every_declared_method_reaches_a_handler(db_path)
-test_every_handler_in_execute_tool_is_declared()
-test_declarations_translate_for_both_providers(db_path)
-test_declarations_match_the_snapshots(db_path)
-
+-- A failure exits inside unit.run and leaves the temp store behind to
+-- look at; a clean run removes it.
+unit.run(tests, db_path)
 os.execute("rm -rf '" .. dir .. "'")
-
-if FAILURES > 0 then
-    print(FAILURES .. " failure(s)")
-    os.exit(false)
-end
-print("agent_tools consistency tests passed")

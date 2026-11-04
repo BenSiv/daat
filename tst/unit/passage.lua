@@ -3,14 +3,9 @@
 
 passage = require("passage")
 
-FAILURES = 0
-
-function check(condition, message)
-    if condition != true then
-        FAILURES = FAILURES + 1
-        print("FAIL: " .. message)
-    end
-end
+unit = require("unit")
+check = unit.check
+tests = unit.suite()
 
 -- Every passage must be the exact slice its offset says, the passages
 -- must tile the document's text in order with no gaps or overlaps, and
@@ -26,7 +21,7 @@ function check_tiling(content, passages, first, max_chars, min_chars, label)
     check(expected == string.len(content) + 1, label .. ": passages reach the end of the document")
 end
 
-function test_headings_start_passages()
+function tests.headings_start_passages()
     print("Testing headings start passages, and each passage knows its heading")
     body = string.rep("Cells were counted daily under the microscope. ", 6)
     content = "# Intro\n" .. body .. "\n## Method\n" .. body .. "\n## Results\n" .. body
@@ -37,7 +32,7 @@ function test_headings_start_passages()
     check_tiling(content, ps, 1, 1500, 50, "headings")
 end
 
-function test_long_sections_split_at_paragraphs_then_sentences()
+function tests.long_sections_split_at_paragraphs_then_sentences()
     print("Testing long sections split at paragraphs, then sentences, never mid-word")
     para = string.rep("The culture grew steadily in the dark incubator. ", 8)
     content = "# Log\n" .. para .. "\n\n" .. para .. "\n\n" .. para
@@ -56,7 +51,7 @@ function test_long_sections_split_at_paragraphs_then_sentences()
     check_tiling(one_paragraph, ps, 1, 400, 50, "sentences")
 end
 
-function test_slivers_merge()
+function tests.slivers_merge()
     print("Testing short pieces merge into a neighbour")
     content = "# A\nshort\n# B\n" .. string.rep("long enough text here. ", 20) .. "\n# C\ntiny"
     ps = passage.split(content, 1500, 100)
@@ -67,7 +62,7 @@ function test_slivers_merge()
     check(passage.split("# Only\nshort", 1500, 100)[1].text == "# Only\nshort", "a document shorter than min is one passage, not none")
 end
 
-function test_preamble_skipped()
+function tests.preamble_skipped()
     print("Testing a synced file's metadata preamble isn't a passage")
     preamble = "> Source: R&D/notes.docx\n> Synced daily\n\n---\n\n"
     content = preamble .. "# Notes\n" .. string.rep("Real content of the note. ", 10)
@@ -79,7 +74,7 @@ function test_preamble_skipped()
     check(string.find(passage.split(quoted, 1500, 10)[1].text, "A quote", 1, true) != nil, "a leading quote without a closing rule is content, not preamble")
 end
 
-function test_edge_cases_and_determinism()
+function tests.edge_cases_and_determinism()
     print("Testing empty input, no headings, an unbreakable run, and determinism")
     check(#passage.split("", 1500, 200) == 0, "empty content gives no passages")
     check(#passage.split(nil, 1500, 200) == 0, "nil content gives no passages")
@@ -99,7 +94,7 @@ function test_edge_cases_and_determinism()
     check(same, "splitting the same content twice gives the same passages")
 end
 
-function test_select()
+function tests.select()
     print("Testing select: best scores first, within the budget and the per-document count, shown in document order")
     ps = {
         {text = string.rep("a", 300), offset = 1, heading = "# A"},
@@ -120,15 +115,4 @@ function test_select()
     check(chosen[1].offset == 1, "ties go to the earlier passage")
 end
 
-test_headings_start_passages()
-test_long_sections_split_at_paragraphs_then_sentences()
-test_slivers_merge()
-test_preamble_skipped()
-test_edge_cases_and_determinism()
-test_select()
-
-if FAILURES > 0 then
-    print(FAILURES .. " test(s) failed")
-    os.exit(1)
-end
-print("All passage.lua tests passed")
+unit.run(tests)

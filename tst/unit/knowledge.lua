@@ -7,16 +7,11 @@
 
 knowledge = require("knowledge")
 
-FAILURES = 0
+unit = require("unit")
+check = unit.check
+tests = unit.suite()
 
-function check(condition, message)
-    if condition != true then
-        FAILURES = FAILURES + 1
-        print("FAIL: " .. message)
-    end
-end
-
-function test_reply_has_visible_reasoning_detects_markers()
+function tests.reply_has_visible_reasoning_detects_markers()
     print("Testing reply_has_visible_reasoning detects <think> tags and 'Thinking...' prefix")
     check(knowledge.reply_has_visible_reasoning("<think>some reasoning</think>Final answer") == true, "should detect <think> tag")
     check(knowledge.reply_has_visible_reasoning("Thinking...\nStep 1...") == true, "should detect 'Thinking...' marker")
@@ -25,7 +20,7 @@ function test_reply_has_visible_reasoning_detects_markers()
     check(knowledge.reply_has_visible_reasoning("") == false, "empty string should not be flagged")
 end
 
-function test_unverified_claims_need_both_documents()
+function tests.unverified_claims_need_both_documents()
     print("Testing unverified_claims: cited authors, years and identifiers must appear in both documents")
     review = {title = "Cacao biotechnology review", content = "Somatic embryogenesis (Dillinger et al., 2000) and CCN51 clones."}
     thesis = {title = "Phospholipase D thesis", content = "Bargmann et al. found LePLD relocalization. Dillinger 2000 cited."}
@@ -48,8 +43,7 @@ function test_unverified_claims_need_both_documents()
         "a plain number isn't a claim on its own")
 end
 
-function test_classify_reply_four_way_split()
-test_unverified_claims_need_both_documents()
+function tests.classify_reply_four_way_split()
     print("Testing classify_reply's four-way classification (error/reasoning-visible/final/empty)")
     kind, quality, reasoning = knowledge.classify_reply(true, nil)
     check(kind == "error" and quality == "error" and reasoning == "none",
@@ -68,7 +62,7 @@ test_unverified_claims_need_both_documents()
         "empty case classified wrong: " .. tostring(kind) .. "/" .. tostring(quality) .. "/" .. tostring(reasoning))
 end
 
-function test_co_retrieval_eligible_threshold_and_hub_ratio()
+function tests.co_retrieval_eligible_threshold_and_hub_ratio()
     print("Testing co_retrieval_eligible's absolute threshold + hub-ratio guard (task #109)")
     -- Below the absolute threshold (3) at all -- never eligible
     -- regardless of how favorable the ratio would be.
@@ -85,7 +79,7 @@ function test_co_retrieval_eligible_threshold_and_hub_ratio()
     check(knowledge.co_retrieval_eligible(3, 0, 0) == false, "both retrieval_counts zero should be rejected, not error")
 end
 
-function test_due_for_link_review_first_time_and_reevaluation_step()
+function tests.due_for_link_review_first_time_and_reevaluation_step()
     print("Testing due_for_link_review's first-time/decline/re-evaluation-step logic (task #109)")
     check(knowledge.due_for_link_review(nil, 3) == true, "a never-reviewed pair should be due")
     check(knowledge.due_for_link_review({decision = "linked", last_co_count = 3}, 10) == false, "an already-linked pair should never be re-evaluated")
@@ -94,14 +88,14 @@ function test_due_for_link_review_first_time_and_reevaluation_step()
     check(knowledge.due_for_link_review({decision = "declined", last_co_count = 3}, 9) == true, "co_count well past the re-evaluation step should be due")
 end
 
-function test_due_for_tier_judgment_first_time_and_content_change()
+function tests.due_for_tier_judgment_first_time_and_content_change()
     print("Testing due_for_tier_judgment's first-time/unchanged/changed-content logic")
     check(knowledge.due_for_tier_judgment(nil, "abc") == true, "a never-judged document should be due")
     check(knowledge.due_for_tier_judgment({judged_hash = "abc", judged_tier = 1}, "abc") == false, "unchanged content_hash since the last judgment should not be due")
     check(knowledge.due_for_tier_judgment({judged_hash = "abc", judged_tier = 1}, "def") == true, "a changed content_hash since the last judgment should be due")
 end
 
-function test_hand_rolled_sql_columns_text_covers_every_event_log_table()
+function tests.hand_rolled_sql_columns_text_covers_every_event_log_table()
     print("Testing hand_rolled_sql_columns_text names the real columns for each knowledge event-log table")
     cases = {
         knowledge_retrieval = {"id", "session_id", "query_text", "hit_count", "created_at"},
@@ -118,7 +112,7 @@ function test_hand_rolled_sql_columns_text_covers_every_event_log_table()
     check(knowledge.hand_rolled_sql_columns_text("not_a_real_table") == nil, "expected nil for an unrecognized table name")
 end
 
-function test_link_reason_too_thin()
+function tests.link_reason_too_thin()
     print("Testing link_reason_too_thin: a connection note needs a sentence saying what both share")
     check(knowledge.link_reason_too_thin(nil) == true, "a bare YES (no reason) is too thin")
     check(knowledge.link_reason_too_thin("both are meeting notes") == true, "a few generic words are too thin")
@@ -126,17 +120,4 @@ function test_link_reason_too_thin()
     check(knowledge.link_reason_too_thin("the subculture protocol calls for exactly this medium recipe.") == false, "a specific sentence is enough")
 end
 
--- Run them
-test_reply_has_visible_reasoning_detects_markers()
-test_classify_reply_four_way_split()
-test_co_retrieval_eligible_threshold_and_hub_ratio()
-test_due_for_link_review_first_time_and_reevaluation_step()
-test_due_for_tier_judgment_first_time_and_content_change()
-test_hand_rolled_sql_columns_text_covers_every_event_log_table()
-test_link_reason_too_thin()
-
-if FAILURES > 0 then
-    print(FAILURES .. " test(s) failed")
-    os.exit(1)
-end
-print("All knowledge.lua tests passed")
+unit.run(tests)

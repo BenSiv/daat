@@ -84,11 +84,14 @@ every change, the rule changes here first.
   that prevents it (#16 is the pattern).
 - **Tests are built like `src`.** Shared harness code lives in one place
   (`tst/lib/` for Luam, `tst/integration/test_helper.bash` for bats), not
-  copied into each file. A test file declares its tests as a table and
-  hands it to the runner, so a test can't be written and silently never
-  run. Scripts in `tst/eval/` have a `main()` like `src/main.lua`.
-- **A Lua script needed by a bats test is a file, not a heredoc**, once it
-  is longer than a few lines or used by more than one test.
+  copied into each file. A unit file declares its tests in a
+  `unit.suite()` and ends with `unit.run(tests)`, so a test can't be
+  written and silently never run. Scripts in `tst/eval/` have a `main()`
+  like `src/main.lua`.
+- **A bats test runs Lua through `run_luam`**, never its own copy of the
+  luam paths. Fixtures (a schema, a view, `platform.lua`) are fine inline
+  as heredocs; a Lua *script* longer than a few lines, or used by more
+  than one test, is a file.
 - **No real model, credentials or network in `./bld/test.sh`.** Agent
   behaviour is scripted through the test provider
   (`AGENT_TEST_RESPONSES`).

@@ -1267,12 +1267,7 @@ print("second:", agent.claim_pending_action(db_path, id, "running"))
 print("deny:", agent.claim_pending_action(db_path, id, "denied"))
 print("status:", db.query(db_path, "SELECT status FROM agent_pending_action WHERE id = " .. id .. ";")[1].status)
 EOF
-    if [ -z "${LUAM_DIR:-}" ]; then
-        LUAM_DIR=$(cd "${PROJECT_ROOT}/../luam" && pwd)
-    fi
-    run env LUA_PATH="${PROJECT_ROOT}/src/?.lua;${LUAM_DIR}/lib/?.lua;${LUAM_DIR}/lib/?/init.lua;;" \
-        LUA_CPATH="${LUAM_DIR}/bin/?.so;${LUAM_DIR}/lib/lfs/?.so;${LUAM_DIR}/lib/hmac/?.so;${LUAM_DIR}/lib/bcrypt/?.so;;" \
-        "${LUAM_DIR}/bin/luam" "${TEST_DIR}/claim_check.lua"
+    run_luam "${TEST_DIR}/claim_check.lua"
     [ "$status" -eq 0 ]
     [[ "$output" =~ "first:	true" ]]
     [[ "$output" =~ "second:	false" ]]
@@ -1284,7 +1279,7 @@ EOF
 # refuses a destructive tool without a row this request claimed, and runs
 # it with that row's arguments.
 @test "agent.run_tool runs a destructive tool only against a pending action this request claimed" {
-    run run_lua_script run_tool_gate.lua
+    run_luam "${PROJECT_ROOT}/tst/integration/lua/run_tool_gate.lua"
     [ "$status" -eq 0 ]
     [[ "$output" =~ "no approval: nil | document.create changes data, so it runs only as an approved pending action" ]]
     [[ "$output" =~ "not our claim: nil | pending action #"[0-9]+" isn't claimed by this request" ]]
@@ -1807,12 +1802,7 @@ EOF
     cat > "${TEST_DIR}/platform.lua" <<EOF
 return {agent_provider = "vertex", vertex_project = "${VERTEX_PROJECT}", vertex_region = "${VERTEX_REGION:-global}"}
 EOF
-    if [ -z "${LUAM_DIR:-}" ]; then
-        LUAM_DIR=$(cd "${PROJECT_ROOT}/../luam" && pwd)
-    fi
-    run env LUA_PATH="${PROJECT_ROOT}/src/?.lua;${LUAM_DIR}/lib/?.lua;${LUAM_DIR}/lib/?/init.lua;;" \
-        LUA_CPATH="${LUAM_DIR}/bin/?.so;${LUAM_DIR}/lib/lfs/?.so;;" \
-        "${LUAM_DIR}/bin/luam" "${TEST_DIR}/vertex_check.lua"
+    run_luam "${TEST_DIR}/vertex_check.lua"
     [ "$status" -eq 0 ]
     [[ "$output" =~ "ERR:	nil" ]]
     [[ ! "$output" =~ "RESULT:	nil" ]]
@@ -1840,12 +1830,7 @@ EOF
     cat > "${TEST_DIR}/platform.lua" <<EOF
 return {agent_provider = "vertex", vertex_project = "${VERTEX_PROJECT}", vertex_region = "${VERTEX_REGION:-global}"}
 EOF
-    if [ -z "${LUAM_DIR:-}" ]; then
-        LUAM_DIR=$(cd "${PROJECT_ROOT}/../luam" && pwd)
-    fi
-    run env LUA_PATH="${PROJECT_ROOT}/src/?.lua;${LUAM_DIR}/lib/?.lua;${LUAM_DIR}/lib/?/init.lua;;" \
-        LUA_CPATH="${LUAM_DIR}/bin/?.so;${LUAM_DIR}/lib/lfs/?.so;;" \
-        "${LUAM_DIR}/bin/luam" "${TEST_DIR}/vertex_converse_check.lua"
+    run_luam "${TEST_DIR}/vertex_converse_check.lua"
     [ "$status" -eq 0 ]
     [[ "$output" =~ "ERR:	nil" ]]
     [[ "$output" =~ "STOP:	stop" ]]
@@ -1937,12 +1922,7 @@ EOF
     cat > "${TEST_DIR}/platform.lua" <<EOF
 return {agent_provider = "vertex", vertex_project = "${VERTEX_PROJECT}", vertex_region = "${VERTEX_REGION:-global}"}
 EOF
-    if [ -z "${LUAM_DIR:-}" ]; then
-        LUAM_DIR=$(cd "${PROJECT_ROOT}/../luam" && pwd)
-    fi
-    run env LUA_PATH="${PROJECT_ROOT}/src/?.lua;${LUAM_DIR}/lib/?.lua;${LUAM_DIR}/lib/?/init.lua;;" \
-        LUA_CPATH="${LUAM_DIR}/bin/?.so;${LUAM_DIR}/lib/lfs/?.so;;" \
-        "${LUAM_DIR}/bin/luam" "${TEST_DIR}/vertex_tool_check.lua"
+    run_luam "${TEST_DIR}/vertex_tool_check.lua"
     [ "$status" -eq 0 ]
     [[ "$output" =~ "STOP1:	toolUse" ]]
     [[ "$output" =~ "TOOL_NAME:	add" ]]
@@ -2025,12 +2005,7 @@ EOF
     cat > "${TEST_DIR}/platform.lua" <<EOF
 return {agent_provider = "vertex", vertex_project = "${VERTEX_PROJECT}", vertex_region = "${VERTEX_REGION:-global}"}
 EOF
-    if [ -z "${LUAM_DIR:-}" ]; then
-        LUAM_DIR=$(cd "${PROJECT_ROOT}/../luam" && pwd)
-    fi
-    run env LUA_PATH="${PROJECT_ROOT}/src/?.lua;${LUAM_DIR}/lib/?.lua;${LUAM_DIR}/lib/?/init.lua;;" \
-        LUA_CPATH="${LUAM_DIR}/bin/?.so;${LUAM_DIR}/lib/lfs/?.so;;" \
-        "${LUAM_DIR}/bin/luam" "${TEST_DIR}/vertex_parallel_tool_check.lua"
+    run_luam "${TEST_DIR}/vertex_parallel_tool_check.lua"
     [ "$status" -eq 0 ]
     [[ "$output" =~ "NUM_TOOL_CALLS:	2" ]]
     [[ "$output" =~ "ERR2:	nil" ]]

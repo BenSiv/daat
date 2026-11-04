@@ -6,16 +6,11 @@
 
 agent_vertex = require("provider.agent_vertex")
 
-FAILURES = 0
+unit = require("unit")
+check = unit.check
+tests = unit.suite()
 
-function check(condition, message)
-    if condition != true then
-        FAILURES = FAILURES + 1
-        print("FAIL: " .. message)
-    end
-end
-
-function test_vertex_url_regional_uses_region_subdomain()
+function tests.vertex_url_regional_uses_region_subdomain()
     print("Testing vertex_url prefixes the host with region for a regional location")
     url = agent_vertex.vertex_url("celleste-elab", "europe-west1", "gemini-2.5-flash:generateContent")
     expected = "https://europe-west1-aiplatform.googleapis.com/v1/projects/celleste-elab" ..
@@ -23,7 +18,7 @@ function test_vertex_url_regional_uses_region_subdomain()
     check(url == expected, "expected " .. expected .. ", got " .. tostring(url))
 end
 
-function test_vertex_url_global_has_no_subdomain_prefix()
+function tests.vertex_url_global_has_no_subdomain_prefix()
     print("Testing vertex_url uses the bare host for the global location")
     url = agent_vertex.vertex_url("celleste-elab", "global", "gemini-3.5-flash-lite:generateContent")
     expected = "https://aiplatform.googleapis.com/v1/projects/celleste-elab" ..
@@ -37,7 +32,7 @@ end
 -- it is a real 400, not just a quality nicety). This locks the
 -- capture half of that round-trip in as a real regression test rather
 -- than only the live-only bats coverage.
-function test_vertex_blocks_captures_thought_signature_on_tool_call()
+function tests.vertex_blocks_captures_thought_signature_on_tool_call()
     print("Testing vertex_blocks_from_parts captures thoughtSignature on a functionCall part")
     parts = {{functionCall = {name = "add", args = {a = 1, b = 2}}, thoughtSignature = "sig-1"}}
     blocks = agent_vertex.vertex_blocks_from_parts(parts)
@@ -48,7 +43,7 @@ end
 -- Confirmed live: on a parallel tool-call turn, only the FIRST
 -- functionCall part in the response carries a thoughtSignature -- a
 -- later one in the same response has none at all.
-function test_vertex_blocks_only_captures_signature_on_first_of_parallel_calls()
+function tests.vertex_blocks_only_captures_signature_on_first_of_parallel_calls()
     print("Testing vertex_blocks_from_parts leaves a later parallel functionCall's signature unset")
     parts = {
         {functionCall = {name = "add", args = {a = 1, b = 2}}, thoughtSignature = "sig-1"},
@@ -64,7 +59,7 @@ end
 -- docs: "recommended," not enforced, but still real data worth
 -- preserving) -- confirmed live against gemini-3.5-flash-lite that an
 -- ordinary text-only reply comes back with one attached.
-function test_vertex_blocks_captures_thought_signature_on_text_and_thinking_parts()
+function tests.vertex_blocks_captures_thought_signature_on_text_and_thinking_parts()
     print("Testing vertex_blocks_from_parts captures thoughtSignature on plain text/thinking parts too")
     parts = {
         {thought = true, text = "reasoning...", thoughtSignature = "sig-thinking"},
@@ -80,7 +75,7 @@ end
 -- The other half of the same round trip: whatever got captured on a
 -- block must be sent back on the matching outgoing part, for all three
 -- block types, not just toolCall.
-function test_vertex_contents_round_trips_thought_signature_for_every_block_type()
+function tests.vertex_contents_round_trips_thought_signature_for_every_block_type()
     print("Testing vertex_contents_from_messages re-attaches thoughtSignature for text/thinking/toolCall blocks")
     messages = {
         {role = "assistant", content = {
@@ -105,14 +100,14 @@ end
 -- pure "is the cached token still good enough to skip a fresh
 -- metadata-server call" decision, kept separate from the actual file/
 -- network calls so it's directly unit-testable.
-function test_vertex_token_cache_expired_no_cache_is_expired()
+function tests.vertex_token_cache_expired_no_cache_is_expired()
     print("Testing vertex_token_cache_expired treats a missing/malformed cache as expired")
     check(agent_vertex.vertex_token_cache_expired(nil, 1000) == true, "nil cache should be expired")
     check(agent_vertex.vertex_token_cache_expired({}, 1000) == true, "a cache with no access_token/expires_at should be expired")
     check(agent_vertex.vertex_token_cache_expired({access_token = "tok"}, 1000) == true, "a cache with no expires_at should be expired")
 end
 
-function test_vertex_token_cache_expired_margin()
+function tests.vertex_token_cache_expired_margin()
     print("Testing vertex_token_cache_expired honors TOKEN_EXPIRY_MARGIN_SECONDS")
     cache = {access_token = "tok", expires_at = 1000}
     check(agent_vertex.vertex_token_cache_expired(cache, 800) == false, "well before expiry should not be expired")
@@ -120,32 +115,24 @@ function test_vertex_token_cache_expired_margin()
     check(agent_vertex.vertex_token_cache_expired(cache, 1000) == true, "at/past the real expiry should be expired")
 end
 
-test_vertex_token_cache_expired_no_cache_is_expired()
-test_vertex_token_cache_expired_margin()
-test_vertex_url_regional_uses_region_subdomain()
-test_vertex_url_global_has_no_subdomain_prefix()
-test_vertex_blocks_captures_thought_signature_on_tool_call()
-test_vertex_blocks_only_captures_signature_on_first_of_parallel_calls()
-test_vertex_blocks_captures_thought_signature_on_text_and_thinking_parts()
-test_vertex_contents_round_trips_thought_signature_for_every_block_type()
-
-print("Testing vertex_embedding_batches groups texts within the count and size limits, in order")
-batches = agent_vertex.vertex_embedding_batches({"aaaa", "bbbb", "cccc", "dddd", "eeeee"}, 2, 100)
-check(#batches == 3 and batches[1][1] == 1 and batches[1][2] == 2 and batches[3][1] == 5 and batches[3][2] == 5, "count limit of 2 gives 1-2, 3-4, 5")
-batches = agent_vertex.vertex_embedding_batches({"aaaa", "bbbb", "cccc"}, 100, 9)
-check(#batches == 2 and batches[1][2] == 2 and batches[2][1] == 3, "size limit of 9 characters gives 1-2, 3")
-batches = agent_vertex.vertex_embedding_batches({string.rep("x", 50), "y"}, 100, 10)
-check(#batches == 2 and batches[1][1] == 1 and batches[1][2] == 1, "a text over the size limit gets a request of its own")
-check(#agent_vertex.vertex_embedding_batches({}, 100, 10) == 0, "no texts, no requests")
+function tests.vertex_embedding_batches_respect_count_and_size_limits()
+    print("Testing vertex_embedding_batches groups texts within the count and size limits, in order")
+    batches = agent_vertex.vertex_embedding_batches({"aaaa", "bbbb", "cccc", "dddd", "eeeee"}, 2, 100)
+    check(#batches == 3 and batches[1][1] == 1 and batches[1][2] == 2 and batches[3][1] == 5 and batches[3][2] == 5, "count limit of 2 gives 1-2, 3-4, 5")
+    batches = agent_vertex.vertex_embedding_batches({"aaaa", "bbbb", "cccc"}, 100, 9)
+    check(#batches == 2 and batches[1][2] == 2 and batches[2][1] == 3, "size limit of 9 characters gives 1-2, 3")
+    batches = agent_vertex.vertex_embedding_batches({string.rep("x", 50), "y"}, 100, 10)
+    check(#batches == 2 and batches[1][1] == 1 and batches[1][2] == 1, "a text over the size limit gets a request of its own")
+    check(#agent_vertex.vertex_embedding_batches({}, 100, 10) == 0, "no texts, no requests")
+end
 
 -- A rejected token is retried once with a fresh one; any other error is not.
-check(agent_vertex.vertex_unauthenticated({code = 401, status = "UNAUTHENTICATED"}) == true, "401 is a rejected token")
-check(agent_vertex.vertex_unauthenticated({status = "UNAUTHENTICATED"}) == true, "UNAUTHENTICATED status alone counts")
-check(agent_vertex.vertex_unauthenticated({code = 429, status = "RESOURCE_EXHAUSTED"}) == false, "a quota error is not a token problem")
-check(agent_vertex.vertex_unauthenticated({code = 400, status = "INVALID_ARGUMENT"}) == false, "a bad request is not a token problem")
-
-if FAILURES > 0 then
-    print(tostring(FAILURES) .. " failure(s)")
-    os.exit(1)
+function tests.vertex_unauthenticated_only_for_a_rejected_token()
+    print("Testing vertex_unauthenticated tells a rejected token from other errors")
+    check(agent_vertex.vertex_unauthenticated({code = 401, status = "UNAUTHENTICATED"}) == true, "401 is a rejected token")
+    check(agent_vertex.vertex_unauthenticated({status = "UNAUTHENTICATED"}) == true, "UNAUTHENTICATED status alone counts")
+    check(agent_vertex.vertex_unauthenticated({code = 429, status = "RESOURCE_EXHAUSTED"}) == false, "a quota error is not a token problem")
+    check(agent_vertex.vertex_unauthenticated({code = 400, status = "INVALID_ARGUMENT"}) == false, "a bad request is not a token problem")
 end
-print("All tests passed")
+
+unit.run(tests)
