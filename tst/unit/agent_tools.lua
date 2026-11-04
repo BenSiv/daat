@@ -106,6 +106,32 @@ function tests.no_tool_is_dispatched_by_name()
     end
 end
 
+-- The agent loop reads what a tool is from its record, never from its
+-- name (#6, "Done when"): no line of code in agent.lua names a built-in
+-- tool as "group.method". Comments may.
+function tests.agent_lua_names_no_builtin_tool()
+    print("Testing agent.lua's code names no built-in tool")
+    f = io.open("src/agent.lua", "r")
+    check(f != nil, "can't open src/agent.lua (run from the repo root)")
+    if f == nil then
+        return
+    end
+    number = 0
+    for line in io.lines(f) do
+        number = number + 1
+        if string.find(line, "^%s*%-%-") == nil then
+            for group, methods in pairs(agent_tools.AGENT_TOOLS) do
+                for method, _ in pairs(methods) do
+                    if string.find(line, "\"" .. group .. "." .. method .. "\"", 1, true) != nil then
+                        check(false, "agent.lua line " .. number .. " names " .. group .. "." .. method .. "; read the record's fields instead")
+                    end
+                end
+            end
+        end
+    end
+    io.close(f)
+end
+
 -- The whole declaration list, as each provider receives it. A schema a
 -- translation can't handle breaks every tool-calling turn, not just
 -- calls to that tool. Empty `properties` must encode as {}: Vertex
@@ -137,8 +163,10 @@ end
 -- What the model is shown, byte for byte (#6): moving tools into records
 -- must not change a single declaration, and a change that should is its
 -- own measured PR. One declaration per line, so a diff of a fixture
--- names the tool that changed. The order is pairs() over AGENT_TOOLS,
--- which is the same from run to run. After an intended change,
+-- names the tool that changed. The order is the registry's own, by name
+-- (agent.build_tool_registry), and each line is canonical JSON with its
+-- keys sorted, so the fixture doesn't depend on how a table iterates
+-- on a given luam build. After an intended change,
 -- regenerate with DAAT_UPDATE_SNAPSHOT=1 and say why in the PR.
 -- The research sub-agent's list is pinned the same way: it is what that
 -- model is shown, and #6 keeps it to the same 21 tools.
@@ -154,7 +182,7 @@ SNAPSHOTS = {
 function declarations_snapshot(declarations)
     lines = {}
     for _, declaration in ipairs(declarations) do
-        table.insert(lines, json.encode(declaration))
+        table.insert(lines, agent.canonical_json(declaration))
     end
     return table.concat(lines, "\n") .. "\n"
 end

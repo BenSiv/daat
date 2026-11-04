@@ -53,6 +53,12 @@ every change, the rule changes here first.
   row a developer can find.
 - **One neutral protocol.** Core code speaks `doc/agent-protocol.md`;
   anything vendor-specific lives in `src/provider/`. Core names no model.
+- **A stable base, a flexible shell.** Tools are defined once, complete
+  and the same for every provider: every record declares its parameters,
+  and a gap in a record is fixed in the base, for every provider (#20).
+  A provider's own rules (the characters a tool name may use) are met in
+  that provider's translation, on the way out and back, never by
+  changing a tool record or patching the base per provider (#21).
 - **Concurrent requests are the normal case.** Each web request is its own
   process. A state change that must happen once is claimed in the database
   first, then acted on (`agent.claim_pending_action`).
