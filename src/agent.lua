@@ -1389,60 +1389,154 @@ end
 -- regardless of which provider's translation runs afterward.
 EMPTY_OBJECT_SCHEMA = {type = "object", properties = setmetatable({}, {__jsontype = "object"})}
 
-function agent.is_known_tool(db_path, tool_name, method_name)
-    agent_tools = require("agent_tools")
-    group = agent_tools.AGENT_TOOLS[tool_name]
-    if group != nil then
-        return group[method_name] != nil
+-- One record per tool, and one registry of every tool the agent can call
+-- (doc/agent-tools.md; #6). Everything the agent loop knows about a tool
+-- -- whether it exists, whether it writes, what the model is shown,
+-- whether a research sub-agent may use it -- is read from its record,
+-- rather than from AGENT_TOOLS here, find_extension_tool there and a list
+-- of names in a third place, which is how the reserved names once
+-- drifted (#15).
+--
+-- What a `control` kind does to the turn. A control tool is about the
+-- conversation itself, not the data, so a research sub-agent never gets
+-- one (agent.research_may_call). Exposed on the module: a bare top-level
+-- assignment is local to its file in Luam.
+CONTROL_KINDS = {
+    clarify = {ends_turn = true},
+    research = {ends_turn = false},
+    background = {ends_turn = false},
+}
+agent.CONTROL_KINDS = CONTROL_KINDS
+
+-- An approved extension's capabilities.tools entry as a record. Its
+-- handler is still execute_tool's extension fallback until #6 moves it.
+-- A read-only extension tool is available to research, as it was before
+-- the registry; one with effects daat can't see is never answered from
+-- context (repeat_safe) or pinned through compaction.
+function extension_tool_record(extension_name, tool)
+    destructive = tool.destructive == true
+    return {
+        description = tool.description,
+        parameters = tool.parameters,
+        destructive = destructive,
+        in_research = destructive == false,
+        repeat_safe = false,
+        pin_on_compaction = false,
+        extension = extension_name,
+    }
+end
+
+-- agent.build_tool_registry(builtins, extensions) -> registry, ordered, refused
+-- Pure, so its rules are unit-tested without a database. `builtins` is
+-- AGENT_TOOLS; `extensions` is extension.approved_with_tools' list.
+--   registry[group][method] = record, for lookups;
+--   ordered = {{group, method, record}, ...}, in declaration order:
+--     built-ins in pairs(AGENT_TOOLS) order, then each extension's tools
+--     in manifest order -- exactly the order the model was always shown;
+--   refused = {{name, reason}, ...}, extensions left out whole.
+-- An extension is refused rather than merged when its name is a built-in
+-- group (manifest validation rejects that already, #15; this is the same
+-- rule where the tools are actually resolved) or when it declares one
+-- tool name twice, which used to reach the model as two declarations
+-- with the same name.
+function agent.build_tool_registry(builtins, extensions)
+    registry = {}
+    ordered = {}
+    refused = {}
+    for group, methods in pairs(builtins) do
+        registry[group] = {}
+        for method, record in pairs(methods) do
+            registry[group][method] = record
+            table.insert(ordered, {group = group, method = method, record = record})
+        end
     end
-    manifest, tool = agent_tools.find_extension_tool(db_path, tool_name, method_name)
-    return tool != nil
+    for _, entry in ipairs(extensions) do
+        reason = nil
+        if registry[entry.name] != nil then
+            reason = "its name is a built-in tool group"
+        end
+        records = {}
+        entries = {}
+        for _, tool in ipairs(entry.manifest.capabilities.tools) do
+            if reason == nil and records[tool.name] != nil then
+                reason = "it declares the tool '" .. tostring(tool.name) .. "' twice"
+            end
+            records[tool.name] = extension_tool_record(entry.name, tool)
+            table.insert(entries, {group = entry.name, method = tool.name, record = records[tool.name]})
+        end
+        if reason == nil then
+            registry[entry.name] = records
+            for _, e in ipairs(entries) do
+                table.insert(ordered, e)
+            end
+        else
+            table.insert(refused, {name = entry.name, reason = reason})
+        end
+    end
+    return registry, ordered, refused
+end
+
+-- Built on every call, never cached for the process: whether an
+-- extension is approved, and for which capabilities, is read here each
+-- time, as find_extension_tool did, so a revoked extension's tools stop
+-- on the next call, mid-turn included.
+function agent.tool_registry(db_path)
+    agent_tools = require("agent_tools")
+    registry, ordered, refused = agent.build_tool_registry(agent_tools.AGENT_TOOLS,
+        extension.approved_with_tools(db_path, config.extensions_dir()))
+    for _, r in ipairs(refused) do
+        io.write(io.stderr, "extension '" .. r.name .. "' left out of the agent's tools: " .. r.reason .. "\n")
+    end
+    return registry, ordered
+end
+
+function agent.tool_record(db_path, tool_name, method_name)
+    if tool_name == nil or method_name == nil then
+        return nil
+    end
+    registry = agent.tool_registry(db_path)
+    if registry[tool_name] == nil then
+        return nil
+    end
+    return registry[tool_name][method_name]
+end
+
+function agent.is_known_tool(db_path, tool_name, method_name)
+    return agent.tool_record(db_path, tool_name, method_name) != nil
 end
 
 function agent.is_destructive(db_path, tool_name, method_name)
-    agent_tools = require("agent_tools")
-    group = agent_tools.AGENT_TOOLS[tool_name]
-    if group != nil then
-        if group[method_name] == nil then
-            return false
-        end
-        return group[method_name].destructive == true
-    end
-    manifest, tool = agent_tools.find_extension_tool(db_path, tool_name, method_name)
-    if tool == nil then
-        return false
-    end
-    return tool.destructive == true
+    record = agent.tool_record(db_path, tool_name, method_name)
+    return record != nil and record.destructive == true
 end
 
--- Flattens AGENT_TOOLS into the function-declaration list the real
--- Vertex/Gemini function-calling API expects -- one entry per method,
--- named "toolname.methodname" (dots are valid in a Gemini function
--- name) so agent.execute_tool's own tool_name/method_name
--- split-on-dot dispatch needs no remapping table at all in either
--- direction. Approved extension tools are appended the same way, under
--- their own manifest.name, so the model sees them with no
--- special-casing on the provider side.
+-- Whether a research sub-agent may be offered, and may call, this tool:
+-- read-only, marked for research, and not about the conversation's own
+-- structure. One predicate for both the declarations a sub-agent gets and
+-- the refusal inside its loop, so the two can't disagree.
+function agent.research_may_call(record)
+    return record != nil and record.in_research == true and record.destructive != true and record.control == nil
+end
+
+-- One declaration per method, named "toolname.methodname" (dots are
+-- valid in a Gemini function name) so the tool_name/method_name
+-- split-on-dot dispatch needs no remapping table in either direction.
+-- Only name, description and parameters: no other record field ever
+-- reaches a provider.
+function tool_declaration(entry)
+    return {
+        name = entry.group .. "." .. entry.method,
+        description = entry.record.description,
+        parameters = entry.record.parameters,
+    }
+end
+agent.tool_declaration = tool_declaration
+
 function agent.tool_declarations(db_path)
-    agent_tools = require("agent_tools")
+    registry, ordered = agent.tool_registry(db_path)
     declarations = {}
-    for tool_name, methods in pairs(agent_tools.AGENT_TOOLS) do
-        for method_name, spec in pairs(methods) do
-            table.insert(declarations, {
-                name = tool_name .. "." .. method_name,
-                description = spec.description,
-                parameters = spec.parameters,
-            })
-        end
-    end
-    for _, entry in ipairs(extension.approved_with_tools(db_path, config.extensions_dir())) do
-        for _, tool in ipairs(entry.manifest.capabilities.tools) do
-            table.insert(declarations, {
-                name = entry.name .. "." .. tool.name,
-                description = tool.description,
-                parameters = tool.parameters,
-            })
-        end
+    for _, entry in ipairs(ordered) do
+        table.insert(declarations, tool_declaration(entry))
     end
     return declarations
 end
@@ -2009,10 +2103,11 @@ function agent.run_research_loop(db_path, author, session_id, model, question, m
             tool_name, method_name = split_tool_name(tool_call.name)
             result_text = nil
             is_error = false
-            if tool_name == nil or not agent.is_known_tool(db_path, tool_name, method_name) then
+            record = agent.tool_record(db_path, tool_name, method_name)
+            if record == nil then
                 result_text = "ERROR: unknown tool " .. tostring(tool_call.name)
                 is_error = true
-            elseif agent.is_destructive(db_path, tool_name, method_name) or tool_name == "research" or tool_name == "clarify" or tool_name == "background" then
+            elseif agent.research_may_call(record) == false then
                 result_text = "ERROR: research is read-only and can't ask the user directly or hand off further -- cannot perform destructive actions, delegate further, ask a clarifying question, or start a background task; report what you've found (including any real ambiguity) instead"
                 is_error = true
             else

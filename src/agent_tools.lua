@@ -40,6 +40,7 @@ agent_tools.AGENT_TOOLS = {
     document = {
         search = {
             destructive = false,
+            in_research = true,
             description = "Search documents by keyword or topic; returns each matching document's id, title, and a real content excerpt so you can answer from what the document actually says, not just its title. Excerpts are short by default; pass detail = \"full\" for longer ones when the short excerpt isn't enough, or read one document with entity.get.",
             parameters = {
                 type = "object",
@@ -79,6 +80,7 @@ agent_tools.AGENT_TOOLS = {
         },
         children = {
             destructive = false,
+            in_research = true,
             description = "List the immediate sub-documents (folder contents) under a document, or every top-level document/folder if parent_id is omitted. Use this to browse the document tree by structure, as an alternative to document.search's content-based matching.",
             parameters = {
                 type = "object",
@@ -87,6 +89,7 @@ agent_tools.AGENT_TOOLS = {
         },
         breadcrumbs = {
             destructive = false,
+            in_research = true,
             description = "Get a document's full path from the root (root first) -- use this to tell the user where a document sits in the folder structure.",
             parameters = {
                 type = "object",
@@ -96,6 +99,7 @@ agent_tools.AGENT_TOOLS = {
         },
         links = {
             destructive = false,
+            in_research = true,
             description = "List every document linked to or from a document, each with the sentence around the [[link]] saying why they're connected (from whichever document's text holds the link). A connection is explained in content: to explain one, write the reason next to the link, or create a document that links both and says why.",
             parameters = {
                 type = "object",
@@ -113,11 +117,13 @@ agent_tools.AGENT_TOOLS = {
     entity = {
         list_types = {
             destructive = false,
+            in_research = true,
             description = "List every registered entity type (samples, tasks, experiments, whatever this deployment has).",
             parameters = EMPTY_OBJECT_SCHEMA,
         },
         fields = {
             destructive = false,
+            in_research = true,
             description = "List an entity type's fields and their types, so you know what's valid before creating/updating one.",
             parameters = {
                 type = "object",
@@ -127,11 +133,13 @@ agent_tools.AGENT_TOOLS = {
         },
         relationships = {
             destructive = false,
+            in_research = true,
             description = "List every reference relationship between registered entity types (which type's field points at which other type -- e.g. 'sample.experiment -> experiment'). Call this when a value you're looking for isn't a field on the entity type you expected -- it's often a field on a DIFFERENT type that references the one you started from (e.g. a 'variety' filter for experiments actually lives on the samples that reference each experiment, not on the experiment itself). No args -- always returns the full relationship graph, small enough to read in one call.",
             parameters = EMPTY_OBJECT_SCHEMA,
         },
         query = {
             destructive = false,
+            in_research = true,
             description = "Run a read-only SQL SELECT against registered entity tables, for anything entity.list's own single-table exact-match filter can't express: joins across related types (call entity.relationships first to find the join path), counts, aggregates, grouping. Table and column names are this deployment's real registered entity type/field names -- call entity.list_types/entity.fields/entity.relationships first if unsure, don't guess. Every table has an archived_at column: archived rows are deleted/superseded records, so filter `archived_at IS NULL` unless you want them. The SQL dialect is the deployment's database (named in any SQL error; schema tables like sqlite_master/information_schema aren't queryable -- use entity.fields). Must be a single plain SELECT statement (no semicolons, no INSERT/UPDATE/DELETE/DDL) referencing only registered entity tables -- anything else is refused. Results are row-capped (this deployment's own configured limit) -- add your own LIMIT or narrow the query if a result comes back truncated (the truncation note tells you the true total match count, so you know whether narrowing is even worth it). Prefer expressing grouping/matching/deduplication logic (e.g. 'which groups of rows share the exact same set of X') as SQL itself -- GROUP BY with GROUP_CONCAT to build a per-group signature, then compare signatures -- rather than fetching many rows and comparing them yourself; there is no code-execution tool, so 'processed afterward' means reasoned over in your own reply, which doesn't scale to large row counts the way one aggregate query does. If a question genuinely can't be answered without paging through everything (no aggregate expresses it), use background.start rather than looping entity.query with an increasing OFFSET in the foreground -- and if you do page manually anyway, always add an explicit ORDER BY on a unique column (e.g. id): without one, SQL row order across separate LIMIT/OFFSET calls isn't guaranteed, so later pages can silently repeat or skip rows.",
             parameters = {
                 type = "object",
@@ -141,6 +149,7 @@ agent_tools.AGENT_TOOLS = {
         },
         list = {
             destructive = false,
+            in_research = true,
             description = "List rows of an entity type, optionally filtered to rows where one field equals a value.",
             parameters = {
                 type = "object",
@@ -156,6 +165,7 @@ agent_tools.AGENT_TOOLS = {
         },
         get = {
             destructive = false,
+            in_research = true,
             description = "Fetch one entity row by id. A long text field (e.g. a document's content) shows its beginning, its headings and its total length; to read more of it, call again with field (the field name) and offset (the character to start from), and optionally length.",
             parameters = {
                 type = "object",
@@ -180,6 +190,7 @@ agent_tools.AGENT_TOOLS = {
         -- of the model catching it itself beforehand.
         validate = {
             destructive = false,
+            in_research = true,
             description = "Check whether values are valid for an entity type, without writing anything -- runs the same validation entity.create/entity.update would apply (required fields, types, valid references, reason-required-on-update rules). Pass entity_type plus one property per field, same as entity.create; also pass entity_id to validate as an UPDATE against that row's current values instead of a fresh create. Use this before entity.create/entity.update on anything non-obvious, so an invalid write is caught here instead of failing only after a human approves it.",
             parameters = {
                 type = "object",
@@ -256,6 +267,7 @@ agent_tools.AGENT_TOOLS = {
     plot = {
         from_query = {
             destructive = false,
+            in_research = true,
             description = "Run a read-only SQL query (same rules as entity.query: single SELECT, registered entity tables only) and turn two of its numeric columns directly into a ready-to-paste ```plot``` fence -- paste the returned text into your reply verbatim, right where the chart should appear. Use this instead of entity.query whenever the goal is a chart: it builds the x/y arrays itself from the real query rows, so there's no risk of miscounting or mistyping values by hand.",
             parameters = {
                 type = "object",
@@ -278,6 +290,7 @@ agent_tools.AGENT_TOOLS = {
     result = {
         read = {
             destructive = false,
+            in_research = true,
             description = "Read more of an earlier tool result that was cut short because it was long (its note gives the result_id and the offset to continue from).",
             parameters = {
                 type = "object",
@@ -295,6 +308,7 @@ agent_tools.AGENT_TOOLS = {
     calc = {
         evaluate = {
             destructive = false,
+            in_research = true,
             description = "Compute a number from a formula, exactly. Use it for every calculation beyond copying a value -- ratios, logarithms, rates, doubling times, unit conversions, averages of a few values -- with the exact numbers a tool returned. Supports + - * / ^, parentheses, ln, log10, log2, exp, sqrt, abs, round(x, digits), min, max, pi and e. Example: 12 * ln(2) / ln(0.8502 / 0.098). Returns the formula and its value; quote both in your reply.",
             parameters = {
                 type = "object",
@@ -310,6 +324,7 @@ agent_tools.AGENT_TOOLS = {
     stats = {
         fit = {
             destructive = false,
+            in_research = true,
             description = "Fit a line or an exponential to two numeric columns of a read-only SQL query (same rules as entity.query) and get the fitted rate with how well it fits. Use it for any growth rate, doubling time, decay or trend over a time series instead of picking two points yourself. model \"exponential\" fits ln(y) against x and reports the growth rate and doubling time; without x_min/x_max it finds the exponential phase from the data and leaves out a lag or plateau, and says which points it used. model \"linear\" fits y against x. Each series is fitted separately: for one value per experiment, sample or replicate, return all of them in one query with a group_column and get one fit per group plus their mean in a single call.",
             parameters = {
                 type = "object",
@@ -335,11 +350,13 @@ agent_tools.AGENT_TOOLS = {
     template = {
         list = {
             destructive = false,
+            in_research = true,
             description = "List reusable Entry templates (name, label, description) available to build a new document from.",
             parameters = EMPTY_OBJECT_SCHEMA,
         },
         get = {
             destructive = false,
+            in_research = true,
             description = "Get one template's rendered content, ready to pass straight to document.create's own content arg, plus its suggested default document name.",
             parameters = {
                 type = "object",
@@ -357,11 +374,13 @@ agent_tools.AGENT_TOOLS = {
     knowledge = {
         stats = {
             destructive = false,
+            in_research = true,
             description = "Summarize the knowledge pool's tier distribution and retrieval activity.",
             parameters = EMPTY_OBJECT_SCHEMA,
         },
         list = {
             destructive = false,
+            in_research = true,
             description = "List knowledge pool documents with their id, tier, content shape (developed/atomic/thin/simple), heat, and retrieval count, hottest first, one page at a time (the footer says how many there are and how to get the next page).",
             parameters = {
                 type = "object",
@@ -393,11 +412,13 @@ agent_tools.AGENT_TOOLS = {
     view = {
         list = {
             destructive = false,
+            in_research = true,
             description = "List admin-approved saved views (name, title, description, and whether it takes a parameter) available to run. Only approved views can actually be run -- see view.run.",
             parameters = EMPTY_OBJECT_SCHEMA,
         },
         run = {
             destructive = false,
+            in_research = true,
             description = "Run an approved saved view by name and return its rows. Pass param_value if view.list said this view takes a parameter. Refuses to run an unapproved view -- ask the user to approve it via /view first, or use entity.query instead if no approved view covers this.",
             parameters = {
                 type = "object",
@@ -424,6 +445,7 @@ agent_tools.AGENT_TOOLS = {
     research = {
         investigate = {
             destructive = false,
+            control = "research",
             description = "Delegate a focused sub-question to an isolated research pass that can run its own series of read-only lookups (entity.fields/entity.relationships/entity.query/entity.list/entity.get, document.search, knowledge.list/stats) before answering. Use this instead of a single direct lookup when a question genuinely needs digging -- a count/aggregate, a relationship you haven't already confirmed, anything where a first attempt coming up empty shouldn't be trusted without a different angle tried. Bounded to a handful of turns -- if the question means checking many discrete items one by one ('across all N experiments/entities'), that's more than this budget covers; use background.start instead so coverage doesn't get silently generalized from a partial sample. Returns a synthesized, grounded finding, not raw rows -- the queries it runs along the way are not added to this conversation.",
             parameters = {
                 type = "object",
@@ -445,6 +467,7 @@ agent_tools.AGENT_TOOLS = {
     clarify = {
         ask = {
             destructive = false,
+            control = "clarify",
             description = "Ask the user one clarifying question instead of guessing or giving up, when the request genuinely has more than one reasonable interpretation that would lead to a different answer or action, or is missing information you can't reasonably infer yourself or find with a tool. Try looking it up first -- don't ask for something a tool call could answer. Ends this turn; the user's next message is the answer.",
             parameters = {
                 type = "object",
@@ -464,6 +487,7 @@ agent_tools.AGENT_TOOLS = {
     background = {
         start = {
             destructive = false,
+            control = "background",
             description = "Hand a question off to a background task that keeps digging after this turn ends, for something that would need more turns than research.investigate's own budget -- use research.investigate first; only use this if that isn't enough. Returns a task id immediately; the finding is appended to this same conversation once it's ready (check with background.status, or just ask again later).",
             parameters = {
                 type = "object",
@@ -473,6 +497,7 @@ agent_tools.AGENT_TOOLS = {
         },
         status = {
             destructive = false,
+            control = "background",
             description = "Check on a background task started with background.start: still pending, or its finding if done.",
             parameters = {
                 type = "object",
@@ -1982,8 +2007,8 @@ function agent_tools.sync_session_document(db_path, login, session_id)
     knowledge.sync_session_document(db_path, login, session_id, "Chat: " .. title, transcript)
 end
 
--- research.investigate's own tool list: every non-destructive AGENT_TOOLS
--- entry except research itself -- excluded so a research sub-agent can't
+-- research.investigate's own tool list: every non-destructive tool
+-- except research itself -- excluded so a research sub-agent can't
 -- recursively delegate to another one and spend turns/cost with no
 -- bound the outer MAX_TURNS-style budget accounts for -- and except
 -- clarify, since "ask the user a question" is a whole-turn decision that
@@ -1996,30 +2021,17 @@ end
 -- so the model isn't even told they exist from inside a pass that's meant
 -- to be read-only investigation, not a place a write could plausibly
 -- come from.
+--
+-- Which tools those are is each record's own business (in_research,
+-- destructive, control), read through agent.research_may_call -- the same
+-- predicate run_research_loop refuses a call with -- rather than a list
+-- of group names kept here and again in the loop (#6).
 function agent_tools.research_tool_declarations(db_path)
+    registry, ordered = agent.tool_registry(db_path)
     declarations = {}
-    for tool_name, methods in pairs(agent_tools.AGENT_TOOLS) do
-        if tool_name != "research" and tool_name != "clarify" and tool_name != "background" then
-            for method_name, spec in pairs(methods) do
-                if spec.destructive == false then
-                    table.insert(declarations, {
-                        name = tool_name .. "." .. method_name,
-                        description = spec.description,
-                        parameters = spec.parameters,
-                    })
-                end
-            end
-        end
-    end
-    for _, entry in ipairs(extension.approved_with_tools(db_path, config.extensions_dir())) do
-        for _, tool in ipairs(entry.manifest.capabilities.tools) do
-            if tool.destructive != true then
-                table.insert(declarations, {
-                    name = entry.name .. "." .. tool.name,
-                    description = tool.description,
-                    parameters = tool.parameters,
-                })
-            end
+    for _, entry in ipairs(ordered) do
+        if agent.research_may_call(entry.record) then
+            table.insert(declarations, agent.tool_declaration(entry))
         end
     end
     return declarations
