@@ -1475,13 +1475,23 @@ function agent.precheck(record, ctx, tool_name, method_name, args)
     return nil
 end
 
--- An approved extension's capabilities.tools entry as a record. Its
--- handler is still execute_tool's extension fallback until #6 moves it.
--- A read-only extension tool is available to research, as it was before
--- the registry; one with effects daat can't see is never answered from
--- context (repeat_safe) or pinned through compaction.
-function extension_tool_record(extension_name, tool)
+-- An approved extension's capabilities.tools entry as a record (`entry`
+-- is one of extension.approved_with_tools'). A read-only extension tool
+-- is available to research, as it was before the registry; one with
+-- effects daat can't see is never answered from context (repeat_safe)
+-- or pinned through compaction.
+--
+-- Its handler (#6, step 7) is what execute_tool's extension fallback
+-- did, with the same errors: load the extension's hooks, and call its
+-- tools[method] with the extension's own capability-checked ctx
+-- (entity.build_ctx), never the agent's -- an extension's tool reaches
+-- only what its approved manifest grants. Hooks are loaded per call, as
+-- before, so an edited main.lua takes effect on the next one.
+function extension_tool_record(entry, tool)
     destructive = tool.destructive == true
+    name = entry.name
+    manifest = entry.manifest
+    method_name = tool.name
     return {
         description = tool.description,
         parameters = tool.parameters,
@@ -1489,7 +1499,28 @@ function extension_tool_record(extension_name, tool)
         in_research = destructive == false,
         repeat_safe = false,
         pin_on_compaction = false,
-        extension = extension_name,
+        extension = name,
+        handler = function(ctx, args)
+            hooks, hooks_err = extension.load_hooks(config.extensions_dir(), name, manifest)
+            if hooks == nil then
+                if hooks_err != nil then
+                    return nil, hooks_err
+                end
+                return nil, "extension '" .. name .. "' does not implement tool '" .. method_name .. "'"
+            end
+            fn = nil
+            if type(hooks.tools) == "table" then
+                fn = hooks.tools[method_name]
+            end
+            if type(fn) != "function" then
+                return nil, "extension '" .. name .. "' does not implement tool '" .. method_name .. "'"
+            end
+            call_ok, result, call_err = pcall(fn, entity.build_ctx(ctx.db_path, manifest), args)
+            if call_ok == false then
+                return nil, tostring(result)
+            end
+            return result, call_err
+        end,
     }
 end
 
@@ -1528,7 +1559,7 @@ function agent.build_tool_registry(builtins, extensions)
             if reason == nil and records[tool.name] != nil then
                 reason = "it declares the tool '" .. tostring(tool.name) .. "' twice"
             end
-            records[tool.name] = extension_tool_record(entry.name, tool)
+            records[tool.name] = extension_tool_record(entry, tool)
             table.insert(entries, {group = entry.name, method = tool.name, record = records[tool.name]})
         end
         if reason == nil then
