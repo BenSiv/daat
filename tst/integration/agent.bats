@@ -1225,6 +1225,88 @@ EOF
     [[ "$output" =~ created_by[[:space:]]+alice ]]
 }
 
+# #16: each request is its own process, and approve_pending used to check
+# status = 'pending', run the tool, and only then mark the row approved.
+# Approvals that arrive together (a double click, two tabs, a retry) all
+# passed the check and all ran the write. Fired in parallel, so without
+# the claim this fails often but not every time; with it, never.
+@test "approving the same pending action from several requests at once runs the write once" {
+    write_task_schema
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(tool_call_response "entity.create" '{"entity_type":"task","title":"Once only","status":"open"}')"
+    send_resp=$(raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"create a task\"}" "$COOKIE" "$CSRF" "$scripted")
+    pending_id=$(json_body "$send_resp" | jq -r '.pending.id')
+
+    for i in 1 2 3 4 5 6 7 8; do
+        raw_post_json "/api/chat-widget-approve" "{\"pending_id\":${pending_id},\"session_id\":\"${session_id}\"}" "$COOKIE" "$CSRF" "$(done_response "Created it.")" >/dev/null 2>&1 &
+    done
+    wait
+
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM task WHERE title = 'Once only';"
+    [ "$output" -eq 1 ]
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT status FROM agent_pending_action WHERE id = ${pending_id};"
+    [ "$output" = "approved" ]
+}
+
+# The claim itself, without relying on timing: the first claim wins,
+# any later one (approve or deny) loses and leaves the row as the
+# winner set it.
+@test "agent.claim_pending_action: only the first claim on a pending action wins (#16)" {
+    cat > "${TEST_DIR}/claim_check.lua" <<'EOF'
+db = require("database")
+config = require("config")
+agent = require("agent")
+db_path = config.db_path(".")
+agent.init_schema(db_path)
+db.exec(db_path, "INSERT INTO agent_pending_action (session_id, tool, method, args_json) VALUES ('s1', 'entity', 'create', '{}');")
+id = tonumber(db.query(db_path, "SELECT MAX(id) AS id FROM agent_pending_action;")[1].id)
+print("first:", agent.claim_pending_action(db_path, id, "running"))
+print("second:", agent.claim_pending_action(db_path, id, "running"))
+print("deny:", agent.claim_pending_action(db_path, id, "denied"))
+print("status:", db.query(db_path, "SELECT status FROM agent_pending_action WHERE id = " .. id .. ";")[1].status)
+EOF
+    if [ -z "${LUAM_DIR:-}" ]; then
+        LUAM_DIR=$(cd "${PROJECT_ROOT}/../luam" && pwd)
+    fi
+    run env LUA_PATH="${PROJECT_ROOT}/src/?.lua;${LUAM_DIR}/lib/?.lua;${LUAM_DIR}/lib/?/init.lua;;" \
+        LUA_CPATH="${LUAM_DIR}/bin/?.so;${LUAM_DIR}/lib/lfs/?.so;${LUAM_DIR}/lib/hmac/?.so;${LUAM_DIR}/lib/bcrypt/?.so;;" \
+        "${LUAM_DIR}/bin/luam" "${TEST_DIR}/claim_check.lua"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "first:	true" ]]
+    [[ "$output" =~ "second:	false" ]]
+    [[ "$output" =~ "deny:	false" ]]
+    [[ "$output" =~ "status:	running" ]]
+}
+
+# An approve and a deny racing: whichever wins, the other does nothing --
+# never a recorded denial with the write done anyway.
+@test "an approve and a deny for the same pending action at once: exactly one of them takes effect" {
+    write_task_schema
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(tool_call_response "entity.create" '{"entity_type":"task","title":"Maybe","status":"open"}')"
+    send_resp=$(raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"create a task\"}" "$COOKIE" "$CSRF" "$scripted")
+    pending_id=$(json_body "$send_resp" | jq -r '.pending.id')
+
+    for i in 1 2 3 4; do
+        raw_post_json "/api/chat-widget-approve" "{\"pending_id\":${pending_id},\"session_id\":\"${session_id}\"}" "$COOKIE" "$CSRF" "$(done_response "Created it.")" >/dev/null 2>&1 &
+        raw_post_json "/api/chat-widget-deny" "{\"pending_id\":${pending_id},\"session_id\":\"${session_id}\"}" "$COOKIE" "$CSRF" "$(done_response "Okay, not creating it.")" >/dev/null 2>&1 &
+    done
+    wait
+
+    rows=$(sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM task WHERE title = 'Maybe';")
+    status=$(sqlite3 "$TEST_DIR/.store/store.db" "SELECT status FROM agent_pending_action WHERE id = ${pending_id};")
+    if [ "$status" = "approved" ]; then
+        [ "$rows" -eq 1 ]
+    else
+        [ "$status" = "denied" ]
+        [ "$rows" -eq 0 ]
+    fi
+}
+
 @test "entity.update is destructive: pauses for approval, then really updates the row once approved" {
     write_task_schema
     "$BIN" entity create task title="Old title" status=open >/dev/null
