@@ -1399,14 +1399,61 @@ EMPTY_OBJECT_SCHEMA = {type = "object", properties = setmetatable({}, {__jsontyp
 --
 -- What a `control` kind does to the turn. A control tool is about the
 -- conversation itself, not the data, so a research sub-agent never gets
--- one (agent.research_may_call). Exposed on the module: a bare top-level
--- assignment is local to its file in Luam.
+-- one (agent.research_may_call). A kind that ends the turn is handled by
+-- run_turn from this table alone -- what the call's result says, what a
+-- second one in the same turn is told, and what the turn returns -- so a
+-- new kind is a new row here, not another branch on a tool name there.
+-- research and background run their handlers like any other tool.
+-- Exposed on the module: a bare top-level assignment is local to its
+-- file in Luam.
 CONTROL_KINDS = {
-    clarify = {ends_turn = true},
+    clarify = {
+        ends_turn = true,
+        result = "Waiting for the user's answer before continuing.",
+        another_this_turn = "ERROR: skipped -- only one clarifying question can be asked per turn",
+        status = "needs_clarification",
+        message_argument = "question",
+    },
     research = {ends_turn = false},
     background = {ends_turn = false},
 }
 agent.CONTROL_KINDS = CONTROL_KINDS
+
+-- The kind's row when this record's control kind ends the turn, else nil.
+function agent.turn_ending_kind(record)
+    if record == nil or record.control == nil then
+        return nil
+    end
+    kind = CONTROL_KINDS[record.control]
+    if kind == nil or kind.ends_turn != true then
+        return nil
+    end
+    return kind
+end
+
+-- What every handler, precheck and recover is given (doc/agent-tools.md,
+-- "Record shape"): the real logged-in user the tool runs as, and the
+-- session it was called from.
+function agent.tool_ctx(db_path, author, session_id)
+    return {
+        db_path = db_path,
+        author = author,
+        session_id = session_id,
+        source = {notebook_entry_id = "agent-session:" .. tostring(session_id)},
+    }
+end
+
+-- Why a destructive call can't do anything, so nobody is asked to approve
+-- a no-op; nil when it may go to approval. The record's own precheck once
+-- its group has moved (#6, steps 1 and 2); until then
+-- reject_before_approval, which still holds those cases.
+function agent.precheck(record, ctx, tool_name, method_name, args)
+    if record.precheck != nil then
+        return record.precheck(ctx, args)
+    end
+    agent_tools = require("agent_tools")
+    return agent_tools.reject_before_approval(tool_name, method_name, args)
+end
 
 -- An approved extension's capabilities.tools entry as a record. Its
 -- handler is still execute_tool's extension fallback until #6 moves it.
@@ -2702,29 +2749,38 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
                 -- proposed in the same breath, on the rare turn that proposes
                 -- both.
                 pending_call = nil
-                clarify_call = nil
+                ending_call = nil
+                ending_kind = nil
+                ctx = agent.tool_ctx(db_path, login, session_id)
                 for _, tool_call in ipairs(tool_calls) do
                     if tool_call.arguments == nil then
                         tool_call.arguments = {}
                     end
                     tool_name, method_name = split_tool_name(tool_call.name)
-                    if tool_name == nil or not agent.is_known_tool(db_path, tool_name, method_name) then
+                    -- Classified by the record's fields, in this order: a
+                    -- turn-ending control kind (clarify.ask) wins over a
+                    -- write proposed in the same step, then destructive.
+                    record = agent.tool_record(db_path, tool_name, method_name)
+                    kind = agent.turn_ending_kind(record)
+                    rejection = nil
+                    if record != nil and record.destructive == true then
+                        rejection = agent.precheck(record, ctx, tool_name, method_name, tool_call.arguments)
+                    end
+                    if record == nil then
                         agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name,
                             "ERROR: unknown tool " .. tostring(tool_call.name), true)
-                    elseif tool_name == "clarify" and method_name == "ask" then
-                        if clarify_call == nil then
-                            clarify_call = tool_call
-                            agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name,
-                                "Waiting for the user's answer before continuing.", false)
+                    elseif kind != nil then
+                        if ending_call == nil then
+                            ending_call = tool_call
+                            ending_kind = kind
+                            agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name, kind.result, false)
                         else
-                            agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name,
-                                "ERROR: skipped -- only one clarifying question can be asked per turn", true)
+                            agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name, kind.another_this_turn, true)
                         end
-                    elseif agent.is_destructive(db_path, tool_name, method_name)
-                            and agent_tools.reject_before_approval(tool_name, method_name, tool_call.arguments) != nil then
+                    elseif rejection != nil then
                         agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name,
-                            "ERROR: " .. agent_tools.reject_before_approval(tool_name, method_name, tool_call.arguments), true)
-                    elseif agent.is_destructive(db_path, tool_name, method_name) then
+                            "ERROR: " .. rejection, true)
+                    elseif record.destructive == true then
                         if pending_call == nil then
                             pending_call = {tool_call = tool_call, tool_name = tool_name, method_name = method_name}
                         else
@@ -2747,7 +2803,7 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
                     end
                 end
 
-                if clarify_call != nil then
+                if ending_call != nil then
                     -- No self-check here (there's no answer yet to critique)
                     -- and no agent_pending_action row -- unlike a destructive
                     -- call, there's nothing to later approve/deny; the user's
@@ -2755,12 +2811,12 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
                     -- /chat-message flow already continues this same turn
                     -- loop from active_messages, no special resume path
                     -- needed.
-                    question = nil
-                    if clarify_call.arguments != nil then
-                        question = clarify_call.arguments.question
+                    ending_message = nil
+                    if ending_call.arguments != nil then
+                        ending_message = ending_call.arguments[ending_kind.message_argument]
                     end
                     agent_tools.sync_session_document(db_path, login, session_id)
-                    return {status = "needs_clarification", message = question}
+                    return {status = ending_kind.status, message = ending_message}
                 end
 
                 if pending_call != nil then

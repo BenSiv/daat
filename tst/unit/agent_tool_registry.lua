@@ -43,6 +43,12 @@ function test_every_builtin_record_follows_the_field_rules()
             -- Until #6 moves it, a tool's handler is still execute_tool's
             -- branch; tst/unit/agent_tools.lua checks every tool reaches one.
             check(record.handler == nil or type(record.handler) == "function", name .. ": handler must be a function")
+            -- precheck runs on the way to approval, which only a
+            -- destructive tool takes.
+            check(record.precheck == nil or type(record.precheck) == "function", name .. ": precheck must be a function")
+            if record.precheck != nil then
+                check(record.destructive == true, name .. ": precheck is only for destructive tools")
+            end
             if record.control != nil then
                 check(record.in_research != true, name .. ": a control tool can't be in_research")
             end
@@ -72,6 +78,24 @@ function test_control_tools_are_the_three_kinds()
         count = count + 1
     end
     check(count == 4, "expected exactly 4 control tools, found " .. count)
+end
+
+-- run_turn handles a turn-ending kind from its row alone, so the row must
+-- say everything it needs.
+function test_turn_ending_kinds_are_complete()
+    print("Testing every turn-ending control kind says what run_turn needs")
+    for name, kind in pairs(agent.CONTROL_KINDS) do
+        check(type(kind.ends_turn) == "flag", name .. ": ends_turn must be true or false")
+        if kind.ends_turn == true then
+            for _, field in ipairs({"result", "another_this_turn", "status", "message_argument"}) do
+                check(type(kind[field]) == "string" and kind[field] != "", name .. ": a turn-ending kind needs " .. field)
+            end
+        end
+    end
+    check(agent.turn_ending_kind({control = "clarify"}) == agent.CONTROL_KINDS.clarify, "clarify ends the turn")
+    check(agent.turn_ending_kind({control = "research"}) == nil, "research doesn't")
+    check(agent.turn_ending_kind({destructive = true}) == nil, "a tool without a control kind doesn't")
+    check(agent.turn_ending_kind(nil) == nil, "an unknown tool doesn't")
 end
 
 function test_research_may_call()
@@ -131,6 +155,7 @@ end
 
 test_every_builtin_record_follows_the_field_rules()
 test_control_tools_are_the_three_kinds()
+test_turn_ending_kinds_are_complete()
 test_research_may_call()
 test_extension_tools_become_records_in_manifest_order()
 test_an_extension_named_after_a_builtin_group_is_refused()
