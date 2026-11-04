@@ -243,15 +243,23 @@ end
 -- The groups #6 has moved so far, one step at a time: every tool in them
 -- runs from its record. A step adds its groups here, in the same commit
 -- that deletes their branches from execute_tool_chain.
-MOVED_GROUPS = {"document", "entity", "knowledge", "view", "template", "result", "calc", "stats", "plot"}
+MOVED_GROUPS = {"document", "entity", "knowledge", "view", "template", "result", "calc", "stats", "plot",
+    "research", "background", "clarify"}
 
+-- The one tool without a handler is one whose control kind ends the turn
+-- (clarify.ask): run_turn does that from its CONTROL_KINDS row, so a
+-- handler there would never run.
 function tests.every_tool_in_a_moved_group_has_a_handler()
     print("Testing every tool in a moved group runs from its record")
     for _, group in ipairs(MOVED_GROUPS) do
         check(agent_tools.AGENT_TOOLS[group] != nil, "no tool group " .. group)
         if agent_tools.AGENT_TOOLS[group] != nil then
             for method, record in pairs(agent_tools.AGENT_TOOLS[group]) do
-                check(type(record.handler) == "function", group .. "." .. method .. " has no handler")
+                if agent.turn_ending_kind(record) != nil then
+                    check(record.handler == nil, group .. "." .. method .. " ends the turn, so it has no handler")
+                else
+                    check(type(record.handler) == "function", group .. "." .. method .. " has no handler")
+                end
             end
         end
     end
