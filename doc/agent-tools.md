@@ -228,6 +228,8 @@ During the transition, `execute_tool` first looks for `record.handler`; if the r
 
 ## Worked example: adding a tool
 
+Where a new tool belongs (its group, its operation, and whether a new tool is justified at all) is decided by `doc/agent-tool-organization.md` first; this example covers how to write the record once that is settled.
+
 A hypothetical `entity.count`: how many active rows a type has, optionally where one field equals a value. Read-only, so a sub-agent may use it. Every line a contributor writes:
 
 **1. The record and its handler** (`src/agent_tools.lua`, in the `entity` group and next to its other handlers):
