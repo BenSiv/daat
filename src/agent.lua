@@ -1482,10 +1482,12 @@ end
 -- moves it, and each writes its own random token; reading the row back
 -- says whose token stuck. Read back rather than counting changed rows:
 -- database.exec reports affected rows on MariaDB but not on SQLite.
+-- nil, err when no token could be made: nothing was claimed, and that's
+-- an error for the caller to report, not another request winning.
 function agent.claim_pending_action(db_path, pending_id, claimed_status)
     token, err = random_session_token()
     if token == nil then
-        return false, err
+        return nil, err
     end
     db.exec(db_path, string.format(
         "UPDATE agent_pending_action SET status = %s, claim_token = %s WHERE id = %d AND status = 'pending';",
@@ -2720,7 +2722,11 @@ function agent.approve_pending(db_path, pending_id, login, system_prompt, model,
     -- between leaves the row there on purpose: the write may or may not
     -- have happened, so nothing runs it again on its own, and it's no
     -- longer offered for approval (agent.latest_pending reads 'pending').
-    if agent.claim_pending_action(db_path, pending_id, "running") == false then
+    claimed, claim_err = agent.claim_pending_action(db_path, pending_id, "running")
+    if claimed == nil then
+        return nil, claim_err
+    end
+    if claimed == false then
         return nil, "action already " .. tostring(agent.get_pending_action(db_path, pending_id, login).status)
     end
 
@@ -2759,7 +2765,11 @@ function agent.deny_pending(db_path, pending_id, login, system_prompt, model, re
     end
     -- Claimed the same way as an approval, so an approve and a deny
     -- arriving together can't both win.
-    if agent.claim_pending_action(db_path, pending_id, "denied") == false then
+    claimed, claim_err = agent.claim_pending_action(db_path, pending_id, "denied")
+    if claimed == nil then
+        return nil, claim_err
+    end
+    if claimed == false then
         return nil, "action already " .. tostring(agent.get_pending_action(db_path, pending_id, login).status)
     end
 
