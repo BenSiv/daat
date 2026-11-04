@@ -1,6 +1,6 @@
 # Agent data: types, curation, context and retention
 
-Design, 2026-11-04. Issue #23. This document decides what the agent keeps, what becomes knowledge, what the model sees, and for how long. It applies to every loop the agent runs: chat, research, background, self-check, compaction.
+Design, 2026-11-04, decisions settled the same day. Issue #23. This document decides what the agent keeps, what becomes knowledge, what the model sees, and for how long. It applies to every loop the agent runs: chat, research, background, self-check, compaction.
 
 ## Principles
 
@@ -87,12 +87,10 @@ Why one table and not a separate log table: the provider protocol needs every to
 
 Approvals and denials are also written as `request` rows when they happen, so the conversation alone holds what the person decided. `agent_pending_action` stays the control record.
 
-A new table is not needed. If one is preferred, it would be `agent_tool_trace`, with the history assembly joining it back in.
-
 ## Reasoning capture
 
 Principle 1 needs reasoning to exist. Today it doesn't:
-- **Thinking:** the deployed model returns no thought parts. Capturing it needs a thinking budget, which is a provider setting with a cost per call. Add `agent_thinking = "off" | "summary" | "full"` to `platform.lua`, translated per provider (Vertex `thinkingConfig.thinkingBudget` with `includeThoughts`; Claude `thinking`). Measure the token cost and answer quality on the scorecard before turning it on in production.
+- **Thinking:** the deployed model returns no thought parts. Capturing it needs a thinking budget, which is a provider setting with a cost per call. Add `agent_thinking = "off" | "summary" | "full"` to `platform.lua`, translated per provider (Vertex `thinkingConfig.thinkingBudget` with `includeThoughts`; Claude `thinking`). Run the live scorecard with `off` and with `summary` (the model's thought summaries, the cheaper level), with the bar set before the run: no worse on correctness, at most about a third more tokens. If `summary` passes, production runs it; `full` is for eval.
 - **Sub-agent text:** a research step's text is reasoning. It is kept as `reasoning` rows under its parent (Storage), not dropped.
 - **Self-check and compaction:** already kept. Typed as `reasoning`.
 
@@ -104,7 +102,7 @@ Thinking is stored as `reasoning` rows in the conversation. It no longer becomes
 - The curate step reads the conversation that way, replacing `transcript_conversation`, which reads `user` and `assistant` rows only (no reasoning). Input is capped as now (40,000 characters). The newest requests and the final answers are kept whole first, reasoning fills the rest.
 - The curated note says what was asked, what was concluded, why, and the caveats the reasoning raised. Corrections and preferences are stated as such. It cites the records and documents the answers cited.
 - It may answer `NOTHING`, as now.
-- **When:** a conversation is queued once it has been quiet for `embedding_quiet_minutes` and has changed since its last curation, not only when a search retrieves it twice. Today only 3 of 48 chats were curated, because a transcript is queued only after it is used.
+- **When:** a conversation is queued once it has been quiet for `agent_curate_quiet_minutes` (default 60) and has changed since its last curation, not only when a search retrieves it twice. An hour, not the 5 minutes embedding waits, so a chat picked up again after a short pause isn't curated in between; a later change rewrites its note in place. Today only 3 of 48 chats were curated, because a transcript is queued only after it is used.
 
 **Raw conversations are not pool documents.** Only the curated note is in the pool and searchable. `sync_session_document` stops writing `chat_session` documents. The conversation stays readable on `/chat` for its owner, as now.
 
@@ -122,7 +120,7 @@ A deployment can keep raw transcripts searchable (`agent_transcript_documents`, 
 
 ## Visibility
 
-- Raw conversation rows of every type are visible only to the session's owner, as `agent_session` already is. Today's exception, the shared transcript document, goes away with the transcript documents.
+- Raw conversation rows of every type are visible only to the session's owner, as `agent_session` already is, and to admins for debugging. Today's exception, the shared transcript document, goes away with the transcript documents. A colleague gets a conversation's curated note instead; a "share this chat" action can come later if people ask for it.
 - Curated notes are shared, like every pool document. A curated note is written for the team: it states findings, not who asked.
 - Logs are readable by the owner and by admins (debugging, audit).
 
@@ -149,9 +147,11 @@ What pruning does:
 - **`model_input`:** cleared, as `prune_prompts` does today.
 - **Raw knowledge under `lean`:** removed only after the conversation's curated note exists or curation answered `NOTHING`, so nothing is lost before it is curated.
 
-One job runs every rule: `daat store prune`, which already prunes prompts and the passage cache, on the jobs timer. `prompt_retention_days` stays readable as an alias for `model_input_days`.
+**"Prompt" in the code is the model input, not the person's request.** `agent_model_call.prompt`, `prompt_retention_days` and `prune_prompts` all mean the text assembled for one model call: the system prompt, the conversation so far and every tool result in it, stored again on every call. Clearing it removes those copies. The person's request is a `request` row in its conversation and is never touched by `model_input_days`. To end the double meaning, `prompt_retention_days` is renamed `model_input_days` (the old name still read as an alias), and `prune_prompts` becomes `prune_model_input`.
 
-With production's numbers, `standard` keeps the 0.4 M characters of knowledge forever. It keeps 30 days of prompts (today 26 M characters over 60 days) and 90 days of tool results (2.7 M), then their stubs.
+One job runs every rule: `daat store prune`, which already prunes stored model input and the passage cache, on the jobs timer.
+
+With production's numbers, `standard` keeps the 0.4 M characters of knowledge forever. It keeps 30 days of model input (today 26 M characters over 60 days) and 90 days of tool results (2.7 M), then their stubs.
 
 ## Migration
 
@@ -171,25 +171,24 @@ Each step is reversible from the Cloud SQL backup. Only step 2 removes anything 
 
 ## Decisions
 
-Settled:
-1. "Prompt" as knowledge means the person's `request`; the assembled model input is a log (2026-11-04).
-
-Proposed, for the maintainer:
-1. **Storage:** typed rows in `agent_message` (proposed), or a separate `agent_tool_trace` table.
-2. **Transcript documents:** retired for curated notes only (proposed), kept without tool output, or Phase 5 segments.
-3. **Visibility:** raw conversations owner-only, curated notes shared (proposed).
-4. **Thinking:** add `agent_thinking`, default `off` until the scorecard shows its cost and gain (proposed), or on by default.
-5. **Curation trigger for conversations:** on quiet plus changed (proposed), or keep the use-driven queue.
-6. **Strategy defaults and assignment:** the table above. Production on `standard`; daat-test on `lean`; eval and demo on `full`.
+Settled 2026-11-04:
+1. **"Prompt" as knowledge** means the person's `request`. The assembled model input is a log.
+2. **Storage:** typed rows in `agent_message`, no new table. The model needs every tool call paired with its result, and that pairing and the `in_context` flag already live there. Readers filter by type through one helper per use (curation input, context, display).
+3. **Transcript documents** are retired. Each is archived only after its conversation's curated note exists, or curation answered `NOTHING`, so nothing leaves search before its note is there. Phase 5 segments only if the scorecard later shows curated notes missing what people ask for.
+4. **Visibility:** raw conversations for their owner and admins; curated notes shared.
+5. **Thinking:** `agent_thinking` added. The live scorecard decides between `off` and `summary` against a bar set before the run; production runs `summary` if it passes.
+6. **Curation trigger:** quiet for `agent_curate_quiet_minutes` (60) and changed since the last curation, alongside the use-driven queue.
+7. **Strategies:** production `standard` (knowledge forever, tool traces 90 days, model input 30 days); daat-test `lean` (a partner's environment keeps as little as possible beyond curated knowledge); eval, demo and local dev `full`.
+8. **Naming:** `prompt_retention_days` becomes `model_input_days`, with the old name still accepted.
 
 ## Implementation
 
-These pieces are handed out as issues once the decisions are made, in this order. Each one measures its effect.
+Each piece is its own issue, in this order; 5 can run alongside the others since it needs only a scorecard run. Each one measures its effect.
 
 1. **Typed storage and the sub-agent trail:** the columns; research and background steps written under their parent; `agent_model_call.loop` and the parent link. Measure: every research step and its last step are recoverable; `context-report` breaks down by loop. Absorbs #19's step 0.
-2. **Curation by type:** the conversation source (request, answer, reasoning from all loops), the quiet-plus-changed queue, transcript documents off, migration of the 48 transcripts. Measure: raw transcripts in the pool, from 48 documents (2.7 M characters) to none; scorecard `cites` and correctness; search hits on curated notes.
-3. **Retention strategies:** `agent_retention` with overrides, tool-trace stubs, one prune job. Measure: storage per type per day, before and after.
+2. **Curation by type and visibility:** the conversation source (request, answer, reasoning from all loops), the quiet-plus-changed queue, transcript documents off, migration of the 48 transcripts, raw conversations owner- and admin-only. Measure: raw transcripts in the pool, from 48 documents (2.7 M characters) to none; scorecard `cites` and correctness; search hits on curated notes.
+3. **Retention strategies:** `agent_retention` with overrides, tool-trace stubs, one prune job, the `model_input_days` rename. Measure: storage per type per day, before and after.
 4. **Context by type:** sub-agent start context and its returned reasoning (#19 options 1 and 2), masking (#12), carried-over corrections (#11). Measure: failed lookups and tokens per run.
-5. **Thinking capture:** `agent_thinking` per provider. Measure: token cost and scorecard answers with it on and off.
+5. **Thinking capture:** `agent_thinking` per provider. Measure: live scorecard `off` vs `summary` against the bar in decision 5.
 
 Tests for each: a research step that runs out of budget leaves its last step; a pruned tool result still pairs with its call; curation never reads a `tool_trace` row; a `lean` deployment removes raw knowledge only after curation; another user can't read a conversation's raw rows.
