@@ -253,8 +253,26 @@ function tests.the_document_group_runs_from_its_records()
     check(update.precheck({}, {}) == "nothing to update: pass title, content or parent_id",
         "document.update's precheck text changed")
     check(update.precheck({}, {title = "New title"}) == nil, "a document.update with a field to change goes to approval")
-    check(agent_tools.reject_before_approval("document", "update", {}) == nil,
-        "reject_before_approval still has a document.update case")
+end
+
+-- #6, step 2: the entity group runs from its records, and entity.update's
+-- precheck takes the last case reject_before_approval had, which is gone.
+function tests.the_entity_group_runs_from_its_records()
+    print("Testing every entity tool has a handler, and entity.update its precheck")
+    for _, method in ipairs({"list_types", "fields", "relationships", "query", "list", "get", "validate", "create", "update", "archive", "unarchive"}) do
+        record = agent_tools.AGENT_TOOLS.entity[method]
+        check(type(record.handler) == "function", "entity." .. method .. " has no handler")
+    end
+    update = agent_tools.AGENT_TOOLS.entity.update
+    check(type(update.precheck) == "function", "entity.update has no precheck")
+    check(update.precheck({}, {entity_type = "task", entity_id = 1}) ==
+        "nothing to update: pass each field to change as its own argument, e.g. status = \"finished\"",
+        "entity.update's precheck text changed")
+    check(update.precheck({}, {entity_type = "task", entity_id = 1, reason = "why"}) != nil,
+        "a reason alone is not a field to change")
+    check(update.precheck({}, {entity_type = "task", entity_id = 1, status = "done"}) == nil,
+        "an entity.update with a field to change goes to approval")
+    check(agent_tools.reject_before_approval == nil, "reject_before_approval should be gone")
 end
 
 -- The hints that moved into shared helpers still read exactly as before:

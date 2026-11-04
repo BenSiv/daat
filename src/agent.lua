@@ -1465,15 +1465,14 @@ function agent.tool_ctx(db_path, author, session_id)
 end
 
 -- Why a destructive call can't do anything, so nobody is asked to approve
--- a no-op; nil when it may go to approval. The record's own precheck once
--- its group has moved (#6, steps 1 and 2); until then
--- reject_before_approval, which still holds those cases.
+-- a no-op; nil when it may go to approval. The record's own precheck
+-- (document.update and entity.update have one, #6); a tool without one
+-- always goes to approval.
 function agent.precheck(record, ctx, tool_name, method_name, args)
     if record.precheck != nil then
         return record.precheck(ctx, args)
     end
-    agent_tools = require("agent_tools")
-    return agent_tools.reject_before_approval(tool_name, method_name, args)
+    return nil
 end
 
 -- An approved extension's capabilities.tools entry as a record. Its
