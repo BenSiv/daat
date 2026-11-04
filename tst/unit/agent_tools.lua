@@ -88,13 +88,12 @@ function tests.every_declared_method_reaches_a_handler(db_path)
     end)
 end
 
--- Every `tool_name == "x" and method_name == "y"` branch in the old
--- dispatch chain (execute_tool_chain, which execute_tool falls back to for
--- a tool whose record has no handler yet) names a declared tool. Reads
--- only that function. Once #6 has moved every handler into its record
--- the chain is gone; delete this then.
-function tests.every_handler_in_execute_tool_is_declared()
-    print("Testing every branch in execute_tool_chain is a declared tool")
+-- Every built-in tool runs from its record's handler (#6, steps 1-6):
+-- execute_tool_chain, until step 8 deletes it, holds only the extension
+-- fallback. A `tool_name == "x"` branch there again would be a tool
+-- handled the old way, and possibly in two places.
+function tests.no_builtin_tool_is_dispatched_by_name()
+    print("Testing execute_tool_chain has no built-in tool branches left")
     f = io.open("src/agent_tools.lua", "r")
     check(f != nil, "can't open src/agent_tools.lua (run from the repo root)")
     if f == nil then
@@ -109,19 +108,9 @@ function tests.every_handler_in_execute_tool_is_declared()
     end
     finish = string.find(source, "\nend\n", start, true)
     body = string.sub(source, start, finish)
-    count = 0
     for group, method in string.gmatch(body, "tool_name == \"([%w_]+)\" and method_name == \"([%w_]+)\"") do
-        count = count + 1
-        declared = agent_tools.AGENT_TOOLS[group] != nil and agent_tools.AGENT_TOOLS[group][method] != nil
-        check(declared, "execute_tool handles " .. group .. "." .. method .. ", which isn't declared in AGENT_TOOLS")
-        -- #6 deletes a group's branches in the same step that gives its
-        -- records handlers, so no tool is ever handled in two places.
-        if declared then
-            check(agent_tools.AGENT_TOOLS[group][method].handler == nil,
-                group .. "." .. method .. " has a handler in its record and still a branch in execute_tool_chain")
-        end
+        check(false, "execute_tool_chain dispatches " .. group .. "." .. method .. " by name; give its record a handler instead")
     end
-    check(count > 0, "found no branches in execute_tool; has the pattern changed?")
 end
 
 -- The whole declaration list, as each provider receives it. A schema a

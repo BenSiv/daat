@@ -1784,22 +1784,29 @@ agent_tools.AGENT_TOOLS.research.investigate.handler = research_investigate
 agent_tools.AGENT_TOOLS.background.start.handler = background_start
 agent_tools.AGENT_TOOLS.background.status.handler = background_status
 
+-- internet_search's handler (#6, step 6), moved the same way as the
+-- document group's above. Destructive: each search is a data exit, so
+-- it goes through approval like a write (see its record).
+
+function internet_search_search(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    if args.query == nil or args.query == "" then
+        return nil, "search requires query"
+    end
+    response, err = search_provider.search(args.query)
+    if response == nil then
+        return nil, err
+    end
+    return search_provider.format_results(response)
+end
+
+agent_tools.AGENT_TOOLS.internet_search.search.handler = internet_search_search
+
 -- Every built-in tool's handler until #6 moves it into its record, then
 -- the extension fallback; agent_tools.execute_tool, below, is the entry
 -- point. Shrinks one group per #6 step and is deleted in step 8.
 function execute_tool_chain(db_path, author, session_id, tool_name, method_name, args)
     source = {notebook_entry_id = "agent-session:" .. tostring(session_id)}
-
-    if tool_name == "internet_search" and method_name == "search" then
-        if args.query == nil or args.query == "" then
-            return nil, "search requires query"
-        end
-        response, err = search_provider.search(args.query)
-        if response == nil then
-            return nil, err
-        end
-        return search_provider.format_results(response)
-    end
 
     ext_manifest, ext_tool = agent_tools.find_extension_tool(db_path, tool_name, method_name)
     if ext_manifest != nil then
