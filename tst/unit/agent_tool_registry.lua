@@ -157,6 +157,9 @@ function tests.extension_tools_become_records_in_manifest_order()
     check(peek.destructive == false, "an absent destructive flag means read-only, as before")
     check(lookup.repeat_safe == false and lookup.pin_on_compaction == false, "extension tools are never answered from context or pinned")
     check(lookup.extension == "widgets", "an extension record names its extension")
+    -- #6 step 7: an extension tool runs from its record like a built-in.
+    check(type(lookup.handler) == "function" and type(bump.handler) == "function",
+        "an extension record has a handler that runs the extension's tool")
     check(lookup.description == "lookup does a thing" and lookup.parameters.type == "object", "description and parameters come from the manifest")
 end
 

@@ -536,29 +536,6 @@ agent_tools.AGENT_TOOLS = {
     },
 }
 
--- The extension-tools plugin surface (doc/plugin-system-research.md,
--- brex 278013129): an approved extension's capabilities.tools entries
--- are dispatched under tool_name = the extension's own manifest.name
--- (validated collision-free against AGENT_TOOLS' own top-level keys at
--- manifest-validate time, see extension.is_reserved_tool_name), so
--- they slot into the exact same tool_name.method_name lookup built-ins
--- use, with no remapping table at all. Returns the matching manifest
--- and tool spec, or nil if tool_name isn't an approved extension's own
--- name or it declares no matching method.
-function agent_tools.find_extension_tool(db_path, tool_name, method_name)
-    for _, entry in ipairs(extension.approved_with_tools(db_path, config.extensions_dir())) do
-        if entry.name == tool_name then
-            for _, tool in ipairs(entry.manifest.capabilities.tools) do
-                if tool.name == method_name then
-                    return entry.manifest, tool
-                end
-            end
-            return nil
-        end
-    end
-    return nil
-end
-
 function issues_summary(issues)
     if issues == nil or #issues == 0 then
         return "failed"
@@ -1802,36 +1779,11 @@ end
 
 agent_tools.AGENT_TOOLS.internet_search.search.handler = internet_search_search
 
--- Every built-in tool's handler until #6 moves it into its record, then
--- the extension fallback; agent_tools.execute_tool, below, is the entry
--- point. Shrinks one group per #6 step and is deleted in step 8.
+-- What execute_tool falls back to for a tool whose record has no handler.
+-- Every built-in tool and, since #6 step 7, every extension tool has one,
+-- so all that's left is the answer for a tool nobody declared; step 8
+-- deletes this.
 function execute_tool_chain(db_path, author, session_id, tool_name, method_name, args)
-    source = {notebook_entry_id = "agent-session:" .. tostring(session_id)}
-
-    ext_manifest, ext_tool = agent_tools.find_extension_tool(db_path, tool_name, method_name)
-    if ext_manifest != nil then
-        hooks, hooks_err = extension.load_hooks(config.extensions_dir(), tool_name, ext_manifest)
-        if hooks == nil then
-            if hooks_err != nil then
-                return nil, hooks_err
-            end
-            return nil, "extension '" .. tool_name .. "' does not implement tool '" .. method_name .. "'"
-        end
-        handler = nil
-        if type(hooks.tools) == "table" then
-            handler = hooks.tools[method_name]
-        end
-        if type(handler) != "function" then
-            return nil, "extension '" .. tool_name .. "' does not implement tool '" .. method_name .. "'"
-        end
-        ctx = entity.build_ctx(db_path, ext_manifest)
-        call_ok, result, call_err = pcall(handler, ctx, args)
-        if call_ok == false then
-            return nil, tostring(result)
-        end
-        return result, call_err
-    end
-
     return nil, "unknown tool: " .. tostring(tool_name) .. "." .. tostring(method_name)
 end
 
