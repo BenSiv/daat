@@ -978,11 +978,6 @@ function canonical_json(value)
 end
 agent.canonical_json = canonical_json
 
--- Whether the built-in tool "group.method" has `field` set on its record
--- (repeat_safe, pin_on_compaction): read from AGENT_TOOLS, not kept as a
--- second list of names (#6). Built-ins only, and that's the whole answer:
--- an extension's record never sets either, since its tool may have
--- effects daat can't see.
 -- The built-in record for "group.method", or nil. No database: for
 -- callers that only have a stored tool call (display, compaction) and
 -- ask about a built-in's own fields.
@@ -1001,6 +996,11 @@ function builtin_record(full_name)
 end
 agent.builtin_record = builtin_record
 
+-- Whether the built-in tool "group.method" has `field` set on its record
+-- (repeat_safe, pin_on_compaction): read from AGENT_TOOLS, not kept as a
+-- second list of names (#6). Built-ins only, and that's the whole answer:
+-- an extension's record never sets either, since its tool may have
+-- effects daat can't see.
 function builtin_tool_has(full_name, field)
     record = builtin_record(full_name)
     return record != nil and record[field] == true
@@ -1540,6 +1540,17 @@ function extension_tool_record(entry, tool)
     }
 end
 
+-- A table's keys, sorted: for building anything whose order matters
+-- from a table, without depending on its iteration order.
+function sorted_keys(t)
+    keys = {}
+    for k, _ in pairs(t) do
+        table.insert(keys, k)
+    end
+    table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+    return keys
+end
+
 -- agent.build_tool_registry(builtins, extensions) -> registry, ordered, refused
 -- Pure, so its rules are unit-tested without a database. `builtins` is
 -- AGENT_TOOLS; `extensions` is extension.approved_with_tools' list.
@@ -1556,17 +1567,6 @@ end
 -- rule where the tools are actually resolved) or when it declares one
 -- tool name twice, which used to reach the model as two declarations
 -- with the same name.
--- A table's keys, sorted: for building anything whose order matters
--- from a table, without depending on its iteration order.
-function sorted_keys(t)
-    keys = {}
-    for k, _ in pairs(t) do
-        table.insert(keys, k)
-    end
-    table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
-    return keys
-end
-
 function agent.build_tool_registry(builtins, extensions)
     registry = {}
     ordered = {}
