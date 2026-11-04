@@ -99,6 +99,7 @@ Three drop-in mechanisms, none requiring changes to `src/`:
 ## Coding conventions
 
 - Luam has no `local` keyword -- bare assignment scopes to the enclosing block automatically. Every file in `src/` relies on this; don't reach for `local` out of habit if you're used to standard Lua.
+- `review-checklist.md` collects the rules every change is reviewed against: process, the agent loop, code and tests. Read it before your first PR.
 - Comments in this codebase are dense, first-person engineering-log prose (rationale, rejected alternatives, explicit tradeoffs), not terse conventional comments -- match the existing style in a file rather than switching it to something terser.
 
 ## Docs that mix in private deployment details
@@ -117,5 +118,6 @@ Everything else in `doc/` (`architecture.md`, `schema.md`, `extensibility.md`, `
 - `extensibility.md` -- the extension system in full.
 - `api.md` -- the HTTP API surface.
 - `agent-protocol.md` -- the LLM-provider protocol every `agent_provider_*.lua` backend implements.
+- `review-checklist.md` -- what a PR is checked against.
 - `glossary.md` -- terminology, keep it open while writing docs or UI copy.
 - `../README.md` -- overview, build/test basics, links to the docs.
