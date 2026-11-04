@@ -6,6 +6,7 @@
 -- research sub-agent may call is one predicate. agent.build_tool_registry
 -- is pure; only the dispatcher tests, which call execute_tool, use a store.
 
+json = require("dkjson")
 agent = require("agent")
 agent_tools = require("agent_tools")
 init = require("init")
@@ -297,6 +298,59 @@ function tests.moved_hints_keep_their_text(db_path)
     check(agent_tools.hint_result_columns({"id", "od"}) == "actual columns: id, od", "hint_result_columns changed")
     check(agent_tools.hint_entity_type({db_path = db_path}, "zz_nope") == "call entity.list_types for the full list",
         "hint_entity_type without a near match changed")
+end
+
+-- The order the model is shown is set by name, not by how a table
+-- iterates or a directory lists: two registries built from the same
+-- tools added in different orders list them identically.
+function tests.declaration_order_is_by_name_not_by_insertion()
+    print("Testing the registry orders built-ins by name and extensions by name, whatever order they were added in")
+    one = {}
+    one.zeta = {b = tool("b", false), a = tool("a", false)}
+    one.alpha = {only = tool("only", false)}
+    two = {}
+    two.alpha = {only = tool("only", false)}
+    two.zeta = {a = tool("a", false), b = tool("b", false)}
+    exts_one = {extension_entry("zz_ext", {tool("second", false), tool("first", false)}), extension_entry("aa_ext", {tool("x", false)})}
+    exts_two = {extension_entry("aa_ext", {tool("x", false)}), extension_entry("zz_ext", {tool("second", false), tool("first", false)})}
+    names = function(builtins, extensions)
+        _, ordered, _ = agent.build_tool_registry(builtins, extensions)
+        out = {}
+        for _, e in ipairs(ordered) do
+            table.insert(out, e.group .. "." .. e.method)
+        end
+        return table.concat(out, ",")
+    end
+    expected = "alpha.only,zeta.a,zeta.b,aa_ext.x,zz_ext.second,zz_ext.first"
+    check(names(one, exts_one) == expected, "got " .. names(one, exts_one))
+    check(names(two, exts_two) == expected, "got " .. names(two, exts_two))
+end
+
+-- No tool name is special-cased in agent.lua (#6, "Done when"): a
+-- turn-ending call is shown by its control kind, and the /sql console
+-- prefill takes any tool call that ran SQL.
+function tests.a_turn_ending_call_is_shown_by_its_kind_not_its_name()
+    print("Testing display_blocks shows a turn-ending call's message argument, read from its control kind")
+    asked = agent.display_blocks({{type = "toolCall", name = "clarify.ask", arguments = {question = "Which run?"}}})
+    check(asked == "Which run?", "clarify.ask should show its question, got: " .. tostring(asked))
+    blank = agent.display_blocks({{type = "toolCall", name = "clarify.ask", arguments = {}}})
+    check(blank == "(no question given)", "a question-less clarify.ask keeps its old text, got: " .. tostring(blank))
+    other = agent.display_blocks({{type = "toolCall", name = "entity.get", arguments = {}}})
+    check(other == "-> entity.get(...)", "an ordinary call is still a one-line stub, got: " .. tostring(other))
+end
+
+function tests.the_console_prefill_takes_any_tool_call_that_ran_sql(db_path)
+    print("Testing last_console_query_sql reads the newest sql argument, whichever tool took it")
+    session_id = agent.create_session(db_path, "alice", "SQL prefill")
+    agent.add_message(db_path, session_id, "assistant", json.encode({blocks = {
+        {type = "toolCall", id = "c1", name = "entity.query", arguments = {sql = "SELECT 1"}}}}), true)
+    check(agent.last_console_query_sql(db_path, session_id) == "SELECT 1", "entity.query's sql should prefill")
+    agent.add_message(db_path, session_id, "assistant", json.encode({blocks = {
+        {type = "toolCall", id = "c2", name = "stats.fit", arguments = {sql = "SELECT 2", x_column = "x", y_column = "y"}}}}), true)
+    check(agent.last_console_query_sql(db_path, session_id) == "SELECT 2", "a newer stats.fit query should prefill")
+    agent.add_message(db_path, session_id, "assistant", json.encode({blocks = {
+        {type = "toolCall", id = "c3", name = "entity.get", arguments = {entity_type = "task", entity_id = 1}}}}), true)
+    check(agent.last_console_query_sql(db_path, session_id) == "SELECT 2", "a call without sql shouldn't change the prefill")
 end
 
 dir = os.tmpname()

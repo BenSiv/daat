@@ -572,21 +572,26 @@ function display_blocks(blocks, include_tool_calls)
             table.insert(parts, block.text)
         elseif block.type == "thinking" and block.thinking != nil then
             table.insert(parts, block.thinking)
-        elseif block.type == "toolCall" and block.name == "clarify.ask" then
-            question = nil
+        elseif block.type == "toolCall" and agent.turn_ending_kind(agent.builtin_record(block.name)) != nil then
+            -- A call that ends the turn (clarify.ask) is shown as what it
+            -- says to the person -- its kind's message argument -- read
+            -- from the record's control kind, not its name (#6).
+            kind = agent.turn_ending_kind(agent.builtin_record(block.name))
+            message = nil
             if block.arguments != nil then
-                question = block.arguments.question
+                message = block.arguments[kind.message_argument]
             end
-            if question == nil then
-                question = "(no question given)"
+            if message == nil then
+                message = kind.missing_message
             end
-            table.insert(parts, question)
+            table.insert(parts, message)
         elseif block.type == "toolCall" and include_tool_calls == true then
             table.insert(parts, "-> " .. tostring(block.name) .. "(...)")
         end
     end
     return table.concat(parts, "\n")
 end
+agent.display_blocks = display_blocks
 
 -- Just the real "text" blocks -- no thinking, no toolCall lines. Used
 -- specifically where a caller needs to judge the model's actual answer
@@ -783,8 +788,10 @@ function agent.extract_sql_from_text(text)
     return candidate
 end
 
--- The console-prefill value for a session: the most recent of either an
--- entity.query tool call's own `sql` argument, or SQL the model wrote out
+-- The console-prefill value for a session: the most recent of either a
+-- tool call's own `sql` argument (entity.query, and stats.fit and
+-- plot.from_query, which run the same read-only SELECT -- any tool that
+-- takes SQL, not one tool by name, #6), or SQL the model wrote out
 -- as plain final-answer text (see agent.extract_sql_from_text) -- whichever
 -- happened more recently, scanning assistant messages newest-first so a
 -- later plain-text answer correctly overrides an older real tool call and
@@ -803,7 +810,7 @@ function agent.last_console_query_sql(db_path, session_id)
         decoded, _, _ = json.decode(row.content)
         if decoded != nil and decoded.blocks != nil then
             for _, block in ipairs(decoded.blocks) do
-                if block.type == "toolCall" and block.name == "entity.query" and block.arguments != nil and block.arguments.sql != nil then
+                if block.type == "toolCall" and block.arguments != nil and type(block.arguments.sql) == "string" then
                     return block.arguments.sql
                 end
                 if block.type == "text" then
@@ -976,18 +983,26 @@ agent.canonical_json = canonical_json
 -- second list of names (#6). Built-ins only, and that's the whole answer:
 -- an extension's record never sets either, since its tool may have
 -- effects daat can't see.
-function builtin_tool_has(full_name, field)
+-- The built-in record for "group.method", or nil. No database: for
+-- callers that only have a stored tool call (display, compaction) and
+-- ask about a built-in's own fields.
+function builtin_record(full_name)
     agent_tools = require("agent_tools")
     name = tostring(full_name)
     dot = string.find(name, ".", 1, true)
     if dot == nil then
-        return false
+        return nil
     end
     group = agent_tools.AGENT_TOOLS[string.sub(name, 1, dot - 1)]
     if group == nil then
-        return false
+        return nil
     end
-    record = group[string.sub(name, dot + 1)]
+    return group[string.sub(name, dot + 1)]
+end
+agent.builtin_record = builtin_record
+
+function builtin_tool_has(full_name, field)
+    record = builtin_record(full_name)
     return record != nil and record[field] == true
 end
 agent.builtin_tool_has = builtin_tool_has
@@ -1434,6 +1449,7 @@ CONTROL_KINDS = {
         another_this_turn = "ERROR: skipped -- only one clarifying question can be asked per turn",
         status = "needs_clarification",
         message_argument = "question",
+        missing_message = "(no question given)",
     },
     research = {ends_turn = false},
     background = {ends_turn = false},
@@ -1529,26 +1545,46 @@ end
 -- AGENT_TOOLS; `extensions` is extension.approved_with_tools' list.
 --   registry[group][method] = record, for lookups;
 --   ordered = {{group, method, record}, ...}, in declaration order:
---     built-ins in pairs(AGENT_TOOLS) order, then each extension's tools
---     in manifest order -- exactly the order the model was always shown;
+--     built-ins sorted by group, then method; then extensions sorted by
+--     name, each with its tools in the order its manifest lists them.
+--     The order is set here, by name, never by how a table happens to
+--     iterate (pairs) or a directory happens to list (lfs.dir), so what
+--     the model is shown is the same on every build and every disk;
 --   refused = {{name, reason}, ...}, extensions left out whole.
 -- An extension is refused rather than merged when its name is a built-in
 -- group (manifest validation rejects that already, #15; this is the same
 -- rule where the tools are actually resolved) or when it declares one
 -- tool name twice, which used to reach the model as two declarations
 -- with the same name.
+-- A table's keys, sorted: for building anything whose order matters
+-- from a table, without depending on its iteration order.
+function sorted_keys(t)
+    keys = {}
+    for k, _ in pairs(t) do
+        table.insert(keys, k)
+    end
+    table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+    return keys
+end
+
 function agent.build_tool_registry(builtins, extensions)
     registry = {}
     ordered = {}
     refused = {}
-    for group, methods in pairs(builtins) do
+    for _, group in ipairs(sorted_keys(builtins)) do
+        methods = builtins[group]
         registry[group] = {}
-        for method, record in pairs(methods) do
-            registry[group][method] = record
-            table.insert(ordered, {group = group, method = method, record = record})
+        for _, method in ipairs(sorted_keys(methods)) do
+            registry[group][method] = methods[method]
+            table.insert(ordered, {group = group, method = method, record = methods[method]})
         end
     end
+    by_name = {}
     for _, entry in ipairs(extensions) do
+        table.insert(by_name, entry)
+    end
+    table.sort(by_name, function(a, b) return tostring(a.name) < tostring(b.name) end)
+    for _, entry in ipairs(by_name) do
         reason = nil
         if registry[entry.name] != nil then
             reason = "its name is a built-in tool group"
