@@ -753,19 +753,18 @@ end
 
 NOTHING_TO_UPDATE = "nothing to update: pass each field to change as its own argument, e.g. status = \"finished\""
 
--- Refuses a destructive call that can't do anything, before it becomes
--- a pending action: a person shouldn't be asked to approve a no-op, and
--- an update that reports success while changing nothing kept the model
--- re-proposing it (found by the agent scorecard, doc/agent-eval.md:
--- ten approved entity.update calls with no field). Returns the error
--- text, or nil when the call may go to approval. A tool whose record has
--- a precheck no longer has a case here (document.update, #6 step 1);
--- entity.update's moves in step 2, and then this goes.
-function agent_tools.reject_before_approval(tool_name, method_name, args)
+-- Refuses an entity.update that sets nothing, before it becomes a pending
+-- action: a person shouldn't be asked to approve a no-op, and an update
+-- that reports success while changing nothing kept the model re-proposing
+-- it (found by the agent scorecard, doc/agent-eval.md: ten approved
+-- entity.update calls with no field). entity.update's precheck (#6, step
+-- 2); it was the last case left in reject_before_approval, which is gone.
+-- The handler still runs the same check if a call reaches it.
+function entity_update_precheck(ctx, args)
     if args == nil then
         args = {}
     end
-    if tool_name == "entity" and method_name == "update" and next(entity_update_values(args)) == nil then
+    if next(entity_update_values(args)) == nil then
         return NOTHING_TO_UPDATE
     end
     return nil
@@ -1064,140 +1063,363 @@ agent_tools.AGENT_TOOLS.document.children.handler = document_children
 agent_tools.AGENT_TOOLS.document.links.handler = document_links
 agent_tools.AGENT_TOOLS.document.breadcrumbs.handler = document_breadcrumbs
 
+-- The entity group's handlers (#6, step 2), moved the same way as the
+-- document group's above: each branch word for word, ctx unpacked on the
+-- first line.
+
+function entity_list_types(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    types = schema.list(db_path)
+    if #types == 0 then
+        return "No entity types registered."
+    end
+    names = {}
+    for _, t in ipairs(types) do
+        table.insert(names, t.name)
+    end
+    return table.concat(names, ", ")
+end
+
+function entity_fields(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    if args.entity_type == nil then
+        return nil, "fields requires entity_type"
+    end
+    if HAND_ROLLED_ENTITY_FIELDS[args.entity_type] != nil then
+        return "'" .. args.entity_type .. "' is a real table, hand-rolled rather than schema.register()'d -- it has no editable schema, but these are its actual SQL columns:\n" .. HAND_ROLLED_ENTITY_FIELDS[args.entity_type]()
+    end
+    if schema.is_registered(db_path, args.entity_type) == false then
+        return nil, unknown_entity_type_message(db_path, args.entity_type)
+    end
+    fields = schema.fields(db_path, args.entity_type)
+    if #fields == 0 then
+        return "'" .. tostring(args.entity_type) .. "' is a registered entity type with no custom fields (only the system-managed id/created/updated columns)."
+    end
+    lines = {}
+    for _, f in ipairs(fields) do
+        required = ""
+        if tonumber(f.required) == 1 then
+            required = ", required"
+        end
+        line = string.format("%s (%s%s)", f.name, f.type, required)
+        if f.type == "multi_select" or f.type == "multi_reference" then
+            value_col = "value"
+            if f.type == "multi_reference" then
+                value_col = f.name .. "_id"
+            end
+            line = line .. " -- not a column on " .. args.entity_type .. ": stored in junction table " ..
+                schema.multi_field_table_name(args.entity_type, f.name) .. "(" .. args.entity_type .. "_id, " .. value_col .. ")"
+        elseif f.type == "polymorphic_reference" or f.type == "multi_polymorphic_reference" then
+            line = line .. " -- not a column on " .. args.entity_type .. ": stored in entity_ref(from_type, from_id, field_name, to_type, to_id); join with from_type = '" ..
+                args.entity_type .. "' AND field_name = '" .. f.name .. "' AND from_id = " .. args.entity_type .. ".id"
+        end
+        table.insert(lines, line)
+    end
+    table.insert(lines, "")
+    table.insert(lines, "System columns on every row (not listed above): id, name, external_id, created_by, created_at, updated_by, updated_at, archived_at (non-NULL = archived; filter archived_at IS NULL for live rows).")
+    -- `document` also carries knowledge-pool columns intentionally kept
+    -- out of schema.fields (see document.lua's KNOWLEDGE_POOL_SQL_COLUMNS
+    -- comment) -- surface them here too, so a query touching
+    -- heat/tier/retrieval/source has real column names to ground in
+    -- instead of inventing a table.
+    if args.entity_type == "document" then
+        table.insert(lines, "")
+        table.insert(lines, "Additional columns on the real `document` table, queryable in SQL but not part of the editable schema above (the knowledge-pool mechanism's own tier/heat/retrieval/source tracking):")
+        table.insert(lines, document.knowledge_pool_sql_columns_text())
+    end
+    return table.concat(lines, "\n")
+end
+
+function entity_relationships(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    edges = schema.relationships(db_path)
+    if #edges == 0 then
+        return "No reference relationships registered between any entity types."
+    end
+    lines = {}
+    for _, edge in ipairs(edges) do
+        table.insert(lines, string.format("%s.%s -> %s (%s)", edge.from_type, edge.field_name, edge.to_type, edge.field_type))
+    end
+    table.sort(lines)
+    return table.concat(lines, "\n")
+end
+
+function entity_query(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    if args.sql == nil then
+        return nil, "query requires sql"
+    end
+    column_names, rows, err, truncated, total_count, archived_note = view.run_agent_query(db_path, args.sql)
+    if column_names == nil then
+        return nil, tostring(err)
+    end
+    if #rows == 0 then
+        if archived_note != nil then
+            return "Query returned no rows.\n\n" .. archived_note
+        end
+        return "Query returned no rows."
+    end
+    lines = {}
+    table.insert(lines, table.concat(column_names, " | "))
+    char_cap = config.platform_config().agent_query_char_cap
+    used = string.len(lines[1])
+    shown = 0
+    for _, row in ipairs(rows) do
+        values = {}
+        for _, col in ipairs(column_names) do
+            table.insert(values, tostring(row[col]))
+        end
+        line = table.concat(values, " | ")
+        if shown > 0 and used + string.len(line) + 1 > char_cap then
+            break
+        end
+        table.insert(lines, line)
+        used = used + string.len(line) + 1
+        shown = shown + 1
+    end
+    result = table.concat(lines, "\n")
+    if shown < #rows then
+        total_text = tostring(#rows)
+        if truncated == true and total_count != nil then
+            total_text = tostring(total_count)
+        end
+        result = result .. "\n\n(showing " .. tostring(shown) .. " of " .. total_text ..
+            " rows -- the result reached its size limit; select fewer columns, aggregate, or narrow the query)"
+        truncated = false
+    end
+    if truncated == true then
+        if total_count != nil then
+            result = result .. "\n\n(showing " .. tostring(#rows) .. " of " .. tostring(total_count) .. " total matching rows -- add your own LIMIT or narrow the query for a complete result)"
+        else
+            result = result .. "\n\n(truncated at " .. tostring(#rows) .. " rows -- add your own LIMIT or narrow the query for a complete result)"
+        end
+    end
+    if archived_note != nil then
+        result = result .. "\n\n" .. archived_note
+    end
+    return result
+end
+
+function entity_list(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    if args.entity_type == nil then
+        return nil, "list requires entity_type"
+    end
+    if schema.is_registered(db_path, args.entity_type) == false then
+        return nil, unknown_entity_type_message(db_path, args.entity_type)
+    end
+    limit = tonumber(args.limit)
+    if limit == nil then
+        limit = 20
+    end
+    offset = tonumber(args.offset)
+    -- Same GET-list shape /api/v1 already offers (filter_field +
+    -- limit/offset) -- a plain entity.list otherwise, unchanged.
+    rows = nil
+    if args.filter_field != nil and args.filter_value != nil then
+        rows = entity.list_by_field(db_path, args.entity_type, args.filter_field, args.filter_value, limit, offset, false)
+    else
+        rows = entity.list(db_path, args.entity_type, limit, offset, false)
+    end
+    if #rows == 0 then
+        return "No " .. tostring(args.entity_type) .. " rows found."
+    end
+    lines = {}
+    for _, row in ipairs(rows) do
+        table.insert(lines, "#" .. tostring(row.id) .. " " .. row_summary(row))
+    end
+    return table.concat(lines, "\n")
+end
+
+function entity_get(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    target_id = tonumber(args.entity_id)
+    if args.entity_type == nil or target_id == nil then
+        return nil, "get requires entity_type and entity_id"
+    end
+    if schema.is_registered(db_path, args.entity_type) == false then
+        return nil, unknown_entity_type_message(db_path, args.entity_type)
+    end
+    row = entity.get(db_path, args.entity_type, target_id)
+    if row == nil then
+        return nil, "no such " .. tostring(args.entity_type) .. " #" .. tostring(target_id)
+    end
+    limit = config.platform_config().agent_get_field_chars
+    if args.field != nil then
+        value = row[args.field]
+        if value == nil then
+            return nil, tostring(args.entity_type) .. " has no field '" .. tostring(args.field) .. "' (or it's empty)"
+        end
+        value = format_field_value(value)
+        start = tonumber(args.offset)
+        if start == nil or start < 0 then
+            start = 0
+        end
+        length = tonumber(args.length)
+        if length == nil or length <= 0 then
+            length = limit
+        end
+        total = string.len(value)
+        slice = string.sub(value, start + 1, start + length)
+        header = string.format("%s #%d %s, characters %d-%d of %d:", tostring(args.entity_type), target_id,
+            tostring(args.field), start, math.min(start + length, total), total)
+        if start + length < total then
+            return header .. "\n" .. slice .. string.format("\n[read on with offset=%d]", start + length)
+        end
+        return header .. "\n" .. slice
+    end
+    return row_summary(row, limit)
+end
+
+function entity_validate(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    if args.entity_type == nil then
+        return nil, "validate requires entity_type"
+    end
+    values = {}
+    for k, v in pairs(args) do
+        if k != "entity_type" and k != "entity_id" then
+            values[k] = v
+        end
+    end
+    target_id = tonumber(args.entity_id)
+    issues = nil
+    if target_id != nil then
+        current = entity.get(db_path, args.entity_type, target_id)
+        if current == nil then
+            return nil, "no such " .. tostring(args.entity_type) .. " #" .. tostring(target_id)
+        end
+        merged = {}
+        for k, v in pairs(current) do
+            merged[k] = v
+        end
+        for k, v in pairs(values) do
+            merged[k] = v
+        end
+        issues = entity.validate(db_path, args.entity_type, merged, current)
+    else
+        issues = entity.validate(db_path, args.entity_type, values)
+    end
+
+    blocking = false
+    lines = {}
+    for _, issue in ipairs(issues) do
+        field = issue.field
+        if field == nil then
+            field = "(general)"
+        end
+        table.insert(lines, string.format("[%s] %s: %s", tostring(issue.severity), field, tostring(issue.message)))
+        if issue.severity == "error" then
+            blocking = true
+        end
+    end
+    if #lines == 0 then
+        return "Valid -- entity.create/entity.update would succeed as given."
+    end
+    result = table.concat(lines, "\n")
+    if blocking == false then
+        result = result .. "\n\n(no blocking errors -- entity.create/entity.update would still succeed)"
+    end
+    return result
+end
+
+function entity_create(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    if args.entity_type == nil then
+        return nil, "create requires entity_type"
+    end
+    if agent_tools.check_write_capability(db_path, args.entity_type, author) == false then
+        return nil, "Forbidden: " .. tostring(args.entity_type) .. " requires your own Admin capability -- ask an admin to grant it to your account."
+    end
+    values = {}
+    for k, v in pairs(args) do
+        if k != "entity_type" then
+            values[k] = v
+        end
+    end
+    created_id, issues = entity.create(db_path, args.entity_type, values, author, source)
+    if created_id == nil then
+        return nil, issues_summary(issues)
+    end
+    return "Created " .. tostring(args.entity_type) .. " #" .. tostring(created_id)
+end
+
+function entity_update(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    target_id = tonumber(args.entity_id)
+    if args.entity_type == nil or target_id == nil then
+        return nil, "update requires entity_type and entity_id"
+    end
+    if agent_tools.check_write_capability(db_path, args.entity_type, author) == false then
+        return nil, "Forbidden: " .. tostring(args.entity_type) .. " requires your own Admin capability -- ask an admin to grant it to your account."
+    end
+    -- `reason` is metadata about the change, not a field being
+    -- changed on the entity itself -- pulled out the same way
+    -- entity_type/entity_id already are, so it never ends up as a
+    -- literal column update.
+    values = entity_update_values(args)
+    if next(values) == nil then
+        return nil, NOTHING_TO_UPDATE
+    end
+    updated_id, issues = entity.update(db_path, args.entity_type, target_id, values, author, source, args.reason)
+    if updated_id == nil then
+        return nil, issues_summary(issues)
+    end
+    return "Updated " .. tostring(args.entity_type) .. " #" .. tostring(updated_id)
+end
+
+function entity_archive(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    target_id = tonumber(args.entity_id)
+    if args.entity_type == nil or target_id == nil then
+        return nil, "archive requires entity_type and entity_id"
+    end
+    if agent_tools.check_write_capability(db_path, args.entity_type, author) == false then
+        return nil, "Forbidden: " .. tostring(args.entity_type) .. " requires your own Admin capability -- ask an admin to grant it to your account."
+    end
+    archived_id, issues = entity.archive(db_path, args.entity_type, target_id, author, source, args.reason)
+    if archived_id == nil then
+        return nil, issues_summary(issues)
+    end
+    document.on_entity_archived(db_path, args.entity_type, archived_id)
+    return "Archived " .. tostring(args.entity_type) .. " #" .. tostring(archived_id)
+end
+
+function entity_unarchive(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    target_id = tonumber(args.entity_id)
+    if args.entity_type == nil or target_id == nil then
+        return nil, "unarchive requires entity_type and entity_id"
+    end
+    if agent_tools.check_write_capability(db_path, args.entity_type, author) == false then
+        return nil, "Forbidden: " .. tostring(args.entity_type) .. " requires your own Admin capability -- ask an admin to grant it to your account."
+    end
+    unarchived_id, issues = entity.unarchive(db_path, args.entity_type, target_id, author, source)
+    if unarchived_id == nil then
+        return nil, issues_summary(issues)
+    end
+    document.on_entity_unarchived(db_path, args.entity_type, unarchived_id)
+    return "Unarchived " .. tostring(args.entity_type) .. " #" .. tostring(unarchived_id)
+end
+
+agent_tools.AGENT_TOOLS.entity.list_types.handler = entity_list_types
+agent_tools.AGENT_TOOLS.entity.fields.handler = entity_fields
+agent_tools.AGENT_TOOLS.entity.relationships.handler = entity_relationships
+agent_tools.AGENT_TOOLS.entity.query.handler = entity_query
+agent_tools.AGENT_TOOLS.entity.list.handler = entity_list
+agent_tools.AGENT_TOOLS.entity.get.handler = entity_get
+agent_tools.AGENT_TOOLS.entity.validate.handler = entity_validate
+agent_tools.AGENT_TOOLS.entity.create.handler = entity_create
+agent_tools.AGENT_TOOLS.entity.update.handler = entity_update
+agent_tools.AGENT_TOOLS.entity.archive.handler = entity_archive
+agent_tools.AGENT_TOOLS.entity.unarchive.handler = entity_unarchive
+agent_tools.AGENT_TOOLS.entity.update.precheck = entity_update_precheck
+
 -- Every built-in tool's handler until #6 moves it into its record, then
 -- the extension fallback; agent_tools.execute_tool, below, is the entry
 -- point. Shrinks one group per #6 step and is deleted in step 8.
 function execute_tool_chain(db_path, author, session_id, tool_name, method_name, args)
     source = {notebook_entry_id = "agent-session:" .. tostring(session_id)}
-
-    if tool_name == "entity" and method_name == "list_types" then
-        types = schema.list(db_path)
-        if #types == 0 then
-            return "No entity types registered."
-        end
-        names = {}
-        for _, t in ipairs(types) do
-            table.insert(names, t.name)
-        end
-        return table.concat(names, ", ")
-    end
-
-    if tool_name == "entity" and method_name == "fields" then
-        if args.entity_type == nil then
-            return nil, "fields requires entity_type"
-        end
-        if HAND_ROLLED_ENTITY_FIELDS[args.entity_type] != nil then
-            return "'" .. args.entity_type .. "' is a real table, hand-rolled rather than schema.register()'d -- it has no editable schema, but these are its actual SQL columns:\n" .. HAND_ROLLED_ENTITY_FIELDS[args.entity_type]()
-        end
-        if schema.is_registered(db_path, args.entity_type) == false then
-            return nil, unknown_entity_type_message(db_path, args.entity_type)
-        end
-        fields = schema.fields(db_path, args.entity_type)
-        if #fields == 0 then
-            return "'" .. tostring(args.entity_type) .. "' is a registered entity type with no custom fields (only the system-managed id/created/updated columns)."
-        end
-        lines = {}
-        for _, f in ipairs(fields) do
-            required = ""
-            if tonumber(f.required) == 1 then
-                required = ", required"
-            end
-            line = string.format("%s (%s%s)", f.name, f.type, required)
-            if f.type == "multi_select" or f.type == "multi_reference" then
-                value_col = "value"
-                if f.type == "multi_reference" then
-                    value_col = f.name .. "_id"
-                end
-                line = line .. " -- not a column on " .. args.entity_type .. ": stored in junction table " ..
-                    schema.multi_field_table_name(args.entity_type, f.name) .. "(" .. args.entity_type .. "_id, " .. value_col .. ")"
-            elseif f.type == "polymorphic_reference" or f.type == "multi_polymorphic_reference" then
-                line = line .. " -- not a column on " .. args.entity_type .. ": stored in entity_ref(from_type, from_id, field_name, to_type, to_id); join with from_type = '" ..
-                    args.entity_type .. "' AND field_name = '" .. f.name .. "' AND from_id = " .. args.entity_type .. ".id"
-            end
-            table.insert(lines, line)
-        end
-        table.insert(lines, "")
-        table.insert(lines, "System columns on every row (not listed above): id, name, external_id, created_by, created_at, updated_by, updated_at, archived_at (non-NULL = archived; filter archived_at IS NULL for live rows).")
-        -- `document` also carries knowledge-pool columns intentionally kept
-        -- out of schema.fields (see document.lua's KNOWLEDGE_POOL_SQL_COLUMNS
-        -- comment) -- surface them here too, so a query touching
-        -- heat/tier/retrieval/source has real column names to ground in
-        -- instead of inventing a table.
-        if args.entity_type == "document" then
-            table.insert(lines, "")
-            table.insert(lines, "Additional columns on the real `document` table, queryable in SQL but not part of the editable schema above (the knowledge-pool mechanism's own tier/heat/retrieval/source tracking):")
-            table.insert(lines, document.knowledge_pool_sql_columns_text())
-        end
-        return table.concat(lines, "\n")
-    end
-
-    if tool_name == "entity" and method_name == "relationships" then
-        edges = schema.relationships(db_path)
-        if #edges == 0 then
-            return "No reference relationships registered between any entity types."
-        end
-        lines = {}
-        for _, edge in ipairs(edges) do
-            table.insert(lines, string.format("%s.%s -> %s (%s)", edge.from_type, edge.field_name, edge.to_type, edge.field_type))
-        end
-        table.sort(lines)
-        return table.concat(lines, "\n")
-    end
-
-    if tool_name == "entity" and method_name == "query" then
-        if args.sql == nil then
-            return nil, "query requires sql"
-        end
-        column_names, rows, err, truncated, total_count, archived_note = view.run_agent_query(db_path, args.sql)
-        if column_names == nil then
-            return nil, tostring(err)
-        end
-        if #rows == 0 then
-            if archived_note != nil then
-                return "Query returned no rows.\n\n" .. archived_note
-            end
-            return "Query returned no rows."
-        end
-        lines = {}
-        table.insert(lines, table.concat(column_names, " | "))
-        char_cap = config.platform_config().agent_query_char_cap
-        used = string.len(lines[1])
-        shown = 0
-        for _, row in ipairs(rows) do
-            values = {}
-            for _, col in ipairs(column_names) do
-                table.insert(values, tostring(row[col]))
-            end
-            line = table.concat(values, " | ")
-            if shown > 0 and used + string.len(line) + 1 > char_cap then
-                break
-            end
-            table.insert(lines, line)
-            used = used + string.len(line) + 1
-            shown = shown + 1
-        end
-        result = table.concat(lines, "\n")
-        if shown < #rows then
-            total_text = tostring(#rows)
-            if truncated == true and total_count != nil then
-                total_text = tostring(total_count)
-            end
-            result = result .. "\n\n(showing " .. tostring(shown) .. " of " .. total_text ..
-                " rows -- the result reached its size limit; select fewer columns, aggregate, or narrow the query)"
-            truncated = false
-        end
-        if truncated == true then
-            if total_count != nil then
-                result = result .. "\n\n(showing " .. tostring(#rows) .. " of " .. tostring(total_count) .. " total matching rows -- add your own LIMIT or narrow the query for a complete result)"
-            else
-                result = result .. "\n\n(truncated at " .. tostring(#rows) .. " rows -- add your own LIMIT or narrow the query for a complete result)"
-            end
-        end
-        if archived_note != nil then
-            result = result .. "\n\n" .. archived_note
-        end
-        return result
-    end
 
     -- The full text of a tool result is always stored (agent_message);
     -- only what the model is shown gets cut (agent.cap_tool_text). Only
@@ -1314,201 +1536,6 @@ function execute_tool_chain(db_path, author, session_id, tool_name, method_name,
             end
         end
         return fence
-    end
-
-    if tool_name == "entity" and method_name == "list" then
-        if args.entity_type == nil then
-            return nil, "list requires entity_type"
-        end
-        if schema.is_registered(db_path, args.entity_type) == false then
-            return nil, unknown_entity_type_message(db_path, args.entity_type)
-        end
-        limit = tonumber(args.limit)
-        if limit == nil then
-            limit = 20
-        end
-        offset = tonumber(args.offset)
-        -- Same GET-list shape /api/v1 already offers (filter_field +
-        -- limit/offset) -- a plain entity.list otherwise, unchanged.
-        rows = nil
-        if args.filter_field != nil and args.filter_value != nil then
-            rows = entity.list_by_field(db_path, args.entity_type, args.filter_field, args.filter_value, limit, offset, false)
-        else
-            rows = entity.list(db_path, args.entity_type, limit, offset, false)
-        end
-        if #rows == 0 then
-            return "No " .. tostring(args.entity_type) .. " rows found."
-        end
-        lines = {}
-        for _, row in ipairs(rows) do
-            table.insert(lines, "#" .. tostring(row.id) .. " " .. row_summary(row))
-        end
-        return table.concat(lines, "\n")
-    end
-
-    if tool_name == "entity" and method_name == "get" then
-        target_id = tonumber(args.entity_id)
-        if args.entity_type == nil or target_id == nil then
-            return nil, "get requires entity_type and entity_id"
-        end
-        if schema.is_registered(db_path, args.entity_type) == false then
-            return nil, unknown_entity_type_message(db_path, args.entity_type)
-        end
-        row = entity.get(db_path, args.entity_type, target_id)
-        if row == nil then
-            return nil, "no such " .. tostring(args.entity_type) .. " #" .. tostring(target_id)
-        end
-        limit = config.platform_config().agent_get_field_chars
-        if args.field != nil then
-            value = row[args.field]
-            if value == nil then
-                return nil, tostring(args.entity_type) .. " has no field '" .. tostring(args.field) .. "' (or it's empty)"
-            end
-            value = format_field_value(value)
-            start = tonumber(args.offset)
-            if start == nil or start < 0 then
-                start = 0
-            end
-            length = tonumber(args.length)
-            if length == nil or length <= 0 then
-                length = limit
-            end
-            total = string.len(value)
-            slice = string.sub(value, start + 1, start + length)
-            header = string.format("%s #%d %s, characters %d-%d of %d:", tostring(args.entity_type), target_id,
-                tostring(args.field), start, math.min(start + length, total), total)
-            if start + length < total then
-                return header .. "\n" .. slice .. string.format("\n[read on with offset=%d]", start + length)
-            end
-            return header .. "\n" .. slice
-        end
-        return row_summary(row, limit)
-    end
-
-    if tool_name == "entity" and method_name == "validate" then
-        if args.entity_type == nil then
-            return nil, "validate requires entity_type"
-        end
-        values = {}
-        for k, v in pairs(args) do
-            if k != "entity_type" and k != "entity_id" then
-                values[k] = v
-            end
-        end
-        target_id = tonumber(args.entity_id)
-        issues = nil
-        if target_id != nil then
-            current = entity.get(db_path, args.entity_type, target_id)
-            if current == nil then
-                return nil, "no such " .. tostring(args.entity_type) .. " #" .. tostring(target_id)
-            end
-            merged = {}
-            for k, v in pairs(current) do
-                merged[k] = v
-            end
-            for k, v in pairs(values) do
-                merged[k] = v
-            end
-            issues = entity.validate(db_path, args.entity_type, merged, current)
-        else
-            issues = entity.validate(db_path, args.entity_type, values)
-        end
-
-        blocking = false
-        lines = {}
-        for _, issue in ipairs(issues) do
-            field = issue.field
-            if field == nil then
-                field = "(general)"
-            end
-            table.insert(lines, string.format("[%s] %s: %s", tostring(issue.severity), field, tostring(issue.message)))
-            if issue.severity == "error" then
-                blocking = true
-            end
-        end
-        if #lines == 0 then
-            return "Valid -- entity.create/entity.update would succeed as given."
-        end
-        result = table.concat(lines, "\n")
-        if blocking == false then
-            result = result .. "\n\n(no blocking errors -- entity.create/entity.update would still succeed)"
-        end
-        return result
-    end
-
-    if tool_name == "entity" and method_name == "create" then
-        if args.entity_type == nil then
-            return nil, "create requires entity_type"
-        end
-        if agent_tools.check_write_capability(db_path, args.entity_type, author) == false then
-            return nil, "Forbidden: " .. tostring(args.entity_type) .. " requires your own Admin capability -- ask an admin to grant it to your account."
-        end
-        values = {}
-        for k, v in pairs(args) do
-            if k != "entity_type" then
-                values[k] = v
-            end
-        end
-        created_id, issues = entity.create(db_path, args.entity_type, values, author, source)
-        if created_id == nil then
-            return nil, issues_summary(issues)
-        end
-        return "Created " .. tostring(args.entity_type) .. " #" .. tostring(created_id)
-    end
-
-    if tool_name == "entity" and method_name == "update" then
-        target_id = tonumber(args.entity_id)
-        if args.entity_type == nil or target_id == nil then
-            return nil, "update requires entity_type and entity_id"
-        end
-        if agent_tools.check_write_capability(db_path, args.entity_type, author) == false then
-            return nil, "Forbidden: " .. tostring(args.entity_type) .. " requires your own Admin capability -- ask an admin to grant it to your account."
-        end
-        -- `reason` is metadata about the change, not a field being
-        -- changed on the entity itself -- pulled out the same way
-        -- entity_type/entity_id already are, so it never ends up as a
-        -- literal column update.
-        values = entity_update_values(args)
-        if next(values) == nil then
-            return nil, NOTHING_TO_UPDATE
-        end
-        updated_id, issues = entity.update(db_path, args.entity_type, target_id, values, author, source, args.reason)
-        if updated_id == nil then
-            return nil, issues_summary(issues)
-        end
-        return "Updated " .. tostring(args.entity_type) .. " #" .. tostring(updated_id)
-    end
-
-    if tool_name == "entity" and method_name == "archive" then
-        target_id = tonumber(args.entity_id)
-        if args.entity_type == nil or target_id == nil then
-            return nil, "archive requires entity_type and entity_id"
-        end
-        if agent_tools.check_write_capability(db_path, args.entity_type, author) == false then
-            return nil, "Forbidden: " .. tostring(args.entity_type) .. " requires your own Admin capability -- ask an admin to grant it to your account."
-        end
-        archived_id, issues = entity.archive(db_path, args.entity_type, target_id, author, source, args.reason)
-        if archived_id == nil then
-            return nil, issues_summary(issues)
-        end
-        document.on_entity_archived(db_path, args.entity_type, archived_id)
-        return "Archived " .. tostring(args.entity_type) .. " #" .. tostring(archived_id)
-    end
-
-    if tool_name == "entity" and method_name == "unarchive" then
-        target_id = tonumber(args.entity_id)
-        if args.entity_type == nil or target_id == nil then
-            return nil, "unarchive requires entity_type and entity_id"
-        end
-        if agent_tools.check_write_capability(db_path, args.entity_type, author) == false then
-            return nil, "Forbidden: " .. tostring(args.entity_type) .. " requires your own Admin capability -- ask an admin to grant it to your account."
-        end
-        unarchived_id, issues = entity.unarchive(db_path, args.entity_type, target_id, author, source)
-        if unarchived_id == nil then
-            return nil, issues_summary(issues)
-        end
-        document.on_entity_unarchived(db_path, args.entity_type, unarchived_id)
-        return "Unarchived " .. tostring(args.entity_type) .. " #" .. tostring(unarchived_id)
     end
 
     if tool_name == "template" and method_name == "list" then

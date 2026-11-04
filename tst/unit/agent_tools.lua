@@ -91,9 +91,8 @@ end
 -- Every `tool_name == "x" and method_name == "y"` branch in the old
 -- dispatch chain (execute_tool_chain, which execute_tool falls back to for
 -- a tool whose record has no handler yet) names a declared tool. Reads
--- only that function: reject_before_approval uses the same pattern. Once
--- #6 has moved every handler into its record the chain is gone; delete
--- this then.
+-- only that function. Once #6 has moved every handler into its record
+-- the chain is gone; delete this then.
 function tests.every_handler_in_execute_tool_is_declared()
     print("Testing every branch in execute_tool_chain is a declared tool")
     f = io.open("src/agent_tools.lua", "r")
