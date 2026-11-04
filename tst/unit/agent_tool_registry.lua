@@ -240,6 +240,23 @@ function tests.recover_adds_to_a_failed_call(db_path)
     end
 end
 
+-- #6, step 1: the document group runs from its records. Its precheck says
+-- what reject_before_approval used to, word for word.
+function tests.the_document_group_runs_from_its_records()
+    print("Testing every document tool has a handler, and document.update its precheck")
+    for _, method in ipairs({"search", "create", "update", "children", "links", "breadcrumbs"}) do
+        record = agent_tools.AGENT_TOOLS.document[method]
+        check(type(record.handler) == "function", "document." .. method .. " has no handler")
+    end
+    update = agent_tools.AGENT_TOOLS.document.update
+    check(type(update.precheck) == "function", "document.update has no precheck")
+    check(update.precheck({}, {}) == "nothing to update: pass title, content or parent_id",
+        "document.update's precheck text changed")
+    check(update.precheck({}, {title = "New title"}) == nil, "a document.update with a field to change goes to approval")
+    check(agent_tools.reject_before_approval("document", "update", {}) == nil,
+        "reject_before_approval still has a document.update case")
+end
+
 -- The hints that moved into shared helpers still read exactly as before:
 -- what the model is told must not change during the migration.
 function tests.moved_hints_keep_their_text(db_path)
