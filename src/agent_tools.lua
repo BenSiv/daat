@@ -758,17 +758,15 @@ NOTHING_TO_UPDATE = "nothing to update: pass each field to change as its own arg
 -- an update that reports success while changing nothing kept the model
 -- re-proposing it (found by the agent scorecard, doc/agent-eval.md:
 -- ten approved entity.update calls with no field). Returns the error
--- text, or nil when the call may go to approval.
+-- text, or nil when the call may go to approval. A tool whose record has
+-- a precheck no longer has a case here (document.update, #6 step 1);
+-- entity.update's moves in step 2, and then this goes.
 function agent_tools.reject_before_approval(tool_name, method_name, args)
     if args == nil then
         args = {}
     end
     if tool_name == "entity" and method_name == "update" and next(entity_update_values(args)) == nil then
         return NOTHING_TO_UPDATE
-    end
-    if tool_name == "document" and method_name == "update"
-            and args.title == nil and args.content == nil and args.parent_id == nil then
-        return "nothing to update: pass title, content or parent_id"
     end
     return nil
 end
@@ -914,132 +912,163 @@ function fit_groups(args, series)
     return table.concat(lines, "\n")
 end
 
+-- The document group's handlers (#6, step 1): each is what its branch in
+-- execute_tool_chain was, word for word, as a function of (ctx, args);
+-- the first line unpacks ctx into the names the body always used. They're
+-- defined here, after the helpers they call, and attached to their
+-- records below: AGENT_TOOLS is built at the top of the file, before
+-- those helpers exist.
+
+-- A document.update that names nothing to change, refused before it
+-- becomes a pending action (it used to be a case in
+-- reject_before_approval), and again by the handler if it gets that far.
+function document_update_precheck(ctx, args)
+    if args.title == nil and args.content == nil and args.parent_id == nil then
+        return "nothing to update: pass title, content or parent_id"
+    end
+    return nil
+end
+
+function document_search(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    -- The same search the /documents search box runs
+    -- (knowledge.search_for_display): same documents, same excerpts.
+    results = knowledge.search_for_display(db_path, args.query, 5, session_id, author, args.detail == "full")
+    if #results == 0 then
+        return "No matching documents found."
+    end
+    lines = {}
+    for _, r in ipairs(results) do
+        detail_bits = {}
+        if r.created_at != nil and r.created_at != "" then
+            table.insert(detail_bits, "created " .. string.sub(r.created_at, 1, 10))
+        end
+        if r.external_id != nil and r.external_id != "" then
+            table.insert(detail_bits, "external_id=" .. r.external_id)
+        end
+        header = "#" .. tostring(r.id) .. " " .. r.title
+        if #detail_bits > 0 then
+            header = header .. " (" .. table.concat(detail_bits, ", ") .. ")"
+        end
+        -- Structural, not just a prompt reminder: multiple documents
+        -- genuinely sharing a title is real and common here (293
+        -- duplicate titles in production, mostly repeated Benchling
+        -- resyncs) -- the result itself surfaces the distinguishing
+        -- fields and calls out the collision whenever this batch has
+        -- one.
+        if r.same_title_count > 1 then
+            header = header .. " [one of " .. tostring(r.same_title_count) ..
+                " documents titled '" .. r.title .. "' -- distinguish by date/external_id/content above, never by asking the user for the id]"
+        end
+        -- A ready-made link to quote wherever the reply uses this
+        -- document, so citing it costs the model nothing.
+        link_title = string.gsub(r.title, "[%[%]]", "")
+        cite = "cite as: [" .. link_title .. "](/document?entity_id=" .. tostring(r.id) .. ")"
+        table.insert(lines, header .. "\n" .. cite .. "\n" .. r.excerpt)
+    end
+    return table.concat(lines, "\n\n")
+end
+
+function document_create(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    if agent_tools.check_write_capability(db_path, "document", author) == false then
+        return nil, "Forbidden: this requires your own Admin capability -- ask an admin to grant it to your account."
+    end
+    parent_id = tonumber(args.parent_id)
+    created_id, issues = document.create_page(db_path, author, args.title, parent_id, args.content, source)
+    if created_id == nil then
+        return nil, issues_summary(issues)
+    end
+    return "Created document #" .. tostring(created_id) .. " (" .. tostring(args.title) .. ")"
+end
+
+function document_update(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    if agent_tools.check_write_capability(db_path, "document", author) == false then
+        return nil, "Forbidden: this requires your own Admin capability -- ask an admin to grant it to your account."
+    end
+    target_id = tonumber(args.entity_id)
+    if target_id == nil then
+        return nil, "update requires entity_id"
+    end
+    nothing = document_update_precheck(ctx, args)
+    if nothing != nil then
+        return nil, nothing
+    end
+    parent_id = tonumber(args.parent_id)
+    updated_id, issues = document.update_page(db_path, author, target_id, args.title, parent_id, args.content, source)
+    if updated_id == nil then
+        return nil, issues_summary(issues)
+    end
+    return "Updated document #" .. tostring(updated_id)
+end
+
+function document_children(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    rows = document.children(db_path, tonumber(args.parent_id))
+    if #rows == 0 then
+        return "No sub-documents."
+    end
+    lines = {}
+    for _, r in ipairs(rows) do
+        table.insert(lines, "#" .. tostring(r.id) .. " " .. r.title)
+    end
+    return table.concat(lines, "\n")
+end
+
+function document_links(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    if args.document_id == nil then
+        return nil, "links requires document_id"
+    end
+    rows = document.links(db_path, tonumber(args.document_id))
+    if #rows == 0 then
+        return "No linked documents."
+    end
+    lines = {}
+    for _, r in ipairs(rows) do
+        arrow = "<-"
+        if r.direction == "out" then
+            arrow = "->"
+        end
+        why = "(nothing in the text says why)"
+        if r.context != nil and r.context != "" then
+            why = r.context
+        end
+        table.insert(lines, string.format("%s #%s %s -- %s", arrow, tostring(r.id), r.title, why))
+    end
+    return table.concat(lines, "\n")
+end
+
+function document_breadcrumbs(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    if args.document_id == nil then
+        return nil, "breadcrumbs requires document_id"
+    end
+    crumbs = document.breadcrumbs(db_path, tonumber(args.document_id))
+    if #crumbs == 0 then
+        return nil, "no such document (or it has no resolvable path)"
+    end
+    parts = {}
+    for _, c in ipairs(crumbs) do
+        table.insert(parts, c.title)
+    end
+    return table.concat(parts, " / ")
+end
+
+agent_tools.AGENT_TOOLS.document.search.handler = document_search
+agent_tools.AGENT_TOOLS.document.create.handler = document_create
+agent_tools.AGENT_TOOLS.document.update.handler = document_update
+agent_tools.AGENT_TOOLS.document.update.precheck = document_update_precheck
+agent_tools.AGENT_TOOLS.document.children.handler = document_children
+agent_tools.AGENT_TOOLS.document.links.handler = document_links
+agent_tools.AGENT_TOOLS.document.breadcrumbs.handler = document_breadcrumbs
+
 -- Every built-in tool's handler until #6 moves it into its record, then
 -- the extension fallback; agent_tools.execute_tool, below, is the entry
 -- point. Shrinks one group per #6 step and is deleted in step 8.
 function execute_tool_chain(db_path, author, session_id, tool_name, method_name, args)
     source = {notebook_entry_id = "agent-session:" .. tostring(session_id)}
-
-    if tool_name == "document" and method_name == "search" then
-        -- The same search the /documents search box runs
-        -- (knowledge.search_for_display): same documents, same excerpts.
-        results = knowledge.search_for_display(db_path, args.query, 5, session_id, author, args.detail == "full")
-        if #results == 0 then
-            return "No matching documents found."
-        end
-        lines = {}
-        for _, r in ipairs(results) do
-            detail_bits = {}
-            if r.created_at != nil and r.created_at != "" then
-                table.insert(detail_bits, "created " .. string.sub(r.created_at, 1, 10))
-            end
-            if r.external_id != nil and r.external_id != "" then
-                table.insert(detail_bits, "external_id=" .. r.external_id)
-            end
-            header = "#" .. tostring(r.id) .. " " .. r.title
-            if #detail_bits > 0 then
-                header = header .. " (" .. table.concat(detail_bits, ", ") .. ")"
-            end
-            -- Structural, not just a prompt reminder: multiple documents
-            -- genuinely sharing a title is real and common here (293
-            -- duplicate titles in production, mostly repeated Benchling
-            -- resyncs) -- the result itself surfaces the distinguishing
-            -- fields and calls out the collision whenever this batch has
-            -- one.
-            if r.same_title_count > 1 then
-                header = header .. " [one of " .. tostring(r.same_title_count) ..
-                    " documents titled '" .. r.title .. "' -- distinguish by date/external_id/content above, never by asking the user for the id]"
-            end
-            -- A ready-made link to quote wherever the reply uses this
-            -- document, so citing it costs the model nothing.
-            link_title = string.gsub(r.title, "[%[%]]", "")
-            cite = "cite as: [" .. link_title .. "](/document?entity_id=" .. tostring(r.id) .. ")"
-            table.insert(lines, header .. "\n" .. cite .. "\n" .. r.excerpt)
-        end
-        return table.concat(lines, "\n\n")
-    end
-
-    if tool_name == "document" and method_name == "create" then
-        if agent_tools.check_write_capability(db_path, "document", author) == false then
-            return nil, "Forbidden: this requires your own Admin capability -- ask an admin to grant it to your account."
-        end
-        parent_id = tonumber(args.parent_id)
-        created_id, issues = document.create_page(db_path, author, args.title, parent_id, args.content, source)
-        if created_id == nil then
-            return nil, issues_summary(issues)
-        end
-        return "Created document #" .. tostring(created_id) .. " (" .. tostring(args.title) .. ")"
-    end
-
-    if tool_name == "document" and method_name == "update" then
-        if agent_tools.check_write_capability(db_path, "document", author) == false then
-            return nil, "Forbidden: this requires your own Admin capability -- ask an admin to grant it to your account."
-        end
-        target_id = tonumber(args.entity_id)
-        if target_id == nil then
-            return nil, "update requires entity_id"
-        end
-        nothing = agent_tools.reject_before_approval("document", "update", args)
-        if nothing != nil then
-            return nil, nothing
-        end
-        parent_id = tonumber(args.parent_id)
-        updated_id, issues = document.update_page(db_path, author, target_id, args.title, parent_id, args.content, source)
-        if updated_id == nil then
-            return nil, issues_summary(issues)
-        end
-        return "Updated document #" .. tostring(updated_id)
-    end
-
-    if tool_name == "document" and method_name == "children" then
-        rows = document.children(db_path, tonumber(args.parent_id))
-        if #rows == 0 then
-            return "No sub-documents."
-        end
-        lines = {}
-        for _, r in ipairs(rows) do
-            table.insert(lines, "#" .. tostring(r.id) .. " " .. r.title)
-        end
-        return table.concat(lines, "\n")
-    end
-
-    if tool_name == "document" and method_name == "links" then
-        if args.document_id == nil then
-            return nil, "links requires document_id"
-        end
-        rows = document.links(db_path, tonumber(args.document_id))
-        if #rows == 0 then
-            return "No linked documents."
-        end
-        lines = {}
-        for _, r in ipairs(rows) do
-            arrow = "<-"
-            if r.direction == "out" then
-                arrow = "->"
-            end
-            why = "(nothing in the text says why)"
-            if r.context != nil and r.context != "" then
-                why = r.context
-            end
-            table.insert(lines, string.format("%s #%s %s -- %s", arrow, tostring(r.id), r.title, why))
-        end
-        return table.concat(lines, "\n")
-    end
-
-    if tool_name == "document" and method_name == "breadcrumbs" then
-        if args.document_id == nil then
-            return nil, "breadcrumbs requires document_id"
-        end
-        crumbs = document.breadcrumbs(db_path, tonumber(args.document_id))
-        if #crumbs == 0 then
-            return nil, "no such document (or it has no resolvable path)"
-        end
-        parts = {}
-        for _, c in ipairs(crumbs) do
-            table.insert(parts, c.title)
-        end
-        return table.concat(parts, " / ")
-    end
 
     if tool_name == "entity" and method_name == "list_types" then
         types = schema.list(db_path)

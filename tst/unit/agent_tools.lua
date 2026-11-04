@@ -115,6 +115,12 @@ function tests.every_handler_in_execute_tool_is_declared()
         count = count + 1
         declared = agent_tools.AGENT_TOOLS[group] != nil and agent_tools.AGENT_TOOLS[group][method] != nil
         check(declared, "execute_tool handles " .. group .. "." .. method .. ", which isn't declared in AGENT_TOOLS")
+        -- #6 deletes a group's branches in the same step that gives its
+        -- records handlers, so no tool is ever handled in two places.
+        if declared then
+            check(agent_tools.AGENT_TOOLS[group][method].handler == nil,
+                group .. "." .. method .. " has a handler in its record and still a branch in execute_tool_chain")
+        end
     end
     check(count > 0, "found no branches in execute_tool; has the pattern changed?")
 end
