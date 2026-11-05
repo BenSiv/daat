@@ -614,6 +614,143 @@ function agent_tools.hint_result_columns(names)
     return "actual columns: " .. table.concat(names, ", ")
 end
 
+-- Levenshtein distance between two strings.
+function edit_distance(a, b)
+    previous = {}
+    for j = 0, string.len(b) do
+        previous[j] = j
+    end
+    for i = 1, string.len(a) do
+        current = {[0] = i}
+        for j = 1, string.len(b) do
+            cost = 1
+            if string.sub(a, i, i) == string.sub(b, j, j) then
+                cost = 0
+            end
+            current[j] = math.min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + cost)
+        end
+        previous = current
+    end
+    return previous[string.len(b)]
+end
+
+-- The column a guessed name most likely meant, or nil when none is close.
+-- Close is one containing the other (time_hours -> hours) or a few edits
+-- apart (archived_id -> archived_at), scaled to the name's length so a
+-- short guess like "id" doesn't match half the table.
+function closest_column(guess, columns)
+    guess = string.lower(guess)
+    best = nil
+    best_score = nil
+    for _, column in ipairs(columns) do
+        name = string.lower(column)
+        score = nil
+        if string.len(guess) >= 3 and string.len(name) >= 3
+                and (string.find(name, guess, 1, true) != nil or string.find(guess, name, 1, true) != nil) then
+            score = math.abs(string.len(name) - string.len(guess)) / 10
+        else
+            distance = edit_distance(guess, name)
+            if distance <= math.max(2, math.floor(string.len(guess) / 3)) then
+                score = distance
+            end
+        end
+        if score != nil and (best_score == nil or score < best_score) then
+            best = column
+            best_score = score
+        end
+    end
+    return best
+end
+
+-- What to tell the model when a query fails on a column that doesn't
+-- exist (#8): the real columns, read from the database, of the table the
+-- column was meant for, and the closest one by name. A failed query used
+-- to get only "call entity.fields for the real names", and on the
+-- 2026-10-30 live scorecard the agent hit "no such column" in 27 of 72
+-- runs, often right after calling entity.fields, guessing plausible
+-- names instead (e.archived_id, m.time_hours, p.name with no table p).
+--
+-- The column's prefix is resolved through the query's own FROM/JOIN
+-- aliases (view.query_aliases): an alias the query never defines is named
+-- as the problem; without a prefix, every table the query names is
+-- listed. Only tables entity.query may read are described
+-- (view.queryable_tables), so a hint never shows another table's
+-- columns. nil when the error isn't a missing column, or nothing can be
+-- said about it.
+function agent_tools.hint_table_columns(ctx, sql_text, err)
+    text = tostring(err)
+    missing = string.match(text, "no such column: ([%w_%.]+)")
+    if missing == nil then
+        missing = string.match(text, "[Uu]nknown column '([^']+)'")
+    end
+    if missing == nil or sql_text == nil then
+        return nil
+    end
+    aliases = view.query_aliases(sql_text)
+    prefix, column = string.match(missing, "^([%w_]+)%.([%w_]+)$")
+    if prefix == nil then
+        column = missing
+    end
+    tables = {}
+    if prefix != nil then
+        table_name = aliases[string.lower(prefix)]
+        if table_name == nil then
+            named = {}
+            for name, target in pairs(aliases) do
+                if name == target then
+                    table.insert(named, name)
+                else
+                    table.insert(named, name .. " = " .. target)
+                end
+            end
+            table.sort(named)
+            if #named == 0 then
+                return nil
+            end
+            return "the query has no table or alias '" .. prefix .. "': it names " .. table.concat(named, ", ") ..
+                " -- give the table that alias in FROM/JOIN, or use a name it already has"
+        end
+        table.insert(tables, table_name)
+    else
+        seen = {}
+        for _, target in pairs(aliases) do
+            if seen[target] == nil then
+                seen[target] = true
+                table.insert(tables, target)
+            end
+        end
+        table.sort(tables)
+    end
+    allowed = view.queryable_tables(ctx.db_path)
+    listed = {}
+    suggestion = nil
+    for _, name in ipairs(tables) do
+        if allowed[name] == true then
+            columns = db.get_columns(ctx.db_path, name)
+            if #columns > 0 then
+                table.insert(listed, name .. ": " .. table.concat(columns, ", "))
+                if suggestion == nil then
+                    match = closest_column(column, columns)
+                    if match != nil then
+                        suggestion = match
+                        if prefix != nil then
+                            suggestion = prefix .. "." .. match
+                        end
+                    end
+                end
+            end
+        end
+    end
+    if #listed == 0 then
+        return nil
+    end
+    hint = "real columns -- " .. table.concat(listed, "; ")
+    if suggestion != nil then
+        hint = "did you mean " .. suggestion .. "? " .. hint
+    end
+    return hint
+end
+
 function unknown_entity_type_message(db_path, entity_type)
     return "unknown entity type: " .. tostring(entity_type) .. " -- " .. agent_tools.hint_entity_type({db_path = db_path}, entity_type)
 end
@@ -1699,6 +1836,20 @@ agent_tools.AGENT_TOOLS.result.read.handler = result_read
 agent_tools.AGENT_TOOLS.calc.evaluate.handler = calc_evaluate
 agent_tools.AGENT_TOOLS.stats.fit.handler = stats_fit
 agent_tools.AGENT_TOOLS.plot.from_query.handler = plot_from_query
+
+-- The tools that run the model's SQL name the real columns when it fails
+-- on one that doesn't exist (#8). One recover for all three, since they
+-- all pass args.sql to view.run_agent_query.
+function sql_column_recover(ctx, args, err)
+    if args == nil then
+        return nil
+    end
+    return agent_tools.hint_table_columns(ctx, args.sql, err)
+end
+
+agent_tools.AGENT_TOOLS.entity.query.recover = sql_column_recover
+agent_tools.AGENT_TOOLS.stats.fit.recover = sql_column_recover
+agent_tools.AGENT_TOOLS.plot.from_query.recover = sql_column_recover
 
 -- The control tools' handlers (#6, step 5). research and background run
 -- like any other tool; their `control` kind only keeps them from a
