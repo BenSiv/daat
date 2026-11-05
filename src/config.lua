@@ -372,8 +372,11 @@ function config.platform_config()
         -- up to date in the embedding job; search_aspects lets search
         -- use them. aspect_dims cuts them to that many dimensions (0:
         -- all); aspect_vector is "medoid" (the group's most central
-        -- passage) or "centroid" (the group's mean). Off until the
-        -- recall test on prod data sets the values. curate_aspects:
+        -- passage) or "centroid" (the group's mean). Values from the
+        -- recall test on prod data (2026-11-05, doc/aspect-retrieval-plan.md):
+        -- k <= 4 centroids at int8/768 got within ~2 points of indexing
+        -- every passage. The two switches stay off until a deployment
+        -- has backfilled its aspects. curate_aspects:
         -- an aspect searches keep finding a long source through is
         -- curated into a note of its own (src/curate.lua); it only
         -- happens with search_aspects on, since hits record no aspect
@@ -381,9 +384,9 @@ function config.platform_config()
         build_aspects = false,
         search_aspects = false,
         aspect_min_chars = 7000,
-        aspect_max = 8,
+        aspect_max = 4,
         aspect_dims = 0,
-        aspect_vector = "medoid",
+        aspect_vector = "centroid",
         curate_aspects = true,
         -- The co-retrieval link gate (doc/link-passage-gate.md): a pair
         -- whose most similar passages score below this isn't put to the
