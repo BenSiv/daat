@@ -115,6 +115,40 @@ function tests.vertex_token_cache_expired_margin()
     check(agent_vertex.vertex_token_cache_expired(cache, 1000) == true, "at/past the real expiry should be expired")
 end
 
+function tests.vertex_embed_range_splits_a_batch_over_the_token_cap()
+    print("Testing a batch over Vertex's token cap is split in half until it fits, keeping order")
+    calls = 0
+    -- A stand-in for vertex_post: more than 2 texts is "too many tokens".
+    function fake_post(path, payload)
+        calls = calls + 1
+        if #payload.instances > 2 then
+            return nil, "Vertex AI error: Unable to submit request because the input token count is 21365 but the model supports up to 20000."
+        end
+        predictions = {}
+        for _, instance in ipairs(payload.instances) do
+            table.insert(predictions, {embeddings = {values = {string.len(instance.content)}}})
+        end
+        return {predictions = predictions}
+    end
+    vectors = {}
+    ok, err = agent_vertex.vertex_embed_range(fake_post, "m", {"a", "bb", "ccc", "dddd", "eeeee"}, 1, 5, vectors)
+    check(ok == true, "split batches succeed: " .. tostring(err))
+    check(#vectors == 5, "one vector per text, got " .. #vectors)
+    for i = 1, 5 do
+        check(vectors[i][1] == i, "vector " .. i .. " is in its text's place")
+    end
+    function failing_post(path, payload)
+        return nil, "Vertex AI error: quota exceeded"
+    end
+    ok, err = agent_vertex.vertex_embed_range(failing_post, "m", {"a", "b", "c"}, 1, 3, {})
+    check(ok == nil and string.find(err, "quota", 1, true) != nil, "any other error fails without splitting")
+    function single_too_long(path, payload)
+        return nil, "Vertex AI error: the input token count is 30000"
+    end
+    ok, err = agent_vertex.vertex_embed_range(single_too_long, "m", {"x"}, 1, 1, {})
+    check(ok == nil, "a single text over the cap fails instead of looping")
+end
+
 function tests.vertex_embedding_batches_respect_count_and_size_limits()
     print("Testing vertex_embedding_batches groups texts within the count and size limits, in order")
     batches = agent_vertex.vertex_embedding_batches({"aaaa", "bbbb", "cccc", "dddd", "eeeee"}, 2, 100)

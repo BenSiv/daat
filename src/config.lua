@@ -365,6 +365,29 @@ function config.platform_config()
         -- Passage embeddings are cached (document_passage_cache) and
         -- expire this many days after last use (0: never).
         passage_cache_days = 30,
+        -- Aspects (doc/aspect-retrieval-plan.md): a document longer than
+        -- aspect_min_chars gets up to aspect_max extra vectors, from its
+        -- passages grouped by meaning, so search finds it by a subject
+        -- past the start its own vector covers. build_aspects keeps them
+        -- up to date in the embedding job; search_aspects lets search
+        -- use them. aspect_dims cuts them to that many dimensions (0:
+        -- all); aspect_vector is "medoid" (the group's most central
+        -- passage) or "centroid" (the group's mean). Values from the
+        -- recall test on prod data (2026-11-05, doc/aspect-retrieval-plan.md):
+        -- k <= 4 centroids at int8/768 got within ~2 points of indexing
+        -- every passage. The two switches stay off until a deployment
+        -- has backfilled its aspects. curate_aspects:
+        -- an aspect searches keep finding a long source through is
+        -- curated into a note of its own (src/curate.lua); it only
+        -- happens with search_aspects on, since hits record no aspect
+        -- otherwise.
+        build_aspects = false,
+        search_aspects = false,
+        aspect_min_chars = 7000,
+        aspect_max = 4,
+        aspect_dims = 0,
+        aspect_vector = "centroid",
+        curate_aspects = true,
         -- The co-retrieval link gate (doc/link-passage-gate.md): a pair
         -- whose most similar passages score below this isn't put to the
         -- model (0: off). Compares at most this many passages of each
@@ -537,6 +560,22 @@ function config.platform_config()
     end
     if type(parsed.passage_cache_days) == "number" and parsed.passage_cache_days >= 0 then
         conf.passage_cache_days = parsed.passage_cache_days
+    end
+    for _, key in ipairs({"build_aspects", "search_aspects", "curate_aspects"}) do
+        if parsed[key] == true or parsed[key] == false then
+            conf[key] = parsed[key]
+        end
+    end
+    for _, key in ipairs({"aspect_min_chars", "aspect_dims"}) do
+        if type(parsed[key]) == "number" and parsed[key] >= 0 then
+            conf[key] = math.floor(parsed[key])
+        end
+    end
+    if type(parsed.aspect_max) == "number" and parsed.aspect_max >= 1 then
+        conf.aspect_max = math.floor(parsed.aspect_max)
+    end
+    if parsed.aspect_vector == "medoid" or parsed.aspect_vector == "centroid" then
+        conf.aspect_vector = parsed.aspect_vector
     end
     if type(parsed.link_passage_gate) == "number" and parsed.link_passage_gate >= 0 then
         conf.link_passage_gate = parsed.link_passage_gate
