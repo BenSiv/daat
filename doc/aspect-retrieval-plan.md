@@ -176,6 +176,7 @@ On `feature/aspect-retrieval`, each tested on its own:
 4. **Search:** `semantic_ranking` reads aspects behind `search_aspects`; results carry `aspect` and `passage_offset`; retrieval hits record the aspect.
 5. **Curation from aspects:** queue, input, prompt line, check; per-aspect rows in `knowledge_aspect_curation`.
 6. **Scorecard scenarios and docs,** then the backfill and deploy, with your OK.
+   - Scenario `facilities-deep-aspect`: an 11k-character facilities manual whose last section (mycoplasma screening, past the embedding cut) answers a question sharing no words with it; the demo lab's loader builds aspects for every run, so `--extra 'search_aspects = true'` compares the two over the same lab. Live, 3 runs each (2026-11-05, gemini-3.5-flash-lite): solved either way, because the agent rewrites the question ("mycoplasma") until keywords find the manual; with aspects it got there in 4 searches and 50k tokens per run instead of 7.3 and 95k. `handbook-deep-passage` (short document) unchanged, ~20k tokens.
 
 ## Tests
 
