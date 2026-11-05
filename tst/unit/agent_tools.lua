@@ -88,13 +88,12 @@ function tests.every_declared_method_reaches_a_handler(db_path)
     end)
 end
 
--- Every `tool_name == "x" and method_name == "y"` branch in execute_tool's
--- own body names a declared tool. Reads only execute_tool:
--- reject_before_approval uses the same pattern. Once #6 has moved every
--- handler into its record there are no branches left, and this passes
--- vacuously; delete it then.
-function tests.every_handler_in_execute_tool_is_declared()
-    print("Testing every branch in execute_tool is a declared tool")
+-- Every tool runs from its record's handler, and execute_tool is a lookup
+-- (#6). A `tool_name == "x" and method_name == "y"` test anywhere in
+-- agent_tools.lua would be a tool dispatched by name again, the way the
+-- old if-chain did, and possibly in two places.
+function tests.no_tool_is_dispatched_by_name()
+    print("Testing agent_tools.lua dispatches no tool by name")
     f = io.open("src/agent_tools.lua", "r")
     check(f != nil, "can't open src/agent_tools.lua (run from the repo root)")
     if f == nil then
@@ -102,20 +101,35 @@ function tests.every_handler_in_execute_tool_is_declared()
     end
     source = io.read(f, "*a")
     io.close(f)
-    start = string.find(source, "\nfunction agent_tools.execute_tool(", 1, true)
-    check(start != nil, "execute_tool not found in src/agent_tools.lua")
-    if start == nil then
+    for group, method in string.gmatch(source, "tool_name == \"([%w_]+)\" and method_name == \"([%w_]+)\"") do
+        check(false, "agent_tools.lua dispatches " .. group .. "." .. method .. " by name; give its record a handler instead")
+    end
+end
+
+-- The agent loop reads what a tool is from its record, never from its
+-- name (#6, "Done when"): no line of code in agent.lua names a built-in
+-- tool as "group.method". Comments may.
+function tests.agent_lua_names_no_builtin_tool()
+    print("Testing agent.lua's code names no built-in tool")
+    f = io.open("src/agent.lua", "r")
+    check(f != nil, "can't open src/agent.lua (run from the repo root)")
+    if f == nil then
         return
     end
-    finish = string.find(source, "\nend\n", start, true)
-    body = string.sub(source, start, finish)
-    count = 0
-    for group, method in string.gmatch(body, "tool_name == \"([%w_]+)\" and method_name == \"([%w_]+)\"") do
-        count = count + 1
-        declared = agent_tools.AGENT_TOOLS[group] != nil and agent_tools.AGENT_TOOLS[group][method] != nil
-        check(declared, "execute_tool handles " .. group .. "." .. method .. ", which isn't declared in AGENT_TOOLS")
+    number = 0
+    for line in io.lines(f) do
+        number = number + 1
+        if string.find(line, "^%s*%-%-") == nil then
+            for group, methods in pairs(agent_tools.AGENT_TOOLS) do
+                for method, _ in pairs(methods) do
+                    if string.find(line, "\"" .. group .. "." .. method .. "\"", 1, true) != nil then
+                        check(false, "agent.lua line " .. number .. " names " .. group .. "." .. method .. "; read the record's fields instead")
+                    end
+                end
+            end
+        end
     end
-    check(count > 0, "found no branches in execute_tool; has the pattern changed?")
+    io.close(f)
 end
 
 -- The whole declaration list, as each provider receives it. A schema a
@@ -141,6 +155,54 @@ function tests.declarations_translate_for_both_providers(db_path)
             if encoded_ok == true then
                 check(string.find(encoded, "\"properties\":[]", 1, true) == nil,
                     provider .. ": an empty properties object encodes as [] instead of {}")
+            end
+        end
+    end
+end
+
+-- What the model is shown, byte for byte (#6): moving tools into records
+-- must not change a single declaration, and a change that should is its
+-- own measured PR. One declaration per line, so a diff of a fixture
+-- names the tool that changed. The order is the registry's own, by name
+-- (agent.build_tool_registry), and each line is canonical JSON with its
+-- keys sorted, so the fixture doesn't depend on how a table iterates
+-- on a given luam build. After an intended change,
+-- regenerate with DAAT_UPDATE_SNAPSHOT=1 and say why in the PR.
+-- The research sub-agent's list is pinned the same way: it is what that
+-- model is shown, and #6 keeps it to the same 21 tools.
+SNAPSHOTS = {
+    {path = "tst/unit/fixtures/tool_declarations.json", name = "agent.tool_declarations", list = function(db_path)
+        return agent.tool_declarations(db_path)
+    end},
+    {path = "tst/unit/fixtures/research_tool_declarations.json", name = "agent_tools.research_tool_declarations", list = function(db_path)
+        return agent_tools.research_tool_declarations(db_path)
+    end},
+}
+
+function declarations_snapshot(declarations)
+    lines = {}
+    for _, declaration in ipairs(declarations) do
+        table.insert(lines, agent.canonical_json(declaration))
+    end
+    return table.concat(lines, "\n") .. "\n"
+end
+
+function tests.declarations_match_the_snapshots(db_path)
+    for _, snapshot in ipairs(SNAPSHOTS) do
+        current = declarations_snapshot(snapshot.list(db_path))
+        if os.getenv("DAAT_UPDATE_SNAPSHOT") == "1" then
+            f = io.open(snapshot.path, "w")
+            io.write(f, current)
+            io.close(f)
+            print("  wrote " .. snapshot.path)
+        else
+            f = io.open(snapshot.path, "r")
+            check(f != nil, "can't open " .. snapshot.path .. " (run from the repo root)")
+            if f != nil then
+                expected = io.read(f, "*a")
+                io.close(f)
+                check(current == expected, snapshot.name .. " no longer matches " .. snapshot.path ..
+                    ": what the model sees changed. If that's intended, regenerate it with DAAT_UPDATE_SNAPSHOT=1 and say why in the PR")
             end
         end
     end

@@ -572,21 +572,26 @@ function display_blocks(blocks, include_tool_calls)
             table.insert(parts, block.text)
         elseif block.type == "thinking" and block.thinking != nil then
             table.insert(parts, block.thinking)
-        elseif block.type == "toolCall" and block.name == "clarify.ask" then
-            question = nil
+        elseif block.type == "toolCall" and agent.turn_ending_kind(agent.builtin_record(block.name)) != nil then
+            -- A call that ends the turn (clarify.ask) is shown as what it
+            -- says to the person -- its kind's message argument -- read
+            -- from the record's control kind, not its name (#6).
+            kind = agent.turn_ending_kind(agent.builtin_record(block.name))
+            message = nil
             if block.arguments != nil then
-                question = block.arguments.question
+                message = block.arguments[kind.message_argument]
             end
-            if question == nil then
-                question = "(no question given)"
+            if message == nil then
+                message = kind.missing_message
             end
-            table.insert(parts, question)
+            table.insert(parts, message)
         elseif block.type == "toolCall" and include_tool_calls == true then
             table.insert(parts, "-> " .. tostring(block.name) .. "(...)")
         end
     end
     return table.concat(parts, "\n")
 end
+agent.display_blocks = display_blocks
 
 -- Just the real "text" blocks -- no thinking, no toolCall lines. Used
 -- specifically where a caller needs to judge the model's actual answer
@@ -783,8 +788,10 @@ function agent.extract_sql_from_text(text)
     return candidate
 end
 
--- The console-prefill value for a session: the most recent of either an
--- entity.query tool call's own `sql` argument, or SQL the model wrote out
+-- The console-prefill value for a session: the most recent of either a
+-- tool call's own `sql` argument (entity.query, and stats.fit and
+-- plot.from_query, which run the same read-only SELECT -- any tool that
+-- takes SQL, not one tool by name, #6), or SQL the model wrote out
 -- as plain final-answer text (see agent.extract_sql_from_text) -- whichever
 -- happened more recently, scanning assistant messages newest-first so a
 -- later plain-text answer correctly overrides an older real tool call and
@@ -803,7 +810,7 @@ function agent.last_console_query_sql(db_path, session_id)
         decoded, _, _ = json.decode(row.content)
         if decoded != nil and decoded.blocks != nil then
             for _, block in ipairs(decoded.blocks) do
-                if block.type == "toolCall" and block.name == "entity.query" and block.arguments != nil and block.arguments.sql != nil then
+                if block.type == "toolCall" and block.arguments != nil and type(block.arguments.sql) == "string" then
                     return block.arguments.sql
                 end
                 if block.type == "text" then
@@ -971,6 +978,35 @@ function canonical_json(value)
 end
 agent.canonical_json = canonical_json
 
+-- The built-in record for "group.method", or nil. No database: for
+-- callers that only have a stored tool call (display, compaction) and
+-- ask about a built-in's own fields.
+function builtin_record(full_name)
+    agent_tools = require("agent_tools")
+    name = tostring(full_name)
+    dot = string.find(name, ".", 1, true)
+    if dot == nil then
+        return nil
+    end
+    group = agent_tools.AGENT_TOOLS[string.sub(name, 1, dot - 1)]
+    if group == nil then
+        return nil
+    end
+    return group[string.sub(name, dot + 1)]
+end
+agent.builtin_record = builtin_record
+
+-- Whether the built-in tool "group.method" has `field` set on its record
+-- (repeat_safe, pin_on_compaction): read from AGENT_TOOLS, not kept as a
+-- second list of names (#6). Built-ins only, and that's the whole answer:
+-- an extension's record never sets either, since its tool may have
+-- effects daat can't see.
+function builtin_tool_has(full_name, field)
+    record = builtin_record(full_name)
+    return record != nil and record[field] == true
+end
+agent.builtin_tool_has = builtin_tool_has
+
 -- Schema lookups survive compaction verbatim (doc/context-management-
 -- plan.md, Phase 1): in prod, 53% of these calls repeated one already
 -- made in the same session, mostly after compaction had summarized the
@@ -978,7 +1014,7 @@ agent.canonical_json = canonical_json
 -- they're carried as a block code appends to the summary -- not left
 -- to the summarizer -- latest result per (tool, arguments) first, within
 -- agent_pinned_schema_chars. One that doesn't fit is still named.
-PINNED_SCHEMA_TOOLS = {["entity.list_types"] = true, ["entity.fields"] = true, ["entity.relationships"] = true}
+-- Which tools those are is each record's pin_on_compaction (#6).
 PINNED_SCHEMA_HEADER = "**Confirmed schema (exact earlier tool results, still current -- no need to look these up again):**"
 
 -- Splits a summary into its prose and its pinned entries ({key, text}).
@@ -1044,7 +1080,7 @@ function pinned_schema_block(to_compact, budget)
             decoded, _, _ = json.decode(msg.content)
             if decoded != nil and type(decoded.blocks) == "table" then
                 for _, block in ipairs(decoded.blocks) do
-                    if block.type == "toolCall" and PINNED_SCHEMA_TOOLS[tostring(block.name)] == true then
+                    if block.type == "toolCall" and builtin_tool_has(block.name, "pin_on_compaction") then
                         args = block.arguments
                         if args == nil then
                             args = {}
@@ -1389,60 +1425,252 @@ end
 -- regardless of which provider's translation runs afterward.
 EMPTY_OBJECT_SCHEMA = {type = "object", properties = setmetatable({}, {__jsontype = "object"})}
 
-function agent.is_known_tool(db_path, tool_name, method_name)
-    agent_tools = require("agent_tools")
-    group = agent_tools.AGENT_TOOLS[tool_name]
-    if group != nil then
-        return group[method_name] != nil
+-- One record per tool, and one registry of every tool the agent can call
+-- (doc/agent-tools.md; #6). Everything the agent loop knows about a tool
+-- -- whether it exists, whether it writes, what the model is shown,
+-- whether a research sub-agent may use it -- is read from its record,
+-- rather than from AGENT_TOOLS here, find_extension_tool there and a list
+-- of names in a third place, which is how the reserved names once
+-- drifted (#15).
+--
+-- What a `control` kind does to the turn. A control tool is about the
+-- conversation itself, not the data, so a research sub-agent never gets
+-- one (agent.research_may_call). A kind that ends the turn is handled by
+-- run_turn from this table alone -- what the call's result says, what a
+-- second one in the same turn is told, and what the turn returns -- so a
+-- new kind is a new row here, not another branch on a tool name there.
+-- research and background run their handlers like any other tool.
+-- Exposed on the module: a bare top-level assignment is local to its
+-- file in Luam.
+CONTROL_KINDS = {
+    clarify = {
+        ends_turn = true,
+        result = "Waiting for the user's answer before continuing.",
+        another_this_turn = "ERROR: skipped -- only one clarifying question can be asked per turn",
+        status = "needs_clarification",
+        message_argument = "question",
+        missing_message = "(no question given)",
+    },
+    research = {ends_turn = false},
+    background = {ends_turn = false},
+}
+agent.CONTROL_KINDS = CONTROL_KINDS
+
+-- The kind's row when this record's control kind ends the turn, else nil.
+function agent.turn_ending_kind(record)
+    if record == nil or record.control == nil then
+        return nil
     end
-    manifest, tool = agent_tools.find_extension_tool(db_path, tool_name, method_name)
-    return tool != nil
+    kind = CONTROL_KINDS[record.control]
+    if kind == nil or kind.ends_turn != true then
+        return nil
+    end
+    return kind
+end
+
+-- What every handler, precheck and recover is given (doc/agent-tools.md,
+-- "Record shape"): the real logged-in user the tool runs as, and the
+-- session it was called from.
+function agent.tool_ctx(db_path, author, session_id)
+    return {
+        db_path = db_path,
+        author = author,
+        session_id = session_id,
+        source = {notebook_entry_id = "agent-session:" .. tostring(session_id)},
+    }
+end
+
+-- Why a destructive call can't do anything, so nobody is asked to approve
+-- a no-op; nil when it may go to approval. The record's own precheck
+-- (document.update and entity.update have one, #6); a tool without one
+-- always goes to approval.
+function agent.precheck(record, ctx, tool_name, method_name, args)
+    if record.precheck != nil then
+        return record.precheck(ctx, args)
+    end
+    return nil
+end
+
+-- An approved extension's capabilities.tools entry as a record (`entry`
+-- is one of extension.approved_with_tools'). A read-only extension tool
+-- is available to research, as it was before the registry; one with
+-- effects daat can't see is never answered from context (repeat_safe)
+-- or pinned through compaction.
+--
+-- Its handler (#6, step 7) is what execute_tool's extension fallback
+-- did, with the same errors: load the extension's hooks, and call its
+-- tools[method] with the extension's own capability-checked ctx
+-- (entity.build_ctx), never the agent's -- an extension's tool reaches
+-- only what its approved manifest grants. Hooks are loaded per call, as
+-- before, so an edited main.lua takes effect on the next one.
+function extension_tool_record(entry, tool)
+    destructive = tool.destructive == true
+    name = entry.name
+    manifest = entry.manifest
+    method_name = tool.name
+    return {
+        description = tool.description,
+        parameters = tool.parameters,
+        destructive = destructive,
+        in_research = destructive == false,
+        repeat_safe = false,
+        pin_on_compaction = false,
+        extension = name,
+        handler = function(ctx, args)
+            hooks, hooks_err = extension.load_hooks(config.extensions_dir(), name, manifest)
+            if hooks == nil then
+                if hooks_err != nil then
+                    return nil, hooks_err
+                end
+                return nil, "extension '" .. name .. "' does not implement tool '" .. method_name .. "'"
+            end
+            fn = nil
+            if type(hooks.tools) == "table" then
+                fn = hooks.tools[method_name]
+            end
+            if type(fn) != "function" then
+                return nil, "extension '" .. name .. "' does not implement tool '" .. method_name .. "'"
+            end
+            call_ok, result, call_err = pcall(fn, entity.build_ctx(ctx.db_path, manifest), args)
+            if call_ok == false then
+                return nil, tostring(result)
+            end
+            return result, call_err
+        end,
+    }
+end
+
+-- A table's keys, sorted: for building anything whose order matters
+-- from a table, without depending on its iteration order.
+function sorted_keys(t)
+    keys = {}
+    for k, _ in pairs(t) do
+        table.insert(keys, k)
+    end
+    table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+    return keys
+end
+
+-- agent.build_tool_registry(builtins, extensions) -> registry, ordered, refused
+-- Pure, so its rules are unit-tested without a database. `builtins` is
+-- AGENT_TOOLS; `extensions` is extension.approved_with_tools' list.
+--   registry[group][method] = record, for lookups;
+--   ordered = {{group, method, record}, ...}, in declaration order:
+--     built-ins sorted by group, then method; then extensions sorted by
+--     name, each with its tools in the order its manifest lists them.
+--     The order is set here, by name, never by how a table happens to
+--     iterate (pairs) or a directory happens to list (lfs.dir), so what
+--     the model is shown is the same on every build and every disk;
+--   refused = {{name, reason}, ...}, extensions left out whole.
+-- An extension is refused rather than merged when its name is a built-in
+-- group (manifest validation rejects that already, #15; this is the same
+-- rule where the tools are actually resolved) or when it declares one
+-- tool name twice, which used to reach the model as two declarations
+-- with the same name.
+function agent.build_tool_registry(builtins, extensions)
+    registry = {}
+    ordered = {}
+    refused = {}
+    for _, group in ipairs(sorted_keys(builtins)) do
+        methods = builtins[group]
+        registry[group] = {}
+        for _, method in ipairs(sorted_keys(methods)) do
+            registry[group][method] = methods[method]
+            table.insert(ordered, {group = group, method = method, record = methods[method]})
+        end
+    end
+    by_name = {}
+    for _, entry in ipairs(extensions) do
+        table.insert(by_name, entry)
+    end
+    table.sort(by_name, function(a, b) return tostring(a.name) < tostring(b.name) end)
+    for _, entry in ipairs(by_name) do
+        reason = nil
+        if registry[entry.name] != nil then
+            reason = "its name is a built-in tool group"
+        end
+        records = {}
+        entries = {}
+        for _, tool in ipairs(entry.manifest.capabilities.tools) do
+            if reason == nil and records[tool.name] != nil then
+                reason = "it declares the tool '" .. tostring(tool.name) .. "' twice"
+            end
+            records[tool.name] = extension_tool_record(entry, tool)
+            table.insert(entries, {group = entry.name, method = tool.name, record = records[tool.name]})
+        end
+        if reason == nil then
+            registry[entry.name] = records
+            for _, e in ipairs(entries) do
+                table.insert(ordered, e)
+            end
+        else
+            table.insert(refused, {name = entry.name, reason = reason})
+        end
+    end
+    return registry, ordered, refused
+end
+
+-- Built on every call, never cached for the process: whether an
+-- extension is approved, and for which capabilities, is read here each
+-- time, as find_extension_tool did, so a revoked extension's tools stop
+-- on the next call, mid-turn included.
+function agent.tool_registry(db_path)
+    agent_tools = require("agent_tools")
+    registry, ordered, refused = agent.build_tool_registry(agent_tools.AGENT_TOOLS,
+        extension.approved_with_tools(db_path, config.extensions_dir()))
+    for _, r in ipairs(refused) do
+        io.write(io.stderr, "extension '" .. r.name .. "' left out of the agent's tools: " .. r.reason .. "\n")
+    end
+    return registry, ordered
+end
+
+function agent.tool_record(db_path, tool_name, method_name)
+    if tool_name == nil or method_name == nil then
+        return nil
+    end
+    registry = agent.tool_registry(db_path)
+    if registry[tool_name] == nil then
+        return nil
+    end
+    return registry[tool_name][method_name]
+end
+
+function agent.is_known_tool(db_path, tool_name, method_name)
+    return agent.tool_record(db_path, tool_name, method_name) != nil
 end
 
 function agent.is_destructive(db_path, tool_name, method_name)
-    agent_tools = require("agent_tools")
-    group = agent_tools.AGENT_TOOLS[tool_name]
-    if group != nil then
-        if group[method_name] == nil then
-            return false
-        end
-        return group[method_name].destructive == true
-    end
-    manifest, tool = agent_tools.find_extension_tool(db_path, tool_name, method_name)
-    if tool == nil then
-        return false
-    end
-    return tool.destructive == true
+    record = agent.tool_record(db_path, tool_name, method_name)
+    return record != nil and record.destructive == true
 end
 
--- Flattens AGENT_TOOLS into the function-declaration list the real
--- Vertex/Gemini function-calling API expects -- one entry per method,
--- named "toolname.methodname" (dots are valid in a Gemini function
--- name) so agent.execute_tool's own tool_name/method_name
--- split-on-dot dispatch needs no remapping table at all in either
--- direction. Approved extension tools are appended the same way, under
--- their own manifest.name, so the model sees them with no
--- special-casing on the provider side.
+-- Whether a research sub-agent may be offered, and may call, this tool:
+-- read-only, marked for research, and not about the conversation's own
+-- structure. One predicate for both the declarations a sub-agent gets and
+-- the refusal inside its loop, so the two can't disagree.
+function agent.research_may_call(record)
+    return record != nil and record.in_research == true and record.destructive != true and record.control == nil
+end
+
+-- One declaration per method, named "toolname.methodname" (dots are
+-- valid in a Gemini function name) so the tool_name/method_name
+-- split-on-dot dispatch needs no remapping table in either direction.
+-- Only name, description and parameters: no other record field ever
+-- reaches a provider.
+function tool_declaration(entry)
+    return {
+        name = entry.group .. "." .. entry.method,
+        description = entry.record.description,
+        parameters = entry.record.parameters,
+    }
+end
+agent.tool_declaration = tool_declaration
+
 function agent.tool_declarations(db_path)
-    agent_tools = require("agent_tools")
+    registry, ordered = agent.tool_registry(db_path)
     declarations = {}
-    for tool_name, methods in pairs(agent_tools.AGENT_TOOLS) do
-        for method_name, spec in pairs(methods) do
-            table.insert(declarations, {
-                name = tool_name .. "." .. method_name,
-                description = spec.description,
-                parameters = spec.parameters,
-            })
-        end
-    end
-    for _, entry in ipairs(extension.approved_with_tools(db_path, config.extensions_dir())) do
-        for _, tool in ipairs(entry.manifest.capabilities.tools) do
-            table.insert(declarations, {
-                name = entry.name .. "." .. tool.name,
-                description = tool.description,
-                parameters = tool.parameters,
-            })
-        end
+    for _, entry in ipairs(ordered) do
+        table.insert(declarations, tool_declaration(entry))
     end
     return declarations
 end
@@ -1496,7 +1724,12 @@ function agent.claim_pending_action(db_path, pending_id, claimed_status)
     rows = db.query(db_path, string.format(
         "SELECT claim_token FROM agent_pending_action WHERE id = %d;", tonumber(pending_id)
     ))
-    return rows != nil and rows[1] != nil and rows[1].claim_token == token
+    -- The winner also gets its token: agent.run_tool runs a destructive
+    -- tool only against a row claimed with it (#6).
+    if rows != nil and rows[1] != nil and rows[1].claim_token == token then
+        return true, token
+    end
+    return false
 end
 
 function agent.resolve_pending_action(db_path, pending_id, status)
@@ -2009,10 +2242,11 @@ function agent.run_research_loop(db_path, author, session_id, model, question, m
             tool_name, method_name = split_tool_name(tool_call.name)
             result_text = nil
             is_error = false
-            if tool_name == nil or not agent.is_known_tool(db_path, tool_name, method_name) then
+            record = agent.tool_record(db_path, tool_name, method_name)
+            if record == nil then
                 result_text = "ERROR: unknown tool " .. tostring(tool_call.name)
                 is_error = true
-            elseif agent.is_destructive(db_path, tool_name, method_name) or tool_name == "research" or tool_name == "clarify" or tool_name == "background" then
+            elseif agent.research_may_call(record) == false then
                 result_text = "ERROR: research is read-only and can't ask the user directly or hand off further -- cannot perform destructive actions, delegate further, ask a clarifying question, or start a background task; report what you've found (including any real ambiguity) instead"
                 is_error = true
             else
@@ -2316,11 +2550,8 @@ end
 -- schema files, which also starts a new request). An exact repeat of one
 -- of these, while the earlier result is still in context and no write
 -- has been proposed since, is answered with REPEAT_CALL_NOTE instead of
--- a second copy (doc/context-management-plan.md, Phase 1).
-REPEAT_SAFE_TOOLS = {
-    ["entity.list_types"] = true, ["entity.fields"] = true, ["entity.relationships"] = true,
-    ["entity.get"] = true, ["document.search"] = true, ["document.children"] = true,
-}
+-- a second copy (doc/context-management-plan.md, Phase 1). Which tools
+-- those are is each record's repeat_safe (#6).
 REPEAT_CALL_NOTE = "Same call as one earlier in this conversation (same tool, same arguments), and this conversation hasn't changed anything since: its result is above. Use that result instead of calling again."
 
 -- agent.find_repeat(messages, full_name, args, is_write) -> earlier call id | nil
@@ -2328,7 +2559,7 @@ REPEAT_CALL_NOTE = "Same call as one earlier in this conversation (same tool, sa
 -- `is_write(full_name)` says whether a call can change data (a
 -- destructive tool). Pure, so it's unit-tested on its own.
 function agent.find_repeat(messages, full_name, args, is_write)
-    if REPEAT_SAFE_TOOLS[full_name] != true or messages == nil then
+    if builtin_tool_has(full_name, "repeat_safe") == false or messages == nil then
         return nil
     end
     if args == nil then
@@ -2365,10 +2596,53 @@ function agent.find_repeat(messages, full_name, args, is_write)
     return found
 end
 
+-- The arguments a destructive call may run with: those of the
+-- agent_pending_action row this request claimed (`approval` = {id,
+-- token}, from agent.claim_pending_action), for this session and this
+-- tool. Read from the row, not taken from the caller, so what runs is
+-- exactly what the user saw and approved. nil and the reason otherwise.
+function approved_arguments(db_path, session_id, tool_name, method_name, approval)
+    full_name = tostring(tool_name) .. "." .. tostring(method_name)
+    if approval == nil or approval.id == nil or approval.token == nil then
+        return nil, full_name .. " changes data, so it runs only as an approved pending action"
+    end
+    rows = db.query(db_path, string.format(
+        "SELECT session_id, tool, method, args_json, status, claim_token FROM agent_pending_action WHERE id = %d;",
+        tonumber(approval.id)
+    ))
+    if rows == nil or rows[1] == nil then
+        return nil, "no such pending action #" .. tostring(approval.id)
+    end
+    row = rows[1]
+    if row.status != "running" or row.claim_token != approval.token then
+        return nil, "pending action #" .. tostring(approval.id) .. " isn't claimed by this request"
+    end
+    if row.session_id != session_id or row.tool != tool_name or row.method != method_name then
+        return nil, "pending action #" .. tostring(approval.id) .. " is for a different call than " .. full_name
+    end
+    approved, _, _ = json.decode(row.args_json)
+    if approved == nil then
+        approved = {}
+    end
+    return approved
+end
+
 -- `context_messages` (optional): the canonical history the model saw
 -- when it made this call, for the repeat check above.
-function agent.run_tool(db_path, author, session_id, tool_name, method_name, args, context_messages)
+-- `approval` (destructive tools only): see approved_arguments. A
+-- destructive tool always goes through the approval gate (doc/agent-
+-- tools.md, "Invariants", rule 1): that used to hold because every
+-- caller checked is_destructive first; here it holds for a caller that
+-- forgets.
+function agent.run_tool(db_path, author, session_id, tool_name, method_name, args, context_messages, approval)
     agent_tools = require("agent_tools")
+    record = agent.tool_record(db_path, tool_name, method_name)
+    if record != nil and record.destructive == true then
+        args, gate_err = approved_arguments(db_path, session_id, tool_name, method_name, approval)
+        if args == nil then
+            return nil, gate_err
+        end
+    end
     if context_messages != nil and config.platform_config().agent_dedupe_repeat_calls == true then
         earlier = agent.find_repeat(context_messages, tostring(tool_name) .. "." .. tostring(method_name), args, function(name)
             dot = string.find(name, ".", 1, true)
@@ -2607,29 +2881,38 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
                 -- proposed in the same breath, on the rare turn that proposes
                 -- both.
                 pending_call = nil
-                clarify_call = nil
+                ending_call = nil
+                ending_kind = nil
+                ctx = agent.tool_ctx(db_path, login, session_id)
                 for _, tool_call in ipairs(tool_calls) do
                     if tool_call.arguments == nil then
                         tool_call.arguments = {}
                     end
                     tool_name, method_name = split_tool_name(tool_call.name)
-                    if tool_name == nil or not agent.is_known_tool(db_path, tool_name, method_name) then
+                    -- Classified by the record's fields, in this order: a
+                    -- turn-ending control kind (clarify.ask) wins over a
+                    -- write proposed in the same step, then destructive.
+                    record = agent.tool_record(db_path, tool_name, method_name)
+                    kind = agent.turn_ending_kind(record)
+                    rejection = nil
+                    if record != nil and record.destructive == true then
+                        rejection = agent.precheck(record, ctx, tool_name, method_name, tool_call.arguments)
+                    end
+                    if record == nil then
                         agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name,
                             "ERROR: unknown tool " .. tostring(tool_call.name), true)
-                    elseif tool_name == "clarify" and method_name == "ask" then
-                        if clarify_call == nil then
-                            clarify_call = tool_call
-                            agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name,
-                                "Waiting for the user's answer before continuing.", false)
+                    elseif kind != nil then
+                        if ending_call == nil then
+                            ending_call = tool_call
+                            ending_kind = kind
+                            agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name, kind.result, false)
                         else
-                            agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name,
-                                "ERROR: skipped -- only one clarifying question can be asked per turn", true)
+                            agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name, kind.another_this_turn, true)
                         end
-                    elseif agent.is_destructive(db_path, tool_name, method_name)
-                            and agent_tools.reject_before_approval(tool_name, method_name, tool_call.arguments) != nil then
+                    elseif rejection != nil then
                         agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name,
-                            "ERROR: " .. agent_tools.reject_before_approval(tool_name, method_name, tool_call.arguments), true)
-                    elseif agent.is_destructive(db_path, tool_name, method_name) then
+                            "ERROR: " .. rejection, true)
+                    elseif record.destructive == true then
                         if pending_call == nil then
                             pending_call = {tool_call = tool_call, tool_name = tool_name, method_name = method_name}
                         else
@@ -2652,7 +2935,7 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
                     end
                 end
 
-                if clarify_call != nil then
+                if ending_call != nil then
                     -- No self-check here (there's no answer yet to critique)
                     -- and no agent_pending_action row -- unlike a destructive
                     -- call, there's nothing to later approve/deny; the user's
@@ -2660,12 +2943,12 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
                     -- /chat-message flow already continues this same turn
                     -- loop from active_messages, no special resume path
                     -- needed.
-                    question = nil
-                    if clarify_call.arguments != nil then
-                        question = clarify_call.arguments.question
+                    ending_message = nil
+                    if ending_call.arguments != nil then
+                        ending_message = ending_call.arguments[ending_kind.message_argument]
                     end
                     agent_tools.sync_session_document(db_path, login, session_id)
-                    return {status = "needs_clarification", message = question}
+                    return {status = ending_kind.status, message = ending_message}
                 end
 
                 if pending_call != nil then
@@ -2722,20 +3005,17 @@ function agent.approve_pending(db_path, pending_id, login, system_prompt, model,
     -- between leaves the row there on purpose: the write may or may not
     -- have happened, so nothing runs it again on its own, and it's no
     -- longer offered for approval (agent.latest_pending reads 'pending').
-    claimed, claim_err = agent.claim_pending_action(db_path, pending_id, "running")
+    claimed, claim_token = agent.claim_pending_action(db_path, pending_id, "running")
     if claimed == nil then
-        return nil, claim_err
+        return nil, claim_token
     end
     if claimed == false then
         return nil, "action already " .. tostring(agent.get_pending_action(db_path, pending_id, login).status)
     end
 
-    args, _, _ = json.decode(pending.args_json)
-    if args == nil then
-        args = {}
-    end
-
-    tool_result, tool_err = agent.run_tool(db_path, login, pending.session_id, pending.tool, pending.method, args)
+    -- run_tool reads the arguments from the claimed row itself.
+    tool_result, tool_err = agent.run_tool(db_path, login, pending.session_id, pending.tool, pending.method, nil, nil,
+        {id = pending_id, token = claim_token})
     summary = tostring(tool_result)
     is_error = false
     if tool_err != nil then

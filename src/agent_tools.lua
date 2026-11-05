@@ -40,6 +40,8 @@ agent_tools.AGENT_TOOLS = {
     document = {
         search = {
             destructive = false,
+            in_research = true,
+            repeat_safe = true,
             description = "Search documents by keyword or topic; returns each matching document's id, title, and a real content excerpt so you can answer from what the document actually says, not just its title. Excerpts are short by default; pass detail = \"full\" for longer ones when the short excerpt isn't enough, or read one document with entity.get.",
             parameters = {
                 type = "object",
@@ -79,6 +81,8 @@ agent_tools.AGENT_TOOLS = {
         },
         children = {
             destructive = false,
+            in_research = true,
+            repeat_safe = true,
             description = "List the immediate sub-documents (folder contents) under a document, or every top-level document/folder if parent_id is omitted. Use this to browse the document tree by structure, as an alternative to document.search's content-based matching.",
             parameters = {
                 type = "object",
@@ -87,6 +91,7 @@ agent_tools.AGENT_TOOLS = {
         },
         breadcrumbs = {
             destructive = false,
+            in_research = true,
             description = "Get a document's full path from the root (root first) -- use this to tell the user where a document sits in the folder structure.",
             parameters = {
                 type = "object",
@@ -96,6 +101,7 @@ agent_tools.AGENT_TOOLS = {
         },
         links = {
             destructive = false,
+            in_research = true,
             description = "List every document linked to or from a document, each with the sentence around the [[link]] saying why they're connected (from whichever document's text holds the link). A connection is explained in content: to explain one, write the reason next to the link, or create a document that links both and says why.",
             parameters = {
                 type = "object",
@@ -113,11 +119,17 @@ agent_tools.AGENT_TOOLS = {
     entity = {
         list_types = {
             destructive = false,
+            in_research = true,
+            repeat_safe = true,
+            pin_on_compaction = true,
             description = "List every registered entity type (samples, tasks, experiments, whatever this deployment has).",
             parameters = EMPTY_OBJECT_SCHEMA,
         },
         fields = {
             destructive = false,
+            in_research = true,
+            repeat_safe = true,
+            pin_on_compaction = true,
             description = "List an entity type's fields and their types, so you know what's valid before creating/updating one.",
             parameters = {
                 type = "object",
@@ -127,11 +139,15 @@ agent_tools.AGENT_TOOLS = {
         },
         relationships = {
             destructive = false,
+            in_research = true,
+            repeat_safe = true,
+            pin_on_compaction = true,
             description = "List every reference relationship between registered entity types (which type's field points at which other type -- e.g. 'sample.experiment -> experiment'). Call this when a value you're looking for isn't a field on the entity type you expected -- it's often a field on a DIFFERENT type that references the one you started from (e.g. a 'variety' filter for experiments actually lives on the samples that reference each experiment, not on the experiment itself). No args -- always returns the full relationship graph, small enough to read in one call.",
             parameters = EMPTY_OBJECT_SCHEMA,
         },
         query = {
             destructive = false,
+            in_research = true,
             description = "Run a read-only SQL SELECT against registered entity tables, for anything entity.list's own single-table exact-match filter can't express: joins across related types (call entity.relationships first to find the join path), counts, aggregates, grouping. Table and column names are this deployment's real registered entity type/field names -- call entity.list_types/entity.fields/entity.relationships first if unsure, don't guess. Every table has an archived_at column: archived rows are deleted/superseded records, so filter `archived_at IS NULL` unless you want them. The SQL dialect is the deployment's database (named in any SQL error; schema tables like sqlite_master/information_schema aren't queryable -- use entity.fields). Must be a single plain SELECT statement (no semicolons, no INSERT/UPDATE/DELETE/DDL) referencing only registered entity tables -- anything else is refused. Results are row-capped (this deployment's own configured limit) -- add your own LIMIT or narrow the query if a result comes back truncated (the truncation note tells you the true total match count, so you know whether narrowing is even worth it). Prefer expressing grouping/matching/deduplication logic (e.g. 'which groups of rows share the exact same set of X') as SQL itself -- GROUP BY with GROUP_CONCAT to build a per-group signature, then compare signatures -- rather than fetching many rows and comparing them yourself; there is no code-execution tool, so 'processed afterward' means reasoned over in your own reply, which doesn't scale to large row counts the way one aggregate query does. If a question genuinely can't be answered without paging through everything (no aggregate expresses it), use background.start rather than looping entity.query with an increasing OFFSET in the foreground -- and if you do page manually anyway, always add an explicit ORDER BY on a unique column (e.g. id): without one, SQL row order across separate LIMIT/OFFSET calls isn't guaranteed, so later pages can silently repeat or skip rows.",
             parameters = {
                 type = "object",
@@ -141,6 +157,7 @@ agent_tools.AGENT_TOOLS = {
         },
         list = {
             destructive = false,
+            in_research = true,
             description = "List rows of an entity type, optionally filtered to rows where one field equals a value.",
             parameters = {
                 type = "object",
@@ -156,6 +173,8 @@ agent_tools.AGENT_TOOLS = {
         },
         get = {
             destructive = false,
+            in_research = true,
+            repeat_safe = true,
             description = "Fetch one entity row by id. A long text field (e.g. a document's content) shows its beginning, its headings and its total length; to read more of it, call again with field (the field name) and offset (the character to start from), and optionally length.",
             parameters = {
                 type = "object",
@@ -180,6 +199,7 @@ agent_tools.AGENT_TOOLS = {
         -- of the model catching it itself beforehand.
         validate = {
             destructive = false,
+            in_research = true,
             description = "Check whether values are valid for an entity type, without writing anything -- runs the same validation entity.create/entity.update would apply (required fields, types, valid references, reason-required-on-update rules). Pass entity_type plus one property per field, same as entity.create; also pass entity_id to validate as an UPDATE against that row's current values instead of a fresh create. Use this before entity.create/entity.update on anything non-obvious, so an invalid write is caught here instead of failing only after a human approves it.",
             parameters = {
                 type = "object",
@@ -256,6 +276,7 @@ agent_tools.AGENT_TOOLS = {
     plot = {
         from_query = {
             destructive = false,
+            in_research = true,
             description = "Run a read-only SQL query (same rules as entity.query: single SELECT, registered entity tables only) and turn two of its numeric columns directly into a ready-to-paste ```plot``` fence -- paste the returned text into your reply verbatim, right where the chart should appear. Use this instead of entity.query whenever the goal is a chart: it builds the x/y arrays itself from the real query rows, so there's no risk of miscounting or mistyping values by hand.",
             parameters = {
                 type = "object",
@@ -278,6 +299,7 @@ agent_tools.AGENT_TOOLS = {
     result = {
         read = {
             destructive = false,
+            in_research = true,
             description = "Read more of an earlier tool result that was cut short because it was long (its note gives the result_id and the offset to continue from).",
             parameters = {
                 type = "object",
@@ -295,6 +317,7 @@ agent_tools.AGENT_TOOLS = {
     calc = {
         evaluate = {
             destructive = false,
+            in_research = true,
             description = "Compute a number from a formula, exactly. Use it for every calculation beyond copying a value -- ratios, logarithms, rates, doubling times, unit conversions, averages of a few values -- with the exact numbers a tool returned. Supports + - * / ^, parentheses, ln, log10, log2, exp, sqrt, abs, round(x, digits), min, max, pi and e. Example: 12 * ln(2) / ln(0.8502 / 0.098). Returns the formula and its value; quote both in your reply.",
             parameters = {
                 type = "object",
@@ -310,6 +333,7 @@ agent_tools.AGENT_TOOLS = {
     stats = {
         fit = {
             destructive = false,
+            in_research = true,
             description = "Fit a line or an exponential to two numeric columns of a read-only SQL query (same rules as entity.query) and get the fitted rate with how well it fits. Use it for any growth rate, doubling time, decay or trend over a time series instead of picking two points yourself. model \"exponential\" fits ln(y) against x and reports the growth rate and doubling time; without x_min/x_max it finds the exponential phase from the data and leaves out a lag or plateau, and says which points it used. model \"linear\" fits y against x. Each series is fitted separately: for one value per experiment, sample or replicate, return all of them in one query with a group_column and get one fit per group plus their mean in a single call.",
             parameters = {
                 type = "object",
@@ -335,11 +359,13 @@ agent_tools.AGENT_TOOLS = {
     template = {
         list = {
             destructive = false,
+            in_research = true,
             description = "List reusable Entry templates (name, label, description) available to build a new document from.",
             parameters = EMPTY_OBJECT_SCHEMA,
         },
         get = {
             destructive = false,
+            in_research = true,
             description = "Get one template's rendered content, ready to pass straight to document.create's own content arg, plus its suggested default document name.",
             parameters = {
                 type = "object",
@@ -357,11 +383,13 @@ agent_tools.AGENT_TOOLS = {
     knowledge = {
         stats = {
             destructive = false,
+            in_research = true,
             description = "Summarize the knowledge pool's tier distribution and retrieval activity.",
             parameters = EMPTY_OBJECT_SCHEMA,
         },
         list = {
             destructive = false,
+            in_research = true,
             description = "List knowledge pool documents with their id, tier, content shape (developed/atomic/thin/simple), heat, and retrieval count, hottest first, one page at a time (the footer says how many there are and how to get the next page).",
             parameters = {
                 type = "object",
@@ -393,11 +421,13 @@ agent_tools.AGENT_TOOLS = {
     view = {
         list = {
             destructive = false,
+            in_research = true,
             description = "List admin-approved saved views (name, title, description, and whether it takes a parameter) available to run. Only approved views can actually be run -- see view.run.",
             parameters = EMPTY_OBJECT_SCHEMA,
         },
         run = {
             destructive = false,
+            in_research = true,
             description = "Run an approved saved view by name and return its rows. Pass param_value if view.list said this view takes a parameter. Refuses to run an unapproved view -- ask the user to approve it via /view first, or use entity.query instead if no approved view covers this.",
             parameters = {
                 type = "object",
@@ -424,6 +454,7 @@ agent_tools.AGENT_TOOLS = {
     research = {
         investigate = {
             destructive = false,
+            control = "research",
             description = "Delegate a focused sub-question to an isolated research pass that can run its own series of read-only lookups (entity.fields/entity.relationships/entity.query/entity.list/entity.get, document.search, knowledge.list/stats) before answering. Use this instead of a single direct lookup when a question genuinely needs digging -- a count/aggregate, a relationship you haven't already confirmed, anything where a first attempt coming up empty shouldn't be trusted without a different angle tried. Bounded to a handful of turns -- if the question means checking many discrete items one by one ('across all N experiments/entities'), that's more than this budget covers; use background.start instead so coverage doesn't get silently generalized from a partial sample. Returns a synthesized, grounded finding, not raw rows -- the queries it runs along the way are not added to this conversation.",
             parameters = {
                 type = "object",
@@ -445,6 +476,7 @@ agent_tools.AGENT_TOOLS = {
     clarify = {
         ask = {
             destructive = false,
+            control = "clarify",
             description = "Ask the user one clarifying question instead of guessing or giving up, when the request genuinely has more than one reasonable interpretation that would lead to a different answer or action, or is missing information you can't reasonably infer yourself or find with a tool. Try looking it up first -- don't ask for something a tool call could answer. Ends this turn; the user's next message is the answer.",
             parameters = {
                 type = "object",
@@ -464,6 +496,7 @@ agent_tools.AGENT_TOOLS = {
     background = {
         start = {
             destructive = false,
+            control = "background",
             description = "Hand a question off to a background task that keeps digging after this turn ends, for something that would need more turns than research.investigate's own budget -- use research.investigate first; only use this if that isn't enough. Returns a task id immediately; the finding is appended to this same conversation once it's ready (check with background.status, or just ask again later).",
             parameters = {
                 type = "object",
@@ -473,6 +506,7 @@ agent_tools.AGENT_TOOLS = {
         },
         status = {
             destructive = false,
+            control = "background",
             description = "Check on a background task started with background.start: still pending, or its finding if done.",
             parameters = {
                 type = "object",
@@ -501,29 +535,6 @@ agent_tools.AGENT_TOOLS = {
         },
     },
 }
-
--- The extension-tools plugin surface (doc/plugin-system-research.md,
--- brex 278013129): an approved extension's capabilities.tools entries
--- are dispatched under tool_name = the extension's own manifest.name
--- (validated collision-free against AGENT_TOOLS' own top-level keys at
--- manifest-validate time, see extension.is_reserved_tool_name), so
--- they slot into the exact same tool_name.method_name lookup built-ins
--- use, with no remapping table at all. Returns the matching manifest
--- and tool spec, or nil if tool_name isn't an approved extension's own
--- name or it declares no matching method.
-function agent_tools.find_extension_tool(db_path, tool_name, method_name)
-    for _, entry in ipairs(extension.approved_with_tools(db_path, config.extensions_dir())) do
-        if entry.name == tool_name then
-            for _, tool in ipairs(entry.manifest.capabilities.tools) do
-                if tool.name == method_name then
-                    return entry.manifest, tool
-                end
-            end
-            return nil
-        end
-    end
-    return nil
-end
 
 function issues_summary(issues)
     if issues == nil or #issues == 0 then
@@ -585,15 +596,26 @@ for name, _ in pairs(HAND_ROLLED_ENTITY_FIELDS) do
     end
 end
 
-function unknown_entity_type_message(db_path, entity_type)
-    message = "unknown entity type: " .. tostring(entity_type)
-    suggestion = schema.suggest_type(db_path, entity_type)
+-- Shared recovery hints (doc/agent-tools.md, "Recovery hints"; #6): what
+-- to tell the model when an argument is wrong, worded once so every tool
+-- says it the same way. A record's recover returns one of these, and the
+-- dispatcher appends it to the error as " -- <hint>". Each takes over a
+-- hint that one tool used to write out by hand, with the same text.
+function agent_tools.hint_entity_type(ctx, entity_type)
+    suggestion = schema.suggest_type(ctx.db_path, entity_type)
     if suggestion != nil then
-        message = message .. " -- did you mean '" .. suggestion .. "'?"
-    else
-        message = message .. " -- call entity.list_types for the full list"
+        return "did you mean '" .. suggestion .. "'?"
     end
-    return message
+    return "call entity.list_types for the full list"
+end
+
+-- `names`: the columns a query actually returned, in the order to show.
+function agent_tools.hint_result_columns(names)
+    return "actual columns: " .. table.concat(names, ", ")
+end
+
+function unknown_entity_type_message(db_path, entity_type)
+    return "unknown entity type: " .. tostring(entity_type) .. " -- " .. agent_tools.hint_entity_type({db_path = db_path}, entity_type)
 end
 
 -- A multi_reference field's raw value is a plain array of ids (schema.
@@ -708,22 +730,19 @@ end
 
 NOTHING_TO_UPDATE = "nothing to update: pass each field to change as its own argument, e.g. status = \"finished\""
 
--- Refuses a destructive call that can't do anything, before it becomes
--- a pending action: a person shouldn't be asked to approve a no-op, and
--- an update that reports success while changing nothing kept the model
--- re-proposing it (found by the agent scorecard, doc/agent-eval.md:
--- ten approved entity.update calls with no field). Returns the error
--- text, or nil when the call may go to approval.
-function agent_tools.reject_before_approval(tool_name, method_name, args)
+-- Refuses an entity.update that sets nothing, before it becomes a pending
+-- action: a person shouldn't be asked to approve a no-op, and an update
+-- that reports success while changing nothing kept the model re-proposing
+-- it (found by the agent scorecard, doc/agent-eval.md: ten approved
+-- entity.update calls with no field). entity.update's precheck (#6, step
+-- 2); it was the last case left in reject_before_approval, which is gone.
+-- The handler still runs the same check if a call reaches it.
+function entity_update_precheck(ctx, args)
     if args == nil then
         args = {}
     end
-    if tool_name == "entity" and method_name == "update" and next(entity_update_values(args)) == nil then
+    if next(entity_update_values(args)) == nil then
         return NOTHING_TO_UPDATE
-    end
-    if tool_name == "document" and method_name == "update"
-            and args.title == nil and args.content == nil and args.parent_id == nil then
-        return "nothing to update: pass title, content or parent_id"
     end
     return nil
 end
@@ -751,7 +770,7 @@ function numeric_series(db_path, args, purpose)
     end
     if has_x == false or has_y == false then
         return nil, "query result has no column named \"" .. tostring(args.x_column) .. "\" and/or \"" .. tostring(args.y_column) ..
-            "\" -- actual columns: " .. table.concat(column_names, ", ")
+            "\" -- " .. agent_tools.hint_result_columns(column_names)
     end
     x_values, y_values = {}, {}
     for i, row in ipairs(rows) do
@@ -816,7 +835,7 @@ function fit_groups(args, series)
         end
         table.sort(names)
         return nil, "query result has no column named \"" .. tostring(args.group_column) ..
-            "\" for group_column -- actual columns: " .. table.concat(names, ", ")
+            "\" for group_column -- " .. agent_tools.hint_result_columns(names)
     end
     order = {}
     groups = {}
@@ -869,817 +888,918 @@ function fit_groups(args, series)
     return table.concat(lines, "\n")
 end
 
-function agent_tools.execute_tool(db_path, author, session_id, tool_name, method_name, args)
-    source = {notebook_entry_id = "agent-session:" .. tostring(session_id)}
+-- The document group's handlers (#6, step 1): each is what its branch in
+-- execute_tool's old if-chain was, word for word, as a function of (ctx, args);
+-- the first line unpacks ctx into the names the body always used. They're
+-- defined here, after the helpers they call, and attached to their
+-- records below: AGENT_TOOLS is built at the top of the file, before
+-- those helpers exist.
 
-    if tool_name == "document" and method_name == "search" then
-        -- The same search the /documents search box runs
-        -- (knowledge.search_for_display): same documents, same excerpts.
-        results = knowledge.search_for_display(db_path, args.query, 5, session_id, author, args.detail == "full")
-        if #results == 0 then
-            return "No matching documents found."
-        end
-        lines = {}
-        for _, r in ipairs(results) do
-            detail_bits = {}
-            if r.created_at != nil and r.created_at != "" then
-                table.insert(detail_bits, "created " .. string.sub(r.created_at, 1, 10))
-            end
-            if r.external_id != nil and r.external_id != "" then
-                table.insert(detail_bits, "external_id=" .. r.external_id)
-            end
-            header = "#" .. tostring(r.id) .. " " .. r.title
-            if #detail_bits > 0 then
-                header = header .. " (" .. table.concat(detail_bits, ", ") .. ")"
-            end
-            -- Structural, not just a prompt reminder: multiple documents
-            -- genuinely sharing a title is real and common here (293
-            -- duplicate titles in production, mostly repeated Benchling
-            -- resyncs) -- the result itself surfaces the distinguishing
-            -- fields and calls out the collision whenever this batch has
-            -- one.
-            if r.same_title_count > 1 then
-                header = header .. " [one of " .. tostring(r.same_title_count) ..
-                    " documents titled '" .. r.title .. "' -- distinguish by date/external_id/content above, never by asking the user for the id]"
-            end
-            -- A ready-made link to quote wherever the reply uses this
-            -- document, so citing it costs the model nothing.
-            link_title = string.gsub(r.title, "[%[%]]", "")
-            cite = "cite as: [" .. link_title .. "](/document?entity_id=" .. tostring(r.id) .. ")"
-            table.insert(lines, header .. "\n" .. cite .. "\n" .. r.excerpt)
-        end
-        return table.concat(lines, "\n\n")
+-- A document.update that names nothing to change, refused before it
+-- becomes a pending action (it used to be a case in
+-- reject_before_approval), and again by the handler if it gets that far.
+function document_update_precheck(ctx, args)
+    if args.title == nil and args.content == nil and args.parent_id == nil then
+        return "nothing to update: pass title, content or parent_id"
     end
+    return nil
+end
 
-    if tool_name == "document" and method_name == "create" then
-        if agent_tools.check_write_capability(db_path, "document", author) == false then
-            return nil, "Forbidden: this requires your own Admin capability -- ask an admin to grant it to your account."
-        end
-        parent_id = tonumber(args.parent_id)
-        created_id, issues = document.create_page(db_path, author, args.title, parent_id, args.content, source)
-        if created_id == nil then
-            return nil, issues_summary(issues)
-        end
-        return "Created document #" .. tostring(created_id) .. " (" .. tostring(args.title) .. ")"
+function document_search(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    -- The same search the /documents search box runs
+    -- (knowledge.search_for_display): same documents, same excerpts.
+    results = knowledge.search_for_display(db_path, args.query, 5, session_id, author, args.detail == "full")
+    if #results == 0 then
+        return "No matching documents found."
     end
-
-    if tool_name == "document" and method_name == "update" then
-        if agent_tools.check_write_capability(db_path, "document", author) == false then
-            return nil, "Forbidden: this requires your own Admin capability -- ask an admin to grant it to your account."
+    lines = {}
+    for _, r in ipairs(results) do
+        detail_bits = {}
+        if r.created_at != nil and r.created_at != "" then
+            table.insert(detail_bits, "created " .. string.sub(r.created_at, 1, 10))
         end
-        target_id = tonumber(args.entity_id)
-        if target_id == nil then
-            return nil, "update requires entity_id"
+        if r.external_id != nil and r.external_id != "" then
+            table.insert(detail_bits, "external_id=" .. r.external_id)
         end
-        nothing = agent_tools.reject_before_approval("document", "update", args)
-        if nothing != nil then
-            return nil, nothing
+        header = "#" .. tostring(r.id) .. " " .. r.title
+        if #detail_bits > 0 then
+            header = header .. " (" .. table.concat(detail_bits, ", ") .. ")"
         end
-        parent_id = tonumber(args.parent_id)
-        updated_id, issues = document.update_page(db_path, author, target_id, args.title, parent_id, args.content, source)
-        if updated_id == nil then
-            return nil, issues_summary(issues)
+        -- Structural, not just a prompt reminder: multiple documents
+        -- genuinely sharing a title is real and common here (293
+        -- duplicate titles in production, mostly repeated Benchling
+        -- resyncs) -- the result itself surfaces the distinguishing
+        -- fields and calls out the collision whenever this batch has
+        -- one.
+        if r.same_title_count > 1 then
+            header = header .. " [one of " .. tostring(r.same_title_count) ..
+                " documents titled '" .. r.title .. "' -- distinguish by date/external_id/content above, never by asking the user for the id]"
         end
-        return "Updated document #" .. tostring(updated_id)
+        -- A ready-made link to quote wherever the reply uses this
+        -- document, so citing it costs the model nothing.
+        link_title = string.gsub(r.title, "[%[%]]", "")
+        cite = "cite as: [" .. link_title .. "](/document?entity_id=" .. tostring(r.id) .. ")"
+        table.insert(lines, header .. "\n" .. cite .. "\n" .. r.excerpt)
     end
+    return table.concat(lines, "\n\n")
+end
 
-    if tool_name == "document" and method_name == "children" then
-        rows = document.children(db_path, tonumber(args.parent_id))
-        if #rows == 0 then
-            return "No sub-documents."
-        end
-        lines = {}
-        for _, r in ipairs(rows) do
-            table.insert(lines, "#" .. tostring(r.id) .. " " .. r.title)
-        end
-        return table.concat(lines, "\n")
+function document_create(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    if agent_tools.check_write_capability(db_path, "document", author) == false then
+        return nil, "Forbidden: this requires your own Admin capability -- ask an admin to grant it to your account."
     end
+    parent_id = tonumber(args.parent_id)
+    created_id, issues = document.create_page(db_path, author, args.title, parent_id, args.content, source)
+    if created_id == nil then
+        return nil, issues_summary(issues)
+    end
+    return "Created document #" .. tostring(created_id) .. " (" .. tostring(args.title) .. ")"
+end
 
-    if tool_name == "document" and method_name == "links" then
-        if args.document_id == nil then
-            return nil, "links requires document_id"
+function document_update(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    if agent_tools.check_write_capability(db_path, "document", author) == false then
+        return nil, "Forbidden: this requires your own Admin capability -- ask an admin to grant it to your account."
+    end
+    target_id = tonumber(args.entity_id)
+    if target_id == nil then
+        return nil, "update requires entity_id"
+    end
+    nothing = document_update_precheck(ctx, args)
+    if nothing != nil then
+        return nil, nothing
+    end
+    parent_id = tonumber(args.parent_id)
+    updated_id, issues = document.update_page(db_path, author, target_id, args.title, parent_id, args.content, source)
+    if updated_id == nil then
+        return nil, issues_summary(issues)
+    end
+    return "Updated document #" .. tostring(updated_id)
+end
+
+function document_children(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    rows = document.children(db_path, tonumber(args.parent_id))
+    if #rows == 0 then
+        return "No sub-documents."
+    end
+    lines = {}
+    for _, r in ipairs(rows) do
+        table.insert(lines, "#" .. tostring(r.id) .. " " .. r.title)
+    end
+    return table.concat(lines, "\n")
+end
+
+function document_links(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    if args.document_id == nil then
+        return nil, "links requires document_id"
+    end
+    rows = document.links(db_path, tonumber(args.document_id))
+    if #rows == 0 then
+        return "No linked documents."
+    end
+    lines = {}
+    for _, r in ipairs(rows) do
+        arrow = "<-"
+        if r.direction == "out" then
+            arrow = "->"
         end
-        rows = document.links(db_path, tonumber(args.document_id))
-        if #rows == 0 then
-            return "No linked documents."
+        why = "(nothing in the text says why)"
+        if r.context != nil and r.context != "" then
+            why = r.context
         end
-        lines = {}
-        for _, r in ipairs(rows) do
-            arrow = "<-"
-            if r.direction == "out" then
-                arrow = "->"
+        table.insert(lines, string.format("%s #%s %s -- %s", arrow, tostring(r.id), r.title, why))
+    end
+    return table.concat(lines, "\n")
+end
+
+function document_breadcrumbs(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    if args.document_id == nil then
+        return nil, "breadcrumbs requires document_id"
+    end
+    crumbs = document.breadcrumbs(db_path, tonumber(args.document_id))
+    if #crumbs == 0 then
+        return nil, "no such document (or it has no resolvable path)"
+    end
+    parts = {}
+    for _, c in ipairs(crumbs) do
+        table.insert(parts, c.title)
+    end
+    return table.concat(parts, " / ")
+end
+
+agent_tools.AGENT_TOOLS.document.search.handler = document_search
+agent_tools.AGENT_TOOLS.document.create.handler = document_create
+agent_tools.AGENT_TOOLS.document.update.handler = document_update
+agent_tools.AGENT_TOOLS.document.update.precheck = document_update_precheck
+agent_tools.AGENT_TOOLS.document.children.handler = document_children
+agent_tools.AGENT_TOOLS.document.links.handler = document_links
+agent_tools.AGENT_TOOLS.document.breadcrumbs.handler = document_breadcrumbs
+
+-- The entity group's handlers (#6, step 2), moved the same way as the
+-- document group's above: each branch word for word, ctx unpacked on the
+-- first line.
+
+function entity_list_types(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    types = schema.list(db_path)
+    if #types == 0 then
+        return "No entity types registered."
+    end
+    names = {}
+    for _, t in ipairs(types) do
+        table.insert(names, t.name)
+    end
+    return table.concat(names, ", ")
+end
+
+function entity_fields(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    if args.entity_type == nil then
+        return nil, "fields requires entity_type"
+    end
+    if HAND_ROLLED_ENTITY_FIELDS[args.entity_type] != nil then
+        return "'" .. args.entity_type .. "' is a real table, hand-rolled rather than schema.register()'d -- it has no editable schema, but these are its actual SQL columns:\n" .. HAND_ROLLED_ENTITY_FIELDS[args.entity_type]()
+    end
+    if schema.is_registered(db_path, args.entity_type) == false then
+        return nil, unknown_entity_type_message(db_path, args.entity_type)
+    end
+    fields = schema.fields(db_path, args.entity_type)
+    if #fields == 0 then
+        return "'" .. tostring(args.entity_type) .. "' is a registered entity type with no custom fields (only the system-managed id/created/updated columns)."
+    end
+    lines = {}
+    for _, f in ipairs(fields) do
+        required = ""
+        if tonumber(f.required) == 1 then
+            required = ", required"
+        end
+        line = string.format("%s (%s%s)", f.name, f.type, required)
+        if f.type == "multi_select" or f.type == "multi_reference" then
+            value_col = "value"
+            if f.type == "multi_reference" then
+                value_col = f.name .. "_id"
             end
-            why = "(nothing in the text says why)"
-            if r.context != nil and r.context != "" then
-                why = r.context
-            end
-            table.insert(lines, string.format("%s #%s %s -- %s", arrow, tostring(r.id), r.title, why))
+            line = line .. " -- not a column on " .. args.entity_type .. ": stored in junction table " ..
+                schema.multi_field_table_name(args.entity_type, f.name) .. "(" .. args.entity_type .. "_id, " .. value_col .. ")"
+        elseif f.type == "polymorphic_reference" or f.type == "multi_polymorphic_reference" then
+            line = line .. " -- not a column on " .. args.entity_type .. ": stored in entity_ref(from_type, from_id, field_name, to_type, to_id); join with from_type = '" ..
+                args.entity_type .. "' AND field_name = '" .. f.name .. "' AND from_id = " .. args.entity_type .. ".id"
         end
-        return table.concat(lines, "\n")
+        table.insert(lines, line)
     end
-
-    if tool_name == "document" and method_name == "breadcrumbs" then
-        if args.document_id == nil then
-            return nil, "breadcrumbs requires document_id"
-        end
-        crumbs = document.breadcrumbs(db_path, tonumber(args.document_id))
-        if #crumbs == 0 then
-            return nil, "no such document (or it has no resolvable path)"
-        end
-        parts = {}
-        for _, c in ipairs(crumbs) do
-            table.insert(parts, c.title)
-        end
-        return table.concat(parts, " / ")
-    end
-
-    if tool_name == "entity" and method_name == "list_types" then
-        types = schema.list(db_path)
-        if #types == 0 then
-            return "No entity types registered."
-        end
-        names = {}
-        for _, t in ipairs(types) do
-            table.insert(names, t.name)
-        end
-        return table.concat(names, ", ")
-    end
-
-    if tool_name == "entity" and method_name == "fields" then
-        if args.entity_type == nil then
-            return nil, "fields requires entity_type"
-        end
-        if HAND_ROLLED_ENTITY_FIELDS[args.entity_type] != nil then
-            return "'" .. args.entity_type .. "' is a real table, hand-rolled rather than schema.register()'d -- it has no editable schema, but these are its actual SQL columns:\n" .. HAND_ROLLED_ENTITY_FIELDS[args.entity_type]()
-        end
-        if schema.is_registered(db_path, args.entity_type) == false then
-            return nil, unknown_entity_type_message(db_path, args.entity_type)
-        end
-        fields = schema.fields(db_path, args.entity_type)
-        if #fields == 0 then
-            return "'" .. tostring(args.entity_type) .. "' is a registered entity type with no custom fields (only the system-managed id/created/updated columns)."
-        end
-        lines = {}
-        for _, f in ipairs(fields) do
-            required = ""
-            if tonumber(f.required) == 1 then
-                required = ", required"
-            end
-            line = string.format("%s (%s%s)", f.name, f.type, required)
-            if f.type == "multi_select" or f.type == "multi_reference" then
-                value_col = "value"
-                if f.type == "multi_reference" then
-                    value_col = f.name .. "_id"
-                end
-                line = line .. " -- not a column on " .. args.entity_type .. ": stored in junction table " ..
-                    schema.multi_field_table_name(args.entity_type, f.name) .. "(" .. args.entity_type .. "_id, " .. value_col .. ")"
-            elseif f.type == "polymorphic_reference" or f.type == "multi_polymorphic_reference" then
-                line = line .. " -- not a column on " .. args.entity_type .. ": stored in entity_ref(from_type, from_id, field_name, to_type, to_id); join with from_type = '" ..
-                    args.entity_type .. "' AND field_name = '" .. f.name .. "' AND from_id = " .. args.entity_type .. ".id"
-            end
-            table.insert(lines, line)
-        end
+    table.insert(lines, "")
+    table.insert(lines, "System columns on every row (not listed above): id, name, external_id, created_by, created_at, updated_by, updated_at, archived_at (non-NULL = archived; filter archived_at IS NULL for live rows).")
+    -- `document` also carries knowledge-pool columns intentionally kept
+    -- out of schema.fields (see document.lua's KNOWLEDGE_POOL_SQL_COLUMNS
+    -- comment) -- surface them here too, so a query touching
+    -- heat/tier/retrieval/source has real column names to ground in
+    -- instead of inventing a table.
+    if args.entity_type == "document" then
         table.insert(lines, "")
-        table.insert(lines, "System columns on every row (not listed above): id, name, external_id, created_by, created_at, updated_by, updated_at, archived_at (non-NULL = archived; filter archived_at IS NULL for live rows).")
-        -- `document` also carries knowledge-pool columns intentionally kept
-        -- out of schema.fields (see document.lua's KNOWLEDGE_POOL_SQL_COLUMNS
-        -- comment) -- surface them here too, so a query touching
-        -- heat/tier/retrieval/source has real column names to ground in
-        -- instead of inventing a table.
-        if args.entity_type == "document" then
-            table.insert(lines, "")
-            table.insert(lines, "Additional columns on the real `document` table, queryable in SQL but not part of the editable schema above (the knowledge-pool mechanism's own tier/heat/retrieval/source tracking):")
-            table.insert(lines, document.knowledge_pool_sql_columns_text())
-        end
-        return table.concat(lines, "\n")
+        table.insert(lines, "Additional columns on the real `document` table, queryable in SQL but not part of the editable schema above (the knowledge-pool mechanism's own tier/heat/retrieval/source tracking):")
+        table.insert(lines, document.knowledge_pool_sql_columns_text())
     end
+    return table.concat(lines, "\n")
+end
 
-    if tool_name == "entity" and method_name == "relationships" then
-        edges = schema.relationships(db_path)
-        if #edges == 0 then
-            return "No reference relationships registered between any entity types."
-        end
-        lines = {}
-        for _, edge in ipairs(edges) do
-            table.insert(lines, string.format("%s.%s -> %s (%s)", edge.from_type, edge.field_name, edge.to_type, edge.field_type))
-        end
-        table.sort(lines)
-        return table.concat(lines, "\n")
+function entity_relationships(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    edges = schema.relationships(db_path)
+    if #edges == 0 then
+        return "No reference relationships registered between any entity types."
     end
+    lines = {}
+    for _, edge in ipairs(edges) do
+        table.insert(lines, string.format("%s.%s -> %s (%s)", edge.from_type, edge.field_name, edge.to_type, edge.field_type))
+    end
+    table.sort(lines)
+    return table.concat(lines, "\n")
+end
 
-    if tool_name == "entity" and method_name == "query" then
-        if args.sql == nil then
-            return nil, "query requires sql"
-        end
-        column_names, rows, err, truncated, total_count, archived_note = view.run_agent_query(db_path, args.sql)
-        if column_names == nil then
-            return nil, tostring(err)
-        end
-        if #rows == 0 then
-            if archived_note != nil then
-                return "Query returned no rows.\n\n" .. archived_note
-            end
-            return "Query returned no rows."
-        end
-        lines = {}
-        table.insert(lines, table.concat(column_names, " | "))
-        char_cap = config.platform_config().agent_query_char_cap
-        used = string.len(lines[1])
-        shown = 0
-        for _, row in ipairs(rows) do
-            values = {}
-            for _, col in ipairs(column_names) do
-                table.insert(values, tostring(row[col]))
-            end
-            line = table.concat(values, " | ")
-            if shown > 0 and used + string.len(line) + 1 > char_cap then
-                break
-            end
-            table.insert(lines, line)
-            used = used + string.len(line) + 1
-            shown = shown + 1
-        end
-        result = table.concat(lines, "\n")
-        if shown < #rows then
-            total_text = tostring(#rows)
-            if truncated == true and total_count != nil then
-                total_text = tostring(total_count)
-            end
-            result = result .. "\n\n(showing " .. tostring(shown) .. " of " .. total_text ..
-                " rows -- the result reached its size limit; select fewer columns, aggregate, or narrow the query)"
-            truncated = false
-        end
-        if truncated == true then
-            if total_count != nil then
-                result = result .. "\n\n(showing " .. tostring(#rows) .. " of " .. tostring(total_count) .. " total matching rows -- add your own LIMIT or narrow the query for a complete result)"
-            else
-                result = result .. "\n\n(truncated at " .. tostring(#rows) .. " rows -- add your own LIMIT or narrow the query for a complete result)"
-            end
-        end
+function entity_query(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    if args.sql == nil then
+        return nil, "query requires sql"
+    end
+    column_names, rows, err, truncated, total_count, archived_note = view.run_agent_query(db_path, args.sql)
+    if column_names == nil then
+        return nil, tostring(err)
+    end
+    if #rows == 0 then
         if archived_note != nil then
-            result = result .. "\n\n" .. archived_note
+            return "Query returned no rows.\n\n" .. archived_note
         end
-        return result
+        return "Query returned no rows."
     end
+    lines = {}
+    table.insert(lines, table.concat(column_names, " | "))
+    char_cap = config.platform_config().agent_query_char_cap
+    used = string.len(lines[1])
+    shown = 0
+    for _, row in ipairs(rows) do
+        values = {}
+        for _, col in ipairs(column_names) do
+            table.insert(values, tostring(row[col]))
+        end
+        line = table.concat(values, " | ")
+        if shown > 0 and used + string.len(line) + 1 > char_cap then
+            break
+        end
+        table.insert(lines, line)
+        used = used + string.len(line) + 1
+        shown = shown + 1
+    end
+    result = table.concat(lines, "\n")
+    if shown < #rows then
+        total_text = tostring(#rows)
+        if truncated == true and total_count != nil then
+            total_text = tostring(total_count)
+        end
+        result = result .. "\n\n(showing " .. tostring(shown) .. " of " .. total_text ..
+            " rows -- the result reached its size limit; select fewer columns, aggregate, or narrow the query)"
+        truncated = false
+    end
+    if truncated == true then
+        if total_count != nil then
+            result = result .. "\n\n(showing " .. tostring(#rows) .. " of " .. tostring(total_count) .. " total matching rows -- add your own LIMIT or narrow the query for a complete result)"
+        else
+            result = result .. "\n\n(truncated at " .. tostring(#rows) .. " rows -- add your own LIMIT or narrow the query for a complete result)"
+        end
+    end
+    if archived_note != nil then
+        result = result .. "\n\n" .. archived_note
+    end
+    return result
+end
 
-    -- The full text of a tool result is always stored (agent_message);
-    -- only what the model is shown gets cut (agent.cap_tool_text). Only
-    -- this session's own results are readable.
-    if tool_name == "result" and method_name == "read" then
-        result_id = tonumber(args.result_id)
-        if result_id == nil then
-            return nil, "read requires result_id"
+function entity_list(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    if args.entity_type == nil then
+        return nil, "list requires entity_type"
+    end
+    if schema.is_registered(db_path, args.entity_type) == false then
+        return nil, unknown_entity_type_message(db_path, args.entity_type)
+    end
+    limit = tonumber(args.limit)
+    if limit == nil then
+        limit = 20
+    end
+    offset = tonumber(args.offset)
+    -- Same GET-list shape /api/v1 already offers (filter_field +
+    -- limit/offset) -- a plain entity.list otherwise, unchanged.
+    rows = nil
+    if args.filter_field != nil and args.filter_value != nil then
+        rows = entity.list_by_field(db_path, args.entity_type, args.filter_field, args.filter_value, limit, offset, false)
+    else
+        rows = entity.list(db_path, args.entity_type, limit, offset, false)
+    end
+    if #rows == 0 then
+        return "No " .. tostring(args.entity_type) .. " rows found."
+    end
+    lines = {}
+    for _, row in ipairs(rows) do
+        table.insert(lines, "#" .. tostring(row.id) .. " " .. row_summary(row))
+    end
+    return table.concat(lines, "\n")
+end
+
+function entity_get(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    target_id = tonumber(args.entity_id)
+    if args.entity_type == nil or target_id == nil then
+        return nil, "get requires entity_type and entity_id"
+    end
+    if schema.is_registered(db_path, args.entity_type) == false then
+        return nil, unknown_entity_type_message(db_path, args.entity_type)
+    end
+    row = entity.get(db_path, args.entity_type, target_id)
+    if row == nil then
+        return nil, "no such " .. tostring(args.entity_type) .. " #" .. tostring(target_id)
+    end
+    limit = config.platform_config().agent_get_field_chars
+    if args.field != nil then
+        value = row[args.field]
+        if value == nil then
+            return nil, tostring(args.entity_type) .. " has no field '" .. tostring(args.field) .. "' (or it's empty)"
         end
-        rows = db.query(db_path, string.format(
-            "SELECT content FROM agent_message WHERE id = %d AND session_id = %s AND role = 'tool_result';",
-            result_id, db.quote(session_id)))
-        if rows == nil or rows[1] == nil then
-            return nil, "no tool result #" .. tostring(result_id) .. " in this conversation"
-        end
-        decoded, _, _ = json.decode(rows[1].content)
-        text = rows[1].content
-        if decoded != nil and decoded.text != nil then
-            text = decoded.text
-        end
+        value = format_field_value(value)
         start = tonumber(args.offset)
         if start == nil or start < 0 then
             start = 0
         end
         length = tonumber(args.length)
         if length == nil or length <= 0 then
-            length = config.platform_config().agent_tool_result_cap
+            length = limit
         end
-        total = string.len(text)
-        out = string.format("result #%d, characters %d-%d of %d:\n", result_id, start, math.min(start + length, total), total) ..
-            string.sub(text, start + 1, start + length)
+        total = string.len(value)
+        slice = string.sub(value, start + 1, start + length)
+        header = string.format("%s #%d %s, characters %d-%d of %d:", tostring(args.entity_type), target_id,
+            tostring(args.field), start, math.min(start + length, total), total)
         if start + length < total then
-            out = out .. string.format("\n[read on with result.read result_id=%d offset=%d]", result_id, start + length)
+            return header .. "\n" .. slice .. string.format("\n[read on with offset=%d]", start + length)
         end
-        return out
+        return header .. "\n" .. slice
     end
+    return row_summary(row, limit)
+end
 
-    if tool_name == "calc" and method_name == "evaluate" then
-        value, calc_err = calc.evaluate(args.expression)
-        if value == nil then
-            return nil, "cannot evaluate '" .. tostring(args.expression) .. "': " .. tostring(calc_err)
-        end
-        return calc.format(args.expression, value)
+function entity_validate(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    if args.entity_type == nil then
+        return nil, "validate requires entity_type"
     end
-
-    if tool_name == "stats" and method_name == "fit" then
-        if args.sql == nil or args.x_column == nil or args.y_column == nil then
-            return nil, "fit requires sql, x_column, y_column and model"
+    values = {}
+    for k, v in pairs(args) do
+        if k != "entity_type" and k != "entity_id" then
+            values[k] = v
         end
-        if args.model != "exponential" and args.model != "linear" then
-            return nil, "model must be \"exponential\" or \"linear\""
-        end
-        series, err = numeric_series(db_path, args, "to fit")
-        if series == nil then
-            return nil, err
-        end
-        if series.truncated == true then
-            return nil, "the query hit the row cap -- narrow it (fewer series, or only the columns needed) before fitting"
-        end
-        if args.group_column == nil or args.group_column == "" then
-            fit, fit_err = fit_series(args, series.x, series.y)
-            if fit == nil then
-                return nil, "cannot fit: " .. tostring(fit_err)
-            end
-            return stats.describe(args.model, fit, args.x_column, args.y_column, #series.x)
-        end
-        return fit_groups(args, series)
     end
-
-    if tool_name == "plot" and method_name == "from_query" then
-        if args.sql == nil or args.x_column == nil or args.y_column == nil then
-            return nil, "from_query requires sql, x_column, and y_column"
-        end
-        series, err = numeric_series(db_path, args, "to plot")
-        if series == nil then
-            return nil, err
-        end
-        x_values, y_values, rows = series.x, series.y, series.rows
-        truncated, total_count = series.truncated, series.total_count
-
-        series_name = args.series_name
-        if series_name == nil then
-            series_name = args.y_column
-        end
-        spec = {series = {{name = series_name, x = x_values, y = y_values}}}
-        if args.type != nil then
-            spec.type = args.type
-        end
-        if args.title != nil then
-            spec.title = args.title
-        end
-        if args.xlabel != nil then
-            spec.xlabel = args.xlabel
-        end
-        if args.ylabel != nil then
-            spec.ylabel = args.ylabel
-        end
-
-        -- Same validation the fence renderer itself runs at reply-render
-        -- time (document.render_plot_fences) -- catching a malformed
-        -- spec here gives the model a clear, actionable tool error
-        -- instead of a reply that only shows a broken chart once sent.
-        cfg, cfg_err = document.plot_spec_to_gnuplot_cfg(spec)
-        if cfg == nil then
-            return nil, "built an invalid plot spec: " .. tostring(cfg_err)
-        end
-
-        fence = "```plot\n" .. json.encode(spec) .. "\n```"
-        if truncated == true then
-            if total_count != nil then
-                fence = fence .. "\n\n(chart shows " .. tostring(#rows) .. " of " .. tostring(total_count) .. " total matching rows -- add your own LIMIT or narrow the query for a complete chart)"
-            else
-                fence = fence .. "\n\n(query truncated at " .. tostring(#rows) .. " rows -- add your own LIMIT or narrow the query for a complete chart)"
-            end
-        end
-        return fence
-    end
-
-    if tool_name == "entity" and method_name == "list" then
-        if args.entity_type == nil then
-            return nil, "list requires entity_type"
-        end
-        if schema.is_registered(db_path, args.entity_type) == false then
-            return nil, unknown_entity_type_message(db_path, args.entity_type)
-        end
-        limit = tonumber(args.limit)
-        if limit == nil then
-            limit = 20
-        end
-        offset = tonumber(args.offset)
-        -- Same GET-list shape /api/v1 already offers (filter_field +
-        -- limit/offset) -- a plain entity.list otherwise, unchanged.
-        rows = nil
-        if args.filter_field != nil and args.filter_value != nil then
-            rows = entity.list_by_field(db_path, args.entity_type, args.filter_field, args.filter_value, limit, offset, false)
-        else
-            rows = entity.list(db_path, args.entity_type, limit, offset, false)
-        end
-        if #rows == 0 then
-            return "No " .. tostring(args.entity_type) .. " rows found."
-        end
-        lines = {}
-        for _, row in ipairs(rows) do
-            table.insert(lines, "#" .. tostring(row.id) .. " " .. row_summary(row))
-        end
-        return table.concat(lines, "\n")
-    end
-
-    if tool_name == "entity" and method_name == "get" then
-        target_id = tonumber(args.entity_id)
-        if args.entity_type == nil or target_id == nil then
-            return nil, "get requires entity_type and entity_id"
-        end
-        if schema.is_registered(db_path, args.entity_type) == false then
-            return nil, unknown_entity_type_message(db_path, args.entity_type)
-        end
-        row = entity.get(db_path, args.entity_type, target_id)
-        if row == nil then
+    target_id = tonumber(args.entity_id)
+    issues = nil
+    if target_id != nil then
+        current = entity.get(db_path, args.entity_type, target_id)
+        if current == nil then
             return nil, "no such " .. tostring(args.entity_type) .. " #" .. tostring(target_id)
         end
-        limit = config.platform_config().agent_get_field_chars
-        if args.field != nil then
-            value = row[args.field]
-            if value == nil then
-                return nil, tostring(args.entity_type) .. " has no field '" .. tostring(args.field) .. "' (or it's empty)"
-            end
-            value = format_field_value(value)
-            start = tonumber(args.offset)
-            if start == nil or start < 0 then
-                start = 0
-            end
-            length = tonumber(args.length)
-            if length == nil or length <= 0 then
-                length = limit
-            end
-            total = string.len(value)
-            slice = string.sub(value, start + 1, start + length)
-            header = string.format("%s #%d %s, characters %d-%d of %d:", tostring(args.entity_type), target_id,
-                tostring(args.field), start, math.min(start + length, total), total)
-            if start + length < total then
-                return header .. "\n" .. slice .. string.format("\n[read on with offset=%d]", start + length)
-            end
-            return header .. "\n" .. slice
+        merged = {}
+        for k, v in pairs(current) do
+            merged[k] = v
         end
-        return row_summary(row, limit)
+        for k, v in pairs(values) do
+            merged[k] = v
+        end
+        issues = entity.validate(db_path, args.entity_type, merged, current)
+    else
+        issues = entity.validate(db_path, args.entity_type, values)
     end
 
-    if tool_name == "entity" and method_name == "validate" then
-        if args.entity_type == nil then
-            return nil, "validate requires entity_type"
+    blocking = false
+    lines = {}
+    for _, issue in ipairs(issues) do
+        field = issue.field
+        if field == nil then
+            field = "(general)"
         end
-        values = {}
-        for k, v in pairs(args) do
-            if k != "entity_type" and k != "entity_id" then
-                values[k] = v
-            end
+        table.insert(lines, string.format("[%s] %s: %s", tostring(issue.severity), field, tostring(issue.message)))
+        if issue.severity == "error" then
+            blocking = true
         end
-        target_id = tonumber(args.entity_id)
-        issues = nil
-        if target_id != nil then
-            current = entity.get(db_path, args.entity_type, target_id)
-            if current == nil then
-                return nil, "no such " .. tostring(args.entity_type) .. " #" .. tostring(target_id)
+    end
+    if #lines == 0 then
+        return "Valid -- entity.create/entity.update would succeed as given."
+    end
+    result = table.concat(lines, "\n")
+    if blocking == false then
+        result = result .. "\n\n(no blocking errors -- entity.create/entity.update would still succeed)"
+    end
+    return result
+end
+
+function entity_create(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    if args.entity_type == nil then
+        return nil, "create requires entity_type"
+    end
+    if agent_tools.check_write_capability(db_path, args.entity_type, author) == false then
+        return nil, "Forbidden: " .. tostring(args.entity_type) .. " requires your own Admin capability -- ask an admin to grant it to your account."
+    end
+    values = {}
+    for k, v in pairs(args) do
+        if k != "entity_type" then
+            values[k] = v
+        end
+    end
+    created_id, issues = entity.create(db_path, args.entity_type, values, author, source)
+    if created_id == nil then
+        return nil, issues_summary(issues)
+    end
+    return "Created " .. tostring(args.entity_type) .. " #" .. tostring(created_id)
+end
+
+function entity_update(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    target_id = tonumber(args.entity_id)
+    if args.entity_type == nil or target_id == nil then
+        return nil, "update requires entity_type and entity_id"
+    end
+    if agent_tools.check_write_capability(db_path, args.entity_type, author) == false then
+        return nil, "Forbidden: " .. tostring(args.entity_type) .. " requires your own Admin capability -- ask an admin to grant it to your account."
+    end
+    -- `reason` is metadata about the change, not a field being
+    -- changed on the entity itself -- pulled out the same way
+    -- entity_type/entity_id already are, so it never ends up as a
+    -- literal column update.
+    values = entity_update_values(args)
+    if next(values) == nil then
+        return nil, NOTHING_TO_UPDATE
+    end
+    updated_id, issues = entity.update(db_path, args.entity_type, target_id, values, author, source, args.reason)
+    if updated_id == nil then
+        return nil, issues_summary(issues)
+    end
+    return "Updated " .. tostring(args.entity_type) .. " #" .. tostring(updated_id)
+end
+
+function entity_archive(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    target_id = tonumber(args.entity_id)
+    if args.entity_type == nil or target_id == nil then
+        return nil, "archive requires entity_type and entity_id"
+    end
+    if agent_tools.check_write_capability(db_path, args.entity_type, author) == false then
+        return nil, "Forbidden: " .. tostring(args.entity_type) .. " requires your own Admin capability -- ask an admin to grant it to your account."
+    end
+    archived_id, issues = entity.archive(db_path, args.entity_type, target_id, author, source, args.reason)
+    if archived_id == nil then
+        return nil, issues_summary(issues)
+    end
+    document.on_entity_archived(db_path, args.entity_type, archived_id)
+    return "Archived " .. tostring(args.entity_type) .. " #" .. tostring(archived_id)
+end
+
+function entity_unarchive(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    target_id = tonumber(args.entity_id)
+    if args.entity_type == nil or target_id == nil then
+        return nil, "unarchive requires entity_type and entity_id"
+    end
+    if agent_tools.check_write_capability(db_path, args.entity_type, author) == false then
+        return nil, "Forbidden: " .. tostring(args.entity_type) .. " requires your own Admin capability -- ask an admin to grant it to your account."
+    end
+    unarchived_id, issues = entity.unarchive(db_path, args.entity_type, target_id, author, source)
+    if unarchived_id == nil then
+        return nil, issues_summary(issues)
+    end
+    document.on_entity_unarchived(db_path, args.entity_type, unarchived_id)
+    return "Unarchived " .. tostring(args.entity_type) .. " #" .. tostring(unarchived_id)
+end
+
+agent_tools.AGENT_TOOLS.entity.list_types.handler = entity_list_types
+agent_tools.AGENT_TOOLS.entity.fields.handler = entity_fields
+agent_tools.AGENT_TOOLS.entity.relationships.handler = entity_relationships
+agent_tools.AGENT_TOOLS.entity.query.handler = entity_query
+agent_tools.AGENT_TOOLS.entity.list.handler = entity_list
+agent_tools.AGENT_TOOLS.entity.get.handler = entity_get
+agent_tools.AGENT_TOOLS.entity.validate.handler = entity_validate
+agent_tools.AGENT_TOOLS.entity.create.handler = entity_create
+agent_tools.AGENT_TOOLS.entity.update.handler = entity_update
+agent_tools.AGENT_TOOLS.entity.archive.handler = entity_archive
+agent_tools.AGENT_TOOLS.entity.unarchive.handler = entity_unarchive
+agent_tools.AGENT_TOOLS.entity.update.precheck = entity_update_precheck
+
+-- The knowledge, view and template groups' handlers (#6, step 3), moved
+-- the same way as the document group's above.
+
+function knowledge_stats(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    stats = knowledge.stats(db_path)
+    return string.format(
+        "tier0=%d tier1=%d tier2=%d tier3=%d notes=%d retrievals=%d reviewed=%d sessions=%d",
+        stats.tier_counts[0], stats.tier_counts[1], stats.tier_counts[2], stats.tier_counts[3],
+        stats.note_count, stats.retrieval_count, stats.reviewed_note_count, stats.session_count
+    )
+end
+
+-- Read-only listing -- surfaces the pool's real document ids/tiers/
+-- content shape to the model. Content shape is what the
+-- distillation pass reads to decide what's actually worth
+-- distilling from -- only "developed" (long/multi-section) content
+-- has something worth extracting; an already-"atomic"/"thin"/
+-- "simple" document doesn't. Optional args.tier filters, same as
+-- the CLI.
+function knowledge_list(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    rows = knowledge.list_documents(db_path, tonumber(args.tier))
+    if #rows == 0 then
+        return "No knowledge pool documents found."
+    end
+    -- One page at a time: listing the whole pool was ~50k characters
+    -- per call in prod (doc/context-management-research.md).
+    page = config.platform_config().agent_knowledge_list_page
+    first = tonumber(args.offset)
+    if first == nil or first < 0 then
+        first = 0
+    end
+    if first >= #rows then
+        return "No more knowledge pool documents (there are " .. tostring(#rows) .. ")."
+    end
+    last = math.min(first + page, #rows)
+    lines = {}
+    for i = first + 1, last do
+        row = rows[i]
+        body = row.content
+        if body == nil then
+            body = ""
+        end
+        table.insert(lines, string.format(
+            "#%s [tier %s, %s] %s (heat=%.2f, retrievals=%s)",
+            tostring(row.id), tostring(row.tier), document.content_shape(body), tostring(row.title),
+            row.effective_heat, tostring(row.retrieval_count)
+        ))
+    end
+    footer = string.format("(documents %d-%d of %d", first + 1, last, #rows)
+    if last < #rows then
+        footer = footer .. string.format(" -- next page: offset = %d", last)
+    end
+    return table.concat(lines, "\n") .. "\n\n" .. footer .. ")"
+end
+
+-- Destructive: writes a new, concise, single-idea document
+-- distilled from a source the agent has read -- the real
+-- counterpart to knowledge.create_document_note's reasoning-note
+-- path. A genuine write (a new document/entity_event row), so this
+-- goes through the same pending-action approval flow as
+-- document.create/entity.create.
+function knowledge_distill(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    if args.title == nil or args.content == nil then
+        return nil, "distill requires title and content"
+    end
+    document_id, err = knowledge.distill_document(db_path, author, tonumber(args.source_document_id), args.title, args.content)
+    if document_id == nil then
+        return nil, tostring(err)
+    end
+    return "Distilled document #" .. tostring(document_id) .. " (source #" .. tostring(args.source_document_id) .. ")"
+end
+
+function view_list(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    entries = view.all(db_path)
+    if #entries == 0 then
+        return "No views defined."
+    end
+    lines = {}
+    for _, e in ipairs(entries) do
+        if e.def != nil then
+            approved_note = "not approved"
+            if view.is_approved(db_path, e.def) == true then
+                approved_note = "approved, runnable"
             end
-            merged = {}
-            for k, v in pairs(current) do
-                merged[k] = v
+            param_note = ""
+            if e.def.param != nil then
+                param_note = " (takes param: " .. e.def.param.name .. ")"
             end
-            for k, v in pairs(values) do
-                merged[k] = v
+            table.insert(lines, e.name .. " -- " .. tostring(e.def.title) .. param_note .. " [" .. approved_note .. "]")
+        end
+    end
+    return table.concat(lines, "\n")
+end
+
+function view_run(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    if args.name == nil then
+        return nil, "run requires name"
+    end
+    view_def, view_err = view.load(db_path, args.name)
+    if view_def == nil then
+        return nil, "no such view: " .. tostring(args.name) .. " (" .. tostring(view_err) .. ")"
+    end
+    if view.is_approved(db_path, view_def) == false then
+        return nil, "view '" .. args.name .. "' is not approved -- ask the user to approve it via /view first"
+    end
+    rows, run_err = view.run(db_path, view_def, args.param_value)
+    if rows == nil then
+        return nil, run_err
+    end
+    if #rows == 0 then
+        return "No rows."
+    end
+    cap = config.platform_config().agent_query_row_cap
+    lines = {}
+    for i = 1, math.min(cap, #rows) do
+        parts = {}
+        for k, v in pairs(rows[i]) do
+            table.insert(parts, tostring(k) .. "=" .. tostring(v))
+        end
+        table.insert(lines, table.concat(parts, ", "))
+    end
+    result = table.concat(lines, "\n")
+    if #rows > cap then
+        result = result .. "\n\n(truncated at " .. tostring(cap) .. " of " .. tostring(#rows) .. " rows -- add your own LIMIT or narrow the query for a complete result)"
+    end
+    return result
+end
+
+function template_list(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    templates_dir = config.templates_dir()
+    names = template.names(templates_dir)
+    if #names == 0 then
+        return "No templates available."
+    end
+    lines = {}
+    for _, name in ipairs(names) do
+        def, err = template.load(templates_dir, name)
+        if def != nil then
+            description = def.description
+            if description == nil then
+                description = ""
             end
-            issues = entity.validate(db_path, args.entity_type, merged, current)
+            table.insert(lines, name .. " (" .. tostring(def.label) .. "): " .. description)
+        end
+    end
+    return table.concat(lines, "\n")
+end
+
+function template_get(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    if args.name == nil then
+        return nil, "get requires name"
+    end
+    def, err = template.load(config.templates_dir(), args.name)
+    if def == nil then
+        return nil, "no such template: " .. tostring(args.name) .. " (" .. tostring(err) .. ")"
+    end
+    rendered = template.render(def)
+    default_path = def.default_path
+    if default_path == nil then
+        default_path = def.label
+    end
+    return "Suggested document name: " .. tostring(default_path) .. "\n\n" .. rendered
+end
+
+agent_tools.AGENT_TOOLS.knowledge.stats.handler = knowledge_stats
+agent_tools.AGENT_TOOLS.knowledge.list.handler = knowledge_list
+agent_tools.AGENT_TOOLS.knowledge.distill.handler = knowledge_distill
+agent_tools.AGENT_TOOLS.view.list.handler = view_list
+agent_tools.AGENT_TOOLS.view.run.handler = view_run
+agent_tools.AGENT_TOOLS.template.list.handler = template_list
+agent_tools.AGENT_TOOLS.template.get.handler = template_get
+
+-- The result, calc, stats and plot groups' handlers (#6, step 4), moved
+-- the same way as the document group's above.
+
+-- The full text of a tool result is always stored (agent_message);
+-- only what the model is shown gets cut (agent.cap_tool_text). Only
+-- this session's own results are readable.
+function result_read(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    result_id = tonumber(args.result_id)
+    if result_id == nil then
+        return nil, "read requires result_id"
+    end
+    rows = db.query(db_path, string.format(
+        "SELECT content FROM agent_message WHERE id = %d AND session_id = %s AND role = 'tool_result';",
+        result_id, db.quote(session_id)))
+    if rows == nil or rows[1] == nil then
+        return nil, "no tool result #" .. tostring(result_id) .. " in this conversation"
+    end
+    decoded, _, _ = json.decode(rows[1].content)
+    text = rows[1].content
+    if decoded != nil and decoded.text != nil then
+        text = decoded.text
+    end
+    start = tonumber(args.offset)
+    if start == nil or start < 0 then
+        start = 0
+    end
+    length = tonumber(args.length)
+    if length == nil or length <= 0 then
+        length = config.platform_config().agent_tool_result_cap
+    end
+    total = string.len(text)
+    out = string.format("result #%d, characters %d-%d of %d:\n", result_id, start, math.min(start + length, total), total) ..
+        string.sub(text, start + 1, start + length)
+    if start + length < total then
+        out = out .. string.format("\n[read on with result.read result_id=%d offset=%d]", result_id, start + length)
+    end
+    return out
+end
+
+function calc_evaluate(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    value, calc_err = calc.evaluate(args.expression)
+    if value == nil then
+        return nil, "cannot evaluate '" .. tostring(args.expression) .. "': " .. tostring(calc_err)
+    end
+    return calc.format(args.expression, value)
+end
+
+function stats_fit(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    if args.sql == nil or args.x_column == nil or args.y_column == nil then
+        return nil, "fit requires sql, x_column, y_column and model"
+    end
+    if args.model != "exponential" and args.model != "linear" then
+        return nil, "model must be \"exponential\" or \"linear\""
+    end
+    series, err = numeric_series(db_path, args, "to fit")
+    if series == nil then
+        return nil, err
+    end
+    if series.truncated == true then
+        return nil, "the query hit the row cap -- narrow it (fewer series, or only the columns needed) before fitting"
+    end
+    if args.group_column == nil or args.group_column == "" then
+        fit, fit_err = fit_series(args, series.x, series.y)
+        if fit == nil then
+            return nil, "cannot fit: " .. tostring(fit_err)
+        end
+        return stats.describe(args.model, fit, args.x_column, args.y_column, #series.x)
+    end
+    return fit_groups(args, series)
+end
+
+function plot_from_query(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    if args.sql == nil or args.x_column == nil or args.y_column == nil then
+        return nil, "from_query requires sql, x_column, and y_column"
+    end
+    series, err = numeric_series(db_path, args, "to plot")
+    if series == nil then
+        return nil, err
+    end
+    x_values, y_values, rows = series.x, series.y, series.rows
+    truncated, total_count = series.truncated, series.total_count
+
+    series_name = args.series_name
+    if series_name == nil then
+        series_name = args.y_column
+    end
+    spec = {series = {{name = series_name, x = x_values, y = y_values}}}
+    if args.type != nil then
+        spec.type = args.type
+    end
+    if args.title != nil then
+        spec.title = args.title
+    end
+    if args.xlabel != nil then
+        spec.xlabel = args.xlabel
+    end
+    if args.ylabel != nil then
+        spec.ylabel = args.ylabel
+    end
+
+    -- Same validation the fence renderer itself runs at reply-render
+    -- time (document.render_plot_fences) -- catching a malformed
+    -- spec here gives the model a clear, actionable tool error
+    -- instead of a reply that only shows a broken chart once sent.
+    cfg, cfg_err = document.plot_spec_to_gnuplot_cfg(spec)
+    if cfg == nil then
+        return nil, "built an invalid plot spec: " .. tostring(cfg_err)
+    end
+
+    fence = "```plot\n" .. json.encode(spec) .. "\n```"
+    if truncated == true then
+        if total_count != nil then
+            fence = fence .. "\n\n(chart shows " .. tostring(#rows) .. " of " .. tostring(total_count) .. " total matching rows -- add your own LIMIT or narrow the query for a complete chart)"
         else
-            issues = entity.validate(db_path, args.entity_type, values)
+            fence = fence .. "\n\n(query truncated at " .. tostring(#rows) .. " rows -- add your own LIMIT or narrow the query for a complete chart)"
         end
-
-        blocking = false
-        lines = {}
-        for _, issue in ipairs(issues) do
-            field = issue.field
-            if field == nil then
-                field = "(general)"
-            end
-            table.insert(lines, string.format("[%s] %s: %s", tostring(issue.severity), field, tostring(issue.message)))
-            if issue.severity == "error" then
-                blocking = true
-            end
-        end
-        if #lines == 0 then
-            return "Valid -- entity.create/entity.update would succeed as given."
-        end
-        result = table.concat(lines, "\n")
-        if blocking == false then
-            result = result .. "\n\n(no blocking errors -- entity.create/entity.update would still succeed)"
-        end
-        return result
     end
+    return fence
+end
 
-    if tool_name == "entity" and method_name == "create" then
-        if args.entity_type == nil then
-            return nil, "create requires entity_type"
-        end
-        if agent_tools.check_write_capability(db_path, args.entity_type, author) == false then
-            return nil, "Forbidden: " .. tostring(args.entity_type) .. " requires your own Admin capability -- ask an admin to grant it to your account."
-        end
-        values = {}
-        for k, v in pairs(args) do
-            if k != "entity_type" then
-                values[k] = v
-            end
-        end
-        created_id, issues = entity.create(db_path, args.entity_type, values, author, source)
-        if created_id == nil then
-            return nil, issues_summary(issues)
-        end
-        return "Created " .. tostring(args.entity_type) .. " #" .. tostring(created_id)
+agent_tools.AGENT_TOOLS.result.read.handler = result_read
+agent_tools.AGENT_TOOLS.calc.evaluate.handler = calc_evaluate
+agent_tools.AGENT_TOOLS.stats.fit.handler = stats_fit
+agent_tools.AGENT_TOOLS.plot.from_query.handler = plot_from_query
+
+-- The control tools' handlers (#6, step 5). research and background run
+-- like any other tool; their `control` kind only keeps them from a
+-- research sub-agent. clarify.ask has no handler: asking ends the turn,
+-- which run_turn does from its CONTROL_KINDS row.
+
+-- agent.default_model() here, not a model threaded through this
+-- whole call chain -- every real call site (cgi.lua's chat routes,
+-- main.lua's knowledge distillation) already resolves `model` the
+-- exact same way before ever calling agent.run_turn, so this is the
+-- same model the outer turn is already using in every real case,
+-- without widening agent.execute_tool's own signature for it.
+function research_investigate(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    if args.question == nil then
+        return nil, "investigate requires question"
     end
-
-    if tool_name == "entity" and method_name == "update" then
-        target_id = tonumber(args.entity_id)
-        if args.entity_type == nil or target_id == nil then
-            return nil, "update requires entity_type and entity_id"
-        end
-        if agent_tools.check_write_capability(db_path, args.entity_type, author) == false then
-            return nil, "Forbidden: " .. tostring(args.entity_type) .. " requires your own Admin capability -- ask an admin to grant it to your account."
-        end
-        -- `reason` is metadata about the change, not a field being
-        -- changed on the entity itself -- pulled out the same way
-        -- entity_type/entity_id already are, so it never ends up as a
-        -- literal column update.
-        values = entity_update_values(args)
-        if next(values) == nil then
-            return nil, NOTHING_TO_UPDATE
-        end
-        updated_id, issues = entity.update(db_path, args.entity_type, target_id, values, author, source, args.reason)
-        if updated_id == nil then
-            return nil, issues_summary(issues)
-        end
-        return "Updated " .. tostring(args.entity_type) .. " #" .. tostring(updated_id)
+    finding, err = agent.run_research_loop(db_path, author, session_id, agent.default_model(), args.question)
+    if finding == nil then
+        return nil, tostring(err)
     end
+    return finding
+end
 
-    if tool_name == "entity" and method_name == "archive" then
-        target_id = tonumber(args.entity_id)
-        if args.entity_type == nil or target_id == nil then
-            return nil, "archive requires entity_type and entity_id"
-        end
-        if agent_tools.check_write_capability(db_path, args.entity_type, author) == false then
-            return nil, "Forbidden: " .. tostring(args.entity_type) .. " requires your own Admin capability -- ask an admin to grant it to your account."
-        end
-        archived_id, issues = entity.archive(db_path, args.entity_type, target_id, author, source, args.reason)
-        if archived_id == nil then
-            return nil, issues_summary(issues)
-        end
-        document.on_entity_archived(db_path, args.entity_type, archived_id)
-        return "Archived " .. tostring(args.entity_type) .. " #" .. tostring(archived_id)
+function background_start(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    if args.question == nil then
+        return nil, "start requires question"
     end
+    task_id = agent.enqueue_background_task(db_path, session_id, args.question)
+    return "Started background task #" .. tostring(task_id) ..
+        " -- its finding will be added to this conversation once it's ready; check with background.status(" ..
+        tostring(task_id) .. ") or just ask again later."
+end
 
-    if tool_name == "entity" and method_name == "unarchive" then
-        target_id = tonumber(args.entity_id)
-        if args.entity_type == nil or target_id == nil then
-            return nil, "unarchive requires entity_type and entity_id"
-        end
-        if agent_tools.check_write_capability(db_path, args.entity_type, author) == false then
-            return nil, "Forbidden: " .. tostring(args.entity_type) .. " requires your own Admin capability -- ask an admin to grant it to your account."
-        end
-        unarchived_id, issues = entity.unarchive(db_path, args.entity_type, target_id, author, source)
-        if unarchived_id == nil then
-            return nil, issues_summary(issues)
-        end
-        document.on_entity_unarchived(db_path, args.entity_type, unarchived_id)
-        return "Unarchived " .. tostring(args.entity_type) .. " #" .. tostring(unarchived_id)
+-- Ownership checked against the CURRENT session (not the task's own
+-- login) -- same "not found" wording either way a mismatch could
+-- happen (unknown id, or a real id belonging to someone else's
+-- session), so a guessed/incremented task_id can't be used to read
+-- another user's background task.
+function background_status(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    target_id = tonumber(args.task_id)
+    if target_id == nil then
+        return nil, "status requires task_id"
     end
-
-    if tool_name == "template" and method_name == "list" then
-        templates_dir = config.templates_dir()
-        names = template.names(templates_dir)
-        if #names == 0 then
-            return "No templates available."
-        end
-        lines = {}
-        for _, name in ipairs(names) do
-            def, err = template.load(templates_dir, name)
-            if def != nil then
-                description = def.description
-                if description == nil then
-                    description = ""
-                end
-                table.insert(lines, name .. " (" .. tostring(def.label) .. "): " .. description)
-            end
-        end
-        return table.concat(lines, "\n")
+    task = agent.get_background_task(db_path, target_id)
+    if task == nil or task.session_id != session_id then
+        return nil, "no such background task #" .. tostring(target_id)
     end
-
-    if tool_name == "template" and method_name == "get" then
-        if args.name == nil then
-            return nil, "get requires name"
-        end
-        def, err = template.load(config.templates_dir(), args.name)
-        if def == nil then
-            return nil, "no such template: " .. tostring(args.name) .. " (" .. tostring(err) .. ")"
-        end
-        rendered = template.render(def)
-        default_path = def.default_path
-        if default_path == nil then
-            default_path = def.label
-        end
-        return "Suggested document name: " .. tostring(default_path) .. "\n\n" .. rendered
+    if task.status == "done" then
+        return "Task #" .. tostring(target_id) .. " (done): " .. tostring(task.result)
+    elseif task.status == "failed" then
+        return "Task #" .. tostring(target_id) .. " (failed after " .. tostring(task.attempts) .. " attempts): " .. tostring(task.last_error)
     end
+    return "Task #" .. tostring(target_id) .. " is still " .. tostring(task.status) .. "."
+end
 
-    if tool_name == "knowledge" and method_name == "stats" then
-        stats = knowledge.stats(db_path)
-        return string.format(
-            "tier0=%d tier1=%d tier2=%d tier3=%d notes=%d retrievals=%d reviewed=%d sessions=%d",
-            stats.tier_counts[0], stats.tier_counts[1], stats.tier_counts[2], stats.tier_counts[3],
-            stats.note_count, stats.retrieval_count, stats.reviewed_note_count, stats.session_count
-        )
+agent_tools.AGENT_TOOLS.research.investigate.handler = research_investigate
+agent_tools.AGENT_TOOLS.background.start.handler = background_start
+agent_tools.AGENT_TOOLS.background.status.handler = background_status
+
+-- internet_search's handler (#6, step 6), moved the same way as the
+-- document group's above. Destructive: each search is a data exit, so
+-- it goes through approval like a write (see its record).
+
+function internet_search_search(ctx, args)
+    db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
+    if args.query == nil or args.query == "" then
+        return nil, "search requires query"
     end
-
-    -- Read-only listing -- surfaces the pool's real document ids/tiers/
-    -- content shape to the model. Content shape is what the
-    -- distillation pass reads to decide what's actually worth
-    -- distilling from -- only "developed" (long/multi-section) content
-    -- has something worth extracting; an already-"atomic"/"thin"/
-    -- "simple" document doesn't. Optional args.tier filters, same as
-    -- the CLI.
-    if tool_name == "knowledge" and method_name == "list" then
-        rows = knowledge.list_documents(db_path, tonumber(args.tier))
-        if #rows == 0 then
-            return "No knowledge pool documents found."
-        end
-        -- One page at a time: listing the whole pool was ~50k characters
-        -- per call in prod (doc/context-management-research.md).
-        page = config.platform_config().agent_knowledge_list_page
-        first = tonumber(args.offset)
-        if first == nil or first < 0 then
-            first = 0
-        end
-        if first >= #rows then
-            return "No more knowledge pool documents (there are " .. tostring(#rows) .. ")."
-        end
-        last = math.min(first + page, #rows)
-        lines = {}
-        for i = first + 1, last do
-            row = rows[i]
-            body = row.content
-            if body == nil then
-                body = ""
-            end
-            table.insert(lines, string.format(
-                "#%s [tier %s, %s] %s (heat=%.2f, retrievals=%s)",
-                tostring(row.id), tostring(row.tier), document.content_shape(body), tostring(row.title),
-                row.effective_heat, tostring(row.retrieval_count)
-            ))
-        end
-        footer = string.format("(documents %d-%d of %d", first + 1, last, #rows)
-        if last < #rows then
-            footer = footer .. string.format(" -- next page: offset = %d", last)
-        end
-        return table.concat(lines, "\n") .. "\n\n" .. footer .. ")"
+    response, err = search_provider.search(args.query)
+    if response == nil then
+        return nil, err
     end
+    return search_provider.format_results(response)
+end
 
-    -- Destructive: writes a new, concise, single-idea document
-    -- distilled from a source the agent has read -- the real
-    -- counterpart to knowledge.create_document_note's reasoning-note
-    -- path. A genuine write (a new document/entity_event row), so this
-    -- goes through the same pending-action approval flow as
-    -- document.create/entity.create.
-    if tool_name == "knowledge" and method_name == "distill" then
-        if args.title == nil or args.content == nil then
-            return nil, "distill requires title and content"
-        end
-        document_id, err = knowledge.distill_document(db_path, author, tonumber(args.source_document_id), args.title, args.content)
-        if document_id == nil then
-            return nil, tostring(err)
-        end
-        return "Distilled document #" .. tostring(document_id) .. " (source #" .. tostring(args.source_document_id) .. ")"
+agent_tools.AGENT_TOOLS.internet_search.search.handler = internet_search_search
+
+-- Runs one tool call: a lookup, not a chain of names (#6). The record's
+-- handler runs; a tool with no record, or a record with no handler
+-- (clarify.ask, whose effect run_turn handles: it ends the turn), is an
+-- unknown tool, in the words the old if-chain used. A failed call gets
+-- the record's recover hint, if it has one: run under pcall, only after
+-- a failure, and only ever added to the error, never replacing it, so
+-- the real cause is always in the result.
+function agent_tools.execute_tool(db_path, author, session_id, tool_name, method_name, args)
+    record = agent.tool_record(db_path, tool_name, method_name)
+    if record == nil or record.handler == nil then
+        return nil, "unknown tool: " .. tostring(tool_name) .. "." .. tostring(method_name)
     end
-
-    if tool_name == "view" and method_name == "list" then
-        entries = view.all(db_path)
-        if #entries == 0 then
-            return "No views defined."
+    ctx = agent.tool_ctx(db_path, author, session_id)
+    result, err = record.handler(ctx, args)
+    if result == nil and err != nil and record.recover != nil then
+        ok, hint = pcall(record.recover, ctx, args, err)
+        if ok == true and type(hint) == "string" and hint != "" then
+            err = tostring(err) .. " -- " .. hint
         end
-        lines = {}
-        for _, e in ipairs(entries) do
-            if e.def != nil then
-                approved_note = "not approved"
-                if view.is_approved(db_path, e.def) == true then
-                    approved_note = "approved, runnable"
-                end
-                param_note = ""
-                if e.def.param != nil then
-                    param_note = " (takes param: " .. e.def.param.name .. ")"
-                end
-                table.insert(lines, e.name .. " -- " .. tostring(e.def.title) .. param_note .. " [" .. approved_note .. "]")
-            end
-        end
-        return table.concat(lines, "\n")
     end
-
-    if tool_name == "view" and method_name == "run" then
-        if args.name == nil then
-            return nil, "run requires name"
-        end
-        view_def, view_err = view.load(db_path, args.name)
-        if view_def == nil then
-            return nil, "no such view: " .. tostring(args.name) .. " (" .. tostring(view_err) .. ")"
-        end
-        if view.is_approved(db_path, view_def) == false then
-            return nil, "view '" .. args.name .. "' is not approved -- ask the user to approve it via /view first"
-        end
-        rows, run_err = view.run(db_path, view_def, args.param_value)
-        if rows == nil then
-            return nil, run_err
-        end
-        if #rows == 0 then
-            return "No rows."
-        end
-        cap = config.platform_config().agent_query_row_cap
-        lines = {}
-        for i = 1, math.min(cap, #rows) do
-            parts = {}
-            for k, v in pairs(rows[i]) do
-                table.insert(parts, tostring(k) .. "=" .. tostring(v))
-            end
-            table.insert(lines, table.concat(parts, ", "))
-        end
-        result = table.concat(lines, "\n")
-        if #rows > cap then
-            result = result .. "\n\n(truncated at " .. tostring(cap) .. " of " .. tostring(#rows) .. " rows -- add your own LIMIT or narrow the query for a complete result)"
-        end
-        return result
-    end
-
-    -- agent.default_model() here, not a model threaded through this
-    -- whole call chain -- every real call site (cgi.lua's chat routes,
-    -- main.lua's knowledge distillation) already resolves `model` the
-    -- exact same way before ever calling agent.run_turn, so this is the
-    -- same model the outer turn is already using in every real case,
-    -- without widening agent.execute_tool's own signature for it.
-    if tool_name == "research" and method_name == "investigate" then
-        if args.question == nil then
-            return nil, "investigate requires question"
-        end
-        finding, err = agent.run_research_loop(db_path, author, session_id, agent.default_model(), args.question)
-        if finding == nil then
-            return nil, tostring(err)
-        end
-        return finding
-    end
-
-    if tool_name == "background" and method_name == "start" then
-        if args.question == nil then
-            return nil, "start requires question"
-        end
-        task_id = agent.enqueue_background_task(db_path, session_id, args.question)
-        return "Started background task #" .. tostring(task_id) ..
-            " -- its finding will be added to this conversation once it's ready; check with background.status(" ..
-            tostring(task_id) .. ") or just ask again later."
-    end
-
-    -- Ownership checked against the CURRENT session (not the task's own
-    -- login) -- same "not found" wording either way a mismatch could
-    -- happen (unknown id, or a real id belonging to someone else's
-    -- session), so a guessed/incremented task_id can't be used to read
-    -- another user's background task.
-    if tool_name == "background" and method_name == "status" then
-        target_id = tonumber(args.task_id)
-        if target_id == nil then
-            return nil, "status requires task_id"
-        end
-        task = agent.get_background_task(db_path, target_id)
-        if task == nil or task.session_id != session_id then
-            return nil, "no such background task #" .. tostring(target_id)
-        end
-        if task.status == "done" then
-            return "Task #" .. tostring(target_id) .. " (done): " .. tostring(task.result)
-        elseif task.status == "failed" then
-            return "Task #" .. tostring(target_id) .. " (failed after " .. tostring(task.attempts) .. " attempts): " .. tostring(task.last_error)
-        end
-        return "Task #" .. tostring(target_id) .. " is still " .. tostring(task.status) .. "."
-    end
-
-    if tool_name == "internet_search" and method_name == "search" then
-        if args.query == nil or args.query == "" then
-            return nil, "search requires query"
-        end
-        response, err = search_provider.search(args.query)
-        if response == nil then
-            return nil, err
-        end
-        return search_provider.format_results(response)
-    end
-
-    ext_manifest, ext_tool = agent_tools.find_extension_tool(db_path, tool_name, method_name)
-    if ext_manifest != nil then
-        hooks, hooks_err = extension.load_hooks(config.extensions_dir(), tool_name, ext_manifest)
-        if hooks == nil then
-            if hooks_err != nil then
-                return nil, hooks_err
-            end
-            return nil, "extension '" .. tool_name .. "' does not implement tool '" .. method_name .. "'"
-        end
-        handler = nil
-        if type(hooks.tools) == "table" then
-            handler = hooks.tools[method_name]
-        end
-        if type(handler) != "function" then
-            return nil, "extension '" .. tool_name .. "' does not implement tool '" .. method_name .. "'"
-        end
-        ctx = entity.build_ctx(db_path, ext_manifest)
-        call_ok, result, call_err = pcall(handler, ctx, args)
-        if call_ok == false then
-            return nil, tostring(result)
-        end
-        return result, call_err
-    end
-
-    return nil, "unknown tool: " .. tostring(tool_name) .. "." .. tostring(method_name)
+    return result, err
 end
 
 -- The default system prompt: domain/behavior guidance only -- the
@@ -1982,8 +2102,8 @@ function agent_tools.sync_session_document(db_path, login, session_id)
     knowledge.sync_session_document(db_path, login, session_id, "Chat: " .. title, transcript)
 end
 
--- research.investigate's own tool list: every non-destructive AGENT_TOOLS
--- entry except research itself -- excluded so a research sub-agent can't
+-- research.investigate's own tool list: every non-destructive tool
+-- except research itself -- excluded so a research sub-agent can't
 -- recursively delegate to another one and spend turns/cost with no
 -- bound the outer MAX_TURNS-style budget accounts for -- and except
 -- clarify, since "ask the user a question" is a whole-turn decision that
@@ -1996,30 +2116,17 @@ end
 -- so the model isn't even told they exist from inside a pass that's meant
 -- to be read-only investigation, not a place a write could plausibly
 -- come from.
+--
+-- Which tools those are is each record's own business (in_research,
+-- destructive, control), read through agent.research_may_call -- the same
+-- predicate run_research_loop refuses a call with -- rather than a list
+-- of group names kept here and again in the loop (#6).
 function agent_tools.research_tool_declarations(db_path)
+    registry, ordered = agent.tool_registry(db_path)
     declarations = {}
-    for tool_name, methods in pairs(agent_tools.AGENT_TOOLS) do
-        if tool_name != "research" and tool_name != "clarify" and tool_name != "background" then
-            for method_name, spec in pairs(methods) do
-                if spec.destructive == false then
-                    table.insert(declarations, {
-                        name = tool_name .. "." .. method_name,
-                        description = spec.description,
-                        parameters = spec.parameters,
-                    })
-                end
-            end
-        end
-    end
-    for _, entry in ipairs(extension.approved_with_tools(db_path, config.extensions_dir())) do
-        for _, tool in ipairs(entry.manifest.capabilities.tools) do
-            if tool.destructive != true then
-                table.insert(declarations, {
-                    name = entry.name .. "." .. tool.name,
-                    description = tool.description,
-                    parameters = tool.parameters,
-                })
-            end
+    for _, entry in ipairs(ordered) do
+        if agent.research_may_call(entry.record) then
+            table.insert(declarations, agent.tool_declaration(entry))
         end
     end
     return declarations

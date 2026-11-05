@@ -70,7 +70,7 @@ Rules for the fields, checked when the registry is built:
 
 ### Where the records live
 
-`AGENT_TOOLS` keeps its shape: `AGENT_TOOLS[group][method] = record`. Each record gains `handler`, `in_research` and `control` next to the fields it already has. Keeping the same table means `pairs` walks the same keys in the same order, which matters for "No change to what the model sees" below.
+`AGENT_TOOLS` keeps its shape: `AGENT_TOOLS[group][method] = record`. Each record gains `handler`, `in_research` and `control` next to the fields it already has. The order the model is shown is set by the registry, by name (built-ins by group then method, extensions by name, each extension's tools in its manifest's order), never by how `pairs` walks a table or a directory lists, so it is the same on every luam build and every disk.
 
 Handlers stay in `src/agent_tools.lua` for now, as named functions next to their group (`function document_search(ctx, args) ... end`, then `handler = document_search`). They use helpers already in that file (`row_summary`, `numeric_series` and others), and moving them to one file per group would add a cross-file require for each group during the migration. Splitting the file can come later, as a pure move.
 

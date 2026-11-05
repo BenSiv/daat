@@ -63,7 +63,7 @@ A new shaping step, `agent.shape_context(messages, policy)`, runs on the canonic
 - A repeat after compaction reruns unless the result is pinned.
 
 **Status:** built (`feature/context-keep-known`).
-- `agent.find_repeat` / `REPEAT_SAFE_TOOLS` and `pinned_schema_block` in `src/agent.lua`, settings `agent_dedupe_repeat_calls`, `agent_pin_schema`, `agent_pinned_schema_chars`.
+- `agent.find_repeat` and `pinned_schema_block` in `src/agent.lua`, reading each tool record's `repeat_safe` and `pin_on_compaction` (`doc/agent-tools.md`), settings `agent_dedupe_repeat_calls`, `agent_pin_schema`, `agent_pinned_schema_chars`.
 - Both loops pass their current message list to `agent.run_tool`.
 - A destructive call anywhere after the earlier one counts as a write, even if it was only proposed or denied, which errs on the side of running again.
 - The pinned block is skipped when a previous summary is re-summarized, and carried by code instead.
