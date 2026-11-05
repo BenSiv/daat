@@ -187,3 +187,76 @@ wait_idle() {
     [[ "$(json_body "$output" | jq -r '.messages[-1].content')" =~ "Status: out of steps." ]]
     [ "$(store "SELECT COUNT(*) FROM agent_message WHERE session_id = '${sid}' AND role = 'progress';")" = "0" ]
 }
+
+@test "auto-continue also stops at agent_auto_continue_minutes, with budgets still left" {
+    # No time at all: the first budget's end is already past the limit,
+    # so the turn stops there although agent_auto_continue_max allows 5.
+    write_platform_config ', agent_turn_mode = "detached", agent_max_turns = 1, agent_auto_continue_max = 5, agent_auto_continue_minutes = 0'
+    export AGENT_TEST_SELF_CHECK_RESPONSE="$(done_response "Status: out of time.")"
+    sid=$(new_session)
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${sid}\",\"message\":\"dig\"}" "$COOKIE" "$CSRF" "$(tool_call_response "entity.list_types" '{}')" >/dev/null
+    wait_idle "$sid"
+    [ "$(store "SELECT COUNT(*) FROM agent_message WHERE session_id = '${sid}' AND role = 'progress';")" = "0" ]
+    [ "$(store "SELECT COUNT(*) FROM agent_message WHERE session_id = '${sid}' AND role = 'tool_result';")" = "1" ]
+    run raw_get "/api/chat-widget-history" "session_id=${sid}" "$COOKIE"
+    [ "$(json_body "$output" | jq -r '.messages[-1].role')" = "assistant" ]
+    [[ "$(json_body "$output" | jq -r '.messages[-1].content')" =~ "Status: out of time." ]]
+}
+
+@test "a stop clicked while the worker is mid-turn ends the turn at the next step, with a wrap-up" {
+    # Every model call takes 2 s. The stop lands about 1 s in, while
+    # step 1's call is under way: step 1 still runs its tool, and the
+    # check before step 2 consumes the flag.
+    export AGENT_TEST_CONVERSE_DELAY=2
+    export AGENT_TEST_SELF_CHECK_RESPONSE="$(done_response "Stopped after listing the types.")"
+    sid=$(new_session)
+    scripted="$(tool_call_response "entity.list_types" '{}')"$'\1'"$(tool_call_response "entity.relationships" '{}')"$'\1'"$(done_response "Never reached.")"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${sid}\",\"message\":\"dig\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+    sleep 1
+    run raw_post_json "/api/chat-widget-stop" "{\"session_id\":\"${sid}\"}" "$COOKIE" "$CSRF"
+    [[ "$output" =~ "200 OK" ]]
+    wait_idle "$sid"
+
+    [ "$(store "SELECT COUNT(*) FROM agent_message WHERE session_id = '${sid}' AND role = 'tool_result';")" = "1" ]
+    [ "$(store "SELECT COUNT(*) FROM agent_message WHERE session_id = '${sid}' AND content LIKE '%entity.relationships%';")" = "0" ]
+    run raw_get "/api/chat-widget-history" "session_id=${sid}" "$COOKIE"
+    [[ "$(json_body "$output" | jq -r '.messages[-1].content')" =~ "Stopped after listing the types." ]]
+    [[ ! "$output" =~ "Never reached." ]]
+    [ "$(store "SELECT cancel_requested FROM agent_session WHERE id = '${sid}';")" = "0" ]
+}
+
+@test "approving a pending action hands the rest of the turn to a worker, which runs the write once and answers" {
+    sid=$(new_session)
+    scripted="$(tool_call_response "document.create" '{"title":"Approved Page","content":"hello"}')"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${sid}\",\"message\":\"create a page\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+    wait_idle "$sid"
+    pending_id=$(json_body "$(raw_get "/api/chat-widget-history" "session_id=${sid}" "$COOKIE")" | jq -r '.pending.id')
+    [ "$pending_id" != "null" ]
+
+    run raw_post_json "/api/chat-widget-approve" "{\"pending_id\":${pending_id},\"session_id\":\"${sid}\"}" "$COOKIE" "$CSRF" "$(done_response "Created it.")"
+    [[ "$output" =~ "200 OK" ]]
+    wait_idle "$sid"
+    [ "$(store "SELECT COUNT(*) FROM document WHERE title = 'Approved Page';")" = "1" ]
+    page_id=$(store "SELECT id FROM document WHERE title = 'Approved Page';")
+    run "$BIN" entity show document "$page_id"
+    [[ "$output" =~ created_by[[:space:]]+alice ]]
+    [ "$(store "SELECT status FROM agent_pending_action WHERE id = ${pending_id};")" = "approved" ]
+    run raw_get "/api/chat-widget-history" "session_id=${sid}" "$COOKIE"
+    [ "$(json_body "$output" | jq -r '.pending')" = "null" ]
+    [[ "$(json_body "$output" | jq -r '.messages[-1].content')" =~ "Created it." ]]
+}
+
+@test "a second malformed reply in a row isn't retried again: the turn ends in a visible error" {
+    write_platform_config ''
+    for reason in MALFORMED_FUNCTION_CALL MALFORMED_RESPONSE; do
+        sid=$(new_session)
+        malformed="{\"content\":[],\"stopReason\":\"error\",\"errorMessage\":\"stopped generating (finishReason: ${reason})\"}"
+        scripted="${malformed}"$'\1'"${malformed}"$'\1'"$(done_response "Never reached.")"
+        run raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${sid}\",\"message\":\"hi\"}" "$COOKIE" "$CSRF" "$scripted"
+        [ "$(json_body "$output" | jq -r '.messages[-1].role')" = "error" ]
+        [[ "$(json_body "$output" | jq -r '.messages[-1].content')" =~ "$reason" ]]
+        [ "$(store "SELECT COUNT(*) FROM agent_message WHERE session_id = '${sid}' AND role = 'error';")" = "1" ]
+        [ "$(store "SELECT COUNT(*) FROM agent_model_call WHERE session_id = '${sid}' AND kind = 'chat';")" = "2" ]
+        [[ ! "$output" =~ "Never reached." ]]
+    done
+}
