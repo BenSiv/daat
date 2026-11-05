@@ -20,9 +20,15 @@ RUN apt-get update -y && apt-get install -y \
         libssl-dev \
         libcrypt-dev \
         cmark-gfm \
+        gnuplot-nox \
+        poppler-utils \
         bats \
         jq \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# gnuplot-nox renders ```plot``` fences (tst/integration/document.bats),
+# poppler-utils gives pdftotext for chat PDF attachments: the same as the
+# runtime image, dev/demo/Dockerfile.
 
 # Optional MariaDB backend support (doc/mariadb-migration.md). Comment
 # out to build a SQLite-only toolchain -- bld/build.sh degrades
