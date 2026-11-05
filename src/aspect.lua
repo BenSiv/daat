@@ -26,8 +26,12 @@ aspect = {}
 -- (cut to aspect_dims when set) scaled by its largest component, so a
 -- 768-dimension aspect is 768 bytes; search renormalises on read.
 -- passage_offset is where the group's most central passage starts, as
--- stage 2 shows it ("[at character N]", counting from 0). text_hash covers the content, the model and every setting
--- that shapes the aspects, so a change of any of them rebuilds them.
+-- stage 2 shows it ("[at character N]", counting from 0);
+-- member_offsets lists where each of the group's passages starts, the
+-- same way, comma-separated in document order -- what curating the
+-- aspect reads (src/curate.lua). text_hash covers the content, the
+-- model and every setting that shapes the aspects, so a change of any
+-- of them rebuilds them.
 ASPECT_SCHEMA = """
 CREATE TABLE IF NOT EXISTS document_aspect (
     document_id INTEGER NOT NULL,
@@ -36,6 +40,7 @@ CREATE TABLE IF NOT EXISTS document_aspect (
     vector_packed BLOB NOT NULL,
     passage_offset INTEGER NOT NULL,
     passage_count INTEGER NOT NULL,
+    member_offsets TEXT NOT NULL,
     text_hash VARCHAR(64) NOT NULL,
     updated_at TEXT DEFAULT (%s),
     PRIMARY KEY (document_id, model, aspect)
@@ -347,14 +352,18 @@ function aspect.refresh(db_path, document_id)
         end
         packed = aspect.pack(source, conf.aspect_dims)
         if packed != nil then
-            table.insert(values, string.format("(%d, %s, %d, %s, %d, %d, %s, %s)",
+            offsets = {}
+            for _, m in ipairs(g.members) do
+                table.insert(offsets, tostring(kept[m].offset - 1))
+            end
+            table.insert(values, string.format("(%d, %s, %d, %s, %d, %d, %s, %s, %s)",
                 document_id, db.quote(model), i, document.hex_literal(packed), kept[g.medoid].offset - 1,
-                #g.members, db.quote(hash), db.now_expr(db_path)))
+                #g.members, db.quote(table.concat(offsets, ",")), db.quote(hash), db.now_expr(db_path)))
         end
     end
     aspect.drop(db_path, document_id)
     if #values > 0 then
-        db.exec(db_path, "INSERT INTO document_aspect (document_id, model, aspect, vector_packed, passage_offset, passage_count, text_hash, updated_at) VALUES " ..
+        db.exec(db_path, "INSERT INTO document_aspect (document_id, model, aspect, vector_packed, passage_offset, passage_count, member_offsets, text_hash, updated_at) VALUES " ..
             table.concat(values, ", ") .. ";")
     end
     return "built", #values
@@ -386,6 +395,41 @@ function aspect.refresh_all(db_path, limit)
         end
     end
     return counts
+end
+
+-- aspect.passages(db_path, document_id, n) -> {passage_offset, passages} | nil
+-- Aspect `n` of a document as it stands: its passages, in document
+-- order, re-split from the content (passage.split is deterministic, so
+-- the offsets the build stored find them again). nil when the document
+-- has no such aspect, or its content changed since the build.
+function aspect.passages(db_path, document_id, n)
+    rows = db.query(db_path, string.format(
+        "SELECT passage_offset, member_offsets FROM document_aspect WHERE document_id = %d AND aspect = %d ORDER BY model LIMIT 1;",
+        tonumber(document_id), tonumber(n)))
+    if rows == nil or rows[1] == nil then
+        return nil
+    end
+    doc = entity.get(db_path, "document", tonumber(document_id))
+    if doc == nil or doc.content == nil then
+        return nil
+    end
+    conf = config.platform_config()
+    by_offset = {}
+    for _, p in ipairs(passage.split(doc.content, conf.passage_max_chars, conf.passage_min_chars)) do
+        by_offset[p.offset - 1] = p
+    end
+    chosen = {}
+    for offset in string.gmatch(tostring(rows[1].member_offsets), "%d+") do
+        p = by_offset[tonumber(offset)]
+        if p == nil then
+            return nil
+        end
+        table.insert(chosen, p)
+    end
+    if #chosen == 0 then
+        return nil
+    end
+    return {passage_offset = tonumber(rows[1].passage_offset), passages = chosen}
 end
 
 --------------------------------------------------------------------------

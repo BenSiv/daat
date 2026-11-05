@@ -148,7 +148,7 @@ embedded_lines() {
 @test "archiving a document drops its aspects, and repair knowledge clears leftovers" {
     "$BIN" entity archive document "$DOC_ID" >/dev/null
     [ "$(db "SELECT COUNT(*) FROM document_aspect WHERE document_id = ${DOC_ID};")" -eq 0 ]
-    db "INSERT INTO document_aspect (document_id, model, aspect, vector_packed, passage_offset, passage_count, text_hash) VALUES (${DOC_ID}, 'test-embedding', 1, X'01', 0, 1, 'x');"
+    db "INSERT INTO document_aspect (document_id, model, aspect, vector_packed, passage_offset, passage_count, member_offsets, text_hash) VALUES (${DOC_ID}, 'test-embedding', 1, X'01', 0, 1, '0', 'x');"
     run "$BIN" repair knowledge
     [[ "$output" =~ "aspects of archived or missing documents" ]]
     [ "$(db "SELECT COUNT(*) FROM document_aspect;")" -eq 0 ]
@@ -164,4 +164,94 @@ embedded_lines() {
     run "$BIN" document embed-pending
     [ "$(db "SELECT COUNT(*) FROM document_embedding_due WHERE document_id = ${DOC_ID};")" -eq 0 ]
     [ "$(db "SELECT COUNT(*) FROM document_aspect WHERE document_id = ${DOC_ID};")" -ge 2 ]
+}
+
+# Curation from aspects (src/curate.lua): a part of a long source that
+# searches keep finding through its aspect gets a note of its own.
+
+# A source longer than the curate input cap (40,000 characters), its
+# centrifuge section past it: 18 sections of filler, then the section.
+long_source() {
+    local filler spin body=""
+    filler=$(printf 'Plants were watered and the greenhouse lights were checked. %.0s' $(seq 1 40))
+    spin=$(printf 'centrifuge %.0s' $(seq 1 60))
+    for i in $(seq 1 18); do
+        body="${body}# Greenhouse ${i}\\n${filler}\\n\\n"
+    done
+    "$BIN" document create-json <<< "[{\"title\":\"Long manual\",\"content\":\"${body}# Centrifuge\\n${spin}\"}]" >/dev/null
+    db "SELECT id FROM document WHERE title = 'Long manual';"
+}
+
+ASPECT_NOTE=$'# Centrifuge use\n\nThe manual repeats the word centrifuge in its last section.'
+SOURCE_NOTE=$'# Greenhouse routine\n\nPlants were watered and the lights checked.'
+
+@test "a second search through the same aspect queues that part for curation; one search doesn't" {
+    page_search "qqqvq" >/dev/null
+    [ "$(db "SELECT COUNT(*) FROM knowledge_aspect_curation;")" -eq 0 ]
+    page_search "qqqvq" >/dev/null
+    aspect=$(db "SELECT aspect FROM knowledge_retrieval_hit WHERE document_id = ${DOC_ID} LIMIT 1;")
+    [ "$(db "SELECT status FROM knowledge_aspect_curation WHERE document_id = ${DOC_ID} AND aspect = ${aspect};")" = "pending" ]
+    [ "$(db "SELECT COUNT(*) FROM knowledge_aspect_curation;")" -eq 1 ]
+}
+
+@test "with curate_aspects off, aspect hits queue nothing" {
+    write_platform_config "${ASPECTS}, build_aspects = true, search_aspects = true, curate_aspects = false"
+    page_search "qqqvq" >/dev/null
+    page_search "qqqvq" >/dev/null
+    [ "$(hits)" -eq 2 ]
+    [ "$(db "SELECT COUNT(*) FROM knowledge_aspect_curation;")" -eq 0 ]
+}
+
+@test "an aspect past the curate input cap is curated from its own passages into a tier-1 note that says where the part starts" {
+    # Only the long source is found, so the scripted replies are its own.
+    "$BIN" entity archive document "$DOC_ID" >/dev/null
+    long=$(long_source)
+    offset=$(db "SELECT instr(content, '# Centrifuge') - 1 FROM document WHERE id = ${long};")
+    [ "$offset" -gt 40000 ]
+    page_search "qqqvq" >/dev/null
+    page_search "qqqvq" >/dev/null
+    aspect=$(db "SELECT aspect FROM knowledge_aspect_curation WHERE document_id = ${long} AND status = 'pending';")
+    [ -n "$aspect" ]
+
+    # The whole source is due too and runs first: its note, then the aspect's.
+    export AGENT_TEST_GENERATE_RESPONSES="$SOURCE_NOTE"$'\1'"PASS"$'\1'"$ASPECT_NOTE"$'\1'"PASS"
+    export AGENT_TEST_CAPTURE_PROMPT="$TEST_DIR/prompt.txt"
+    export AGENT_TEST_CAPTURE_SYSTEM_PROMPT="$TEST_DIR/system.txt"
+    run "$BIN" knowledge curate-pending 5
+    [ "$status" -eq 0 ]
+    note=$(db "SELECT note_id FROM knowledge_aspect_curation WHERE document_id = ${long} AND aspect = ${aspect};")
+    [ -n "$note" ]
+    [[ "$output" =~ "#${long} aspect ${aspect} curated -> note #${note}" ]]
+    [ "$(db "SELECT status FROM knowledge_aspect_curation WHERE document_id = ${long} AND aspect = ${aspect};")" = "curated" ]
+
+    # The check (the last call) saw the centrifuge section, not the filler.
+    prompt=$(cat "$TEST_DIR/prompt.txt")
+    [[ "$prompt" =~ "# Centrifuge" ]]
+    [[ ! "$prompt" =~ "greenhouse lights" ]]
+    [[ "$(cat "$TEST_DIR/system.txt")" =~ "one part of a longer document" ]]
+
+    [ "$(db "SELECT title || '|' || tier || '|' || source_type || '|' || source_id || '|' || source_ref FROM document WHERE id = ${note};")" = "Centrifuge use|1|curated|${long}|aspect ${aspect}" ]
+    [[ "$(db "SELECT content FROM document WHERE id = ${note};")" =~ "Source: [[Long manual]], the part at character ${offset}" ]]
+    # Next to the whole source's own note, not in its place.
+    [ "$(db "SELECT COUNT(*) FROM document WHERE source_type = 'curated' AND source_id = ${long};")" -eq 2 ]
+
+    # Found again through the same, unchanged part: nothing new to do.
+    page_search "qqqvq" >/dev/null
+    [ "$(db "SELECT status FROM knowledge_aspect_curation WHERE document_id = ${long} AND aspect = ${aspect};")" = "curated" ]
+}
+
+@test "a queued aspect gone by the time it runs comes to nothing; an archived source leaves the queue" {
+    page_search "qqqvq" >/dev/null
+    page_search "qqqvq" >/dev/null
+    db "DELETE FROM knowledge_curation;"
+    db "DELETE FROM document_aspect;"
+    run "$BIN" knowledge curate-pending 5
+    [[ "$output" =~ "aspect" ]] && [[ "$output" =~ "nothing" ]]
+    [ "$(db "SELECT reason FROM knowledge_aspect_curation WHERE document_id = ${DOC_ID};")" = "the aspect no longer exists" ]
+
+    db "UPDATE knowledge_aspect_curation SET status = 'pending';"
+    "$BIN" entity archive document "$DOC_ID" >/dev/null
+    run "$BIN" knowledge curate-pending 5
+    [[ "$output" =~ "skipped" ]]
+    [ "$(db "SELECT COUNT(*) FROM knowledge_aspect_curation;")" -eq 0 ]
 }

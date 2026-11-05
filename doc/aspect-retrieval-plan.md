@@ -70,12 +70,13 @@ Table document_aspect {          // derived; safe to empty, rebuilt by the embed
   vector_packed blob [not null]  // int8, scaled by its largest component; renormalised on read
   passage_offset integer [not null]  // first character of the medoid passage
   passage_count integer [not null]   // passages in the group
+  member_offsets text [not null]     // where each of the group's passages starts, comma-separated
   text_hash varchar(64) [not null]   // of the embedding text it was built from
   updated_at text
 }
 ```
 
-One more built-in table (37 → 38). Archiving a document drops its aspects (`document.drop_derived`). It isn't visible to `entity.query`, and its columns are described for `/sql`.
+One more built-in table (37 → 38; 39 with `knowledge_aspect_curation`, commit 5). Archiving a document drops its aspects (`document.drop_derived`). Like `document_passage_cache`, neither is visible to `entity.query`.
 
 ### Search
 
@@ -96,11 +97,14 @@ The arithmetic is cheap. Moving the bytes may not be: today's stage 1 already ta
 ### Curation from aspects
 
 - `knowledge_retrieval_hit` gets `aspect` (null when the document's own vector or words found it).
-- `curate.queue` takes an optional aspect. A source can have one curation per aspect next to its whole-source one (`knowledge_curation` keyed by document and aspect).
-- An aspect is due on the same rule a source is (`due_for_review`: retrieved through that aspect twice, or hot).
-- The curate input for an aspect is that group's passages in document order, each with its heading, within `CURATE_INPUT_MAX_CHARS`. The prompt gets one line more: the note is about this part of the source, titled by its own subject.
-- The check (`CURATE_CHECK_SYSTEM_PROMPT`) compares the note with those passages, as it compares a whole-source note with the part shown.
-- The note links to the source as today, and records the aspect's offset in its source line, so a reader can go to that place.
+- Each aspect stores its member passages (`member_offsets`), so curating it reads exactly that group: `aspect.passages` re-splits the content and picks them out by offset.
+- A source can have one curation per aspect next to its whole-source one: a table of its own, `knowledge_aspect_curation` (keyed by document and aspect, with the same columns as `knowledge_curation`). A separate table, not a new key on `knowledge_curation`, so the existing table and its queries don't change.
+- An aspect is due once searches found the document through it twice (`due_for_review` on that aspect's hit count; heat is per document, so it doesn't count here). Review queues it (`curate.queue_aspect`) next to the whole-source queueing; `curate_aspects` turns this off.
+- The curate input for an aspect is that group's passages in document order, each with its heading, `[...]` where the document skips text between them, within `CURATE_INPUT_MAX_CHARS`. The prompt gets one rule more (`CURATE_ASPECT_RULE`): the note is about this part of the source, titled by its own subject.
+- The check (`CURATE_CHECK_SYSTEM_PROMPT` plus `CURATE_ASPECT_CHECK_RULE`) compares the note with those passages only.
+- The note is a tier-1 `curated` document with the source as `source_id` and `source_ref` = `aspect N`, and its source line ends with ", the part at character N", so a reader can go to that place.
+- The source's hash for an aspect is of the part's text: an edit elsewhere in the document doesn't re-curate it. If aspects are rebuilt and the queued one is gone, the run records `nothing` ("the aspect no longer exists") and keeps any note it had. Aspect numbers can shift when a document is rebuilt; the next curation of that number rewrites its note in place.
+- `daat knowledge curate-pending N` runs queued whole sources first, then queued aspects with what's left of N.
 
 This also fixes the 40k cut for long sources: parts past it become reachable one subject at a time, through use.
 
@@ -142,7 +146,7 @@ On `feature/aspect-retrieval`, each tested on its own:
 2. **Clustering and the table:** k-means and medoids as pure functions (`src/aspect.lua`), unit-tested; `document_aspect` on SQLite and MySQL; int8/256 packing next to `document.pack_vector`.
 3. **Building:** `embed_pending` builds aspects; `daat repair aspects` backfills (batched, resumable, capped per run); archiving drops them.
 4. **Search:** `semantic_ranking` reads aspects behind `search_aspects`; results carry `aspect` and `passage_offset`; retrieval hits record the aspect.
-5. **Curation from aspects:** queue, input, prompt line, check; per-aspect `knowledge_curation` rows.
+5. **Curation from aspects:** queue, input, prompt line, check; per-aspect rows in `knowledge_aspect_curation`.
 6. **Scorecard scenarios and docs,** then the backfill and deploy, with your OK.
 
 ## Tests
@@ -164,7 +168,7 @@ On `feature/aspect-retrieval`, each tested on its own:
 - `doc/passage-retrieval.md`: stage 1 now scores by the best of a document's vector and its aspects, and the 2,048-token cut is stated.
 - `doc/tier-curation-ladder.md`: curation per aspect, next to per source.
 - `doc/architecture.md`: the semantic search bullet, the settings.
-- `doc/schema-revision.md`: the new table (38 built-in).
+- `doc/schema-revision.md`: the new tables (39 built-in).
 
 ## Not now
 

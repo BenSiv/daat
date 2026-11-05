@@ -373,13 +373,18 @@ function config.platform_config()
         -- use them. aspect_dims cuts them to that many dimensions (0:
         -- all); aspect_vector is "medoid" (the group's most central
         -- passage) or "centroid" (the group's mean). Off until the
-        -- recall test on prod data sets the values.
+        -- recall test on prod data sets the values. curate_aspects:
+        -- an aspect searches keep finding a long source through is
+        -- curated into a note of its own (src/curate.lua); it only
+        -- happens with search_aspects on, since hits record no aspect
+        -- otherwise.
         build_aspects = false,
         search_aspects = false,
         aspect_min_chars = 7000,
         aspect_max = 8,
         aspect_dims = 0,
         aspect_vector = "medoid",
+        curate_aspects = true,
         -- The co-retrieval link gate (doc/link-passage-gate.md): a pair
         -- whose most similar passages score below this isn't put to the
         -- model (0: off). Compares at most this many passages of each
@@ -553,7 +558,7 @@ function config.platform_config()
     if type(parsed.passage_cache_days) == "number" and parsed.passage_cache_days >= 0 then
         conf.passage_cache_days = parsed.passage_cache_days
     end
-    for _, key in ipairs({"build_aspects", "search_aspects"}) do
+    for _, key in ipairs({"build_aspects", "search_aspects", "curate_aspects"}) do
         if parsed[key] == true or parsed[key] == false then
             conf[key] = parsed[key]
         end

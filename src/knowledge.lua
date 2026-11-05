@@ -107,6 +107,21 @@ CREATE TABLE IF NOT EXISTS knowledge_curation (
     queued_at TEXT DEFAULT (%s)
 );
 
+-- The same for one aspect of a long source (doc/aspect-retrieval-plan.md):
+-- a part of it searches keep finding through that aspect, curated into a
+-- note of its own next to the whole-source one. source_hash is of the
+-- part's text, so the note is rewritten only when that part changes.
+CREATE TABLE IF NOT EXISTS knowledge_aspect_curation (
+    document_id INTEGER NOT NULL,
+    aspect INTEGER NOT NULL,
+    source_hash VARCHAR(64) NOT NULL,
+    status VARCHAR(32) NOT NULL,
+    note_id INTEGER,
+    reason TEXT,
+    queued_at TEXT DEFAULT (%s),
+    PRIMARY KEY (document_id, aspect)
+);
+
 -- The synthesize step's queue and outcomes, one row per tag
 -- (src/synthesize.lua): the hash of the notes it last saw, and how that
 -- went -- pending, running, referenced (document_id is the tier-2
@@ -150,6 +165,7 @@ CREATE TABLE IF NOT EXISTS knowledge_reference (
 function knowledge_schema_sql(db_path)
     return string.format(KNOWLEDGE_SCHEMA,
         db.autoincrement_keyword(db_path), db.now_expr(db_path),
+        db.now_expr(db_path),
         db.now_expr(db_path),
         db.now_expr(db_path),
         db.now_expr(db_path),
@@ -461,11 +477,12 @@ end
 -- -- reactive, tied to real usage, not a synthetic actor.
 function knowledge.review_retrieval(db_path, retrieval_id, author)
     rows = db.query(db_path, string.format(
-        "SELECT document_id FROM knowledge_retrieval_hit WHERE retrieval_id = %d;", tonumber(retrieval_id)
+        "SELECT document_id, aspect FROM knowledge_retrieval_hit WHERE retrieval_id = %d;", tonumber(retrieval_id)
     ))
     if rows == nil then
         return
     end
+    curate_aspects = require("config").platform_config().curate_aspects == true
     peer_count = #rows - 1
     if peer_count < 0 then
         peer_count = 0
@@ -522,6 +539,21 @@ function knowledge.review_retrieval(db_path, retrieval_id, author)
                 -- the old judge path here would have reset a fresh
                 -- tier-1 note to 0 on its second retrieval (never
                 -- "revised"), or moved a revised one to any tier.
+            end
+            -- Found through one of its aspects (a part of a long source
+            -- past what its own vector covers): once that aspect has
+            -- found it as often as makes a source due, the part is
+            -- curated into a note of its own (src/curate.lua).
+            -- (A NULL column doesn't always read back as nil, so the
+            -- number decides.)
+            hit_aspect = tonumber(row.aspect)
+            if curate_aspects and hit_aspect != nil and not knowledge.can_hold_tier(doc.source_type) then
+                aspect_hits = db.query(db_path, string.format(
+                    "SELECT COUNT(*) AS n FROM knowledge_retrieval_hit WHERE document_id = %d AND aspect = %d;",
+                    tonumber(doc.id), hit_aspect))
+                if aspect_hits != nil and aspect_hits[1] != nil and knowledge.due_for_review(tonumber(aspect_hits[1].n), 0) then
+                    require("curate").queue_aspect(db_path, doc, hit_aspect)
+                end
             end
 
             db.exec(db_path, string.format(
