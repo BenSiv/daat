@@ -255,3 +255,14 @@ SOURCE_NOTE=$'# Greenhouse routine\n\nPlants were watered and the lights checked
     [[ "$output" =~ "skipped" ]]
     [ "$(db "SELECT COUNT(*) FROM knowledge_aspect_curation;")" -eq 0 ]
 }
+
+@test "repair aspects counts a document whose build fails, says why, and goes on to the rest" {
+    write_platform_config "${ASPECTS}, build_aspects = false"
+    db "DELETE FROM document_aspect; DELETE FROM document_passage_cache;"
+    AGENT_TEST_EMBEDDINGS_FAIL=1 run "$BIN" repair aspects
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "1 failed" ]]
+    [[ "$output" =~ "document ${DOC_ID}: aspects failed:" ]]
+    run "$BIN" repair aspects
+    [[ "$output" =~ "Built aspects for 1 document(s)" ]]
+}
