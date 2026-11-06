@@ -7,6 +7,7 @@
 -- doc/extensibility.md) plug into the same contract, run after.
 
 db = require("database")
+database_adapter = require("database_adapter")
 ledger = require("ledger")
 schema = require("schema")
 config = require("config")
@@ -625,15 +626,21 @@ function entity.create_batch(db_path, entity_type, rows_values, author, source)
     end
 
     created_ids = {}
+    if db.is_mariadb(db_path) == false then
+        database_adapter.sqlite_keep_open(true)
+    end
+    db.exec(db_path, "BEGIN;")
     for i, values in ipairs(rows_values) do
         row_source = {notebook_entry_id = source.notebook_entry_id, row_id = tostring(i)}
         id, issues = entity.create(db_path, entity_type, values, author, row_source)
         if id != nil then
             table.insert(created_ids, id)
         else
+            db.exec(db_path, "ROLLBACK;")
             return nil, issues
         end
     end
+    db.exec(db_path, "COMMIT;")
     return created_ids, batch_issues
 end
 
