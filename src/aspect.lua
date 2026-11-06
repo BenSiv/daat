@@ -386,7 +386,14 @@ function aspect.refresh_all(db_path, limit)
         ok, outcome, count = pcall(aspect.refresh, db_path, row.id)
         if ok != true or outcome == nil then
             counts.failed = counts.failed + 1
-            io.write(io.stderr, string.format("document %s: aspects failed: %s\n", tostring(row.id), tostring(ok == true and count or outcome)))
+            -- pcall's error, or refresh's own (nil, err). Spelled out:
+            -- luam's `and`/`or` take booleans only, and the one-line
+            -- version crashed prod's first backfill on its first failure.
+            why = outcome
+            if ok == true then
+                why = count
+            end
+            io.write(io.stderr, string.format("document %s: aspects failed: %s\n", tostring(row.id), tostring(why)))
         else
             counts[outcome] = counts[outcome] + 1
             if outcome == "built" then
