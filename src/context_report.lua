@@ -312,9 +312,18 @@ function call_sections(db_path, since, out)
 end
 
 -- Section 3 and 4: what fills the history, and exact re-fetches.
+-- The main conversations' history only: a sub-agent's own steps (rows
+-- with a parent) never fill it. A store from before those were typed
+-- has no such column and no such rows.
 function history_sections(db_path, since, out)
+    main_only = ""
+    for _, name in ipairs(db.get_columns(db_path, "agent_message")) do
+        if name == "parent_message_id" then
+            main_only = " AND parent_message_id IS NULL"
+        end
+    end
     rows = rows_or_empty(db.query(db_path,
-        "SELECT session_id, role, content FROM agent_message WHERE 1 = 1" .. since_clause("created_at", since) .. " ORDER BY id;"))
+        "SELECT session_id, role, content FROM agent_message WHERE 1 = 1" .. main_only .. since_clause("created_at", since) .. " ORDER BY id;"))
 
     total_chars = 0
     tools = {}

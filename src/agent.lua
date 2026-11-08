@@ -159,7 +159,8 @@ end
 --   -> call id
 -- `usage` is {prompt_tokens, completion_tokens, total_tokens} (every
 -- field nil-safe: a provider without usage metadata shouldn't fail the
--- call over accounting); `step` is {kind = ..., number = N}.
+-- call over accounting); `step` is {kind = ..., number = N,
+-- parent_message_id = ...}, the parent set on a sub-agent's steps.
 function agent.record_model_call(db_path, session_id, message_id, prompt, model_id, reasoning_document_id, usage, step)
     if usage == nil then
         usage = {}
@@ -168,9 +169,10 @@ function agent.record_model_call(db_path, session_id, message_id, prompt, model_
         step = {}
     end
     _, call_id = db.exec(db_path, string.format(
-        "INSERT INTO agent_model_call (session_id, message_id, kind, step, model_id, prompt, reasoning_document_id, prompt_tokens, completion_tokens, total_tokens) " ..
-        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s);",
+        "INSERT INTO agent_model_call (session_id, message_id, kind, step, parent_message_id, model_id, prompt, reasoning_document_id, prompt_tokens, completion_tokens, total_tokens) " ..
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);",
         db.quote(session_id), db.literal(tonumber(message_id)), db.literal(step.kind), db.literal(tonumber(step.number)),
+        db.literal(tonumber(step.parent_message_id)),
         db.literal(model_id), db.literal(prompt), db.literal(tonumber(reasoning_document_id)),
         db.literal(tonumber(usage.prompt_tokens)), db.literal(tonumber(usage.completion_tokens)), db.literal(tonumber(usage.total_tokens))
     ))
@@ -270,6 +272,7 @@ AGENT_MODEL_CALL_SQL_COLUMNS = {
     {name = "message_id", note = "FK to agent_message.id -- the message this call produced, if any"},
     {name = "kind", note = "'chat', 'research', 'background', 'compaction', 'wrapup', 'self_check' (NULL on older rows)"},
     {name = "step", note = "the call's step number within its turn, for loop steps"},
+    {name = "parent_message_id", note = "on a sub-agent's steps (research, background): agent_message.id of the message holding the tool call that started it"},
     {name = "provider", note = "model provider, on reply rows"},
     {name = "model_id", note = "which model served the call"},
     {name = "prompt", note = "the exact message history sent (LONGTEXT; cleared after the deployment's retention period)"},
@@ -342,11 +345,96 @@ function ensure_agent_session_columns(db_path)
     end
 end
 
+-- doc/agent-data.md, "Storage": every agent_message row says what it is
+-- (`data_type`: request, answer, reasoning, tool_trace or control) and
+-- which loop wrote it (`loop_kind`: chat, research, background,
+-- self_check or compaction -- not `loop`, a reserved word in MySQL).
+-- A sub-agent's own steps also name the message holding the tool call
+-- that started them (`parent_message_id`). The main conversation's rows
+-- have no parent: that is how every reader of a whole session
+-- (all_messages, the transcript, curation) leaves a sub-agent's steps
+-- out. agent_model_call gets the same parent link; its `kind` already
+-- names the loop. agent_background_task keeps the calling message, so
+-- the worker can file the task's steps under it.
+AGENT_MESSAGE_TYPES = {
+    user = "request",
+    assistant = "answer",
+    progress = "answer",
+    tool_result = "tool_trace",
+    compaction_summary = "reasoning",
+    self_check = "reasoning",
+    error = "control",
+}
+
+-- The loop that writes each role, when the writer doesn't say: the
+-- self-check and compaction write their own rows; everything else in
+-- the main conversation is the chat loop's.
+AGENT_MESSAGE_ROLE_LOOPS = {
+    compaction_summary = "compaction",
+    self_check = "self_check",
+}
+
+function agent.message_data_type(role)
+    return AGENT_MESSAGE_TYPES[role]
+end
+
+function agent.message_loop(role)
+    loop_kind = AGENT_MESSAGE_ROLE_LOOPS[role]
+    if loop_kind == nil then
+        return "chat"
+    end
+    return loop_kind
+end
+
+-- Added via migration (store.lua's migration 8 backfills the old rows),
+-- same pattern as the two functions above. Each table is checked on its
+-- own: a store from before agent_model_call existed reaches here from
+-- the migration too.
+function agent.ensure_typed_columns(db_path)
+    wanted = {
+        agent_message = {{"data_type", "VARCHAR(16)"}, {"loop_kind", "VARCHAR(16)"}, {"parent_message_id", "INTEGER"}},
+        agent_model_call = {{"parent_message_id", "INTEGER"}},
+        agent_background_task = {{"parent_message_id", "INTEGER"}},
+    }
+    for _, table_name in ipairs({"agent_message", "agent_model_call", "agent_background_task"}) do
+        if db.table_exists(db_path, table_name) then
+            have = {}
+            for _, name in ipairs(db.get_columns(db_path, table_name)) do
+                have[name] = true
+            end
+            for _, column in ipairs(wanted[table_name]) do
+                if have[column[1]] == nil then
+                    db.exec(db_path, "ALTER TABLE " .. table_name .. " ADD COLUMN " .. column[1] .. " " .. column[2] .. ";")
+                end
+            end
+        end
+    end
+end
+
+-- The backfill for rows written before the columns existed: each row's
+-- type and loop from its role, as every new row gets them (add_message).
+-- One statement per column, so it stays one round trip on MySQL.
+-- Every old row is the main conversation's: a sub-agent's steps were
+-- never stored before, so none has a parent.
+function agent.backfill_message_types(db_path)
+    type_cases = {}
+    loop_cases = {}
+    for _, role in ipairs({"user", "assistant", "progress", "tool_result", "compaction_summary", "self_check", "error"}) do
+        table.insert(type_cases, string.format("WHEN %s THEN %s", db.quote(role), db.quote(AGENT_MESSAGE_TYPES[role])))
+        table.insert(loop_cases, string.format("WHEN %s THEN %s", db.quote(role), db.quote(agent.message_loop(role))))
+    end
+    db.exec(db_path, "UPDATE agent_message SET data_type = CASE role " .. table.concat(type_cases, " ") ..
+        " ELSE 'control' END WHERE data_type IS NULL;")
+    db.exec(db_path, "UPDATE agent_message SET loop_kind = CASE role " .. table.concat(loop_cases, " ") ..
+        " ELSE 'chat' END WHERE loop_kind IS NULL;")
+end
+
 function agent.init_schema(db_path)
     ok, err = db.exec(db_path, agent_schema_sql(db_path))
     agent.ensure_model_call_table(db_path)
     ensure_agent_pending_action_columns(db_path)
     ensure_agent_session_columns(db_path)
+    agent.ensure_typed_columns(db_path)
     return ok, err
 end
 
@@ -497,17 +585,39 @@ end
 -- append_create/append_update guard against). Needed correctly here
 -- since knowledge_context/knowledge_chat_eval key off this id
 -- directly.
-function agent.add_message(db_path, session_id, role, content, in_context)
+--
+-- `trail` (optional) types the row (agent.ensure_typed_columns):
+-- {loop = ..., parent_message_id = ..., data_type = ...}. Without it,
+-- the type and loop follow from the role. A row with a parent is a
+-- sub-agent's step, so it is never in the main conversation's context,
+-- whatever `in_context` says.
+function agent.add_message(db_path, session_id, role, content, in_context, trail)
+    if trail == nil then
+        trail = {}
+    end
     if in_context == nil then
         in_context = true
+    end
+    if trail.parent_message_id != nil then
+        in_context = false
     end
     in_context_flag = 0
     if in_context == true then
         in_context_flag = 1
     end
+    data_type = trail.data_type
+    if data_type == nil then
+        data_type = agent.message_data_type(role)
+    end
+    loop_kind = trail.loop
+    if loop_kind == nil then
+        loop_kind = agent.message_loop(role)
+    end
     _, message_id = db.exec(db_path, string.format(
-        "INSERT INTO agent_message (session_id, role, content, in_context) VALUES (%s, %s, %s, %d);",
-        db.quote(session_id), db.quote(role), db.quote(content), in_context_flag
+        "INSERT INTO agent_message (session_id, role, content, in_context, data_type, loop_kind, parent_message_id) " ..
+        "VALUES (%s, %s, %s, %d, %s, %s, %s);",
+        db.quote(session_id), db.quote(role), db.quote(content), in_context_flag,
+        db.literal(data_type), db.literal(loop_kind), db.literal(tonumber(trail.parent_message_id))
     ))
     agent.touch_session(db_path, session_id)
     return tonumber(message_id)
@@ -517,10 +627,10 @@ end
 -- -- JSON-encoded the same way an assistant row is (see
 -- build_history_messages), carrying the tool_call_id/tool_name needed
 -- to correlate it back to the model's own toolCall block via a real
--- toolResult message on the next turn.
-function agent.add_tool_result_message(db_path, session_id, tool_call_id, tool_name, text, is_error)
+-- toolResult message on the next turn. `trail` as in add_message.
+function agent.add_tool_result_message(db_path, session_id, tool_call_id, tool_name, text, is_error, trail)
     content = json.encode({tool_call_id = tool_call_id, tool_name = tool_name, text = text, is_error = is_error == true})
-    return agent.add_message(db_path, session_id, "tool_result", content, true)
+    return agent.add_message(db_path, session_id, "tool_result", content, true, trail)
 end
 
 function agent.active_messages(db_path, session_id)
@@ -730,7 +840,7 @@ end
 -- human-facing transcript itself ever shows.
 function agent.last_tool_call_arguments(db_path, session_id, tool_name)
     rows = db.query(db_path, string.format(
-        "SELECT content FROM agent_message WHERE session_id = %s AND role = 'assistant' ORDER BY id DESC;",
+        "SELECT content FROM agent_message WHERE session_id = %s AND role = 'assistant' AND parent_message_id IS NULL ORDER BY id DESC;",
         db.quote(session_id)
     ))
     if rows == nil then
@@ -800,7 +910,7 @@ end
 -- arguments should use agent.last_tool_call_arguments instead.
 function agent.last_console_query_sql(db_path, session_id)
     rows = db.query(db_path, string.format(
-        "SELECT content FROM agent_message WHERE session_id = %s AND role = 'assistant' ORDER BY id DESC;",
+        "SELECT content FROM agent_message WHERE session_id = %s AND role = 'assistant' AND parent_message_id IS NULL ORDER BY id DESC;",
         db.quote(session_id)
     ))
     if rows == nil then
@@ -851,12 +961,16 @@ function agent.assistant_message_is_final(content)
     return true
 end
 
+-- The session's whole conversation, in order: every row of the main
+-- conversation, in context or not. A sub-agent's own steps (rows with a
+-- parent, agent.ensure_typed_columns) are left out; its finding is here
+-- as the tool result of the call that started it.
 function agent.all_messages(db_path, session_id, include_tool_calls)
     if include_tool_calls == nil then
         include_tool_calls = true
     end
     rows = db.query(db_path, string.format(
-        "SELECT * FROM agent_message WHERE session_id = %s ORDER BY id ASC;",
+        "SELECT * FROM agent_message WHERE session_id = %s AND parent_message_id IS NULL ORDER BY id ASC;",
         db.quote(session_id)
     ))
     if rows == nil then
@@ -1458,13 +1572,16 @@ function agent.turn_ending_kind(record)
 end
 
 -- What every handler, precheck and recover is given (doc/agent-tools.md,
--- "Record shape"): the real logged-in user the tool runs as, and the
--- session it was called from.
-function agent.tool_ctx(db_path, author, session_id)
+-- "Record shape"): the real logged-in user the tool runs as, the
+-- session it was called from, and the message holding the call
+-- (`message_id`, nil when the caller has none), which a sub-agent files
+-- its own steps under.
+function agent.tool_ctx(db_path, author, session_id, message_id)
     return {
         db_path = db_path,
         author = author,
         session_id = session_id,
+        message_id = message_id,
         source = {notebook_entry_id = "agent-session:" .. tostring(session_id)},
     }
 end
@@ -2139,13 +2256,22 @@ that plainly along with what you tried, rather than guessing.
 -- A disposable, isolated tool-calling loop for one focused sub-question
 -- -- the actual "research" tool implementation (see AGENT_TOOLS.research
 -- .investigate). Deliberately keeps its own in-memory message list
--- rather than writing anything to agent_message: the wrong-turn/
+-- rather than the main conversation's history: the wrong-turn/
 -- wrong-query noise a real investigation produces along the way is
 -- exactly what shouldn't count against the main conversation's own
 -- self-check (which judges the final answer against what's actually in
 -- its context) or its compaction budget -- only the synthesized finding
 -- returned below ever becomes part of the real session, as this tool
 -- call's own tool_result message.
+--
+-- Each step is still kept (doc/agent-data.md, "Storage"): with a
+-- `parent_message_id` (the message holding the tool call that started
+-- this loop), every reply and tool result is written to agent_message
+-- under that parent, out of the main context. A step that calls tools
+-- is `reasoning`; the one that doesn't is the finding, an `answer`. A
+-- step left when the budget runs out is kept like any other. Without a
+-- parent (a background task queued before tasks recorded one), nothing
+-- is written, as before.
 --
 -- `max_turns` defaults to the agent_research_max_turns-configurable
 -- bound (the interactive research.investigate tool's own budget) when
@@ -2154,8 +2280,8 @@ that plainly along with what you tried, rather than guessing.
 -- agent_background_max_turns budget instead, since it isn't bound to
 -- one HTTP request's lifetime the way an inline tool call is.
 -- `step_kind` ("research" by default, "background" for a background
--- task) labels each step's agent_model_call row.
-function agent.run_research_loop(db_path, author, session_id, model, question, max_turns, step_kind)
+-- task) labels each step's agent_model_call row and its messages' loop.
+function agent.run_research_loop(db_path, author, session_id, model, question, max_turns, step_kind, parent_message_id)
     agent_tools = require("agent_tools")
     if max_turns == nil then
         max_turns = config.platform_config().agent_research_max_turns
@@ -2188,9 +2314,24 @@ function agent.run_research_loop(db_path, author, session_id, model, question, m
         research_prompt = json.encode(messages)
         response, err, usage = agent_provider.converse(model, RESEARCH_SYSTEM_PROMPT, messages, tools)
         -- Every real model call is persisted (doc/architecture.md, "Full
-        -- prompt/reasoning/token persistence"), sub-agent steps too. No
-        -- message_id: a research step's messages live only in this loop.
-        agent.record_model_call(db_path, session_id, nil, research_prompt, model, nil, usage, {kind = step_kind, number = turn})
+        -- prompt/reasoning/token persistence"), sub-agent steps too,
+        -- linked to the step's own message when it is kept.
+        step = {kind = step_kind, number = turn, parent_message_id = parent_message_id}
+        failed = response == nil or response.stopReason == "error" or response.stopReason == "aborted"
+        step_message_id = nil
+        if failed == false and parent_message_id != nil then
+            step_blocks = response.content
+            if step_blocks == nil then
+                step_blocks = {}
+            end
+            step_type = "reasoning"
+            if #all_tool_calls(step_blocks) == 0 then
+                step_type = "answer"
+            end
+            step_message_id = agent.add_message(db_path, session_id, "assistant", json.encode({blocks = step_blocks}), false,
+                {loop = step_kind, parent_message_id = parent_message_id, data_type = step_type})
+        end
+        agent.record_model_call(db_path, session_id, step_message_id, research_prompt, model, nil, usage, step)
         if response == nil then
             if last_real_text != nil then
                 return "(research stopped early: " .. tostring(err) .. ") " .. last_real_text
@@ -2246,9 +2387,16 @@ function agent.run_research_loop(db_path, author, session_id, model, question, m
                     is_error = true
                 end
             end
+            -- Kept whole under the parent, so a result cut for the model
+            -- below can be read on with result.read, as in chat.
+            result_id = nil
+            if parent_message_id != nil then
+                result_id = agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name, result_text, is_error,
+                    {loop = step_kind, parent_message_id = parent_message_id})
+            end
             table.insert(messages, {
                 role = "toolResult", toolCallId = tool_call.id, toolName = tool_call.name,
-                content = {{type = "text", text = agent.cap_tool_text(result_text, config.platform_config().agent_tool_result_cap, nil)}}, isError = is_error,
+                content = {{type = "text", text = agent.cap_tool_text(result_text, config.platform_config().agent_tool_result_cap, result_id)}}, isError = is_error,
             })
             agent.turn_heartbeat(db_path, session_id)
         end
@@ -2270,10 +2418,12 @@ end
 -- for a human to approve here, just a question that needs more turns
 -- than one HTTP request affords.
 
-function agent.enqueue_background_task(db_path, session_id, question)
+-- `parent_message_id`: the message holding the background.start call;
+-- the worker files the task's steps under it (run_research_loop).
+function agent.enqueue_background_task(db_path, session_id, question, parent_message_id)
     db.exec(db_path, string.format(
-        "INSERT INTO agent_background_task (session_id, question) VALUES (%s, %s);",
-        db.quote(session_id), db.quote(question)
+        "INSERT INTO agent_background_task (session_id, question, parent_message_id) VALUES (%s, %s, %s);",
+        db.quote(session_id), db.quote(question), db.literal(tonumber(parent_message_id))
     ))
     rows = db.query(db_path, "SELECT MAX(id) AS id FROM agent_background_task;")
     return tonumber(rows[1].id)
@@ -2512,7 +2662,7 @@ function agent.run_pending_background_tasks(db_path, model, limit)
             failed = failed + 1
         else
             finding, err = agent.run_research_loop(db_path, login, task.session_id, model, task.question,
-                config.platform_config().agent_background_max_turns, "background")
+                config.platform_config().agent_background_max_turns, "background", tonumber(task.parent_message_id))
             if finding == nil then
                 agent.mark_background_task_failed(db_path, task, tostring(err))
                 failed = failed + 1
@@ -2520,7 +2670,7 @@ function agent.run_pending_background_tasks(db_path, model, limit)
                 agent.mark_background_task_done(db_path, task, finding)
                 message_text = "Background research finished: " .. finding
                 agent.add_message(db_path, task.session_id, "assistant",
-                    json.encode({blocks = {{type = "text", text = message_text}}}), true)
+                    json.encode({blocks = {{type = "text", text = message_text}}}), true, {loop = "background"})
                 agent_tools.sync_session_document(db_path, login, task.session_id)
                 ran = ran + 1
             end
@@ -2623,7 +2773,9 @@ end
 -- tools.md, "Invariants", rule 1): that used to hold because every
 -- caller checked is_destructive first; here it holds for a caller that
 -- forgets.
-function agent.run_tool(db_path, author, session_id, tool_name, method_name, args, context_messages, approval)
+-- `call_message_id`: the message holding this call, passed on to the
+-- tool (agent.tool_ctx).
+function agent.run_tool(db_path, author, session_id, tool_name, method_name, args, context_messages, approval, call_message_id)
     agent_tools = require("agent_tools")
     record = agent.tool_record(db_path, tool_name, method_name)
     if record != nil and record.destructive == true then
@@ -2644,7 +2796,7 @@ function agent.run_tool(db_path, author, session_id, tool_name, method_name, arg
             return REPEAT_CALL_NOTE
         end
     end
-    call_ok, result, err = pcall(agent_tools.execute_tool, db_path, author, session_id, tool_name, method_name, args)
+    call_ok, result, err = pcall(agent_tools.execute_tool, db_path, author, session_id, tool_name, method_name, args, call_message_id)
     if call_ok == false then
         io.write(io.stderr, "agent tool " .. tostring(tool_name) .. "." .. tostring(method_name) .. " crashed: " .. tostring(result) .. "\n")
         return nil, "tool crashed: " .. tostring(result)
@@ -2872,7 +3024,7 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
                 pending_call = nil
                 ending_call = nil
                 ending_kind = nil
-                ctx = agent.tool_ctx(db_path, login, session_id)
+                ctx = agent.tool_ctx(db_path, login, session_id, message_id)
                 for _, tool_call in ipairs(tool_calls) do
                     if tool_call.arguments == nil then
                         tool_call.arguments = {}
@@ -2912,7 +3064,7 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
                         agent.add_tool_result_message(db_path, session_id, tool_call.id, tool_call.name,
                             "ERROR: deferred -- a destructive action earlier in this turn is waiting for approval; call this again after it is resolved", true)
                     else
-                        tool_result, tool_err = agent.run_tool(db_path, login, session_id, tool_name, method_name, tool_call.arguments, history_messages)
+                        tool_result, tool_err = agent.run_tool(db_path, login, session_id, tool_name, method_name, tool_call.arguments, history_messages, nil, message_id)
                         summary = tostring(tool_result)
                         is_error = false
                         if tool_err != nil then

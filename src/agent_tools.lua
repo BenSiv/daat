@@ -1923,7 +1923,7 @@ function research_investigate(ctx, args)
     if args.question == nil then
         return nil, "investigate requires question"
     end
-    finding, err = agent.run_research_loop(db_path, author, session_id, agent.default_model(), args.question)
+    finding, err = agent.run_research_loop(db_path, author, session_id, agent.default_model(), args.question, nil, nil, ctx.message_id)
     if finding == nil then
         return nil, tostring(err)
     end
@@ -1935,7 +1935,7 @@ function background_start(ctx, args)
     if args.question == nil then
         return nil, "start requires question"
     end
-    task_id = agent.enqueue_background_task(db_path, session_id, args.question)
+    task_id = agent.enqueue_background_task(db_path, session_id, args.question, ctx.message_id)
     return "Started background task #" .. tostring(task_id) ..
         " -- its finding will be added to this conversation once it's ready; check with background.status(" ..
         tostring(task_id) .. ") or just ask again later."
@@ -1993,12 +1993,12 @@ agent_tools.AGENT_TOOLS.internet_search.search.handler = internet_search_search
 -- the record's recover hint, if it has one: run under pcall, only after
 -- a failure, and only ever added to the error, never replacing it, so
 -- the real cause is always in the result.
-function agent_tools.execute_tool(db_path, author, session_id, tool_name, method_name, args)
+function agent_tools.execute_tool(db_path, author, session_id, tool_name, method_name, args, call_message_id)
     record = agent.tool_record(db_path, tool_name, method_name)
     if record == nil or record.handler == nil then
         return nil, "unknown tool: " .. tostring(tool_name) .. "." .. tostring(method_name)
     end
-    ctx = agent.tool_ctx(db_path, author, session_id)
+    ctx = agent.tool_ctx(db_path, author, session_id, call_message_id)
     result, err = record.handler(ctx, args)
     if result == nil and err != nil and record.recover != nil then
         ok, hint = pcall(record.recover, ctx, args, err)
