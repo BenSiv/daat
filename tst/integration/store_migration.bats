@@ -231,6 +231,41 @@ view|stock|SELECT 1|admin" ]
     [ "$output" = "0 a long synced paper" ]
     run store "SELECT COUNT(*) FROM document_tier_judgment;"
     [ "$output" = "0" ]
-    run store "SELECT number_value = 7 FROM system_state WHERE name = 'store.schema_version';"
+    run store "SELECT number_value >= 7 FROM system_state WHERE name = 'store.schema_version';"
+    [ "$output" = "1" ]
+}
+
+@test "migration 8 types every agent message by its role and keeps a row already typed" {
+    store "INSERT INTO agent_session (id, login) VALUES ('s1', 'admin');"
+    for role in user assistant progress tool_result compaction_summary self_check error; do
+        store "INSERT INTO agent_message (session_id, role, content) VALUES ('s1', '${role}', 'old ${role}');"
+    done
+    store "INSERT INTO agent_message (session_id, role, content) VALUES ('s1', 'assistant', 'already typed');"
+    # The layout before migration 8, with one row typed by hand to show
+    # the backfill leaves it alone.
+    store "ALTER TABLE agent_message DROP COLUMN data_type;"
+    store "ALTER TABLE agent_message DROP COLUMN loop_kind;"
+    store "ALTER TABLE agent_message DROP COLUMN parent_message_id;"
+    store "ALTER TABLE agent_model_call DROP COLUMN parent_message_id;"
+    store "ALTER TABLE agent_background_task DROP COLUMN parent_message_id;"
+    store "ALTER TABLE agent_message ADD COLUMN data_type VARCHAR(16);"
+    store "UPDATE agent_message SET data_type = 'reasoning' WHERE content = 'already typed';"
+    rewind_to 7
+
+    "$BIN" entity list document >/dev/null
+    run store "SELECT role || ':' || data_type || ':' || loop_kind || ':' || COALESCE(parent_message_id, '-') FROM agent_message ORDER BY id;"
+    [ "${lines[0]}" = "user:request:chat:-" ]
+    [ "${lines[1]}" = "assistant:answer:chat:-" ]
+    [ "${lines[2]}" = "progress:answer:chat:-" ]
+    [ "${lines[3]}" = "tool_result:tool_trace:chat:-" ]
+    [ "${lines[4]}" = "compaction_summary:reasoning:compaction:-" ]
+    [ "${lines[5]}" = "self_check:reasoning:self_check:-" ]
+    [ "${lines[6]}" = "error:control:chat:-" ]
+    [ "${lines[7]}" = "assistant:reasoning:chat:-" ]
+    run store "SELECT COUNT(*) FROM pragma_table_info('agent_model_call') WHERE name = 'parent_message_id';"
+    [ "$output" = "1" ]
+    run store "SELECT COUNT(*) FROM pragma_table_info('agent_background_task') WHERE name = 'parent_message_id';"
+    [ "$output" = "1" ]
+    run store "SELECT number_value = 8 FROM system_state WHERE name = 'store.schema_version';"
     [ "$output" = "1" ]
 }

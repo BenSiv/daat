@@ -264,15 +264,15 @@ EOF
     [[ "$output" =~ "self_check:" ]]
 }
 
-@test "research.investigate's own steps are recorded, tagged 'research', with no message" {
+@test "research.investigate's own steps are recorded, tagged 'research', each with its step's message" {
     read session csrf < <(session_for admin secret123)
     chat_session=$(start_chat "$session" "$csrf" "Research")
     scripted="$(tool_call_response "research.investigate" '{"question":"what types exist"}')"$'\1'"$(tool_call_response "entity.list_types" "{}")"$'\1'"$(done_response "Found the types.")"$'\1'"$(done_response "Here are the types.")"
     send_message "$session" "$csrf" "$chat_session" "look into the types" "$scripted" > /dev/null
 
-    run sqlite3 .store/store.db "SELECT step || ':' || COALESCE(message_id, 'none') || ':' || (prompt IS NOT NULL) FROM agent_model_call WHERE session_id = '${chat_session}' AND kind = 'research' ORDER BY id;"
-    [ "${lines[0]}" = "1:none:1" ]
-    [ "${lines[1]}" = "2:none:1" ]
+    run sqlite3 .store/store.db "SELECT step || ':' || (message_id IS NOT NULL) || ':' || (prompt IS NOT NULL) FROM agent_model_call WHERE session_id = '${chat_session}' AND kind = 'research' ORDER BY id;"
+    [ "${lines[0]}" = "1:1:1" ]
+    [ "${lines[1]}" = "2:1:1" ]
 }
 
 @test "agent context-report summarizes calls, tool results, exact repeats and compaction" {

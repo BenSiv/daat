@@ -329,6 +329,19 @@ table.insert(MIGRATIONS, {version = 7, name = "tier reset for the curation ladde
     end
 end})
 
+-- 8. Agent messages are typed (doc/agent-data.md, "Storage";
+-- doc/chat-history-migration.md, step 1): the new columns, and every
+-- existing row's type and loop from its role. A row already typed is
+-- left alone. Nothing is removed or rewritten.
+table.insert(MIGRATIONS, {version = 8, name = "typed agent messages", run = function(db_path)
+    if not exists(db_path, "agent_message") then
+        return
+    end
+    agent = require("agent")
+    agent.ensure_typed_columns(db_path)
+    agent.backfill_message_types(db_path)
+end})
+
 function latest_version()
     latest = 0
     for _, m in ipairs(MIGRATIONS) do

@@ -46,8 +46,8 @@ Each step needs one implementation piece of `doc/agent-data.md` to be deployed f
 
 ### 1. Type the rows (with piece 1, typed storage)
 
-- The schema upgrade that adds `data_type`, `loop` and `parent_message_id` also backfills them: `UPDATE agent_message SET data_type = ... WHERE data_type IS NULL`, by role, as in the table above, with `loop = 'chat'`. Rows already typed are left alone, so the upgrade can run more than once.
-- `agent_model_call.loop` is backfilled from `kind` where it is set (`chat`, `research`, `background`, `self_check`, `compaction`, `wrapup` -> `chat`) and is `chat` where `kind` is NULL.
+- Store migration 8 adds `data_type`, `loop_kind` and `parent_message_id` and backfills them: `UPDATE agent_message SET data_type = ... WHERE data_type IS NULL`, by role, as in the table above. `loop_kind` is `compaction` for compaction summaries, `self_check` for self-checks and `chat` for the rest, as new rows get it. Rows already typed are left alone, so it can run more than once.
+- `agent_model_call` needs no loop backfill: its `kind` is the loop. Rows from before `kind` was recorded stay NULL.
 - Earlier research steps aren't recoverable, as `doc/agent-data.md` says. Their prompts expire in step 4.
 - **Check:** `SELECT COUNT(*) FROM agent_message WHERE data_type IS NULL` is 0, and the role-by-type counts match the table above.
 - **Undo:** the columns are new. Dropping them, or leaving them unread, restores today's behaviour.

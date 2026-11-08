@@ -938,10 +938,14 @@ SCHEMA
     run latest_tool_result "$session_id"
     [[ "$output" =~ "Found note_count=2" ]]
 
-    # The sub-loop's own entity.query call never becomes a separate,
-    # real tool_result row in this session -- only research.investigate's
-    # own synthesized finding does (its noise stays isolated).
-    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM agent_message WHERE session_id = '${session_id}' AND role = 'tool_result';"
+    # The sub-loop's own entity.query call never becomes a tool_result
+    # of the main conversation -- only research.investigate's own
+    # synthesized finding does (its noise stays isolated). It is kept,
+    # out of context, under the message that called research
+    # (doc/agent-data.md, "Storage").
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM agent_message WHERE session_id = '${session_id}' AND role = 'tool_result' AND parent_message_id IS NULL;"
+    [ "$output" -eq 1 ]
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM agent_message WHERE session_id = '${session_id}' AND role = 'tool_result' AND parent_message_id IS NOT NULL AND in_context = 0;"
     [ "$output" -eq 1 ]
 }
 

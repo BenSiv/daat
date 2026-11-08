@@ -76,16 +76,16 @@ Every piece of data the agent produces has exactly one type. The type decides st
 
 **One conversation table, typed rows.** `agent_message` gets three columns:
 - `data_type`: one of the types above;
-- `loop`: `chat`, `research`, `background`, `self_check` or `compaction`;
+- `loop_kind`: `chat`, `research`, `background`, `self_check` or `compaction` (not `loop`, a reserved word in MySQL);
 - `parent_message_id`: for a sub-agent's rows, the message holding the tool call that started it.
 
-Research and background steps are written there too, with `in_context = 0` for the main conversation. Their own loop reads them back by `parent_message_id`.
+Research and background steps are written there too, with `in_context = 0` for the main conversation. A step that calls tools is `reasoning`, the one that doesn't is the finding (`answer`), and each tool result is `tool_trace`. The loop itself still works from its in-memory list, since it runs inside one call. Every reader of a whole session (the chat view, the transcript, curation, the context report's history) takes only rows without a parent. A background task records its calling message (`agent_background_task.parent_message_id`), so the worker files the task's steps under it. The finding it posts to the conversation is a main-conversation `answer` in the `background` loop.
 
 Why one table and not a separate log table: the provider protocol needs every tool call paired with its result inside the history the model reads (`pair_tool_results`). Keeping calls and results as rows of the same conversation keeps that pairing in one place. The type column, not the table, decides what curation, context and retention do with a row.
 
-`agent_model_call` stays the record of each call (`model_input` and `call_metrics`), with `loop` and `parent_message_id` added, so research steps can be told apart and traced to their caller.
+`agent_model_call` stays the record of each call (`model_input` and `call_metrics`), with `parent_message_id` added, so research steps can be told apart and traced to their caller. Its existing `kind` already names the loop (with `wrapup` as a kind of chat call), so no second loop column is added. A sub-agent's call also links to the step it produced (`message_id`).
 
-Approvals and denials are also written as `request` rows when they happen, so the conversation alone holds what the person decided. `agent_pending_action` stays the control record.
+Approvals and denials are also written as `request` rows when they happen, so the conversation alone holds what the person decided. `agent_pending_action` stays the control record. (Not built with piece 1: it lands with piece 2, whose curation is the first reader.)
 
 ## Reasoning capture
 
@@ -187,7 +187,7 @@ Settled 2026-11-04:
 
 Each piece is its own issue, in this order; 5 can run alongside the others since it needs only a scorecard run. Each one measures its effect.
 
-1. **Typed storage and the sub-agent trail:** the columns; research and background steps written under their parent; `agent_model_call.loop` and the parent link. Measure: every research step and its last step are recoverable; `context-report` breaks down by loop. Absorbs #19's step 0.
+1. **Typed storage and the sub-agent trail:** the columns; research and background steps written under their parent; the parent link on `agent_model_call`. Measure: every research step and its last step are recoverable; `context-report` breaks down by loop. Absorbs #19's step 0. **Built** on `feature/typed-agent-messages`: store migration 8 adds the columns and types the old rows; `tst/integration/agent_typed_messages.bats`.
 2. **Curation by type and visibility:** the conversation source (request, answer, reasoning from all loops), the quiet-plus-changed queue, transcript documents off, migration of the 48 transcripts, raw conversations owner- and admin-only. Measure: raw transcripts in the pool, from 48 documents (2.7 M characters) to none; scorecard `cites` and correctness; search hits on curated notes.
 3. **Retention strategies:** `agent_retention` with overrides, tool-trace stubs, one prune job, the `model_input_days` rename. Measure: storage per type per day, before and after.
 4. **Context by type:** sub-agent start context and its returned reasoning (#19 options 1 and 2), masking (#12), carried-over corrections (#11). Measure: failed lookups and tokens per run.
