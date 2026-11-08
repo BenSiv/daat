@@ -2262,52 +2262,30 @@ extrapolating. Never fill in a table with values no tool returned.
 """ .. extra
 end
 
-ROLE_LABELS = {user = "User", assistant = "Assistant", tool_result = "Tool result", self_check = "Self-check"}
-
--- A human-readable transcript of a session's full message history --
--- full session persistence, not just the individual prompt/reasoning
--- audit rows knowledge_context already keeps per turn (see
--- doc/architecture.md's "Knowledge pool" section, "Whole chat sessions
--- are themselves documents"). Reuses agent.all_messages' own
--- display_content cleanup (strips the [Current user:...]/[Current
--- page:...] annotations, renders a tool call as "-> tool.method(...)")
--- rather than a second rendering path.
+-- Keeps this session's own document (knowledge.sync_session_document)
+-- in sync with its conversation, when the deployment keeps transcripts
+-- searchable (agent_transcript_documents = "whole"). By default it
+-- doesn't (doc/agent-data.md, "Curation"): a chat reaches the pool as
+-- its curated note only, and the conversation stays on /chat for its
+-- owner. A kept transcript holds what curation reads -- requests,
+-- answers and reasoning, never tool output (curate.conversation_full).
 --
 -- [[...]] in the conversation is escaped (\[\[...\]\]): it still reads as
 -- written, but the transcript makes no links. Otherwise every title the
 -- agent or the person typed -- even "use [[title]] links" -- became a
 -- link from the chat, and a chat turned into a hub in the graph.
-function build_session_transcript(messages)
-    lines = {}
-    for _, msg in ipairs(messages) do
-        label = ROLE_LABELS[msg.role]
-        if label == nil then
-            label = msg.role
-        end
-        text = string.gsub(tostring(msg.content), "%[%[", "\\[\\[")
-        text = string.gsub(text, "%]%]", "\\]\\]")
-        table.insert(lines, label .. ": " .. text)
-    end
-    return table.concat(lines, "\n\n")
-end
-
--- Keeps this session's own document (knowledge.sync_session_document)
--- in sync with its current transcript -- find-or-create, then update
--- in place every time a turn concludes, so it always reflects the
--- conversation so far, not a one-time snapshot. Filed under the
--- Knowledge Pool folder like any other system-derived document (see
--- doc/architecture.md's "Knowledge pool" section) so a
--- heavily-revisited conversation participates in the same
--- tiered/searchable/distillation pipeline as everything else, with no
--- separate mechanism needed on top.
 function agent_tools.sync_session_document(db_path, login, session_id)
+    if config.platform_config().agent_transcript_documents != "whole" then
+        return
+    end
     session = agent.get_session(db_path, session_id, login)
     title = "Untitled chat"
     if session != nil and session.title != nil and session.title != "" then
         title = session.title
     end
-    messages = agent.all_messages(db_path, session_id)
-    transcript = build_session_transcript(messages)
+    transcript = require("curate").conversation_full(db_path, session_id)
+    transcript = string.gsub(transcript, "%[%[", "\\[\\[")
+    transcript = string.gsub(transcript, "%]%]", "\\]\\]")
     knowledge.sync_session_document(db_path, login, session_id, "Chat: " .. title, transcript)
 end
 

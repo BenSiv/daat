@@ -419,6 +419,11 @@ function config.platform_config()
         -- chat picked up again after a short pause isn't curated in
         -- between. 0 curates at the next jobs run.
         agent_curate_quiet_minutes = 60,
+        -- "off": a chat reaches the pool only as its curated note.
+        -- "whole": each chat is also kept as a searchable transcript
+        -- document, holding its requests, answers and reasoning, never
+        -- tool output (doc/agent-data.md, "Retention").
+        agent_transcript_documents = "off",
         -- Lua patterns: a content line any of them matches is left out of
         -- the text a document's embedding is made from (document.lua's
         -- embedding_text) -- a sync's own header, template boilerplate.
@@ -618,6 +623,9 @@ function config.platform_config()
     end
     if type(parsed.agent_curate_quiet_minutes) == "number" and parsed.agent_curate_quiet_minutes >= 0 then
         conf.agent_curate_quiet_minutes = parsed.agent_curate_quiet_minutes
+    end
+    if parsed.agent_transcript_documents == "off" or parsed.agent_transcript_documents == "whole" then
+        conf.agent_transcript_documents = parsed.agent_transcript_documents
     end
     if type(parsed.embedding_skip) == "table" then
         conf.embedding_skip = validate_patterns(parsed.embedding_skip)

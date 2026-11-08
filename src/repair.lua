@@ -201,6 +201,46 @@ function repair_curate(cmd_args, db_path)
     end
 end
 
+function repair_curate_chats(cmd_args, db_path)
+    curate = require("curate")
+    limit = nil
+    dry_run = false
+    skip = {}
+    i = 2
+    while i <= #cmd_args do
+        if cmd_args[i] == "--dry-run" then
+            dry_run = true
+        elseif cmd_args[i] == "--limit" then
+            limit = tonumber(cmd_args[i + 1])
+            i = i + 1
+        elseif cmd_args[i] == "--skip-login" then
+            table.insert(skip, cmd_args[i + 1])
+            i = i + 1
+        end
+        i = i + 1
+    end
+    for _, line in ipairs(curate.repair_chats(db_path, limit, dry_run, skip, "system")) do
+        print(line)
+    end
+end
+
+function repair_retire_transcripts(cmd_args, db_path)
+    curate = require("curate")
+    lines = nil
+    if cmd_args[2] == "--undo" then
+        if cmd_args[3] == nil then
+            print("Usage: daat repair retire-transcripts --undo <log of an earlier run>")
+            return
+        end
+        lines = curate.unretire_transcripts(db_path, cmd_args[3], "system")
+    else
+        lines = curate.retire_transcripts(db_path, cmd_args[2] == "--dry-run", "system")
+    end
+    for _, line in ipairs(lines) do
+        print(line)
+    end
+end
+
 function repair_synthesize(cmd_args, db_path)
     synthesize = require("synthesize")
     limit = nil
@@ -280,6 +320,10 @@ REPAIRS = {
      description = "Fold copies of the same synced file (same text past the sync header, or the same title and most of the text) into one copy (the lowest id with a real title): links move to it, the copies are archived as its duplicates (--dry-run: list them)."},
     {name = "curate", usage = "curate [--limit N] [--dry-run] [--recheck]", run = repair_curate,
      description = "Curate the sources already in use (retrieved twice or more), most used first, into checked tier-1 notes -- one model call to write and one to check each (--dry-run: list them, no model calls; --recheck: try again the sources that came to nothing, were rejected or failed)."},
+    {name = "curate-chats", usage = "curate-chats [--limit N] [--dry-run] [--skip-login LOGIN]...", run = repair_curate_chats,
+     description = "Curate every chat that is due (quiet and changed since last curated), oldest first, from its requests, answers and reasoning -- one model call to write and one to check each; a chat of a --skip-login login is marked as nothing to keep, with no model call (--dry-run: list them with their size, no model calls)."},
+    {name = "retire-transcripts", usage = "retire-transcripts [--dry-run | --undo <log>]", run = repair_retire_transcripts,
+     description = "Archive each chat transcript document whose conversation is curated or came to nothing, and keep the rest, saying why; refused while agent_transcript_documents is \"whole\" (--dry-run: list them; --undo: restore what an earlier run's output says it archived)."},
     {name = "synthesize", usage = "synthesize [--limit N] [--dry-run] [--recheck]", run = repair_synthesize,
      description = "Write a tier-2 reference for each tag holding three or more curated notes, from those notes -- one model call to write and one to check each; rewritten in place when the notes change (--dry-run: list the tags, no model calls; --recheck: try again the tags that came to nothing, were rejected or failed)."},
     {name = "distill", usage = "distill [--limit N] [--dry-run] [--recheck]", run = repair_distill,

@@ -672,6 +672,12 @@ function render_entries(entries, keep)
     return table.concat(parts, "\n\n")
 end
 
+-- The whole conversation as curation reads it, uncut: a kept
+-- transcript document (agent_transcript_documents = "whole").
+function curate.conversation_full(db_path, session_id)
+    return render_entries(conversation_entries(db_path, session_id), nil)
+end
+
 -- curate.conversation_text(db_path, session_id) -> text, hash
 -- What the agent reads of a conversation, and the hash of all of it
 -- (so a change anywhere makes it due again, even past the cap). Within
@@ -840,6 +846,134 @@ function curate.run_conversation(db_path, session_id, author)
         return status, note_id
     end
     return status, nil
+end
+
+--------------------------------------------------------------------------
+-- Moving old chats over (doc/chat-history-migration.md, steps 2 and 3)
+--------------------------------------------------------------------------
+
+-- `daat repair curate-chats [--limit N] [--dry-run] [--skip-login L]...`:
+-- every conversation that is due, oldest first. A session of a skipped
+-- login is marked `nothing` without a model call (decision 1: testing
+-- chats aren't written up as team notes); the rest are curated, up to
+-- `limit`. --dry-run lists what it would do and makes no model call (it
+-- may move checked_at on unchanged chats, which changes no outcome).
+function curate.repair_chats(db_path, limit, dry_run, skip_logins, author)
+    skip = {}
+    for _, login in ipairs(skip_logins) do
+        skip[login] = true
+    end
+    due = curate.due_conversations(db_path, nil)
+    lines = {}
+    to_run = {}
+    skipped = 0
+    for _, d in ipairs(due) do
+        title = d.title
+        if title == nil or title == "" then
+            title = "Untitled chat"
+        end
+        what = string.format("chat %s (%s, \"%s\", %d characters)", tostring(d.session_id), tostring(d.login), tostring(title), d.chars)
+        if skip[d.login] == true then
+            skipped = skipped + 1
+            if dry_run then
+                table.insert(lines, "would skip " .. what)
+            else
+                conversation_record(db_path, d.session_id, d.hash, "nothing", transcript_note_id(db_path, d.session_id),
+                    "skipped: login " .. tostring(d.login))
+                table.insert(lines, "skipped " .. what)
+            end
+        elseif limit == nil or #to_run < limit then
+            table.insert(to_run, d)
+            if dry_run then
+                table.insert(lines, "would curate " .. what)
+            end
+        end
+    end
+    if dry_run == false then
+        for _, d in ipairs(to_run) do
+            curate.queue_conversation(db_path, d.session_id, d.hash)
+            if curate.claim_conversation(db_path, d.session_id) then
+                status, note_id = curate.run_conversation(db_path, d.session_id, author)
+                line = string.format("chat %s %s", tostring(d.session_id), status)
+                if note_id != nil then
+                    line = line .. " -> note #" .. tostring(note_id)
+                end
+                table.insert(lines, line)
+            end
+        end
+    end
+    verb = "run"
+    if dry_run then
+        verb = "would be run"
+    end
+    table.insert(lines, string.format("%d chat(s) due: %d skipped by login, %d %s", #due, skipped, #to_run, verb))
+    return lines
+end
+
+-- `daat repair retire-transcripts [--dry-run]`: archives each chat
+-- transcript document whose conversation has its note, or came to
+-- nothing; keeps the rest and says why. Refuses while the deployment
+-- still keeps transcripts (agent_transcript_documents = "whole"): new
+-- turns would keep writing them. Archived, never deleted: each line
+-- "archived #N" is what --undo reads back.
+function curate.retire_transcripts(db_path, dry_run, author)
+    if require("config").platform_config().agent_transcript_documents == "whole" then
+        return {"Transcript documents are still kept (agent_transcript_documents = \"whole\"); set it to \"off\" first."}
+    end
+    entity = require("entity")
+    rows = db.query(db_path,
+        "SELECT d.id, d.title, d.source_ref, c.status FROM document d " ..
+        "LEFT JOIN knowledge_conversation_curation c ON c.session_id = d.source_ref " ..
+        "WHERE d.source_type = 'chat_session' AND (d.archived_at IS NULL OR d.archived_at = '') ORDER BY d.id;")
+    lines = {}
+    retired = 0
+    kept = 0
+    for _, row in ipairs(or_empty(rows)) do
+        status = row.status
+        if status == nil or status == "" then
+            status = "not curated"
+        end
+        what = string.format("#%d %s (chat %s: %s)", tonumber(row.id), tostring(row.title), tostring(row.source_ref), status)
+        if status == "curated" or status == "nothing" then
+            retired = retired + 1
+            if dry_run then
+                table.insert(lines, "would archive " .. what)
+            else
+                entity.archive(db_path, "document", tonumber(row.id), author, nil, "chat transcript retired: its conversation is curated")
+                table.insert(lines, "archived " .. what)
+            end
+        else
+            kept = kept + 1
+            table.insert(lines, "kept " .. what)
+        end
+    end
+    verb = "archived"
+    if dry_run then
+        verb = "would be archived"
+    end
+    table.insert(lines, string.format("%d transcript(s) %s, %d kept", retired, verb, kept))
+    return lines
+end
+
+-- `daat repair retire-transcripts --undo <log>`: brings back the
+-- transcripts a run archived, from its output ("archived #N" lines).
+function curate.unretire_transcripts(db_path, log_path, author)
+    entity = require("entity")
+    file = io.open(log_path, "r")
+    if file == nil then
+        return {"Cannot read " .. tostring(log_path)}
+    end
+    lines = {}
+    for line in io.lines(log_path) do
+        id = string.match(line, "^archived #(%d+) ")
+        if id != nil then
+            entity.unarchive(db_path, "document", tonumber(id), author, nil)
+            table.insert(lines, "restored #" .. id)
+        end
+    end
+    io.close(file)
+    table.insert(lines, string.format("%d transcript(s) restored", #lines))
+    return lines
 end
 
 return curate

@@ -198,8 +198,8 @@ THEME
 # "role|data_type|content" lines; a row's parent, when it is a
 # sub-agent's step, is the session's first assistant row.
 old_chat() {
-    local id="$1" title="$2" rows="$3"
-    db "INSERT INTO agent_session (id, login, title, updated_at) VALUES ('$id', 'admin', '$title', '2026-01-01 00:00:00');"
+    local id="$1" title="$2" rows="$3" login="${4:-admin}"
+    db "INSERT INTO agent_session (id, login, title, updated_at) VALUES ('$id', '$login', '$title', '2026-01-01 00:00:00');"
     while IFS='|' read -r role type content parent; do
         [ -z "$role" ] && continue
         local parent_sql="NULL"
@@ -310,3 +310,62 @@ assistant|answer|{\"blocks\":[{\"type\":\"text\",\"text\":\"M9, per the protocol
     [[ ! "$output" =~ "Summary of earlier conversation: summary 1" ]]
     unset AGENT_TEST_CAPTURE_PROMPT
 }
+
+SHORT_CHAT="user|request|${LONG_ASK}
+assistant|answer|{\"blocks\":[{\"type\":\"text\",\"text\":\"M9, per the protocol.\"}]}"
+
+@test "repair curate-chats --dry-run lists the due chats and the skipped logins, and decides nothing" {
+    old_chat s1 media "$SHORT_CHAT" alice
+    old_chat s2 testing "$SHORT_CHAT" admin
+    run "$BIN" repair curate-chats --dry-run --skip-login admin
+    [[ "$output" =~ "would curate chat s1 (alice, \"media\"," ]]
+    [[ "$output" =~ "would skip chat s2 (admin, \"testing\"," ]]
+    [[ "$output" =~ "2 chat(s) due: 1 skipped by login, 1 would be run" ]]
+    [ "$(db "SELECT COUNT(*) FROM knowledge_conversation_curation;")" = "0" ]
+}
+
+@test "repair curate-chats curates the due chats and marks a skipped login's as nothing, with no model call" {
+    old_chat s1 media "$SHORT_CHAT" alice
+    old_chat s2 testing "$SHORT_CHAT" admin
+    export AGENT_TEST_GENERATE_RESPONSES="${CHAT_NOTE}"$'\1'"PASS"
+    run "$BIN" repair curate-chats --skip-login admin
+    [[ "$output" =~ "skipped chat s2 (admin" ]]
+    [[ "$output" =~ "chat s1 curated -> note #" ]]
+    run db "SELECT session_id || ':' || status || ':' || COALESCE(reason, '') FROM knowledge_conversation_curation ORDER BY session_id;"
+    [ "${lines[0]}" = "s1:curated:" ]
+    [ "${lines[1]}" = "s2:nothing:skipped: login admin" ]
+    # Nothing left due.
+    run "$BIN" repair curate-chats
+    [[ "$output" =~ "0 chat(s) due" ]]
+}
+
+@test "repair retire-transcripts archives transcripts of curated chats, keeps the rest, and --undo restores them" {
+    write_platform_config ', agent_transcript_documents = "whole"'
+    run "$BIN" repair retire-transcripts
+    [[ "$output" =~ "set it to \"off\" first" ]]
+    write_platform_config
+
+    for sid in s1 s2 s3; do
+        "$BIN" entity create document title="Chat: $sid" content="transcript $sid" >/dev/null
+        db "UPDATE document SET source_type = 'chat_session', source_ref = '$sid' WHERE title = 'Chat: $sid';"
+    done
+    db "INSERT INTO knowledge_conversation_curation (session_id, source_hash, status) VALUES ('s1', 'x', 'curated');"
+    db "INSERT INTO knowledge_conversation_curation (session_id, source_hash, status) VALUES ('s2', 'x', 'nothing');"
+    db "INSERT INTO knowledge_conversation_curation (session_id, source_hash, status) VALUES ('s3', 'x', 'rejected');"
+
+    run "$BIN" repair retire-transcripts --dry-run
+    [[ "$output" =~ "2 transcript(s) would be archived, 1 kept" ]]
+    [ "$(db "SELECT COUNT(*) FROM document WHERE source_type = 'chat_session' AND archived_at IS NULL;")" = "3" ]
+
+    "$BIN" repair retire-transcripts > "$TEST_DIR/retire.log"
+    run cat "$TEST_DIR/retire.log"
+    [[ "$output" =~ "kept #" ]]
+    [[ "$output" =~ "(chat s3: rejected)" ]]
+    run db "SELECT source_ref FROM document WHERE source_type = 'chat_session' AND archived_at IS NULL;"
+    [ "$output" = "s3" ]
+
+    run "$BIN" repair retire-transcripts --undo "$TEST_DIR/retire.log"
+    [[ "$output" =~ "2 transcript(s) restored" ]]
+    [ "$(db "SELECT COUNT(*) FROM document WHERE source_type = 'chat_session' AND archived_at IS NULL;")" = "3" ]
+}
+

@@ -83,16 +83,26 @@ calling_message() {
     [ "${lines[1]}" = "2:${parent}:answer" ]
 }
 
-@test "a sub-agent's steps stay out of the chat view and the transcript; its finding is there as the call's result" {
+@test "by default a chat writes no transcript document" {
+    read session csrf < <(session_for admin secret123)
+    chat=$(start_chat "$session" "$csrf" "No transcript")
+    send_message "$session" "$csrf" "$chat" "hello" "$(done_response "Hi.")" > /dev/null
+    [ "$(store "SELECT COUNT(*) FROM document WHERE source_type = 'chat_session';")" = "0" ]
+}
+
+@test "a sub-agent's steps stay out of the chat view; a kept transcript has its finding and reasoning, never tool output" {
+    write_platform_config ', agent_transcript_documents = "whole"'
     read session csrf < <(session_for admin secret123)
     chat=$(start_chat "$session" "$csrf" "Research")
     scripted="$(tool_call_response "research.investigate" '{"question":"what types exist"}')"$'\1'"$(tool_call_response "entity.list_types" "{}")"$'\1'"$(done_response "Found the types.")"$'\1'"$(done_response "Here are the types.")"
     send_message "$session" "$csrf" "$chat" "look into the types" "$scripted" > /dev/null
 
     transcript=$(store "SELECT content FROM document WHERE source_type = 'chat_session' AND source_ref = '${chat}';")
-    [[ "$transcript" =~ "research.investigate" ]]
-    [[ "$transcript" =~ "Found the types." ]]
+    [[ "$transcript" =~ "User: look into the types" ]]
+    [[ "$transcript" =~ "Research finding: Found the types." ]]
+    [[ "$transcript" =~ "Assistant: Here are the types." ]]
     [[ ! "$transcript" =~ "entity.list_types" ]]
+    [[ ! "$transcript" =~ "Tool result" ]]
 
     run raw_get "/api/chat-widget-history" "session_id=${chat}" "session=${session}; csrf=${csrf}"
     [[ "$output" =~ "Here are the types." ]]
