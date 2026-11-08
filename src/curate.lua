@@ -84,10 +84,12 @@ CURATE_ASPECT_CHECK_RULE = """
 The source shown is one part of a longer document; judge the note against that part only.
 """
 
--- Sources curate reads: synced files and pages (no source_type) and
--- chats. Not reasoning, connection notes, generated views, legacy
--- distilled facts, or anything the curation wrote itself.
-CURATE_SOURCE_TYPES = {chat_session = true}
+-- Document sources curate reads: synced files and pages (no
+-- source_type). Not reasoning, connection notes, generated views, legacy
+-- distilled facts, or anything the curation wrote itself. Not chat
+-- transcripts either: a chat is curated from its conversation, by
+-- session (below, "Curating a conversation"), not from its document.
+CURATE_SOURCE_TYPES = {}
 
 function curate.is_source(doc)
     if doc == nil then
@@ -432,12 +434,14 @@ function aspect_curate_claim(db_path, document_id, n)
     return row != nil and row.status == "running" and row.reason == token
 end
 
--- Runs up to `limit` queued sources, oldest first, then queued aspects
--- with what's left of the limit. Returns report lines.
+-- Queues the conversations that are due, then runs up to `limit`
+-- queued sources, oldest first, then queued conversations and queued
+-- aspects with what's left of the limit. Returns report lines.
 function curate.run_pending(db_path, limit, author)
     if limit == nil then
         limit = 5
     end
+    curate.queue_due_conversations(db_path)
     rows = db.query(db_path, string.format(
         "SELECT document_id FROM knowledge_curation WHERE status = 'pending' ORDER BY queued_at, document_id LIMIT %d;",
         tonumber(limit)))
@@ -456,6 +460,26 @@ function curate.run_pending(db_path, limit, author)
         end
     end
     left = tonumber(limit) - #rows
+    if left <= 0 then
+        return lines
+    end
+    conversation_rows = db.query(db_path, string.format(
+        "SELECT session_id FROM knowledge_conversation_curation WHERE status = 'pending' ORDER BY queued_at, session_id LIMIT %d;",
+        left))
+    if conversation_rows == nil then
+        conversation_rows = {}
+    end
+    for _, row in ipairs(conversation_rows) do
+        if curate.claim_conversation(db_path, row.session_id) then
+            status, note_id = curate.run_conversation(db_path, row.session_id, author)
+            line = string.format("chat %s %s", tostring(row.session_id), status)
+            if note_id != nil then
+                line = line .. " -> note #" .. tostring(note_id)
+            end
+            table.insert(lines, line)
+        end
+    end
+    left = left - #conversation_rows
     if left <= 0 then
         return lines
     end
@@ -536,6 +560,286 @@ function curate.repair(db_path, limit, dry_run, author, recheck)
     end
     table.insert(lines, string.format("%d source(s) due, %d run", #due, math.min(limit, #due)))
     return lines
+end
+
+--------------------------------------------------------------------------
+-- Curating a conversation
+--------------------------------------------------------------------------
+--
+-- doc/agent-data.md, "Curation": a chat is one curation source, read by
+-- type -- what the person asked and decided (`request`), what the agent
+-- concluded (`answer`) and how it got there (`reasoning`), from every
+-- loop, a sub-agent's steps included. Tool traces are never read. The
+-- note is the only thing of the chat in the pool; the conversation
+-- itself stays on /chat for its owner.
+--
+-- A conversation is due once it has been quiet for
+-- agent_curate_quiet_minutes and has changed since it was last
+-- curated. One row per session in knowledge_conversation_curation, with
+-- the statuses and the in-place rewrite of knowledge_curation.
+
+CURATE_CONVERSATION_RULE = """
+The source is a conversation between a member of the team and the assistant. "User" lines are what they asked, "Decision" lines what they approved or declined; state corrections and stated preferences as such. "Research" lines are the assistant's own sub-investigations. Write the note for the whole team: state what was established, decided and still open, and the caveats raised, not who asked or how the conversation went. Name the records and documents the answers relied on.
+"""
+
+-- The label each kind of row is shown with in the curation input.
+function or_empty(rows)
+    if rows == nil then
+        return {}
+    end
+    return rows
+end
+
+function conversation_label(row)
+    if row.role == "user" then
+        return "User"
+    elseif row.role == "decision" then
+        return "Decision"
+    elseif row.role == "compaction_summary" then
+        return "Summary of earlier conversation"
+    elseif row.role == "self_check" then
+        return "Self-check"
+    elseif row.parent_message_id != nil and row.parent_message_id != "" then
+        if row.data_type == "answer" then
+            return "Research finding"
+        end
+        return "Research step"
+    end
+    return "Assistant"
+end
+
+-- The conversation's entries, in order: {label, text, core}. `core`
+-- entries (requests, answers) are kept whole first when the input is
+-- too long; reasoning fills what's left. A session from before decision
+-- rows were written gets its decided actions from agent_pending_action
+-- instead, at the end (doc/approval-request-rows.md).
+function conversation_entries(db_path, session_id)
+    agent = require("agent")
+    rows = db.query(db_path, string.format(
+        "SELECT id, role, content, data_type, parent_message_id FROM agent_message WHERE session_id = %s " ..
+        "AND data_type IN ('request', 'answer', 'reasoning') ORDER BY id;", db.quote(session_id)))
+    entries = {}
+    has_decisions = false
+    for _, row in ipairs(or_empty(rows)) do
+        if row.role == "decision" then
+            has_decisions = true
+        end
+        text = agent.display_content(row.content, row.role, false)
+        if text != nil then
+            text = string.gsub(string.gsub(text, "^%s+", ""), "%s+$", "")
+        end
+        if text != nil and text != "" then
+            table.insert(entries, {label = conversation_label(row), text = text, core = row.data_type != "reasoning"})
+        end
+    end
+    if has_decisions == false then
+        decided = db.query(db_path, string.format(
+            "SELECT id, tool, method, args_json, status FROM agent_pending_action WHERE session_id = %s " ..
+            "AND status IN ('approved', 'denied') ORDER BY id;", db.quote(session_id)))
+        for _, p in ipairs(or_empty(decided)) do
+            verb = "Approved"
+            if p.status == "denied" then
+                verb = "Denied"
+            end
+            args = tostring(p.args_json)
+            if string.len(args) > 300 then
+                args = string.sub(args, 1, 300) .. "..."
+            end
+            table.insert(entries, {label = "Decision", core = true,
+                text = string.format("%s %s.%s (pending action #%d): %s", verb, tostring(p.tool), tostring(p.method), tonumber(p.id), args)})
+        end
+    end
+    return entries
+end
+
+function render_entries(entries, keep)
+    parts = {}
+    skipped = false
+    for i, e in ipairs(entries) do
+        if keep == nil or keep[i] == true then
+            if skipped then
+                table.insert(parts, "[...]")
+                skipped = false
+            end
+            table.insert(parts, e.label .. ": " .. e.text)
+        else
+            skipped = true
+        end
+    end
+    if skipped then
+        table.insert(parts, "[...]")
+    end
+    return table.concat(parts, "\n\n")
+end
+
+-- curate.conversation_text(db_path, session_id) -> text, hash
+-- What the agent reads of a conversation, and the hash of all of it
+-- (so a change anywhere makes it due again, even past the cap). Within
+-- CURATE_INPUT_MAX_CHARS: requests and answers first, newest first,
+-- then reasoning, newest first, shown in conversation order with "[...]"
+-- where entries were left out.
+function curate.conversation_text(db_path, session_id)
+    entries = conversation_entries(db_path, session_id)
+    full = render_entries(entries, nil)
+    hash = document.content_hash(full)
+    if string.len(full) <= CURATE_INPUT_MAX_CHARS then
+        return full, hash
+    end
+    keep = {}
+    budget = CURATE_INPUT_MAX_CHARS - 200
+    for _, wanted in ipairs({true, false}) do
+        for i = #entries, 1, -1 do
+            e = entries[i]
+            size = string.len(e.label) + string.len(e.text) + 9
+            if e.core == wanted and size <= budget then
+                keep[i] = true
+                budget = budget - size
+            end
+        end
+    end
+    return render_entries(entries, keep) ..
+        "\n\n[...conversation shortened to fit: the newest requests and answers are shown whole, earlier reasoning in part...]", hash
+end
+
+function conversation_row(db_path, session_id)
+    rows = db.query(db_path, string.format(
+        "SELECT * FROM knowledge_conversation_curation WHERE session_id = %s;", db.quote(session_id)))
+    if rows == nil then
+        return nil
+    end
+    return rows[1]
+end
+
+function conversation_record(db_path, session_id, source_hash, status, note_id, reason)
+    db.exec(db_path, string.format("DELETE FROM knowledge_conversation_curation WHERE session_id = %s;", db.quote(session_id)))
+    db.exec(db_path, string.format(
+        "INSERT INTO knowledge_conversation_curation (session_id, source_hash, status, note_id, reason, checked_at) VALUES (%s, %s, %s, %s, %s, %s);",
+        db.quote(session_id), db.quote(source_hash), db.quote(status), db.literal(tonumber(note_id)), db.literal(reason), db.now_expr(db_path)))
+end
+
+-- The note a chat already has from when it was curated as a transcript
+-- document, if any, so the conversation's note rewrites it in place
+-- (doc/chat-history-migration.md, decision 3).
+function transcript_note_id(db_path, session_id)
+    rows = db.query(db_path, string.format(
+        "SELECT c.note_id FROM document d JOIN knowledge_curation c ON c.document_id = d.id " ..
+        "WHERE d.source_type = 'chat_session' AND d.source_ref = %s AND c.note_id IS NOT NULL;", db.quote(session_id)))
+    if rows == nil or rows[1] == nil then
+        return nil
+    end
+    return tonumber(rows[1].note_id)
+end
+
+-- Queues one conversation (keeping its note to rewrite in place).
+function curate.queue_conversation(db_path, session_id, hash)
+    row = conversation_row(db_path, session_id)
+    note_id = nil
+    if row != nil then
+        note_id = tonumber(row.note_id)
+    end
+    if note_id == nil then
+        note_id = transcript_note_id(db_path, session_id)
+    end
+    conversation_record(db_path, session_id, hash, "pending", note_id, nil)
+end
+
+-- curate.due_conversations(db_path, quiet_minutes) -> {{session_id, login, title, hash, chars}}
+-- Sessions quiet for `quiet_minutes` that changed since they were last
+-- checked, and whose conversation differs from what was last curated.
+-- One that was touched but didn't change only has its checked_at moved.
+-- Nothing queued or running is due.
+function curate.due_conversations(db_path, quiet_minutes)
+    if quiet_minutes == nil then
+        quiet_minutes = require("config").platform_config().agent_curate_quiet_minutes
+    end
+    cutoff = os.date("!%Y-%m-%d %H:%M:%S", os.time() - math.floor(quiet_minutes * 60))
+    rows = db.query(db_path, string.format(
+        "SELECT s.id, s.login, s.title, c.source_hash, c.status FROM agent_session s " ..
+        "LEFT JOIN knowledge_conversation_curation c ON c.session_id = s.id " ..
+        "WHERE s.updated_at <= %s AND (c.session_id IS NULL OR c.checked_at IS NULL OR s.updated_at >= c.checked_at) " ..
+        "AND (c.status IS NULL OR c.status NOT IN ('pending', 'running')) ORDER BY s.updated_at, s.id;", db.quote(cutoff)))
+    due = {}
+    for _, row in ipairs(or_empty(rows)) do
+        text, hash = curate.conversation_text(db_path, row.id)
+        if row.source_hash != nil and row.source_hash == hash then
+            db.exec(db_path, string.format(
+                "UPDATE knowledge_conversation_curation SET checked_at = %s WHERE session_id = %s;",
+                db.now_expr(db_path), db.quote(row.id)))
+        else
+            table.insert(due, {session_id = row.id, login = row.login, title = row.title, hash = hash, chars = string.len(text)})
+        end
+    end
+    return due
+end
+
+-- Queues every due conversation (the jobs worker, via run_pending).
+-- Returns how many it queued.
+function curate.queue_due_conversations(db_path)
+    due = curate.due_conversations(db_path, nil)
+    for _, d in ipairs(due) do
+        curate.queue_conversation(db_path, d.session_id, d.hash)
+    end
+    return #due
+end
+
+-- curate_claim for one conversation's row.
+function curate.claim_conversation(db_path, session_id)
+    token = new_claim_token()
+    if token == nil then
+        return false
+    end
+    db.exec(db_path, string.format(
+        "UPDATE knowledge_conversation_curation SET status = 'running', reason = %s WHERE session_id = %s AND status = 'pending';",
+        db.quote(token), db.quote(session_id)))
+    row = conversation_row(db_path, session_id)
+    return row != nil and row.status == "running" and row.reason == token
+end
+
+-- Where a conversation's note points: the chat on /chat, which only its
+-- owner (and admins) can open.
+function conversation_source_line(session)
+    title = session.title
+    if title == nil or title == "" then
+        title = "Untitled chat"
+    end
+    title = string.gsub(title, "[%[%]\n]", " ")
+    return "Source: [Chat: " .. title .. "](chat?session_id=" .. tostring(session.id) .. ") (open to its owner)"
+end
+
+-- Curates one conversation now. Returns the status written (as
+-- curate.run) and the note id when one was written.
+function curate.run_conversation(db_path, session_id, author)
+    sessions = db.query(db_path, string.format("SELECT * FROM agent_session WHERE id = %s;", db.quote(session_id)))
+    if sessions == nil or sessions[1] == nil then
+        db.exec(db_path, string.format("DELETE FROM knowledge_conversation_curation WHERE session_id = %s;", db.quote(session_id)))
+        return "skipped", nil
+    end
+    session = sessions[1]
+    text, hash = curate.conversation_text(db_path, session_id)
+    previous = conversation_row(db_path, session_id)
+    note_id = nil
+    if previous != nil then
+        note_id = tonumber(previous.note_id)
+    end
+    if note_id == nil then
+        note_id = transcript_note_id(db_path, session_id)
+    end
+    if string.len(text) < CURATE_MIN_CHARS then
+        conversation_record(db_path, session_id, hash, "nothing", note_id, "too little text")
+        return "nothing", nil
+    end
+    title = session.title
+    if title == nil or title == "" then
+        title = "Untitled chat"
+    end
+    status, note_id, reason = write_note(db_path, author, {id = nil, title = "Chat: " .. title}, text,
+        curate.system_prompt() .. "\n" .. CURATE_CONVERSATION_RULE, CURATE_CHECK_SYSTEM_PROMPT,
+        note_id, conversation_source_line(session), session_id)
+    conversation_record(db_path, session_id, hash, status, note_id, reason)
+    if status == "curated" then
+        return status, note_id
+    end
+    return status, nil
 end
 
 return curate

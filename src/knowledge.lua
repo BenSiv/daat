@@ -122,6 +122,20 @@ CREATE TABLE IF NOT EXISTS knowledge_aspect_curation (
     PRIMARY KEY (document_id, aspect)
 );
 
+-- The same for a conversation (src/curate.lua, doc/agent-data.md,
+-- "Curation"): one row per chat session, curated from its requests,
+-- answers and reasoning. checked_at is when the conversation was last
+-- looked at, so one that hasn't changed since isn't hashed again.
+CREATE TABLE IF NOT EXISTS knowledge_conversation_curation (
+    session_id VARCHAR(255) PRIMARY KEY,
+    source_hash VARCHAR(64) NOT NULL,
+    status VARCHAR(32) NOT NULL,
+    note_id INTEGER,
+    reason TEXT,
+    queued_at TEXT DEFAULT (%s),
+    checked_at TEXT
+);
+
 -- The synthesize step's queue and outcomes, one row per tag
 -- (src/synthesize.lua): the hash of the notes it last saw, and how that
 -- went -- pending, running, referenced (document_id is the tier-2
@@ -165,6 +179,7 @@ CREATE TABLE IF NOT EXISTS knowledge_reference (
 function knowledge_schema_sql(db_path)
     return string.format(KNOWLEDGE_SCHEMA,
         db.autoincrement_keyword(db_path), db.now_expr(db_path),
+        db.now_expr(db_path),
         db.now_expr(db_path),
         db.now_expr(db_path),
         db.now_expr(db_path),

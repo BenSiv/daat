@@ -413,6 +413,12 @@ function config.platform_config()
         -- and again -- a chat transcript after every turn -- costs one
         -- embedding, not one per save. 0 embeds on save.
         embedding_quiet_minutes = 5,
+        -- A chat is curated into a note once it has gone this many
+        -- minutes without a new message and has changed since it was
+        -- last curated (doc/agent-data.md, "Curation"): an hour, so a
+        -- chat picked up again after a short pause isn't curated in
+        -- between. 0 curates at the next jobs run.
+        agent_curate_quiet_minutes = 60,
         -- Lua patterns: a content line any of them matches is left out of
         -- the text a document's embedding is made from (document.lua's
         -- embedding_text) -- a sync's own header, template boilerplate.
@@ -609,6 +615,9 @@ function config.platform_config()
     end
     if type(parsed.embedding_quiet_minutes) == "number" and parsed.embedding_quiet_minutes >= 0 then
         conf.embedding_quiet_minutes = parsed.embedding_quiet_minutes
+    end
+    if type(parsed.agent_curate_quiet_minutes) == "number" and parsed.agent_curate_quiet_minutes >= 0 then
+        conf.agent_curate_quiet_minutes = parsed.agent_curate_quiet_minutes
     end
     if type(parsed.embedding_skip) == "table" then
         conf.embedding_skip = validate_patterns(parsed.embedding_skip)

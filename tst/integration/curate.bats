@@ -194,20 +194,119 @@ THEME
     [ "$output" -eq 0 ]
 }
 
-@test "a chat is curated from what was said, without its tool results" {
-    chat=$(used_source "Chat: media" 3)
-    db "INSERT INTO agent_session (id, login, title) VALUES ('s1', 'admin', 'media');"
-    db "INSERT INTO agent_message (session_id, role, content) VALUES ('s1', 'user', 'which medium for cotyledons? $(printf 'context %s ' $(seq 1 80))');"
-    db "INSERT INTO agent_message (session_id, role, content) VALUES ('s1', 'tool_result', 'raw search output #12 #13');"
-    db "INSERT INTO agent_message (session_id, role, content) VALUES ('s1', 'assistant', 'M9, per the protocol.');"
-    db "UPDATE document SET source_type = 'chat_session', source_ref = 's1' WHERE id = $chat;"
-    export AGENT_TEST_CAPTURE_PROMPT="$TEST_DIR/check-prompt.txt"
-    export AGENT_TEST_GENERATE_RESPONSES=$'# Cotyledon medium\n\nM9, per the protocol.'$'\1'"PASS"
+# A chat session last active long ago, with typed rows. `rows` are
+# "role|data_type|content" lines; a row's parent, when it is a
+# sub-agent's step, is the session's first assistant row.
+old_chat() {
+    local id="$1" title="$2" rows="$3"
+    db "INSERT INTO agent_session (id, login, title, updated_at) VALUES ('$id', 'admin', '$title', '2026-01-01 00:00:00');"
+    while IFS='|' read -r role type content parent; do
+        [ -z "$role" ] && continue
+        local parent_sql="NULL"
+        if [ "$parent" = "sub" ]; then
+            parent_sql="(SELECT MIN(id) FROM agent_message WHERE session_id = '$id' AND role = 'assistant')"
+        fi
+        db "INSERT INTO agent_message (session_id, role, content, data_type, loop_kind, parent_message_id, in_context) VALUES ('$id', '$role', '$content', '$type', 'chat', $parent_sql, 1);"
+    done <<< "$rows"
+    db "UPDATE agent_session SET updated_at = '2026-01-01 00:00:00' WHERE id = '$id';"
+}
 
-    run "$BIN" repair curate
-    [[ "$output" =~ "#$chat curated" ]]
+LONG_ASK="which medium for cotyledons? $(printf 'context %s ' $(seq 1 80))"
+CHAT_NOTE=$'# Cotyledon medium\n\nM9, per the protocol.'
+
+@test "a chat is curated from its requests, answers and reasoning, never its tool results, into a note that links to the chat" {
+    old_chat s1 media "user|request|${LONG_ASK}
+assistant|answer|{\"blocks\":[{\"type\":\"text\",\"text\":\"Looking.\"},{\"type\":\"toolCall\",\"id\":\"c1\",\"name\":\"research.investigate\",\"arguments\":{}}]}
+assistant|reasoning|{\"blocks\":[{\"type\":\"text\",\"text\":\"Checked the protocol list.\"}]}|sub
+tool_result|tool_trace|raw search output #12 #13
+assistant|answer|{\"blocks\":[{\"type\":\"text\",\"text\":\"M9, per the protocol.\"}]}"
+    export AGENT_TEST_CAPTURE_PROMPT="$TEST_DIR/check-prompt.txt"
+    export AGENT_TEST_GENERATE_RESPONSES="${CHAT_NOTE}"$'\1'"PASS"
+
+    run "$BIN" knowledge curate-pending
+    [[ "$output" =~ "chat s1 curated -> note #" ]]
     run cat "$TEST_DIR/check-prompt.txt"
     [[ "$output" =~ "User: which medium for cotyledons?" ]]
+    [[ "$output" =~ "Research step: Checked the protocol list." ]]
+    [[ "$output" =~ "Assistant: M9, per the protocol." ]]
     [[ ! "$output" =~ "raw search output" ]]
+    [[ ! "$output" =~ "research.investigate" ]]
+    unset AGENT_TEST_CAPTURE_PROMPT
+
+    run db "SELECT source_type || '|' || source_ref || '|' || tier FROM document WHERE title = 'Cotyledon medium';"
+    [ "$output" = "curated|s1|1" ]
+    [[ "$(db "SELECT content FROM document WHERE title = 'Cotyledon medium';")" =~ "Source: [Chat: media](chat?session_id=s1)" ]]
+    [ "$(db "SELECT status FROM knowledge_conversation_curation WHERE session_id = 's1';")" = "curated" ]
+}
+
+@test "a chat waits until it has been quiet; an unchanged one isn't curated again; a changed one rewrites its note in place" {
+    old_chat s1 media "user|request|${LONG_ASK}
+assistant|answer|{\"blocks\":[{\"type\":\"text\",\"text\":\"M9, per the protocol.\"}]}"
+    db "UPDATE agent_session SET updated_at = '2999-01-01 00:00:00' WHERE id = 's1';"
+    export AGENT_TEST_GENERATE_RESPONSES="${CHAT_NOTE}"$'\1'"PASS"
+    run "$BIN" knowledge curate-pending
+    [[ ! "$output" =~ "chat s1" ]]
+
+    db "UPDATE agent_session SET updated_at = '2026-01-01 00:00:00' WHERE id = 's1';"
+    "$BIN" knowledge curate-pending >/dev/null
+    note=$(db "SELECT note_id FROM knowledge_conversation_curation WHERE session_id = 's1';")
+    [ -n "$note" ]
+
+    # Touched but not changed: not curated again.
+    db "UPDATE agent_session SET updated_at = '2026-01-02 00:00:00' WHERE id = 's1';"
+    db "UPDATE knowledge_conversation_curation SET checked_at = '2026-01-01 00:00:00' WHERE session_id = 's1';"
+    run "$BIN" knowledge curate-pending
+    [[ ! "$output" =~ "chat s1" ]]
+
+    # Changed: curated again, into the same note.
+    db "INSERT INTO agent_message (session_id, role, content, data_type, loop_kind) VALUES ('s1', 'user', 'and for hypocotyls?', 'request', 'chat');"
+    db "UPDATE agent_session SET updated_at = '2026-01-03 00:00:00' WHERE id = 's1';"
+    db "UPDATE knowledge_conversation_curation SET checked_at = '2026-01-02 00:00:00' WHERE session_id = 's1';"
+    export AGENT_TEST_GENERATE_RESPONSES=$'# Cotyledon and hypocotyl media\n\nM9 for both.'$'\1'"PASS"
+    run "$BIN" knowledge curate-pending
+    [[ "$output" =~ "chat s1 curated -> note #${note}" ]]
+    [ "$(db "SELECT title FROM document WHERE id = ${note};")" = "Cotyledon and hypocotyl media" ]
+}
+
+@test "a transcript document is no longer a source; its chat's note is taken over by the conversation's" {
+    chat=$(used_source "Chat: media" 3)
+    db "UPDATE document SET source_type = 'chat_session', source_ref = 's1' WHERE id = $chat;"
+    run "$BIN" repair curate --dry-run
+    [[ ! "$output" =~ "Chat: media" ]]
+
+    # A note from when the transcript was curated, rewritten in place.
+    "$BIN" entity create document title="Old chat note" content="old" >/dev/null
+    old_note=$(db "SELECT id FROM document WHERE title = 'Old chat note';")
+    db "INSERT INTO knowledge_curation (document_id, source_hash, status, note_id) VALUES ($chat, 'x', 'curated', $old_note);"
+    old_chat s1 media "user|request|${LONG_ASK}
+assistant|answer|{\"blocks\":[{\"type\":\"text\",\"text\":\"M9, per the protocol.\"}]}"
+    export AGENT_TEST_GENERATE_RESPONSES="${CHAT_NOTE}"$'\1'"PASS"
+    run "$BIN" knowledge curate-pending
+    [[ "$output" =~ "chat s1 curated -> note #${old_note}" ]]
+    [ "$(db "SELECT title FROM document WHERE id = ${old_note};")" = "Cotyledon medium" ]
+}
+
+@test "a chat from before decision rows reads its decided actions; a long chat keeps its newest requests and answers whole" {
+    old_chat s1 media "user|request|${LONG_ASK}
+assistant|answer|{\"blocks\":[{\"type\":\"text\",\"text\":\"M9, per the protocol.\"}]}"
+    db "INSERT INTO agent_pending_action (session_id, tool, method, args_json, status) VALUES ('s1', 'document', 'archive', '{\"id\":7}', 'denied');"
+    db "INSERT INTO agent_pending_action (session_id, tool, method, args_json, status) VALUES ('s1', 'document', 'update', '{\"id\":8}', 'pending');"
+    big=$(printf 'reasoning %s ' $(seq 1 1200))
+    for i in 1 2 3; do
+        db "INSERT INTO agent_message (session_id, role, content, data_type, loop_kind) VALUES ('s1', 'compaction_summary', 'summary $i $big', 'reasoning', 'compaction');"
+    done
+    db "INSERT INTO agent_message (session_id, role, content, data_type, loop_kind) VALUES ('s1', 'user', 'last question about M9', 'request', 'chat');"
+    db "UPDATE agent_session SET updated_at = '2026-01-01 00:00:00' WHERE id = 's1';"
+    export AGENT_TEST_CAPTURE_PROMPT="$TEST_DIR/check-prompt.txt"
+    export AGENT_TEST_GENERATE_RESPONSES="${CHAT_NOTE}"$'\1'"PASS"
+    "$BIN" knowledge curate-pending >/dev/null
+    run cat "$TEST_DIR/check-prompt.txt"
+    [[ "$output" =~ "Decision: Denied document.archive (pending action #1): {\"id\":7}" ]]
+    [[ ! "$output" =~ "document.update" ]]
+    [[ "$output" =~ "User: which medium for cotyledons?" ]]
+    [[ "$output" =~ "User: last question about M9" ]]
+    [[ "$output" =~ "[...conversation shortened to fit" ]]
+    [[ "$output" =~ "Summary of earlier conversation: summary 3" ]]
+    [[ ! "$output" =~ "Summary of earlier conversation: summary 1" ]]
     unset AGENT_TEST_CAPTURE_PROMPT
 }
