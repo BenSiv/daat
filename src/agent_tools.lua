@@ -669,36 +669,6 @@ function closest_column(guess, columns)
     return best
 end
 
--- The query's other prefixed columns that don't exist, beyond the one the
--- database reported. It stops at the first, so a query with two wrong
--- names took two failures (m.time, then m.od) when both could be named
--- at once. Only prefixes that resolve to a queryable table are judged;
--- quoted text is dropped first, so 'S.demo' in a filter isn't a column.
--- An unprefixed name can't be judged without parsing the SQL, and is left
--- to the database.
-function other_missing_columns(db_path, sql_text, aliases, allowed, reported)
-    bare_sql = string.gsub(string.lower(sql_text), "'[^']*'", "''")
-    found = {}
-    seen = {[string.lower(reported)] = true}
-    for prefix, column in string.gmatch(bare_sql, "([%a_][%w_]*)%.([%a_][%w_]*)") do
-        name = prefix .. "." .. column
-        table_name = aliases[prefix]
-        if seen[name] == nil and table_name != nil and allowed[table_name] == true then
-            seen[name] = true
-            is_real = false
-            for _, real in ipairs(db.get_columns(db_path, table_name)) do
-                if string.lower(real) == column then
-                    is_real = true
-                end
-            end
-            if is_real == false then
-                table.insert(found, {name = name, table_name = table_name})
-            end
-        end
-    end
-    return found
-end
-
 -- What to tell the model when a query fails on a column that doesn't
 -- exist (#8): the real columns, read from the database, of the table the
 -- column was meant for, and the closest one by name. A failed query used
@@ -759,18 +729,6 @@ function agent_tools.hint_table_columns(ctx, sql_text, err)
         table.sort(tables)
     end
     allowed = view.queryable_tables(ctx.db_path)
-    also_missing = other_missing_columns(ctx.db_path, sql_text, aliases, allowed, missing)
-    for _, entry in ipairs(also_missing) do
-        already = false
-        for _, name in ipairs(tables) do
-            if name == entry.table_name then
-                already = true
-            end
-        end
-        if already == false then
-            table.insert(tables, entry.table_name)
-        end
-    end
     listed = {}
     suggestion = nil
     for _, name in ipairs(tables) do
@@ -794,13 +752,6 @@ function agent_tools.hint_table_columns(ctx, sql_text, err)
         return nil
     end
     hint = "real columns -- " .. table.concat(listed, "; ")
-    if #also_missing > 0 then
-        names = {}
-        for _, entry in ipairs(also_missing) do
-            table.insert(names, entry.name)
-        end
-        hint = "also not columns: " .. table.concat(names, ", ") .. "; " .. hint
-    end
     if suggestion != nil then
         hint = "did you mean " .. suggestion .. "? " .. hint
     end
@@ -1436,25 +1387,6 @@ function entity_list(ctx, args)
     -- limit/offset) -- a plain entity.list otherwise, unchanged.
     rows = nil
     if args.filter_field != nil and args.filter_value != nil then
-        -- A guessed field used to reach the SQL and come back as "tool
-        -- crashed", with no way to tell what the real names were (#8).
-        -- The wording keeps "no such column" so the scorecard still counts
-        -- it as the failed lookup it is.
-        columns = db.get_columns(db_path, args.entity_type)
-        known = false
-        for _, column in ipairs(columns) do
-            if string.lower(column) == string.lower(tostring(args.filter_field)) then
-                known = true
-            end
-        end
-        if known == false then
-            message = "no such column: " .. tostring(args.filter_field) .. " on " .. args.entity_type .. " -- "
-            match = closest_column(tostring(args.filter_field), columns)
-            if match != nil then
-                message = message .. "did you mean " .. match .. "? "
-            end
-            return nil, message .. "real columns: " .. table.concat(columns, ", ")
-        end
         rows = entity.list_by_field(db_path, args.entity_type, args.filter_field, args.filter_value, limit, offset, false)
     else
         rows = entity.list(db_path, args.entity_type, limit, offset, false)
