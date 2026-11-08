@@ -251,8 +251,13 @@ function reference.rebuild_names(db_path)
             end
         end
     end
+    -- IGNORE: two prefixes distinct in Lua can be one value to MariaDB's
+    -- case- and accent-insensitive collation; a plain INSERT aborted the
+    -- whole repair on prod after the index was rebuilt (2026-11-08,
+    -- 'm6a1'), before any document was re-read.
     for prefix, _ in pairs(prefixes) do
-        db.exec(db_path, string.format("INSERT INTO entity_name_prefix (prefix) VALUES (%s);", db.quote(prefix)))
+        db.exec(db_path, string.format("%s entity_name_prefix (prefix) VALUES (%s);",
+            db.insert_ignore(db_path), db.quote(prefix)))
     end
     return indexed
 end
