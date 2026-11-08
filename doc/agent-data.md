@@ -85,7 +85,7 @@ Why one table and not a separate log table: the provider protocol needs every to
 
 `agent_model_call` stays the record of each call (`model_input` and `call_metrics`), with `parent_message_id` added, so research steps can be told apart and traced to their caller. Its existing `kind` already names the loop (with `wrapup` as a kind of chat call), so no second loop column is added. A sub-agent's call also links to the step it produced (`message_id`).
 
-Approvals and denials are also written as `request` rows when they happen, so the conversation alone holds what the person decided. `agent_pending_action` stays the control record. (Not built with piece 1: it lands with piece 2, whose curation is the first reader.)
+Approvals and denials are also written as `request` rows when they happen, so the conversation alone holds what the person decided. `agent_pending_action` stays the control record. (Not built with piece 1: it lands with piece 2, whose curation is the first reader. Plan: `doc/approval-request-rows.md`.)
 
 ## Reasoning capture
 
