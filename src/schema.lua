@@ -1246,9 +1246,9 @@ function schema.is_registered(db_path, entity_type)
     return rows != nil and #rows > 0
 end
 
--- Plain Levenshtein edit distance -- only used below to guess an intended
--- entity type name, never on a performance-sensitive path, so no need for
--- anything fancier.
+-- Plain Levenshtein edit distance -- used to guess an intended entity type
+-- name (below) and column name (agent_tools.lua's closest_column), never
+-- on a performance-sensitive path, so no need for anything fancier.
 function levenshtein(a, b)
     la, lb = #a, #b
     if la == 0 then
@@ -1274,6 +1274,8 @@ function levenshtein(a, b)
     end
     return prev[lb]
 end
+
+schema.levenshtein = levenshtein
 
 -- Best-guess registered entity type for a name that turned out not to be
 -- registered -- e.g. an agent (or API caller) passing the plural "samples"

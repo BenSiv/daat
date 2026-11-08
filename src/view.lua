@@ -657,6 +657,64 @@ function cte_names(sql_text)
     return names
 end
 
+-- Words that can follow a FROM/JOIN table name without being its alias.
+SQL_CLAUSE_WORDS = {
+    ["as"] = true, where = true, on = true, using = true, join = true, left = true, right = true,
+    inner = true, outer = true, cross = true, full = true, natural = true, group = true,
+    order = true, limit = true, offset = true, union = true, having = true, window = true,
+}
+
+-- view.query_aliases(sql_text) -> {name = table}: every table a FROM or
+-- JOIN clause names, under its own name and under its alias
+-- ("FROM experiment e", "JOIN project AS p", "FROM a x, b y"), all
+-- lowercased. For telling the model, when a query fails on a column,
+-- which table that column's prefix stands for (#8). The same
+-- string-matching rigor as referenced_table_names above, not a parser:
+-- a subquery in FROM is skipped, not resolved.
+function view.query_aliases(sql_text)
+    lowered = string.lower(tostring(sql_text))
+    aliases = {}
+    for _, keyword in ipairs({"from", "join"}) do
+        start = 1
+        while true do
+            s, e = string.find(lowered, "%f[%a]" .. keyword .. "%f[%A]%s+", start)
+            if s == nil then
+                break
+            end
+            pos = e
+            while true do
+                tail = string.sub(lowered, pos + 1)
+                _, name_end, table_name = string.find(tail, "^([%a_][%w_]*)")
+                if table_name == nil then
+                    break
+                end
+                aliases[table_name] = table_name
+                consumed = name_end
+                after = string.sub(tail, name_end + 1)
+                alias = nil
+                _, alias_end, alias = string.find(after, "^%s+as%s+([%a_][%w_]*)")
+                if alias == nil then
+                    _, alias_end, alias = string.find(after, "^%s+([%a_][%w_]*)")
+                    if alias != nil and SQL_CLAUSE_WORDS[alias] == true then
+                        alias = nil
+                    end
+                end
+                if alias != nil then
+                    aliases[alias] = table_name
+                    consumed = name_end + alias_end
+                end
+                _, comma_end = string.find(string.sub(tail, consumed + 1), "^%s*,%s*")
+                if comma_end == nil then
+                    break
+                end
+                pos = pos + consumed + comma_end
+            end
+            start = e + 1
+        end
+    end
+    return aliases
+end
+
 -- Registered entity tables plus the storage tables that hold their
 -- own multi-valued/polymorphic field values -- entity data the model can
 -- already read one row at a time via entity.get, just not joinable in
