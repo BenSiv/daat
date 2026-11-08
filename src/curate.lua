@@ -15,6 +15,14 @@
 -- last saw and how that went (pending, curated, nothing, rejected,
 -- failed). A source is curated again only once its content changes,
 -- and its existing note is then rewritten in place.
+--
+-- A long source is also curated in parts (doc/aspect-retrieval-plan.md):
+-- when searches keep finding it through one of its aspects -- a subject
+-- past the start its own vector covers -- that aspect's passages are
+-- curated into a note of their own, one row per aspect in
+-- knowledge_aspect_curation. That is how the parts past
+-- CURATE_INPUT_MAX_CHARS of a long source reach a note: one subject at a
+-- time, through use.
 
 db = require("database")
 document = require("document")
@@ -64,6 +72,16 @@ end
 
 CURATE_CHECK_SYSTEM_PROMPT = """
 You check a curated note against the source it was written from. Reply PASS if every statement in the note is supported by the source, it adds nothing the source doesn't say, and it's clearly cleaner and more useful to a reader than the raw source. A long source may be cut, with a line saying so; the note was written from the part shown, so judge it against that part only. Otherwise reply FAIL: followed by one short reason. Reply with nothing else.
+"""
+
+-- Said after the curate prompt when the source shown is one part of a
+-- long document (an aspect), not the whole of it.
+CURATE_ASPECT_RULE = """
+The source below is one part of a longer document: its passages about one subject, in document order, with "[...]" where text in between was left out. Write the note about this part only, titled by its own subject, not the whole document's.
+"""
+
+CURATE_ASPECT_CHECK_RULE = """
+The source shown is one part of a longer document; judge the note against that part only.
 """
 
 -- Sources curate reads: synced files and pages (no source_type) and
@@ -169,14 +187,75 @@ function curate_source_line(db_path, doc)
     return "Source: " .. ref
 end
 
+-- Drafts a note from `text`, checks it against the same text, and
+-- writes it (rewriting `note_id` in place when there is one). Returns
+-- the status ("curated", "nothing", "rejected", "failed"), the note id,
+-- and the reason when there is one.
+function write_note(db_path, author, doc, text, system_prompt, check_prompt, note_id, source_line, source_ref)
+    agent_provider = require("agent_provider")
+    draft, err = agent_provider.generate(nil, system_prompt, "Title: " .. tostring(doc.title) .. "\n\n" .. text)
+    if draft == nil then
+        return "failed", note_id, tostring(err)
+    end
+    draft = string.gsub(draft, "^%s+", "")
+    draft = string.gsub(draft, "%s+$", "")
+    if draft == "" or string.sub(draft, 1, 7) == "NOTHING" then
+        why = string.gsub(string.sub(draft, 8), "^:?%s*", "")
+        if why == "" then
+            why = nil
+        end
+        return "nothing", note_id, why
+    end
+
+    -- The check sees exactly what the writer saw, cut line included.
+    -- Found in production 2026-10-28: cutting it again here dropped
+    -- that line, and the check rejected a faithful note on a 200k
+    -- character book for covering more than the "truncated" text.
+    verdict, err = agent_provider.generate(nil, check_prompt, "Note:\n" .. draft .. "\n\nSource:\n" .. text)
+    if verdict == nil then
+        return "failed", note_id, tostring(err)
+    end
+    verdict = string.gsub(verdict, "^%s+", "")
+    if string.sub(verdict, 1, 4) != "PASS" then
+        reason = string.gsub(verdict, "^FAIL:?%s*", "")
+        return "rejected", note_id, string.sub(reason, 1, 500)
+    end
+
+    title, body = curate_note_title(draft)
+    body = body .. "\n\n" .. source_line
+    if note_id != nil and knowledge.get_document(db_path, note_id) != nil then
+        ok, issues = document.update_page(db_path, author, note_id, title, nil, body, nil)
+        if ok == nil then
+            return "failed", note_id, "could not update the note"
+        end
+        db.exec(db_path, string.format("UPDATE document SET content_hash = %s WHERE id = %d;",
+            db.quote(document.content_hash(body)), note_id))
+    else
+        note_id, issues = knowledge.create_document_note(db_path, author, title, body, "curated", doc.id, source_ref)
+        if note_id == nil then
+            return "failed", nil, "could not create the note"
+        end
+    end
+    knowledge.set_tier(db_path, note_id, 1)
+    return "curated", note_id, nil
+end
+
+-- A live, curatable source, or nil.
+function curate_source_doc(db_path, document_id)
+    doc = knowledge.get_document(db_path, tonumber(document_id))
+    if doc == nil or (doc.archived_at != nil and doc.archived_at != "") or not curate.is_source(doc) then
+        return nil
+    end
+    return doc
+end
+
 -- Curates one source now. Returns the status written: "curated",
 -- "nothing" (the agent found nothing to keep), "rejected" (the check
 -- failed), "failed" (a model call failed), or "skipped" (too short or
 -- not a source), and the note id when one was written.
 function curate.run(db_path, document_id, author)
-    agent_provider = require("agent_provider")
-    doc = knowledge.get_document(db_path, tonumber(document_id))
-    if doc == nil or (doc.archived_at != nil and doc.archived_at != "") or not curate.is_source(doc) then
+    doc = curate_source_doc(db_path, document_id)
+    if doc == nil then
         db.exec(db_path, string.format("DELETE FROM knowledge_curation WHERE document_id = %d;", tonumber(document_id)))
         return "skipped", nil
     end
@@ -191,60 +270,135 @@ function curate.run(db_path, document_id, author)
         curate_record(db_path, doc.id, hash, "nothing", note_id, "too little text")
         return "nothing", nil
     end
-
-    draft, err = agent_provider.generate(nil, curate.system_prompt(), "Title: " .. tostring(doc.title) .. "\n\n" .. text)
-    if draft == nil then
-        curate_record(db_path, doc.id, hash, "failed", note_id, tostring(err))
-        return "failed", nil
+    status, note_id, reason = write_note(db_path, author, doc, text, curate.system_prompt(), CURATE_CHECK_SYSTEM_PROMPT,
+        note_id, curate_source_line(db_path, doc), nil)
+    curate_record(db_path, doc.id, hash, status, note_id, reason)
+    if status == "curated" then
+        return status, note_id
     end
-    draft = string.gsub(draft, "^%s+", "")
-    draft = string.gsub(draft, "%s+$", "")
-    if draft == "" or string.sub(draft, 1, 7) == "NOTHING" then
-        why = string.gsub(string.sub(draft, 8), "^:?%s*", "")
-        if why == "" then
-            why = nil
+    return status, nil
+end
+
+--------------------------------------------------------------------------
+-- Curating one aspect of a long source
+--------------------------------------------------------------------------
+
+-- What the agent reads of an aspect: its passages in document order,
+-- each led by its heading, "[...]" where the document skips text
+-- between them; cut to the input cap. Returns the text and where the
+-- aspect's most central passage starts, or nil when the aspect is gone.
+function curate.aspect_text(db_path, document_id, n)
+    part = require("aspect").passages(db_path, document_id, n)
+    if part == nil then
+        return nil
+    end
+    pieces = {}
+    previous_end = nil
+    for _, p in ipairs(part.passages) do
+        if previous_end != nil and p.offset > previous_end + 1 then
+            table.insert(pieces, "[...]")
         end
-        curate_record(db_path, doc.id, hash, "nothing", note_id, why)
+        text = p.text
+        if p.heading != nil and string.sub(text, 1, string.len(p.heading)) != p.heading then
+            text = p.heading .. "\n" .. text
+        end
+        table.insert(pieces, (string.gsub(string.gsub(text, "^%s+", ""), "%s+$", "")))
+        previous_end = p.offset + string.len(p.text) - 1
+    end
+    text = table.concat(pieces, "\n\n")
+    if string.len(text) > CURATE_INPUT_MAX_CHARS then
+        text = string.sub(text, 1, CURATE_INPUT_MAX_CHARS) ..
+            "\n\n[...part cut here, showing the first " .. tostring(CURATE_INPUT_MAX_CHARS) .. " characters...]"
+    end
+    return text, part.passage_offset
+end
+
+function aspect_curate_row(db_path, document_id, n)
+    rows = db.query(db_path, string.format(
+        "SELECT * FROM knowledge_aspect_curation WHERE document_id = %d AND aspect = %d;", tonumber(document_id), tonumber(n)))
+    if rows == nil then
+        return nil
+    end
+    return rows[1]
+end
+
+function aspect_curate_record(db_path, document_id, n, source_hash, status, note_id, reason)
+    db.exec(db_path, string.format("DELETE FROM knowledge_aspect_curation WHERE document_id = %d AND aspect = %d;",
+        tonumber(document_id), tonumber(n)))
+    db.exec(db_path, string.format(
+        "INSERT INTO knowledge_aspect_curation (document_id, aspect, source_hash, status, note_id, reason) VALUES (%d, %d, %s, %s, %s, %s);",
+        tonumber(document_id), tonumber(n), db.quote(source_hash), db.quote(status), db.literal(note_id), db.literal(reason)))
+end
+
+-- Queues aspect `n` of a source unless this version of that part is
+-- already queued or done. Returns true when it queued.
+function curate.queue_aspect(db_path, doc, n)
+    if not curate.is_source(doc) then
+        return false
+    end
+    text = curate.aspect_text(db_path, doc.id, n)
+    if text == nil then
+        return false
+    end
+    hash = document.content_hash(text)
+    row = aspect_curate_row(db_path, doc.id, n)
+    if row != nil and row.source_hash == hash then
+        return false
+    end
+    note_id = nil
+    if row != nil then
+        note_id = row.note_id
+    end
+    aspect_curate_record(db_path, doc.id, n, hash, "pending", note_id, nil)
+    return true
+end
+
+-- Curates aspect `n` of a source now; the same outcomes as curate.run.
+-- An aspect gone since it was queued (the document changed and its
+-- aspects were rebuilt) comes to "nothing", keeping any note it had.
+function curate.run_aspect(db_path, document_id, n, author)
+    doc = curate_source_doc(db_path, document_id)
+    if doc == nil then
+        db.exec(db_path, string.format("DELETE FROM knowledge_aspect_curation WHERE document_id = %d AND aspect = %d;",
+            tonumber(document_id), tonumber(n)))
+        return "skipped", nil
+    end
+    previous = aspect_curate_row(db_path, doc.id, n)
+    note_id = nil
+    hash = ""
+    if previous != nil then
+        note_id = tonumber(previous.note_id)
+        hash = previous.source_hash
+    end
+    text, offset = curate.aspect_text(db_path, doc.id, n)
+    if text == nil then
+        aspect_curate_record(db_path, doc.id, n, hash, "nothing", note_id, "the aspect no longer exists")
         return "nothing", nil
     end
+    hash = document.content_hash(text)
+    if string.len(text) < CURATE_MIN_CHARS then
+        aspect_curate_record(db_path, doc.id, n, hash, "nothing", note_id, "too little text")
+        return "nothing", nil
+    end
+    source_line = curate_source_line(db_path, doc) .. ", the part at character " .. tostring(offset)
+    status, note_id, reason = write_note(db_path, author, doc, text,
+        curate.system_prompt() .. CURATE_ASPECT_RULE, CURATE_CHECK_SYSTEM_PROMPT .. CURATE_ASPECT_CHECK_RULE,
+        note_id, source_line, "aspect " .. tostring(n))
+    aspect_curate_record(db_path, doc.id, n, hash, status, note_id, reason)
+    if status == "curated" then
+        return status, note_id
+    end
+    return status, nil
+end
 
-    -- The check sees exactly what the writer saw, cut line included.
-    -- Found in production 2026-10-28: cutting it again here dropped
-    -- that line, and the check rejected a faithful note on a 200k
-    -- character book for covering more than the "truncated" text.
-    verdict, err = agent_provider.generate(nil, CURATE_CHECK_SYSTEM_PROMPT,
-        "Note:\n" .. draft .. "\n\nSource:\n" .. text)
-    if verdict == nil then
-        curate_record(db_path, doc.id, hash, "failed", note_id, tostring(err))
-        return "failed", nil
+function new_claim_token()
+    urandom = io.open("/dev/urandom", "rb")
+    if urandom == nil then
+        return nil
     end
-    verdict = string.gsub(verdict, "^%s+", "")
-    if string.sub(verdict, 1, 4) != "PASS" then
-        reason = string.gsub(verdict, "^FAIL:?%s*", "")
-        curate_record(db_path, doc.id, hash, "rejected", note_id, string.sub(reason, 1, 500))
-        return "rejected", nil
-    end
-
-    title, body = curate_note_title(draft)
-    body = body .. "\n\n" .. curate_source_line(db_path, doc)
-    if note_id != nil and knowledge.get_document(db_path, note_id) != nil then
-        ok, issues = document.update_page(db_path, author, note_id, title, nil, body, nil)
-        if ok == nil then
-            curate_record(db_path, doc.id, hash, "failed", note_id, "could not update the note")
-            return "failed", nil
-        end
-        db.exec(db_path, string.format("UPDATE document SET content_hash = %s WHERE id = %d;",
-            db.quote(document.content_hash(body)), note_id))
-    else
-        note_id, issues = knowledge.create_document_note(db_path, author, title, body, "curated", doc.id, nil)
-        if note_id == nil then
-            curate_record(db_path, doc.id, hash, "failed", nil, "could not create the note")
-            return "failed", nil
-        end
-    end
-    knowledge.set_tier(db_path, note_id, 1)
-    curate_record(db_path, doc.id, hash, "curated", note_id, nil)
-    return "curated", note_id
+    raw = io.read(urandom, 8)
+    io.close(urandom)
+    return (string.gsub(raw, ".", function(c) return string.format("%02x", string.byte(c)) end))
 end
 
 -- Takes a queued source for this process: pending -> running, marked
@@ -254,13 +408,10 @@ end
 -- `repair curate` batch and wrote a second note for one source. A row
 -- left running by a process that died is retried by `--recheck`.
 function curate_claim(db_path, document_id)
-    urandom = io.open("/dev/urandom", "rb")
-    if urandom == nil then
+    token = new_claim_token()
+    if token == nil then
         return false
     end
-    raw = io.read(urandom, 8)
-    io.close(urandom)
-    token = string.gsub(raw, ".", function(c) return string.format("%02x", string.byte(c)) end)
     db.exec(db_path, string.format(
         "UPDATE knowledge_curation SET status = 'running', reason = %s WHERE document_id = %d AND status = 'pending';",
         db.quote(token), document_id))
@@ -268,7 +419,21 @@ function curate_claim(db_path, document_id)
     return row != nil and row.status == "running" and row.reason == token
 end
 
--- Runs up to `limit` queued sources, oldest first. Returns report lines.
+-- curate_claim for one aspect's row.
+function aspect_curate_claim(db_path, document_id, n)
+    token = new_claim_token()
+    if token == nil then
+        return false
+    end
+    db.exec(db_path, string.format(
+        "UPDATE knowledge_aspect_curation SET status = 'running', reason = %s WHERE document_id = %d AND aspect = %d AND status = 'pending';",
+        db.quote(token), document_id, n))
+    row = aspect_curate_row(db_path, document_id, n)
+    return row != nil and row.status == "running" and row.reason == token
+end
+
+-- Runs up to `limit` queued sources, oldest first, then queued aspects
+-- with what's left of the limit. Returns report lines.
 function curate.run_pending(db_path, limit, author)
     if limit == nil then
         limit = 5
@@ -278,12 +443,34 @@ function curate.run_pending(db_path, limit, author)
         tonumber(limit)))
     lines = {}
     if rows == nil then
-        return lines
+        rows = {}
     end
     for _, row in ipairs(rows) do
         if curate_claim(db_path, tonumber(row.document_id)) then
             status, note_id = curate.run(db_path, tonumber(row.document_id), author)
             line = string.format("#%d %s", tonumber(row.document_id), status)
+            if note_id != nil then
+                line = line .. " -> note #" .. tostring(note_id)
+            end
+            table.insert(lines, line)
+        end
+    end
+    left = tonumber(limit) - #rows
+    if left <= 0 then
+        return lines
+    end
+    aspect_rows = db.query(db_path, string.format(
+        "SELECT document_id, aspect FROM knowledge_aspect_curation WHERE status = 'pending' ORDER BY queued_at, document_id, aspect LIMIT %d;",
+        left))
+    if aspect_rows == nil then
+        return lines
+    end
+    for _, row in ipairs(aspect_rows) do
+        id = tonumber(row.document_id)
+        n = tonumber(row.aspect)
+        if aspect_curate_claim(db_path, id, n) then
+            status, note_id = curate.run_aspect(db_path, id, n, author)
+            line = string.format("#%d aspect %d %s", id, n, status)
             if note_id != nil then
                 line = line .. " -> note #" .. tostring(note_id)
             end

@@ -580,6 +580,37 @@ SELECT * FROM task
     [[ "$output" =~ "tool crashed" ]]
 }
 
+@test "a tool name nothing declares gets an error result, and the loop goes on to answer" {
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    # An invented group and a name without a group, in one step.
+    scripted="$(multi_tool_call_response "widgets.frobnicate" '{}' "frobnicate" '{}')"$'\1'"$(done_response "Answered anyway.")"
+    run raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"get it\"}" "$COOKIE" "$CSRF" "$scripted"
+    [[ "$(json_body "$output" | jq -r '.messages[-1].content')" =~ "Answered anyway." ]]
+
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT content FROM agent_message WHERE session_id = '${session_id}' AND role = 'tool_result' ORDER BY id;"
+    [ "${#lines[@]}" -eq 2 ]
+    [[ "${lines[0]}" =~ "ERROR: unknown tool widgets.frobnicate" ]]
+    [[ "${lines[0]}" =~ '"is_error":true' ]]
+    [[ "${lines[1]}" =~ "ERROR: unknown tool frobnicate" ]]
+}
+
+@test "inside research.investigate, a tool name nothing declares is an error result, and the sub-agent goes on" {
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(tool_call_response "research.investigate" '{"question":"what types exist"}')"$'\1'"$(tool_call_response "widgets.frobnicate" '{}')"$'\1'"$(done_response "There is a task type.")"$'\1'"$(done_response "Found it: task.")"
+    run raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"investigate\"}" "$COOKIE" "$CSRF" "$scripted"
+    [[ "$(json_body "$output" | jq -r '.messages[-1].content')" =~ "Found it: task." ]]
+    # The sub-agent's own steps live in memory; its next model call is
+    # recorded with the prompt it was sent, error result included.
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM agent_model_call WHERE session_id = '${session_id}' AND kind = 'research' AND prompt LIKE '%ERROR: unknown tool widgets.frobnicate%';"
+    [ "$output" -eq 1 ]
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "There is a task type." ]]
+}
+
 @test "entity.query refuses any table that isn't a registered entity type, even a real internal one" {
     resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
     session_id=$(extract_query_param "$resp" "session_id")
@@ -1291,6 +1322,16 @@ EOF
         [ "$(sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM document WHERE title = '${title}';")" -eq 0 ]
     done
     [ "$(sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM document WHERE title = 'from the row';")" -eq 1 ]
+}
+
+@test "the turn loop beats the turn's heartbeat before every step and after every tool it runs" {
+    export AGENT_TEST_RESPONSES="$(multi_tool_call_response "entity.list_types" '{}' "entity.relationships" '{}')"$'\1'"$(done_response "Done.")"
+    run_luam "${PROJECT_ROOT}/tst/integration/lua/turn_heartbeats.lua"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "status: done" ]]
+    # Step 1: a beat, the model call, then a beat after each of its two
+    # tools. Step 2: a beat, the answer, its self-check.
+    [[ "$output" =~ "events: beat model tool:entity.list_types beat tool:entity.relationships beat beat model check" ]]
 }
 
 # An approve and a deny racing: whichever wins, the other does nothing --

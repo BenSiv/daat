@@ -135,3 +135,32 @@ one_turn() {
     first=$(printf '%s' "$output" | jq -r '.[0].content')
     [[ "$first" =~ ^"[COMPACTED HISTORY SUMMARY]" ]]
 }
+
+@test "a summary carries only the last 3 compacted requests, each capped at 800 characters, and the summarizer sees tool arguments capped at 800" {
+    write_platform_config ", agent_compaction_threshold = 1000000"
+    long_text=$(printf 'L%.0s' $(seq 1 1000))
+    long_sql="SELECT $(printf 'q%.0s' $(seq 1 1000))"
+    one_turn "request one" "document"
+    one_turn "request two" "document"
+    one_turn "request three" "document"
+    send "request four ${long_text}" "$(tool_call_response "entity.query" "{\"sql\":\"${long_sql}\"}")"$'\1'"$(done_response "ok.")"
+    # The last turn reports a large prompt, so the next one compacts
+    # everything before its kept tail: requests one to four, and five.
+    AGENT_TEST_PROMPT_TOKENS=50000 one_turn "request five" "document"
+    write_platform_config ", agent_compaction_threshold = 20000"
+    send "continue" "$(done_response "ok")"
+
+    summary=$(sqlite3 "$DB" "SELECT content FROM agent_message WHERE session_id = '${CHAT}' AND role = 'compaction_summary' AND in_context = 1;")
+    requests=$(printf '%s\n' "$summary" | grep '^- request ')
+    [ "$(printf '%s\n' "$requests" | wc -l)" -eq 3 ]
+    [ "$(printf '%s\n' "$requests" | sed -n 1p)" = "- request three" ]
+    [ "$(printf '%s\n' "$requests" | sed -n 3p)" = "- request five" ]
+    # "request four " is 13 characters: 800 kept, 213 cut.
+    four=$(printf '%s\n' "$requests" | sed -n 2p)
+    [ "$four" = "- request four $(printf 'L%.0s' $(seq 1 787)) ...[truncated, 213 more chars]" ]
+
+    # The summarizer's own input: the query's arguments,
+    # {"sql":"SELECT q...q"} (1,017 characters), are cut at 800.
+    prompt=$(sqlite3 "$DB" "SELECT prompt FROM agent_model_call WHERE session_id = '${CHAT}' AND kind = 'compaction';")
+    [[ "$prompt" =~ "-> entity.query({\"sql\":\"SELECT $(printf 'q%.0s' $(seq 1 785)) ...[truncated, 217 more chars])" ]]
+}

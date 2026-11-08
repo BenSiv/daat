@@ -42,6 +42,7 @@ function new_test_db(document_count)
     -- What on_entity_archived clears (document.drop_derived).
     db.exec(db_path, "CREATE TABLE document_embedding (document_id INTEGER PRIMARY KEY);")
     db.exec(db_path, "CREATE TABLE document_embedding_due (document_id INTEGER PRIMARY KEY, queued_at TEXT);")
+    db.exec(db_path, "CREATE TABLE document_aspect (document_id INTEGER, aspect INTEGER);")
     db.exec(db_path, "CREATE TABLE document_mention (document_id INTEGER);")
     db.exec(db_path, "CREATE TABLE document_link_sync (document_id INTEGER PRIMARY KEY, content_hash VARCHAR(64) NOT NULL);")
     -- Read by on_entity_archived's tag hook (src/tag.lua): no rows, so

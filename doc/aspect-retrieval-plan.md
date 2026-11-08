@@ -67,15 +67,16 @@ Table document_aspect {          // derived; safe to empty, rebuilt by the embed
   document_id integer [pk]
   model varchar(128) [pk]        // embedding model, as document_embedding
   aspect integer [pk]            // 1..k
-  vector_packed longblob [not null]  // L2-normalised; float32, or int8 if the gate shows no loss
+  vector_packed blob [not null]  // int8, scaled by its largest component; renormalised on read
   passage_offset integer [not null]  // first character of the medoid passage
   passage_count integer [not null]   // passages in the group
+  member_offsets text [not null]     // where each of the group's passages starts, comma-separated
   text_hash varchar(64) [not null]   // of the embedding text it was built from
   updated_at text
 }
 ```
 
-One more built-in table (37 → 38). Archiving a document drops its aspects (`document.drop_derived`). It isn't visible to `entity.query`, and its columns are described for `/sql`.
+One more built-in table (37 → 38; 39 with `knowledge_aspect_curation`, commit 5). Archiving a document drops its aspects (`document.drop_derived`). Like `document_passage_cache`, neither is visible to `entity.query`.
 
 ### Search
 
@@ -96,11 +97,14 @@ The arithmetic is cheap. Moving the bytes may not be: today's stage 1 already ta
 ### Curation from aspects
 
 - `knowledge_retrieval_hit` gets `aspect` (null when the document's own vector or words found it).
-- `curate.queue` takes an optional aspect. A source can have one curation per aspect next to its whole-source one (`knowledge_curation` keyed by document and aspect).
-- An aspect is due on the same rule a source is (`due_for_review`: retrieved through that aspect twice, or hot).
-- The curate input for an aspect is that group's passages in document order, each with its heading, within `CURATE_INPUT_MAX_CHARS`. The prompt gets one line more: the note is about this part of the source, titled by its own subject.
-- The check (`CURATE_CHECK_SYSTEM_PROMPT`) compares the note with those passages, as it compares a whole-source note with the part shown.
-- The note links to the source as today, and records the aspect's offset in its source line, so a reader can go to that place.
+- Each aspect stores its member passages (`member_offsets`), so curating it reads exactly that group: `aspect.passages` re-splits the content and picks them out by offset.
+- A source can have one curation per aspect next to its whole-source one: a table of its own, `knowledge_aspect_curation` (keyed by document and aspect, with the same columns as `knowledge_curation`). A separate table, not a new key on `knowledge_curation`, so the existing table and its queries don't change.
+- An aspect is due once searches found the document through it twice (`due_for_review` on that aspect's hit count; heat is per document, so it doesn't count here). Review queues it (`curate.queue_aspect`) next to the whole-source queueing; `curate_aspects` turns this off.
+- The curate input for an aspect is that group's passages in document order, each with its heading, `[...]` where the document skips text between them, within `CURATE_INPUT_MAX_CHARS`. The prompt gets one rule more (`CURATE_ASPECT_RULE`): the note is about this part of the source, titled by its own subject.
+- The check (`CURATE_CHECK_SYSTEM_PROMPT` plus `CURATE_ASPECT_CHECK_RULE`) compares the note with those passages only.
+- The note is a tier-1 `curated` document with the source as `source_id` and `source_ref` = `aspect N`, and its source line ends with ", the part at character N", so a reader can go to that place.
+- The source's hash for an aspect is of the part's text: an edit elsewhere in the document doesn't re-curate it. If aspects are rebuilt and the queued one is gone, the run records `nothing` ("the aspect no longer exists") and keeps any note it had. Aspect numbers can shift when a document is rebuilt; the next curation of that number rewrites its note in place.
+- `daat knowledge curate-pending N` runs queued whole sources first, then queued aspects with what's left of N.
 
 This also fixes the 40k cut for long sources: parts past it become reachable one subject at a time, through use.
 
@@ -108,11 +112,15 @@ This also fixes the 40k cut for long sources: parts past it become reachable one
 
 | Setting | Default | |
 |---|---|---|
-| `search_aspects` | `false` until the gate, then the gate's result | aspects in stage 1, for the agent and the page alike |
-| `aspect_min_chars` | 7000 | documents longer than this get aspects |
-| `aspect_max` | from the gate (4-16) | most aspects per document |
-| `aspect_dims` | from the gate (768 or 256) | dimensions stored per aspect |
-| `curate_aspects` | `true` with `search_aspects` | aspect hits queue curation of that part |
+| `build_aspects` | `false` | the embedding job keeps aspects current (`daat repair aspects` builds them regardless, for the backfill) |
+| `search_aspects` | `false`; on per deployment after the backfill (the gate passed) | aspects in stage 1, for the agent and the page alike |
+| `aspect_min_chars` | 7000 | documents whose embedding text is longer than this get aspects |
+| `aspect_max` | 4 (gate: k ≤ 8 or 16 gained nothing measurable) | most aspects per document |
+| `aspect_dims` | 0 (all; gate: 256 cost ~2 points) | dimensions stored per aspect |
+| `aspect_vector` | `centroid` (gate: within noise of `medoid`, slightly ahead on deep questions) | an aspect's vector: its most central passage (`medoid`) or the group's mean (`centroid`) |
+| `curate_aspects` | `true` with `search_aspects` | aspect hits queue curation of that part (commit 5) |
+
+Rollout: `build_aspects` on, `daat repair aspects --limit N` until the backfill is done, then `search_aspects` on. Changing `aspect_max`, `aspect_dims`, `aspect_vector` or the passage sizes makes every document's aspects stale (they're hashed with the content), and `daat repair aspects` rebuilds them; passage vectors come from the cache, so a rebuild embeds only passages whose cache entries have expired (`passage_cache_days`).
 
 ## Gate: a recall test on prod data, before building
 
@@ -130,16 +138,45 @@ The design rests on one number: how often a question about a deep, off-topic par
 
 Cost: embedding every passage of the pool once (~150 M characters, ~130k passages; about $4 at text-embedding-005's list price), ~160 model calls for the questions, and ~20 min of embedding time. The passage vectors are the same ones the build would make, so they aren't wasted if the gate passes.
 
+### Result (prod, 2026-11-05)
+
+3,094 long documents, 111,312 passages (145 M characters). 94 deep questions (of 170 sampled passages, the rest skipped as boilerplate or found too few per document) and 40 controls, written by Gemini 2.5 Flash; questions in other words than the passage. Stage 1 replicated offline. Hit rate, top 5 (agent) / top 10 (page):
+
+| Variant | Extra vectors | Deep | Controls |
+|---|---|---|---|
+| today | 0 | 54.3 / 60.6 | 60.0 / 67.5 |
+| own vector = mean of passages | 0 | 68.1 / 75.5 | 70.0 / 75.0 |
+| aspects k ≤ 4, medoid | 12,122 | 68.1 / 76.6 | 72.5 / 75.0 |
+| **aspects k ≤ 4, centroid** | **12,122** | **71.3 / 79.8** | **70.0 / 77.5** |
+| aspects k ≤ 8, medoid | 18,123 | 72.3 / 76.6 | 70.0 / 75.0 |
+| aspects k ≤ 8, centroid | 18,123 | 72.3 / 78.7 | 65.0 / 77.5 |
+| aspects k ≤ 16, medoid / centroid | 18,855 | 71.3 / 76.6-79.8 | 65.0-70.0 / 75.0-77.5 |
+| aspects k ≤ 8, medoid, int8/768 | 18,123 | 72.3 / 76.6 | 70.0 / 75.0 |
+| aspects k ≤ 8, medoid, int8/256 | 18,123 | 70.2 / 74.5 | 72.5 / 77.5 |
+| every passage (ceiling) | 111,312 | 70.2 / 81.9 | 67.5 / 82.5 |
+
+Reading it (one deep question is ~1 point, so differences under ~5 points between variants are noise; the gap to today is not):
+- **Aspects recover ~17 points on deep questions** (54 → 71 top 5, 61 → 80 top 10), within ~2 points of the ceiling, and **controls don't drop** (they rise: a long document's start is also better matched once its later sections aren't the only thing missing).
+- **k ≤ 4 is enough.** Most long documents have 30 passages (median; p90 65), so √n caps at 6-8 and k ≤ 8 or 16 adds 50% more vectors for no measurable gain.
+- **Centroid vs medoid, int8 vs float:** within noise. int8 at 768 dimensions is lossless here; cutting to 256 costs ~2 points, so keep 768 (k ≤ 4 int8/768 is ~9 MB per search, against today's 24 MB of document vectors).
+- **The mean of passages, as the document's own vector, gets most of it (68 / 76) with no extra vectors.** It is the truncation fix alone. It changes the vector tags, links, dedup and distillation use, so it's a separate decision (see "Not now"); aspects get the same recall without touching those, and give curation its signal.
+- **Replay** (53 distinct real queries since 2026-10-06; traffic is low): aspects k ≤ 4 change the top 5 for 68% of queries, 54 new entries, 50 of them long documents. No document dominates: the most frequent newcomer is in 4 of 53 queries. A read of the new entries found them on topic (cacao genetics and agronomy papers for a cacao-geography query, lipid papers for lipid queries, the R&D meeting decks for "R&D meeting slides"). int8/256 changes more (87%), a sign of noisier matching.
+
+**Decision:** aspects pass. `aspect_max` = 4, `aspect_vector` = centroid, `aspect_dims` = 0 (int8, all 768). `search_aspects` and `build_aspects` stay off in the code defaults and are turned on per deployment after the backfill (rollout above).
+
+Found on the way: Vertex's embedding request is capped at 20,000 tokens, and dense text runs ~1.4 characters per token, so daat's 30,000-character batches can be rejected whole; `vertex_embed_range` now halves such a batch (fixed in this branch, also affects stage 2 on main).
+
 ## Commits, in order
 
 On `feature/aspect-retrieval`, each tested on its own:
 
-1. **The gate** (above). Numbers into this doc, `aspect_max` and `aspect_dims` set from them. No daat code.
+1. **The gate** (above). Done 2026-11-05: aspects pass; `aspect_max` 4, centroid, int8/768.
 2. **Clustering and the table:** k-means and medoids as pure functions (`src/aspect.lua`), unit-tested; `document_aspect` on SQLite and MySQL; int8/256 packing next to `document.pack_vector`.
 3. **Building:** `embed_pending` builds aspects; `daat repair aspects` backfills (batched, resumable, capped per run); archiving drops them.
 4. **Search:** `semantic_ranking` reads aspects behind `search_aspects`; results carry `aspect` and `passage_offset`; retrieval hits record the aspect.
-5. **Curation from aspects:** queue, input, prompt line, check; per-aspect `knowledge_curation` rows.
+5. **Curation from aspects:** queue, input, prompt line, check; per-aspect rows in `knowledge_aspect_curation`.
 6. **Scorecard scenarios and docs,** then the backfill and deploy, with your OK.
+   - Scenario `facilities-deep-aspect`: an 11k-character facilities manual whose last section (mycoplasma screening, past the embedding cut) answers a question sharing no words with it; the demo lab's loader builds aspects for every run, so `--extra 'search_aspects = true'` compares the two over the same lab. Live, 3 runs each (2026-11-05, gemini-3.5-flash-lite): solved either way, because the agent rewrites the question ("mycoplasma") until keywords find the manual; with aspects it got there in 4 searches and 50k tokens per run instead of 7.3 and 95k. `handbook-deep-passage` (short document) unchanged, ~20k tokens.
 
 ## Tests
 
@@ -160,13 +197,14 @@ On `feature/aspect-retrieval`, each tested on its own:
 - `doc/passage-retrieval.md`: stage 1 now scores by the best of a document's vector and its aspects, and the 2,048-token cut is stated.
 - `doc/tier-curation-ladder.md`: curation per aspect, next to per source.
 - `doc/architecture.md`: the semantic search bullet, the settings.
-- `doc/schema-revision.md`: the new table (38 built-in).
+- `doc/schema-revision.md`: the new tables (39 built-in).
 
 ## Not now
 
 - **A vector index in the database** (every passage searchable, no grouping). It's the ceiling the gate measures. If it beats aspects by a lot, it's a separate decision, tied to the persistent process (brex 245159427) and to what Cloud SQL for MySQL offers.
 - **`task_type`.** daat sends none; `RETRIEVAL_DOCUMENT` for documents and `RETRIEVAL_QUERY` for questions usually help short questions find long text. It needs a full re-embed. The gate's harness can measure it on the same questions, as a separate change.
 - **A larger-window embedding model.** It would push the cut further out, but a single vector still averages a long document's subjects together. Aspects are needed either way.
+- **The mean of passages as the document's own vector.** The gate's surprise: it recovers most of the deep-question gap (68 / 76 against aspects' 71 / 80) with no extra vectors, by fixing the truncation itself. It changes the vector every other feature reads (tags, links, the passage gate, dedup, distillation's near-match checks), so each of those would need re-checking, and it gives curation no per-part signal. Worth its own measurement later (tags especially: brex 394585883).
 - **Scanning sources for curation without use.** If the gate shows aspects don't help, this is the alternative: curate long sources part by part on a schedule. It costs model calls for every source, used or not.
 
 ## Risks

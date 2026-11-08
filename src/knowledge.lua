@@ -107,6 +107,21 @@ CREATE TABLE IF NOT EXISTS knowledge_curation (
     queued_at TEXT DEFAULT (%s)
 );
 
+-- The same for one aspect of a long source (doc/aspect-retrieval-plan.md):
+-- a part of it searches keep finding through that aspect, curated into a
+-- note of its own next to the whole-source one. source_hash is of the
+-- part's text, so the note is rewritten only when that part changes.
+CREATE TABLE IF NOT EXISTS knowledge_aspect_curation (
+    document_id INTEGER NOT NULL,
+    aspect INTEGER NOT NULL,
+    source_hash VARCHAR(64) NOT NULL,
+    status VARCHAR(32) NOT NULL,
+    note_id INTEGER,
+    reason TEXT,
+    queued_at TEXT DEFAULT (%s),
+    PRIMARY KEY (document_id, aspect)
+);
+
 -- The synthesize step's queue and outcomes, one row per tag
 -- (src/synthesize.lua): the hash of the notes it last saw, and how that
 -- went -- pending, running, referenced (document_id is the tier-2
@@ -155,6 +170,7 @@ function knowledge_schema_sql(db_path)
         db.now_expr(db_path),
         db.now_expr(db_path),
         db.now_expr(db_path),
+        db.now_expr(db_path),
         db.now_expr(db_path)
     )
 end
@@ -192,10 +208,23 @@ function ensure_link_review_reason_column(db_path)
     end
 end
 
+-- Which aspect of the document found it (src/aspect.lua; NULL: its own
+-- vector or its words did). Postdates the table, so retrofitted.
+function ensure_retrieval_hit_aspect_column(db_path)
+    have = {}
+    for _, name in ipairs(db.get_columns(db_path, "knowledge_retrieval_hit")) do
+        have[name] = true
+    end
+    if have["aspect"] == nil then
+        db.exec(db_path, "ALTER TABLE knowledge_retrieval_hit ADD COLUMN aspect INTEGER DEFAULT NULL;")
+    end
+end
+
 function knowledge.init_schema(db_path)
     db.exec(db_path, knowledge_schema_sql(db_path))
     ensure_knowledge_indexes(db_path)
     ensure_link_review_reason_column(db_path)
+    ensure_retrieval_hit_aspect_column(db_path)
 end
 
 -- Same treatment as document.lua's KNOWLEDGE_POOL_SQL_COLUMNS: these are
@@ -224,6 +253,7 @@ HAND_ROLLED_TABLE_COLUMNS = {
         {name = "duplication_status", note = "rule-based review outcome: does this document duplicate another"},
         {name = "title_status", note = "rule-based review outcome: is the title specific, not generic"},
         {name = "reviewed_at", note = "when the hit was reviewed (NULL: not reviewed)"},
+        {name = "aspect", note = "which of the document's aspects found it (document_aspect.aspect; NULL: its own vector or its words)"},
     },
 }
 
@@ -373,7 +403,7 @@ end
 -- document.reinforcement_delta). content_hash is refreshed on every hit
 -- (not just at creation) so dedup review stays accurate even as a
 -- document's content is edited over time.
-function knowledge.record_retrieval_hit(db_path, retrieval_id, document_id, tier, rank, score, content_hash)
+function knowledge.record_retrieval_hit(db_path, retrieval_id, document_id, tier, rank, score, content_hash, aspect)
     delta = document.reinforcement_delta(tier)
     tier_weight = document.tier_weight(tier)
     db.exec(db_path, string.format(
@@ -385,11 +415,15 @@ function knowledge.record_retrieval_hit(db_path, retrieval_id, document_id, tier
     -- pool is now the only heat model -- the old `heat`/
     -- `last_retrieved_at` wall-clock columns are no longer written.
     document.reinforce_pool_heat(db_path, document_id, delta)
+    aspect_literal = "NULL"
+    if aspect != nil then
+        aspect_literal = tostring(tonumber(aspect))
+    end
     db.exec(db_path, string.format(
-        "%s knowledge_retrieval_hit (retrieval_id, document_id, `rank`, score, tier_weight, reinforcement_delta) " ..
-        "VALUES (%d, %d, %d, %.17g, %.17g, %.17g);",
+        "%s knowledge_retrieval_hit (retrieval_id, document_id, `rank`, score, tier_weight, reinforcement_delta, aspect) " ..
+        "VALUES (%d, %d, %d, %.17g, %.17g, %.17g, %s);",
         db.replace_into(db_path),
-        tonumber(retrieval_id), tonumber(document_id), tonumber(rank), tonumber(score), tier_weight, delta
+        tonumber(retrieval_id), tonumber(document_id), tonumber(rank), tonumber(score), tier_weight, delta, aspect_literal
     ))
     return delta
 end
@@ -443,11 +477,12 @@ end
 -- -- reactive, tied to real usage, not a synthetic actor.
 function knowledge.review_retrieval(db_path, retrieval_id, author)
     rows = db.query(db_path, string.format(
-        "SELECT document_id FROM knowledge_retrieval_hit WHERE retrieval_id = %d;", tonumber(retrieval_id)
+        "SELECT document_id, aspect FROM knowledge_retrieval_hit WHERE retrieval_id = %d;", tonumber(retrieval_id)
     ))
     if rows == nil then
         return
     end
+    curate_aspects = require("config").platform_config().curate_aspects == true
     peer_count = #rows - 1
     if peer_count < 0 then
         peer_count = 0
@@ -504,6 +539,21 @@ function knowledge.review_retrieval(db_path, retrieval_id, author)
                 -- the old judge path here would have reset a fresh
                 -- tier-1 note to 0 on its second retrieval (never
                 -- "revised"), or moved a revised one to any tier.
+            end
+            -- Found through one of its aspects (a part of a long source
+            -- past what its own vector covers): once that aspect has
+            -- found it as often as makes a source due, the part is
+            -- curated into a note of its own (src/curate.lua).
+            -- (A NULL column doesn't always read back as nil, so the
+            -- number decides.)
+            hit_aspect = tonumber(row.aspect)
+            if curate_aspects and hit_aspect != nil and not knowledge.can_hold_tier(doc.source_type) then
+                aspect_hits = db.query(db_path, string.format(
+                    "SELECT COUNT(*) AS n FROM knowledge_retrieval_hit WHERE document_id = %d AND aspect = %d;",
+                    tonumber(doc.id), hit_aspect))
+                if aspect_hits != nil and aspect_hits[1] != nil and knowledge.due_for_review(tonumber(aspect_hits[1].n), 0) then
+                    require("curate").queue_aspect(db_path, doc, hit_aspect)
+                end
             end
 
             db.exec(db_path, string.format(
@@ -1565,7 +1615,7 @@ function knowledge.search_and_log(db_path, query_text, limit, use_semantic, sess
         if tier == nil then
             tier = 0
         end
-        delta = knowledge.record_retrieval_hit(db_path, retrieval_id, r.id, tier, rank, r.score, document.content_hash(r.content))
+        delta = knowledge.record_retrieval_hit(db_path, retrieval_id, r.id, tier, rank, r.score, document.content_hash(r.content), r.aspect)
         knowledge.spread_activation(db_path, retrieval_id, r.id, delta, hit_ids)
     end
     if #results > 0 then

@@ -334,6 +334,31 @@ peek() {
     [[ "$output" =~ "status:       approved" ]]
 }
 
+@test "after its manifest changes, an extension's tools are no longer offered, and a call to one is refused as unknown" {
+    "$BIN" entity create widget label="gadget"
+    "$BIN" extension approve tool-demo
+    run_luam "${PROJECT_ROOT}/tst/integration/lua/declared_tools.lua"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "tool-demo.peek" ]]
+
+    sed -i 's/Looks up widgets by label\./Looks up widgets by label (v2)./' extensions/tool-demo/manifest.lua
+    run_luam "${PROJECT_ROOT}/tst/integration/lua/declared_tools.lua"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "document.search" ]]
+    [[ ! "$output" =~ "tool-demo." ]]
+
+    # A model that still calls it (from an earlier turn's declarations)
+    # gets the unknown-tool error; the handler never runs.
+    cookie="session=${TEST_SESSION_COOKIE}; csrf=${TEST_CSRF_TOKEN}"
+    resp=$(start_chat "$cookie" "$TEST_CSRF_TOKEN")
+    session_id=$(extract_query_param "$resp" "session_id")
+    scripted="$(tool_call_response "tool-demo.peek" '{"type":"widget"}')"$'\1'"$(done_response "Done.")"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"peek\"}" "$cookie" "$TEST_CSRF_TOKEN" "$scripted" > /dev/null
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "ERROR: unknown tool tool-demo.peek" ]]
+    [[ ! "$output" =~ "peek rows" ]]
+}
+
 # A tools extension named after a built-in group (#15). stats was added
 # to AGENT_TOOLS after the hand-kept reserved list, and was never
 # reserved: an extension named stats was approved, then had every tool

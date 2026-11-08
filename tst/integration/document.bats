@@ -369,7 +369,7 @@ EOF
     [[ ! "$output" =~ '|---|---|' ]]
 }
 
-@test "a ```plot``` fence renders as a real gnuplot SVG, not raw JSON text (document.render_plot_fences)" {
+@test "a plot fence renders as a real gnuplot SVG, not raw JSON text (document.render_plot_fences)" {
     body='{"content": "```plot\n{\"type\":\"line\",\"title\":\"Growth\",\"series\":[{\"name\":\"Run A\",\"x\":[1,2,3],\"y\":[4,5,6]}]}\n```"}'
 
     run raw_document_preview "$body" "$CSRF"

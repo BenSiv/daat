@@ -377,3 +377,27 @@ EOF2
     run "$BIN" store prune
     [[ "$output" =~ "Deleted ${stored} passage embeddings" ]]
 }
+
+@test "aspects are built into document_aspect on MariaDB/MySQL, and search finds a document through one" {
+    cat > platform.lua <<EOF2
+return {db_backend = "mariadb", mariadb_host = "${PLATFORM_MARIADB_HOST}", mariadb_port = ${PLATFORM_MARIADB_PORT}, mariadb_user = "${PLATFORM_MARIADB_USER}", mariadb_database = "${PLATFORM_MARIADB_DATABASE}", agent_provider = "test", search_provider = "test", embedding_quiet_minutes = 0, search_passages = true, passage_min_chars = 50, aspect_min_chars = 1000, build_aspects = true, search_aspects = true}
+EOF2
+    export AGENT_TEST_EMBEDDINGS=terms
+    "$BIN" init >/dev/null
+    "$BIN" user add alice secret123 i >/dev/null
+    # See tst/integration/aspect_retrieval.bats: "qqqvq" shares only its
+    # embedding dimension with "centrifuge", and no characters at all.
+    filler=$(printf 'Plants were watered and the greenhouse lights were checked. %.0s' $(seq 1 40))
+    spin=$(printf 'centrifuge %.0s' $(seq 1 30))
+    "$BIN" document create-json <<< "[{\"title\":\"Lab handbook\",\"content\":\"# Greenhouse\\n${filler}\\n\\n# Watering\\n${filler}\\n\\n# Centrifuge\\n${spin}\"}]" >/dev/null
+    raw=$(printf 'login=alice&password=secret123' | GATEWAY_INTERFACE=CGI/1.1 REQUEST_METHOD=POST PATH_INFO=/login QUERY_STRING="" "$BIN")
+    session=$(printf '%s' "$raw" | grep -o 'Set-Cookie: session=[^;]*' | sed 's/Set-Cookie: session=//')
+    q() { mariadb -N -h "$PLATFORM_MARIADB_HOST" -P "$PLATFORM_MARIADB_PORT" -u "$PLATFORM_MARIADB_USER" -p"$PLATFORM_MARIADB_PASSWORD" "$PLATFORM_MARIADB_DATABASE" -e "$1" 2>/dev/null; }
+
+    [ "$(q "SELECT COUNT(*) FROM document_aspect;")" -ge 2 ]
+    [ "$(q "SELECT MIN(LENGTH(vector_packed)) FROM document_aspect;")" = "64" ]
+    GATEWAY_INTERFACE=CGI/1.1 REQUEST_METHOD=GET PATH_INFO=/documents QUERY_STRING="q=qqqvq" HTTP_COOKIE="session=$session" "$BIN" >/dev/null
+    [ "$(q "SELECT COUNT(*) FROM knowledge_retrieval_hit WHERE aspect IS NOT NULL;")" -eq 1 ]
+    run "$BIN" repair aspects
+    [[ "$output" =~ "0 document(s) (0 aspects), 1 unchanged" ]]
+}

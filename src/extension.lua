@@ -55,9 +55,28 @@ function extension_schema_sql(db_path)
 end
 
 -- Approvals live in system_approval (store.lua), kind 'extension'.
+-- Once per process and database: every entity create reaches here (via
+-- enqueue_after_hooks), and on MariaDB any CREATE TABLE -- IF NOT EXISTS
+-- included -- commits the open transaction implicitly, which would
+-- split entity.create_batch's one transaction into one per row.
+extension_schema_ready = {}
+
+function extension_schema_key(db_path)
+    if type(db_path) == "table" then
+        return "mariadb:" .. tostring(db_path.host) .. ":" .. tostring(db_path.port) .. "/" .. tostring(db_path.database)
+    end
+    return "sqlite:" .. tostring(db_path)
+end
+
 function extension.init_schema(db_path)
+    key = extension_schema_key(db_path)
+    if extension_schema_ready[key] == true then
+        return true
+    end
     require("store").ensure_system_tables(db_path)
-    return db.exec(db_path, extension_schema_sql(db_path))
+    result = db.exec(db_path, extension_schema_sql(db_path))
+    extension_schema_ready[key] = true
+    return result
 end
 
 -- Names of extension directories under ext_dir that have both a

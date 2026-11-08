@@ -357,6 +357,42 @@ function generate(opts)
         cooling_question = "How long do I wait after sterilising broth before putting in the antibiotics?",
     }
 
+    -- A long facilities manual -- past what one embedding reads
+    -- (text-embedding-005 stops at 2,048 tokens, ~8k characters) --
+    -- about the building, with one section on another subject at its
+    -- very end (doc/aspect-retrieval-plan.md). The question about it
+    -- shares no words with the section, so neither keywords nor the
+    -- manual's own vector find it; only an aspect does. Fixed text, no
+    -- rng(), so every other generated fact stays the same.
+    facility_sections = {
+        {"Heating and ventilation", "The building has two air handling units on the roof. The north unit serves the offices and the corridor, the south unit the laboratories, which are kept at a slight negative pressure relative to the corridor. Filters are changed by the maintenance contractor every quarter, and the pressure gauges beside each lab door are read and logged every Monday. A gauge reading outside the marked band is reported to the facilities manager the same day."},
+        {"Electrical supply", "Sockets on the red circuits are backed by the generator and are for freezers, incubators and anything that must not lose power. The generator is tested on the first Wednesday of each month at seven in the morning; expect a short interruption on the white circuits. Extension leads may not be chained, and every new appliance gets a portable appliance test before first use."},
+        {"Fire safety", "Fire doors are kept closed and never wedged open. The assembly point is the car park beside the bicycle shed. Fire wardens wear yellow vests and sweep their floor before reporting to the assembly point. The alarm is tested every Thursday at ten; a continuous tone is a real alarm. Extinguishers are checked yearly, and the date is written on the tag."},
+        {"Water and drainage", "Deionised water comes from the taps marked DI in each lab; the cartridges are replaced when the conductivity light turns amber. Nothing but water and approved dilute buffers may go down the sinks. A leak under a bench is reported at once, and the stopcock for each lab is in the cupboard nearest the door, marked with a blue label."},
+        {"Gas cylinders", "Cylinders are chained upright in the cylinder store outside the loading bay and brought in on the trolley only when in use. Carbon dioxide for the incubators comes through the manifold in the corridor ceiling. Empty cylinders are labelled empty and returned to the store the same day. The supplier collects on Mondays."},
+        {"Keys and alarms", "Keys to the stores and plant rooms are signed out at reception. The intruder alarm is set by the last person to leave; the code changes every three months and is sent by email. Anyone who sets off the alarm by mistake calls the monitoring company at once with the password from the reception folder."},
+        {"Deliveries and loading bay", "The loading bay is open from eight until four. Pallets are not left in the corridor; they go to the bay store and are broken down the same day. Large items are booked with reception a day ahead so the lift can be reserved. Cardboard goes to the compactor beside the bay."},
+        {"Cleaning contractors", "Contract cleaners do the offices, corridors and toilets every evening and the lab floors twice a week. They do not touch benches, equipment or waste in the labs. Anything that should not be moved is marked with a do not move sign, and spills are cleaned by lab staff before the cleaners arrive."},
+        {"Meeting rooms", "The two meeting rooms on the first floor are booked on the shared calendar. Leave the room as found: chairs back, screen off, whiteboard wiped. The larger room has a video conferencing kit in the cabinet; return the remote to the cabinet after use."},
+        {"Parking and bicycles", "Staff parking is in the rear car park; visitors use the marked bays at the front. The bicycle shed is locked with a code from reception. Charging points for electric cars are booked for at most four hours at a time."},
+        {"Kitchen", "Food and drink stay in the kitchen and the offices, never in the labs. The kitchen fridge is emptied every Friday afternoon; label anything you want to keep. The dishwasher is run by whoever fills it."},
+        {"Lost property and post", "Lost property is kept at reception for a month. Post is sorted into pigeonholes by eleven each morning, and outgoing post leaves from the tray at reception at three."},
+    }
+    body = "# Facilities manual\n\nHow the building works, who to call, and what to do when something goes wrong.\n\n"
+    for _, section in ipairs(facility_sections) do
+        body = body .. "## " .. section[1] .. "\n\n" .. section[2] .. " " .. section[2] .. " " .. section[2] .. "\n\n"
+    end
+    body = body ..
+        "## Mycoplasma screening\n\nEvery cell line in culture is screened for mycoplasma once a month by PCR, using the kit kept in drawer D7 " ..
+        "of the tissue culture room. A positive line is autoclaved and discarded the same day, and every line that shared its hood " ..
+        "is screened again within a week.\n"
+    table.insert(out.documents, {key = "doc-facilities", title = "Facilities manual", content = body})
+    facts.facilities = {
+        doc_key = "doc-facilities",
+        screening_drawer = "D7",
+        screening_question = "Where is the stuff for checking flasks for those tiny wall-less microbes?",
+    }
+
     -- Asked about, but recorded nowhere: the agent should say so.
     facts.unknown = {
         {question = "Which supplier provided the yeast extract?", subject = "yeast extract supplier"},

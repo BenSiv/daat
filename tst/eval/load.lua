@@ -106,6 +106,10 @@ end
 
 document.embed_pending(db_path)
 embedded = db.query(db_path, "SELECT COUNT(*) AS n FROM document_embedding;")[1].n
+-- Aspects for the long documents (doc/aspect-retrieval-plan.md), built
+-- whatever the deployment's build_aspects says, so a run can compare
+-- search_aspects on and off over the same lab (bld/eval.sh --extra).
+aspects = require("aspect").refresh_all(db_path)
 
 -- A document without an embedding is invisible to semantic search, so
 -- a half-embedded lab would quietly score retrieval wrong: refuse it.
@@ -120,5 +124,5 @@ file = io.open("facts.json", "w")
 io.write(file, json.encode(lab.facts, {indent = true}))
 io.close(file)
 
-print(string.format("demo lab: %d records, %d documents, %d embedded",
-    #lab.records, #lab.documents, tonumber(embedded)))
+print(string.format("demo lab: %d records, %d documents, %d embedded, %d aspects",
+    #lab.records, #lab.documents, tonumber(embedded), aspects.aspects))

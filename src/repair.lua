@@ -51,6 +51,29 @@ function repair_embeddings(cmd_args, db_path)
     print(string.format("Reindexed %d document(s), %d failed, %d unchanged", reindexed, failed, unchanged))
 end
 
+-- Builds aspects whatever build_aspects says: the backfill runs before
+-- the embedding job is told to keep them current.
+function repair_aspects(cmd_args, db_path)
+    aspect = require("aspect")
+    entity_id = tonumber(cmd_args[2])
+    if entity_id != nil then
+        outcome, detail = aspect.refresh(db_path, entity_id)
+        if outcome == nil then
+            print("Error: " .. tostring(detail))
+            return
+        end
+        print(string.format("Document #%d: %s (%d aspects)", entity_id, outcome, detail))
+        return
+    end
+    limit = nil
+    if cmd_args[2] == "--limit" then
+        limit = tonumber(cmd_args[3])
+    end
+    counts = aspect.refresh_all(db_path, limit)
+    print(string.format("Built aspects for %d document(s) (%d aspects), %d unchanged, %d too short, %d failed",
+        counts.built, counts.aspects, counts.unchanged, counts.short, counts.failed))
+end
+
 function repair_embeddings_packed(cmd_args, db_path)
     packed = document.repack_all_embeddings(db_path)
     print(string.format("Packed %d embedding(s)", packed))
@@ -239,6 +262,8 @@ REPAIRS = {
      description = "Re-parse [[...]] links from document content into document_link, for documents whose content changed since their links were last synced (--all: every document)."},
     {name = "embeddings", usage = "embeddings [document_id | --all]", run = repair_embeddings,
      description = "Embed documents whose embedding is missing, from another model, or of changed text (--all: every document; one provider call each)."},
+    {name = "aspects", usage = "aspects [document_id | --limit N]", run = repair_aspects,
+     description = "Build the aspects of documents longer than aspect_min_chars whose aspects are missing or stale (--limit: build at most N documents; passage embeddings are batched and cached)."},
     {name = "embeddings-packed", usage = "embeddings-packed", run = repair_embeddings_packed,
      description = "Pack stored embeddings into the binary form search reads (no provider calls)."},
     {name = "tags", usage = "tags [document_id | --place-untagged | --relabel [--dry-run] | --restructure [--dry-run [--judge] [--pairs-above C]]]", run = repair_tags,

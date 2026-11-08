@@ -718,6 +718,7 @@ function document.init_schema(db_path)
     tag.init_schema(db_path)
     require("tag_upkeep").init_schema(db_path)
     require("passage").init_schema(db_path)
+    require("aspect").init_schema(db_path)
     reference.init_schema(db_path)
     ensure_document_knowledge_columns(db_path)
     ensure_document_knowledge_indexes(db_path)
@@ -1990,6 +1991,7 @@ function document.drop_derived(db_path, document_id)
     document_id = tonumber(document_id)
     db.exec(db_path, string.format("DELETE FROM document_embedding WHERE document_id = %d;", document_id))
     db.exec(db_path, string.format("DELETE FROM document_embedding_due WHERE document_id = %d;", document_id))
+    db.exec(db_path, string.format("DELETE FROM document_aspect WHERE document_id = %d;", document_id))
     db.exec(db_path, string.format("DELETE FROM document_mention WHERE document_id = %d;", document_id))
     db.exec(db_path, string.format("DELETE FROM document_link_sync WHERE document_id = %d;", document_id))
     db.exec(db_path, string.format(
@@ -2304,7 +2306,11 @@ end
 
 -- Re-embeds a document if its text changed, then swaps the new vector
 -- into its tags' centres and places it by nearest tag (tag.lua) -- the
--- tag upkeep a save used to do, now done once the vector exists.
+-- tag upkeep a save used to do, now done once the vector exists. With
+-- build_aspects, also brings the document's aspects up to date
+-- (src/aspect.lua); a failure there is a failure of the whole step, so
+-- embed_pending keeps the document queued and the next run retries
+-- (its own vector is then unchanged, so only the aspects are redone).
 -- -> as document.reindex_embedding.
 function document.refresh_embedding(db_path, document_id)
     old_vector = tag.document_vector(db_path, document_id)
@@ -2312,6 +2318,12 @@ function document.refresh_embedding(db_path, document_id)
     if embedded == true then
         tag.on_document_vector_changed(db_path, document_id, old_vector)
         tag.place_document(db_path, document_id)
+    end
+    if embedded != nil and config.platform_config().build_aspects == true then
+        outcome, aspect_err = require("aspect").refresh(db_path, document_id)
+        if outcome == nil then
+            return nil, "aspects: " .. tostring(aspect_err)
+        end
     end
     return embedded, err
 end
@@ -2822,6 +2834,9 @@ end
 -- query's, keeping those above the similarity floor. Reads only
 -- vector_packed; a row not yet packed (saved before the column existed,
 -- until `daat repair embeddings-packed` runs) falls back to its JSON.
+-- With search_aspects, a document's similarity is the best of its own
+-- vector and its aspects (src/aspect.lua), and an entry found through
+-- an aspect says which one and where its passage starts.
 function semantic_ranking(db_path, query_vector, model)
     query_packed = document.pack_vector(query_vector)
     if query_packed == nil then
@@ -2839,19 +2854,36 @@ function semantic_ranking(db_path, query_vector, model)
     if rows == nil then
         return {}
     end
-    ranked = {}
+    best = {}
     for _, row in ipairs(rows) do
         unit = document.unpack_vector(row.vector_packed)
         if unit == nil and row.vector_json != nil then
             decoded, _, _ = json.decode(row.vector_json)
             unit = document.unpack_vector(document.pack_vector(decoded))
         end
-        similarity = dot_product(query_unit, unit)
-        if similarity > SEARCH_SIMILARITY_FLOOR then
-            table.insert(ranked, {id = tonumber(row.document_id), similarity = similarity})
+        id = tonumber(row.document_id)
+        best[id] = {id = id, similarity = dot_product(query_unit, unit)}
+    end
+    if config.platform_config().search_aspects == true then
+        for id, match in pairs(require("aspect").best_matches(db_path, query_unit, model, SEARCHABLE_DOCUMENT_WHERE)) do
+            if best[id] == nil or match.similarity > best[id].similarity then
+                best[id] = {id = id, similarity = match.similarity, aspect = match.aspect, aspect_offset = match.passage_offset}
+            end
         end
     end
-    table.sort(ranked, function(a, b) return a.similarity > b.similarity end)
+    ranked = {}
+    for _, entry in pairs(best) do
+        if entry.similarity > SEARCH_SIMILARITY_FLOOR then
+            table.insert(ranked, entry)
+        end
+    end
+    -- Ties by id, so the order never depends on table traversal.
+    table.sort(ranked, function(a, b)
+        if a.similarity != b.similarity then
+            return a.similarity > b.similarity
+        end
+        return a.id < b.id
+    end)
     return ranked
 end
 
@@ -2908,8 +2940,13 @@ function document.search(db_path, query_text, limit, use_semantic)
     for rank = 1, math.min(#lexical, SEARCH_CANDIDATES_PER_RANKING) do
         table.insert(rankings, {id = tonumber(lexical[rank].id), rank = rank, row = lexical[rank]})
     end
+    -- Which aspect found a document, when one did (search_aspects).
+    found_by_aspect = {}
     for rank = 1, math.min(#semantic, SEARCH_CANDIDATES_PER_RANKING) do
         table.insert(rankings, {id = semantic[rank].id, rank = rank})
+        if semantic[rank].aspect != nil then
+            found_by_aspect[semantic[rank].id] = semantic[rank]
+        end
     end
     for _, ranked in ipairs(rankings) do
         entry = by_id[ranked.id]
@@ -2971,6 +3008,11 @@ function document.search(db_path, query_text, limit, use_semantic)
                 source_id = row.source_id, content_hash = row.content_hash,
                 created_at = row.created_at, external_id = row.external_id,
             })
+            by_aspect = found_by_aspect[tonumber(row.id)]
+            if by_aspect != nil then
+                scored[#scored].aspect = by_aspect.aspect
+                scored[#scored].aspect_offset = by_aspect.aspect_offset
+            end
         end
     end
     table.sort(scored, function(a, b) return a.score > b.score end)
@@ -3137,6 +3179,8 @@ function document.prune_derived(db_path, dry_run)
          tbl = "document_embedding", where = "document_id NOT IN (" .. ACTIVE_DOCUMENT_IDS .. ")"},
         {label = "queued embeddings of archived or missing documents", action = "deleted",
          tbl = "document_embedding_due", where = "document_id NOT IN (" .. ACTIVE_DOCUMENT_IDS .. ")"},
+        {label = "aspects of archived or missing documents", action = "deleted",
+         tbl = "document_aspect", where = "document_id NOT IN (" .. ACTIVE_DOCUMENT_IDS .. ")"},
         {label = "references from archived or missing documents", action = "deleted",
          tbl = "document_mention", where = "document_id NOT IN (" .. ACTIVE_DOCUMENT_IDS .. ")"},
         {label = "live links from archived or missing documents", action = "archived",
