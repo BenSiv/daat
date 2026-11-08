@@ -155,6 +155,8 @@ With production's numbers, `standard` keeps the 0.4 M characters of knowledge fo
 
 ## Migration
 
+Steps, production counts and undo for each: `doc/chat-history-migration.md`.
+
 1. **Type existing rows:**
    - `user` -> `request`;
    - `assistant` -> `answer` (a reply with tool calls is split by block type when read: text is the answer, tool calls belong to the trace);
