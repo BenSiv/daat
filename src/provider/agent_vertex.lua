@@ -352,7 +352,7 @@ function vertex_schema_from_canonical(schema)
             end
             -- Same empty-table/dkjson object-vs-array ambiguity
             -- AGENT_TOOLS' own EMPTY_OBJECT_SCHEMA already works around
-            -- (agent.lua) -- preserve it through translation instead of
+            -- (agent_tools.lua) -- preserve it through translation instead of
             -- re-triggering the same live 400 INVALID_ARGUMENT.
             if next(props) == nil then
                 setmetatable(props, {__jsontype = "object"})

@@ -36,6 +36,26 @@ agent_tools = {}
 -- (document.sync_links), so this is the only way to connect documents.
 DOCUMENT_LINK_HELP = "To connect documents, link them in the content as [[Exact title]] -- that's what makes a connection (shown under Connections and in the knowledge graph); a Markdown link to /document or /detail does not. When several documents share a title, write [[Parent title/Exact title]]. A link to a title that doesn't exist yet stays a placeholder until that document is created. Say why next to the link, e.g. \"Grown in the medium chosen at [[Weekly lab meeting]].\" Records (experiments, samples, ...) are not documents: link those with Markdown links as before."
 
+-- The parameters of a tool that takes no arguments (#20). It is defined
+-- here, beside the records that use it: it once lived at agent.lua's top
+-- level, and a bare top-level assignment is local to its file in luam, so
+-- in this file the name was nil and five tools went out with no
+-- parameters at all.
+--
+-- properties = {} (a plain empty Lua table) is genuinely ambiguous to
+-- dkjson.encode: it comes out as a JSON array ("[]"), not an object
+-- ("{}") -- the same empty-table-encoding ambiguity that bit
+-- schema.lua's own JSON columns elsewhere in this codebase. A real
+-- Vertex AI call rejects the resulting {"type":"OBJECT",
+-- "properties":[]} with a 400 INVALID_ARGUMENT -- every no-arg tool
+-- (entity.list_types/template.list/knowledge.stats) would break every
+-- real tool-calling turn merely by being *declared*, before the model
+-- even chose one. dkjson's own __jsontype = "object" metatable marker
+-- forces object encoding regardless of emptiness -- this is a dkjson
+-- serialization quirk, not a Vertex-specific concern, so it stays
+-- regardless of which provider's translation runs afterward.
+EMPTY_OBJECT_SCHEMA = {type = "object", properties = setmetatable({}, {__jsontype = "object"})}
+
 agent_tools.AGENT_TOOLS = {
     document = {
         search = {

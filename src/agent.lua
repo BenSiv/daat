@@ -1411,19 +1411,8 @@ end
 -- `destructive` is unchanged, still gates the pending-approval flow
 -- below.
 --
--- properties = {} (a plain empty Lua table) is genuinely ambiguous to
--- dkjson.encode: it comes out as a JSON array ("[]"), not an object
--- ("{}") -- the same empty-table-encoding ambiguity that bit
--- schema.lua's own JSON columns elsewhere in this codebase. A real
--- Vertex AI call rejects the resulting {"type":"OBJECT",
--- "properties":[]} with a 400 INVALID_ARGUMENT -- every no-arg tool
--- (entity.list_types/template.list/knowledge.stats) would break every
--- real tool-calling turn merely by being *declared*, before the model
--- even chose one. dkjson's own __jsontype = "object" metatable marker
--- forces object encoding regardless of emptiness -- this is a dkjson
--- serialization quirk, not a Vertex-specific concern, so it stays
--- regardless of which provider's translation runs afterward.
-EMPTY_OBJECT_SCHEMA = {type = "object", properties = setmetatable({}, {__jsontype = "object"})}
+-- A tool without arguments declares EMPTY_OBJECT_SCHEMA (agent_tools.lua,
+-- next to the records that use it).
 
 -- One record per tool, and one registry of every tool the agent can call
 -- (doc/agent-tools.md; #6). Everything the agent loop knows about a tool

@@ -23,20 +23,6 @@ NOT_IN_EXECUTE_TOOL = {
     ["clarify.ask"] = "agent.run_turn handles it: asking ends the turn",
 }
 
--- Declared with parameters = EMPTY_OBJECT_SCHEMA, which is nil in
--- agent_tools.lua: agent.lua assigns it at its own top level, and a bare
--- top-level assignment is local to its file in luam. So these go out
--- with no parameters at all (Vertex accepts that; Claude needs an
--- input_schema). Fixing it changes what the model sees, so it's its own
--- measured PR (#20); remove each name here when it lands.
-KNOWN_WITHOUT_PARAMETERS = {
-    ["entity.list_types"] = true,
-    ["entity.relationships"] = true,
-    ["template.list"] = true,
-    ["knowledge.stats"] = true,
-    ["view.list"] = true,
-}
-
 function each_declared(fn)
     for group, methods in pairs(agent_tools.AGENT_TOOLS) do
         for method, spec in pairs(methods) do
@@ -53,11 +39,9 @@ function tests.every_declaration_is_well_formed()
         -- Luam's type() calls a boolean a "flag".
         check(type(spec.destructive) == "flag", name .. ": destructive must be true or false")
         params = spec.parameters
-        if KNOWN_WITHOUT_PARAMETERS[name] == true then
-            check(params == nil, name .. " now has parameters: remove it from KNOWN_WITHOUT_PARAMETERS")
-        else
-            check(type(params) == "table" and params.type == "object", name .. ": parameters must be a JSON Schema with type = \"object\"")
-        end
+        -- Every record declares its parameters, an argument-less tool too
+        -- (EMPTY_OBJECT_SCHEMA): a provider may require them (#20).
+        check(type(params) == "table" and params.type == "object", name .. ": parameters must be a JSON Schema with type = \"object\"")
         if type(params) == "table" and params.required != nil then
             properties = params.properties
             if properties == nil then
@@ -135,7 +119,7 @@ end
 -- The whole declaration list, as each provider receives it. A schema a
 -- translation can't handle breaks every tool-calling turn, not just
 -- calls to that tool. Empty `properties` must encode as {}: Vertex
--- refuses [] (see EMPTY_OBJECT_SCHEMA in agent.lua).
+-- refuses [] (see EMPTY_OBJECT_SCHEMA in agent_tools.lua).
 function tests.declarations_translate_for_both_providers(db_path)
     print("Testing every declaration translates and encodes for Claude and Vertex")
     declarations = agent.tool_declarations(db_path)
