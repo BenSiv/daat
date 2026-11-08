@@ -1,6 +1,6 @@
 # Context management: implementation plan
 
-Plan for the recommendations in `doc/context-management-research.md`, ordered by expected impact per unit of work, using the 2026-10-23 prod baseline in that doc. Each phase is its own branch, ships behind a config flag, and is measured before the next starts.
+Plan for the recommendations in `doc/context-management-research.md`, ordered by expected impact per unit of work, using the 2026-10-23 prod baseline in that doc. Each phase is its own branch, ships behind a config flag, and is measured before the next starts. Phases 0-3 are built and on `main`; each ends with what was built, which is the design as it stands. Open work is in the issues named under each phase.
 
 ## Where the changes go
 
@@ -19,7 +19,7 @@ A new shaping step, `agent.shape_context(messages, policy)`, runs on the canonic
 
 | Phase | What | Evidence of impact | Effort |
 |---|---|---|---|
-| 0 | Per-step usage logging + a re-runnable context report | Needed to measure everything below; today only the last step of a turn is recorded | S |
+| 0 | Per-step usage logging + a re-runnable context report | Needed to measure everything below; before it, only the last step of a turn was recorded | S |
 | 1 | Keep what's known: schema pinning + exact-repeat answers | 53% of schema calls and 33 searches are exact repeats | S–M |
 | 2 | Concise defaults and size caps for the worst tools | Tool results are 77% of history; `knowledge.list` ~50k chars per call, `document.search` ~6k per call × frequent, `entity.query` tail to 59k | M |
 | 3 | Real token accounting + better compaction | Estimate misses ~3.9k tokens of tool definitions and assumes 4 characters per token where prod shows 2.8; 20 of 26 compacted sessions compacted repeatedly | M |
@@ -41,7 +41,7 @@ A new shaping step, `agent.shape_context(messages, policy)`, runs on the canonic
 
 **Done when:** the report reproduces the 2026-10-23 baseline numbers from prod data, and a scorecard run in test mode prints the new columns.
 
-**Status:** built on `feature/context-usage-logging`. Run on prod before the upgrade, the report reproduced the hand-measured baseline. Against a store without the new columns, every row reports as `unlabelled`, and chat turns are grouped by message instead. To read prod: open the read-only proxy (`software/benchling/migration/connect-platform-db.sh` documents it), point a scratch `platform.lua` at it with `mariadb_user = "platform_readonly"`, and run `daat agent context-report`, or run it inside the prod container. CLI agent entry points (`agent continue`, `agent run-pending-background`) now bring the knowledge tables up to date themselves, since the background timer can fire before any web request after a deploy.
+**As built** (abd9495, merged in 8155cfc): run on prod before the upgrade, the report reproduced the hand-measured baseline. The usage rows have since moved, with their `kind` and `step`, from `knowledge_context` to `agent_model_call` (`src/store.lua`, migration 2); a store from before Phase 0 has no kind, and its rows report as `unlabelled`, with chat turns grouped by message instead. To read prod: open the read-only proxy (`software/benchling/migration/connect-platform-db.sh` documents it), point a scratch `platform.lua` at it with `mariadb_user = "platform_readonly"`, and run `daat agent context-report`, or run it inside the prod container. CLI agent entry points (`agent continue`, `agent run-pending-background`) bring the knowledge tables up to date themselves, since the background timer can fire before any web request after a deploy.
 
 ## Phase 1: keep what's known
 
@@ -62,7 +62,7 @@ A new shaping step, `agent.shape_context(messages, policy)`, runs on the canonic
 - A repeat after a write tool reruns.
 - A repeat after compaction reruns unless the result is pinned.
 
-**Status:** built (`feature/context-keep-known`).
+**As built** (3cd0ec1, merged in e1aa419):
 - `agent.find_repeat` and `pinned_schema_block` in `src/agent.lua`, reading each tool record's `repeat_safe` and `pin_on_compaction` (`doc/agent-tools.md`), settings `agent_dedupe_repeat_calls`, `agent_pin_schema`, `agent_pinned_schema_chars`.
 - Both loops pass their current message list to `agent.run_tool`.
 - A destructive call anywhere after the earlier one counts as a write, even if it was only proposed or denied, which errs on the side of running again.
@@ -81,11 +81,11 @@ A new shaping step, `agent.shape_context(messages, policy)`, runs on the canonic
 4. **`entity.get` on long text:** for text fields over ~4k characters, return the head, the heading outline and the total length. Add `offset` / `length` arguments to read more of that field.
 5. **Safety net for every tool,** in `agent.run_tool`: a result over `agent_tool_result_cap` (e.g. 24k characters) is cut to the head plus `[truncated: N more characters of result #id -- call agent.read_result(id, offset)]`. The full text stays in `agent_message`, which already stores what the tool returned. A new read-only `agent.read_result(id, offset, length)` tool pages it, checked against the caller's session.
 
-**Status:** items 2-5 built (`feature/context-tool-sizes`):
+**As built:** items 2-5 (merged in 6f19e99):
 - `knowledge.list` pages (`agent_knowledge_list_page`, 50).
 - `entity.query` stops at `agent_query_char_cap` (12,000).
 - `entity.get` previews long text fields (`agent_get_field_chars`, 4,000) and reads on with `field` / `offset` / `length`.
-- Any tool result over `agent_tool_result_cap` (24,000) is cut when rendered for the model, and the new `result.read` tool reads the stored whole, this session's results only. Research sub-loop results are cut with a "narrow the request" note, since they aren't stored.
+- Any tool result over `agent_tool_result_cap` (24,000) is cut when rendered for the model, and the `result.read` tool reads the stored whole, this session's results only. Research sub-loop results are cut with a "narrow the request" note, since they aren't stored.
 
 Item 1 became passage retrieval (`doc/passage-retrieval.md`, plan in `doc/passage-retrieval-plan.md`): what search shows of each document is chosen by meaning, within the same budget, for the agent and the `/documents` page alike.
 
@@ -108,9 +108,9 @@ Item 1 became passage retrieval (`doc/passage-retrieval.md`, plan in `doc/passag
 
 **Tests:** the trigger uses recorded usage when present and the estimate otherwise; a mid-turn compaction keeps tool calls paired with their results (the existing cut rule); a second compaction keeps the first's facts.
 
-**Status (2026-10-27): done, on `feature/context-compaction`.**
+**As built** (d97f638, 2026-10-27):
 - `agent.context_tokens`: the last chat call's `prompt_tokens` when it still describes the history (its reply is in context and no compaction since), plus newer messages rendered as sent, at `agent_chars_per_token` (2.8). Otherwise `agent_context_fixed_tokens` (3,900) plus the whole rendered history at that ratio.
-- `agent_compaction_threshold` is now in real tokens: 48,000, about where the old chars/4 check fired on prod-sized histories.
+- `agent_compaction_threshold` is in real tokens: 48,000, about where the old chars/4 check fired on prod-sized histories.
 - `agent_compaction_mid_turn` (on): checked before every step after the first. The research loop isn't compacted: its history is in memory and bounded by its step budget; Phase 4's masking is the tool for it.
 - Anchored summary: the summarizer writes three fixed sections (established facts, decisions, open questions and next step); code appends the last 3 user requests verbatim and the pinned schema. A later compaction sends the previous summary's prose as "Summary so far" with only the newly dropped messages, and carries its requests and pinned schema on by code.
 - Found while testing: a summary has a newer id than the tail it keeps, so it sorted *after* that tail. The model read it out of order, and the next compaction often didn't fold it in, so summaries piled up. `active_messages` now puts the summary first, and every active summary is folded into the next one, so one stays in context. Sessions that already hold several merge at their next compaction.
@@ -134,6 +134,8 @@ Item 1 became passage retrieval (`doc/passage-retrieval.md`, plan in `doc/passag
 
 **Measure:** on the scorecard's research-heavy scenarios and prod research/background runs: tokens per task, steps per task (watch for elongation), correctness, `cachedContentTokenCount` hit rate.
 
+Not built yet; tracked in #12, which also covers compaction probes for Phase 3.
+
 ## Phase 5: summarize and split transcripts at save time
 
 **Why:** cross-session memory and search. A session with tangents is one document with one embedding today.
@@ -152,6 +154,8 @@ Item 1 became passage retrieval (`doc/passage-retrieval.md`, plan in `doc/passag
 
 **Measure:** a small set of prod sessions with tangents, with questions only one tangent answers: `document.search` hit rank and answer quality, segments vs whole transcripts.
 
+Not built, and no issue: the agent-data design (`doc/agent-data.md`, #23) retires raw transcript documents in favour of curated notes, and builds segments only if the scorecard later shows curated notes missing what people ask for.
+
 ## Phase 6: later, only if the numbers ask for it
 
 - System-prompt nudges to use `research.investigate` for reading-heavy work (cheap; can ride along with any phase).
@@ -161,7 +165,7 @@ Item 1 became passage retrieval (`doc/passage-retrieval.md`, plan in `doc/passag
 
 ## Decisions for Ben
 
-1. The usage log: a column on `knowledge_context` or a separate `agent_usage` table (plan assumes the former).
-2. Whether `document.search`'s shorter excerpt (Phase 2.1) ships as the new default or only after a scorecard run (plan assumes after).
+1. The usage log: a column on `knowledge_context` or a separate `agent_usage` table. Decided: columns (`kind`, `step`), now on `agent_model_call`.
+2. Whether `document.search`'s shorter excerpt (Phase 2.1) ships as the new default or only after a scorecard run. Superseded: Phase 2.1 became passage retrieval.
 3. Whether segment documents (Phase 5) join the knowledge pool like other documents, or stay out of retrieval until reviewed.
 4. Starting values: K for masking, the tool-result cap, the excerpt length. The plan's numbers are starting points for the scorecard, not decisions.
