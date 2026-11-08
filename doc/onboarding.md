@@ -43,7 +43,7 @@ cd dev && ./deploy.sh
 ```sh
 ./bld/build.sh          # -> bin/daat
 ./bld/build.sh -v       # same, with full compiler output
-./bld/test.sh           # builds, then runs tst/unit/*.lua and tst/integration/*.bats
+./bld/test.sh           # builds, then runs tst/unit/*.lua, the agent scorecard in test mode, and tst/integration/*.bats
 ```
 
 ## Repo layout
@@ -51,12 +51,13 @@ cd dev && ./deploy.sh
 | Path | Purpose |
 |---|---|
 | `bin/` | Build output (`bin/daat`) -- gitignored, never committed |
-| `bld/` | `build.sh` (compiles everything into one binary), `test.sh` |
+| `bld/` | `build.sh` (compiles everything into one binary), `test.sh`, `eval.sh` (the agent scorecard), `eval-env.sh` (builds the demo-lab deployment the scorecard runs on) |
 | `doc/` | Architecture/design docs -- see "Where to go next" below |
 | `dev/` | Minimal Podman dev environment (see "Quick start" above) |
 | `src/` | All Lua source; every file here gets bundled into the one binary |
 | `tst/unit/` | Plain Luam scripts, no DB, run directly by the interpreter |
 | `tst/integration/` | `.bats` tests against the real compiled binary, real CGI env vars |
+| `tst/eval/` | The agent scorecard: the demo-lab generator, scenarios, checks and report (`agent-eval.md`) |
 | `vnd/` | Vendored, checked-in frontend JS (Toast UI Editor, Zebra Browser Print) -- no CDN, no JS build step |
 
 `src/*.lua` at a glance -- each module's top-of-file comment has the full story:
@@ -67,7 +68,8 @@ cd dev && ./deploy.sh
 - `auth.lua` -- login, sessions, CSRF
 - `document.lua` -- the Document entity type and its tree/links
 - `knowledge.lua` -- the knowledge pool (tiering/heat on documents)
-- `agent.lua` + `agent_provider*.lua` -- the chat/assistant subsystem and its pluggable LLM backends
+- `agent.lua` + `agent_tools.lua` -- the chat/assistant subsystem: the turn loop, approval gate and tool registry in `agent.lua`, the tool records and their handlers in `agent_tools.lua` (`agent-tools.md`)
+- `agent_provider.lua` + `provider/agent_*.lua` -- the pluggable LLM backends (Vertex, Claude, and the scripted `test` provider)
 - `extension.lua` / `view.lua` -- the drop-in extensibility mechanisms (see below)
 - `html.lua` / `render.lua` / `template.lua` / `page.lua` -- rendering (`page.lua` is daat's own first-party page-section vocabulary, deliberately separate from `html.lua`'s extension canvas -- see `doc/templating.md`)
 - `config.lua` / `init.lua` / `multipart.lua` / `label.lua` -- deployment config, `daat init`, CGI form parsing, ZPL labels (the storage adapter itself, `database.lua` -- with the raw per-backend bindings one layer down in `database_adapter.lua` -- is shared infrastructure in `../luam/lib/`, not daat's own `src/`)
@@ -78,7 +80,7 @@ cd dev && ./deploy.sh
 - **Traceability** -- archiving/unarchiving are additive log entries, never a row removal. Listing excludes archived rows by default; a direct lookup or full history always works regardless of archive state. Same convention for accounts.
 - **Sandboxing** -- schema definitions, extension hooks, and views are all untrusted source loaded into a restricted environment exposing only the capabilities that role (or that extension's approved manifest) actually needs. One mechanism, `sandbox.lua` -- shared, daat-agnostic infrastructure that lives in `../luam/lib/`, not daat's own `src/` -- covers all three. See `architecture.md` ("Sandboxed extensibility") and `extensibility.md`.
 - **Auth** -- every route but `/login`/`/logout` requires a session; permissions are re-read from the account's current row on *every* request, never trusted from the session itself, so a permission change or account archive takes effect on the very next request. See `architecture.md` ("Auth") and `api.md`.
-- **Chat/agent** -- per-user DB-backed sessions, a small explicit tool registry, a pluggable LLM backend behind a neutral protocol (`agent-protocol.md`), and a hard human-approval gate before any tool call that changes data can run.
+- **Chat/agent** -- per-user DB-backed sessions, a small explicit tool registry with one record per tool (`agent-tools.md`), a pluggable LLM backend behind a neutral protocol (`agent-protocol.md`), and a hard human-approval gate before any tool call that changes data can run.
 - **Page rendering** -- daat's own trusted pages are built as a typed table of sections dispatched to a renderer (`page.lua`), the same pattern as `template.lua`'s Entry templates and the extension canvas -- but a deliberately separate module/vocabulary from the canvas, since that one is a narrow trust boundary for untrusted plugin markup and this one has no such boundary to protect. Vocabulary grows only against a real page's real need, never speculatively. See `templating.md`.
 - **Glossary discipline** -- `glossary.md` is treated as authoritative for terminology (Document, not page/Notebook; Entity, not record; View vs. Extension vs. Hook kept deliberately distinct). Check it before introducing new UI copy, doc prose, or tool descriptions -- this is a hard rule in this codebase, not a suggestion.
 
@@ -95,6 +97,14 @@ Three drop-in mechanisms, none requiring changes to `src/`:
 - `tst/unit/*.lua` test one module each, without the binary or CGI, run directly by the interpreter. They use the shared harness in `tst/lib/unit.lua`: `check = unit.check`, `tests = unit.suite()`, each test written as `function tests.<what_it_shows>()`, and `unit.run(tests)` as the last line. Every test in the suite runs, in the order written; a duplicate name is refused, and a test that raises counts as a failure without stopping the rest. A fixture built once for the file (a temp store's `db_path`) goes to every test through `unit.run(tests, db_path)`.
 - `tst/integration/*.bats` exercise the real compiled `bin/daat` binary with real CGI environment variables end to end. `tst/integration/test_helper.bash` provides the shared harness: `setup_test_env`/`cleanup_test_env` (a fresh scratch dir per test), `write_platform_config`, `login_test_user`, CGI-call helpers (`raw_get`, `raw_post`, `run_cgi`, `run_cgi_admin`, etc), and `run_luam <script.lua>` for a test that must call a module function directly.
 - **You will never need real LLM credentials to run the test suite.** `write_platform_config` defaults every test's `platform.lua` to `agent_provider = "test"`, which selects `src/provider/agent_test.lua` -- a deterministic stub scripted via the `AGENT_TEST_RESPONSES` env var (canned JSON responses matching `agent-protocol.md`'s shape). It lives in `src/` rather than `tst/` specifically so it gets bundled into the same binary the tests run against -- tests exercise the real production binary, never a separate test build.
+
+## Working on the agent
+
+A change to the agent's behaviour (a prompt, a tool, the turn loop) is judged by numbers, not by one conversation that seemed better (`review-checklist.md`, "Measure before changing agent behaviour").
+
+- **The scorecard** -- `./bld/eval.sh --mode test` runs every scenario with scripted replies, for free, and is part of `./bld/test.sh`. `./bld/eval.sh --mode live --compare <baseline>/results.json` runs them against a real model and shows what moved. How to run it, what each score means and how to add a scenario: `agent-eval.md`.
+- **Adding a tool** -- one record in `src/agent_tools.lua`, a handler, a test, and the regenerated declaration fixtures: `agent-tools.md`, "Worked example: adding a tool".
+- **What a PR is checked against** -- `review-checklist.md`.
 
 ## Coding conventions
 
@@ -117,7 +127,9 @@ Everything else in `doc/` (`architecture.md`, `schema.md`, `extensibility.md`, `
 - `schema.md` -- defining entity types.
 - `extensibility.md` -- the extension system in full.
 - `api.md` -- the HTTP API surface.
-- `agent-protocol.md` -- the LLM-provider protocol every `agent_provider_*.lua` backend implements.
+- `agent-protocol.md` -- the LLM-provider protocol every `provider/agent_*.lua` backend implements.
+- `agent-tools.md` -- how agent tools are defined, gated and shown to the model.
+- `agent-eval.md` -- the agent scorecard.
 - `review-checklist.md` -- what a PR is checked against.
 - `glossary.md` -- terminology, keep it open while writing docs or UI copy.
 - `../README.md` -- overview, build/test basics, links to the docs.
