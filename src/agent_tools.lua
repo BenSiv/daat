@@ -142,13 +142,13 @@ agent_tools.AGENT_TOOLS = {
             in_research = true,
             repeat_safe = true,
             pin_on_compaction = true,
-            description = "List every reference relationship between registered entity types (which type's field points at which other type -- e.g. 'sample.experiment -> experiment'). Call this when a value you're looking for isn't a field on the entity type you expected -- it's often a field on a DIFFERENT type that references the one you started from (e.g. a 'variety' filter for experiments actually lives on the samples that reference each experiment, not on the experiment itself). No args -- always returns the full relationship graph, small enough to read in one call.",
+            description = "List every reference relationship between registered entity types (which type's field points at which other type -- e.g. 'sample.experiment -> experiment'), and every type's real columns and multi-value join tables. Call this before your first entity.query, so its join paths and column names are real ones. Also call it when a value you're looking for isn't a field on the entity type you expected -- it's often a field on a DIFFERENT type that references the one you started from (e.g. a 'variety' filter for experiments actually lives on the samples that reference each experiment, not on the experiment itself). No args -- always returns the whole schema, small enough to read in one call.",
             parameters = EMPTY_OBJECT_SCHEMA,
         },
         query = {
             destructive = false,
             in_research = true,
-            description = "Run a read-only SQL SELECT against registered entity tables, for anything entity.list's own single-table exact-match filter can't express: joins across related types (call entity.relationships first to find the join path), counts, aggregates, grouping. Table and column names are this deployment's real registered entity type/field names -- call entity.list_types/entity.fields/entity.relationships first if unsure, don't guess. Every table has an archived_at column: archived rows are deleted/superseded records, so filter `archived_at IS NULL` unless you want them. The SQL dialect is the deployment's database (named in any SQL error; schema tables like sqlite_master/information_schema aren't queryable -- use entity.fields). Must be a single plain SELECT statement (no semicolons, no INSERT/UPDATE/DELETE/DDL) referencing only registered entity tables -- anything else is refused. Results are row-capped (this deployment's own configured limit) -- add your own LIMIT or narrow the query if a result comes back truncated (the truncation note tells you the true total match count, so you know whether narrowing is even worth it). Prefer expressing grouping/matching/deduplication logic (e.g. 'which groups of rows share the exact same set of X') as SQL itself -- GROUP BY with GROUP_CONCAT to build a per-group signature, then compare signatures -- rather than fetching many rows and comparing them yourself; there is no code-execution tool, so 'processed afterward' means reasoned over in your own reply, which doesn't scale to large row counts the way one aggregate query does. If a question genuinely can't be answered without paging through everything (no aggregate expresses it), use background.start rather than looping entity.query with an increasing OFFSET in the foreground -- and if you do page manually anyway, always add an explicit ORDER BY on a unique column (e.g. id): without one, SQL row order across separate LIMIT/OFFSET calls isn't guaranteed, so later pages can silently repeat or skip rows.",
+            description = "Run a read-only SQL SELECT against registered entity tables, for anything entity.list's own single-table exact-match filter can't express: joins across related types (call entity.relationships first to find the join path), counts, aggregates, grouping. Table and column names are this deployment's real registered entity type/field names -- call entity.relationships before your first query (it lists every type's columns as well as the join paths), and use only names it lists: don't guess, and don't assume a column like label, description or start_date exists. Every table has an archived_at column: archived rows are deleted/superseded records, so filter `archived_at IS NULL` unless you want them. The SQL dialect is the deployment's database (named in any SQL error; schema tables like sqlite_master/information_schema aren't queryable -- use entity.fields). Must be a single plain SELECT statement (no semicolons, no INSERT/UPDATE/DELETE/DDL) referencing only registered entity tables -- anything else is refused. Results are row-capped (this deployment's own configured limit) -- add your own LIMIT or narrow the query if a result comes back truncated (the truncation note tells you the true total match count, so you know whether narrowing is even worth it). Prefer expressing grouping/matching/deduplication logic (e.g. 'which groups of rows share the exact same set of X') as SQL itself -- GROUP BY with GROUP_CONCAT to build a per-group signature, then compare signatures -- rather than fetching many rows and comparing them yourself; there is no code-execution tool, so 'processed afterward' means reasoned over in your own reply, which doesn't scale to large row counts the way one aggregate query does. If a question genuinely can't be answered without paging through everything (no aggregate expresses it), use background.start rather than looping entity.query with an increasing OFFSET in the foreground -- and if you do page manually anyway, always add an explicit ORDER BY on a unique column (e.g. id): without one, SQL row order across separate LIMIT/OFFSET calls isn't guaranteed, so later pages can silently repeat or skip rows.",
             parameters = {
                 type = "object",
                 properties = {sql = {type = "string", description = "a single SELECT statement"}},
@@ -635,22 +635,29 @@ function edit_distance(a, b)
 end
 
 -- The column a guessed name most likely meant, or nil when none is close.
--- Close is one containing the other (time_hours -> hours) or a few edits
--- apart (archived_id -> archived_at), scaled to the name's length so a
--- short guess like "id" doesn't match half the table.
+-- Close is one holding the other as whole underscore-separated words
+-- (time_hours -> hours) or at most one edit per four letters (archived_id
+-- -> archived_at). A wrong suggestion is worse than none, since the real
+-- columns are listed either way: the first version allowed two edits on
+-- any name and told the model m.time meant m.name 8 times on the
+-- 2026-11-08 live scorecard, and plain substrings would send date to
+-- updated_at.
 function closest_column(guess, columns)
     guess = string.lower(guess)
+    wrapped_guess = "_" .. guess .. "_"
     best = nil
     best_score = nil
     for _, column in ipairs(columns) do
         name = string.lower(column)
+        wrapped_name = "_" .. name .. "_"
         score = nil
         if string.len(guess) >= 3 and string.len(name) >= 3
-                and (string.find(name, guess, 1, true) != nil or string.find(guess, name, 1, true) != nil) then
+                and (string.find(wrapped_name, wrapped_guess, 1, true) != nil
+                    or string.find(wrapped_guess, wrapped_name, 1, true) != nil) then
             score = math.abs(string.len(name) - string.len(guess)) / 10
         else
             distance = edit_distance(guess, name)
-            if distance <= math.max(2, math.floor(string.len(guess) / 3)) then
+            if distance <= math.floor(string.len(guess) / 4) then
                 score = distance
             end
         end
@@ -660,6 +667,36 @@ function closest_column(guess, columns)
         end
     end
     return best
+end
+
+-- The query's other prefixed columns that don't exist, beyond the one the
+-- database reported. It stops at the first, so a query with two wrong
+-- names took two failures (m.time, then m.od) when both could be named
+-- at once. Only prefixes that resolve to a queryable table are judged;
+-- quoted text is dropped first, so 'S.demo' in a filter isn't a column.
+-- An unprefixed name can't be judged without parsing the SQL, and is left
+-- to the database.
+function other_missing_columns(db_path, sql_text, aliases, allowed, reported)
+    bare_sql = string.gsub(string.lower(sql_text), "'[^']*'", "''")
+    found = {}
+    seen = {[string.lower(reported)] = true}
+    for prefix, column in string.gmatch(bare_sql, "([%a_][%w_]*)%.([%a_][%w_]*)") do
+        name = prefix .. "." .. column
+        table_name = aliases[prefix]
+        if seen[name] == nil and table_name != nil and allowed[table_name] == true then
+            seen[name] = true
+            is_real = false
+            for _, real in ipairs(db.get_columns(db_path, table_name)) do
+                if string.lower(real) == column then
+                    is_real = true
+                end
+            end
+            if is_real == false then
+                table.insert(found, {name = name, table_name = table_name})
+            end
+        end
+    end
+    return found
 end
 
 -- What to tell the model when a query fails on a column that doesn't
@@ -722,6 +759,18 @@ function agent_tools.hint_table_columns(ctx, sql_text, err)
         table.sort(tables)
     end
     allowed = view.queryable_tables(ctx.db_path)
+    also_missing = other_missing_columns(ctx.db_path, sql_text, aliases, allowed, missing)
+    for _, entry in ipairs(also_missing) do
+        already = false
+        for _, name in ipairs(tables) do
+            if name == entry.table_name then
+                already = true
+            end
+        end
+        if already == false then
+            table.insert(tables, entry.table_name)
+        end
+    end
     listed = {}
     suggestion = nil
     for _, name in ipairs(tables) do
@@ -745,6 +794,13 @@ function agent_tools.hint_table_columns(ctx, sql_text, err)
         return nil
     end
     hint = "real columns -- " .. table.concat(listed, "; ")
+    if #also_missing > 0 then
+        names = {}
+        for _, entry in ipairs(also_missing) do
+            table.insert(names, entry.name)
+        end
+        hint = "also not columns: " .. table.concat(names, ", ") .. "; " .. hint
+    end
     if suggestion != nil then
         hint = "did you mean " .. suggestion .. "? " .. hint
     end
@@ -1194,6 +1250,8 @@ function entity_list_types(ctx, args)
     return table.concat(names, ", ")
 end
 
+ENTITY_SYSTEM_COLUMNS = "id, name, external_id, created_by, created_at, updated_by, updated_at, archived_at (non-NULL = archived; filter archived_at IS NULL for live rows)."
+
 function entity_fields(ctx, args)
     db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
     if args.entity_type == nil then
@@ -1230,7 +1288,7 @@ function entity_fields(ctx, args)
         table.insert(lines, line)
     end
     table.insert(lines, "")
-    table.insert(lines, "System columns on every row (not listed above): id, name, external_id, created_by, created_at, updated_by, updated_at, archived_at (non-NULL = archived; filter archived_at IS NULL for live rows).")
+    table.insert(lines, "System columns on every row (not listed above): " .. ENTITY_SYSTEM_COLUMNS)
     -- `document` also carries knowledge-pool columns intentionally kept
     -- out of schema.fields (see document.lua's KNOWLEDGE_POOL_SQL_COLUMNS
     -- comment) -- surface them here too, so a query touching
@@ -1244,17 +1302,64 @@ function entity_fields(ctx, args)
     return table.concat(lines, "\n")
 end
 
+-- Every type's columns, for entity.relationships (#8). On the 2026-11-08
+-- live scorecard, 15 of the 25 runs that hit "no such column" had called
+-- entity.relationships and gone straight to a query: it gave them the
+-- join path but no column names, so they guessed them (m.time for hours,
+-- cmi.ingredient_id for ingredients_id). One more call per type to
+-- entity.fields is what they skipped, so the first look carries the names
+-- itself, rather than entity.fields taking several types. These are
+-- schema.fields' names, not the table's every column: the system columns
+-- share one line, and document's knowledge-pool columns stay with
+-- entity.fields, to keep a result that's pinned through compaction small.
+function schema_columns_lines(db_path)
+    tables = {}
+    stored_elsewhere = {}
+    for _, t in ipairs(schema.list(db_path)) do
+        columns = {}
+        for _, f in ipairs(schema.fields(db_path, t.name)) do
+            if f.type == "multi_select" or f.type == "multi_reference" then
+                value_col = "value"
+                if f.type == "multi_reference" then
+                    value_col = f.name .. "_id"
+                end
+                table.insert(tables, schema.multi_field_table_name(t.name, f.name) .. ": " .. t.name .. "_id, " .. value_col ..
+                    " (join table for " .. t.name .. "." .. f.name .. ")")
+            elseif f.type == "polymorphic_reference" or f.type == "multi_polymorphic_reference" then
+                table.insert(stored_elsewhere, t.name .. "." .. f.name)
+            else
+                table.insert(columns, f.name)
+            end
+        end
+        table.insert(tables, t.name .. ": " .. table.concat(columns, ", "))
+    end
+    table.sort(tables)
+    lines = {"", "Real columns, the only names entity.query can use:"}
+    for _, line in ipairs(tables) do
+        table.insert(lines, line)
+    end
+    table.insert(lines, "Every entity table also has: " .. ENTITY_SYSTEM_COLUMNS)
+    if #stored_elsewhere > 0 then
+        table.sort(stored_elsewhere)
+        table.insert(lines, "Not columns, stored in entity_ref(from_type, from_id, field_name, to_type, to_id): " .. table.concat(stored_elsewhere, ", "))
+    end
+    return lines
+end
+
 function entity_relationships(ctx, args)
     db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
     edges = schema.relationships(db_path)
-    if #edges == 0 then
-        return "No reference relationships registered between any entity types."
-    end
     lines = {}
     for _, edge in ipairs(edges) do
         table.insert(lines, string.format("%s.%s -> %s (%s)", edge.from_type, edge.field_name, edge.to_type, edge.field_type))
     end
     table.sort(lines)
+    if #edges == 0 then
+        lines = {"No reference relationships registered between any entity types."}
+    end
+    for _, line in ipairs(schema_columns_lines(db_path)) do
+        table.insert(lines, line)
+    end
     return table.concat(lines, "\n")
 end
 
@@ -1331,6 +1436,25 @@ function entity_list(ctx, args)
     -- limit/offset) -- a plain entity.list otherwise, unchanged.
     rows = nil
     if args.filter_field != nil and args.filter_value != nil then
+        -- A guessed field used to reach the SQL and come back as "tool
+        -- crashed", with no way to tell what the real names were (#8).
+        -- The wording keeps "no such column" so the scorecard still counts
+        -- it as the failed lookup it is.
+        columns = db.get_columns(db_path, args.entity_type)
+        known = false
+        for _, column in ipairs(columns) do
+            if string.lower(column) == string.lower(tostring(args.filter_field)) then
+                known = true
+            end
+        end
+        if known == false then
+            message = "no such column: " .. tostring(args.filter_field) .. " on " .. args.entity_type .. " -- "
+            match = closest_column(tostring(args.filter_field), columns)
+            if match != nil then
+                message = message .. "did you mean " .. match .. "? "
+            end
+            return nil, message .. "real columns: " .. table.concat(columns, ", ")
+        end
         rows = entity.list_by_field(db_path, args.entity_type, args.filter_field, args.filter_value, limit, offset, false)
     else
         rows = entity.list(db_path, args.entity_type, limit, offset, false)
@@ -2072,8 +2196,10 @@ reasoning. The narration is a visible part of the transcript now; its job
 is to orient the user in a few words, not to think out loud at length. Save
 the real depth for the final synthesis, where it's actually being read.
 
-If you don't already know an entity type's fields, call entity.fields first
-rather than guessing field names.
+If you don't already know an entity type's fields, call entity.relationships
+(every type's columns and join paths, in one call) or entity.fields (one type,
+with field types) first rather than guessing field names. Do this before your
+first entity.query as well: a column name you haven't seen listed is a guess.
 
 entity.list_types and entity.relationships describe the schema itself,
 which never changes within a conversation -- if you already called one of

@@ -65,6 +65,17 @@ function tests.a_longer_guess_containing_the_real_name_is_matched(db_path)
     check(contains(err, "did you mean m.hours?"), "suggests hours, got: " .. err)
 end
 
+function tests.a_guess_with_no_close_column_only_lists_the_real_ones(db_path)
+    print("Testing no suggestion when nothing is really close")
+    -- m.time was told "did you mean m.name?" 8 times on the 2026-11-08 run.
+    for _, guess in ipairs({"m.time", "m.od", "m.date"}) do
+        err = query_error(db_path, "SELECT " .. guess .. " FROM measurement m")
+        check(contains(err, "did you mean") == false, guess .. " shouldn't get a suggestion, got: " .. err)
+        check(contains(err, "real columns -- measurement: id,") and contains(err, "hours") and contains(err, "od600"),
+            guess .. " should still list the real columns, got: " .. err)
+    end
+end
+
 function tests.a_multi_value_join_table_gets_its_columns(db_path)
     print("Testing a multi-value field's join table")
     err = query_error(db_path, "SELECT cmi.ingredient_id FROM culture_medium_ingredients cmi")
@@ -76,6 +87,42 @@ function tests.an_unprefixed_column_lists_every_table_in_the_query(db_path)
     print("Testing a column without a prefix")
     err = query_error(db_path, "SELECT start_date FROM experiment JOIN project ON experiment.project = project.id")
     check(contains(err, "experiment: ") and contains(err, "project: "), "lists both tables, got: " .. err)
+end
+
+function tests.every_wrong_prefixed_column_is_named_at_once(db_path)
+    print("Testing a query with several wrong columns names them all")
+    err = query_error(db_path, "SELECT m.time, m.od, s.experiment_id FROM measurement m JOIN sample s ON m.sample = s.id WHERE s.label = 'S.demo'")
+    check(contains(err, "also not columns:"), "names the others, got: " .. err)
+    check(contains(err, "m.od") and contains(err, "s.experiment_id") and contains(err, "s.label"), "names each one, got: " .. err)
+    check(contains(err, "measurement: id,") and contains(err, "sample: id,"), "lists both tables' columns, got: " .. err)
+    check(contains(err, "s.demo,") == false and contains(err, "columns: s.demo") == false, "quoted text isn't a column, got: " .. err)
+    one = query_error(db_path, "SELECT m.time, m.hours FROM measurement m")
+    check(contains(one, "also not columns") == false, "a real column isn't named, got: " .. one)
+end
+
+function tests.entity_relationships_lists_the_real_columns(db_path)
+    print("Testing entity.relationships carries the column names")
+    result = agent_tools.execute_tool(db_path, "test", 0, "entity", "relationships", {})
+    check(contains(result, "measurement.sample -> sample (reference)"), "keeps the edges, got: " .. tostring(result))
+    check(contains(result, "\nmeasurement: sample, hours, od600\n"), "lists a type's columns, got: " .. tostring(result))
+    check(contains(result, "culture_medium_ingredients: culture_medium_id, ingredients_id (join table for culture_medium.ingredients)"),
+        "lists a multi-value join table, got: " .. tostring(result))
+    check(contains(result, "\nculture_medium: label, ph\n"), "a multi-value field isn't a column, got: " .. tostring(result))
+    check(contains(result, "Every entity table also has: id, name,"), "names the system columns, got: " .. tostring(result))
+    check(contains(result, "stored in entity_ref(from_type, from_id, field_name, to_type, to_id): ") and contains(result, "sample.source"),
+        "says where a polymorphic field lives, got: " .. tostring(result))
+end
+
+function tests.entity_list_with_a_wrong_field_names_the_real_ones(db_path)
+    print("Testing entity.list with a guessed filter_field")
+    result, err = agent_tools.execute_tool(db_path, "test", 0, "entity", "list",
+        {entity_type = "experiment", filter_field = "label", filter_value = "EXP-032"})
+    check(result == nil, "a guessed field is an error")
+    check(contains(tostring(err), "no such column: label on experiment"), "says what's wrong, got: " .. tostring(err))
+    check(contains(tostring(err), "lab_number") and contains(tostring(err), "title"), "lists the real columns, got: " .. tostring(err))
+    ok_result = agent_tools.execute_tool(db_path, "test", 0, "entity", "list",
+        {entity_type = "experiment", filter_field = "LAB_NUMBER", filter_value = "EXP-032"})
+    check(ok_result != nil, "a real field still lists, whatever its case")
 end
 
 function tests.other_errors_get_no_column_hint(db_path)
