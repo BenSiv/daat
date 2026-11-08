@@ -1,6 +1,6 @@
 # Historical chats: migration to the agent-data format
 
-Plan, 2026-11-08. Expands the Migration section of `doc/agent-data.md` (issue #23) into steps that can be run, checked and undone. It covers what already exists on celleste-lims: the sessions, their messages, their `chat_session` transcript documents and their stored prompts. Nothing here runs before the code it depends on.
+Plan, 2026-11-08, approved the same day. Expands the Migration section of `doc/agent-data.md` (issue #23) into steps that can be run, checked and undone. It covers what already exists on celleste-lims: the sessions, their messages, their `chat_session` transcript documents and their stored prompts. Nothing here runs before the code it depends on.
 
 ## What changes for an old chat
 
@@ -89,17 +89,19 @@ Piece 2 makes the conversation the curation source (its `request`, `answer` and 
 
 Steps 2 and 3 can run on daat-test first, though under `lean` there step 3 is followed by removing the raw knowledge after 30 days.
 
-## Decisions for Ben
+## Decisions
 
-1. **Admin sessions** (29 of the 49 transcripts, 9 of the 12 without one) are mostly testing. Curate them like the rest and let curation answer `NOTHING` where it should, or skip them (`--skip-login admin`), mark them `nothing` without a model call, and retire their transcripts? Recommended: skip. Test chats written up as team notes would add noise to the pool.
-2. **The 12 sessions without a transcript:** curate them too? Recommended: yes for the 3 staff sessions. The admin ones follow decision 1.
-3. **The 4 already-curated transcripts:** redo them with the new reader, which also reads reasoning, and rewrite each note in place? Recommended: yes.
-4. **Past approvals:** write them now as `request` rows from `agent_pending_action`? Recommended: no. Conversations are ordered by id, so rows added now would land after the turns they belong to. Curation can read decided actions beside the conversation for these sessions instead.
-5. **A note's source after retirement:** point it at the `/chat` conversation (owner and admins only), or name the source without a link? Recommended: the `/chat` link. Other readers see a source they can't open, which is the visibility the design chose.
+Settled 2026-11-08, each as recommended:
+
+1. **Admin sessions** (29 of the 49 transcripts, 9 of the 12 without one) are mostly testing. They are skipped (`--skip-login admin`): marked `nothing` without a model call, and their transcripts retired. Test chats written up as team notes would add noise to the pool.
+2. **The 12 sessions without a transcript:** the 3 staff sessions are curated. The admin ones follow decision 1.
+3. **The 4 already-curated transcripts** are redone with the new reader, which also reads reasoning, and each note is rewritten in place.
+4. **Past approvals** are not written as `request` rows. Conversations are ordered by id, so rows added now would land after the turns they belong to. Curation can read decided actions beside the conversation for these sessions instead.
+5. **A note's source after retirement** links to the `/chat` conversation (owner and admins only). Other readers see a source they can't open, which is the visibility the design chose.
 
 ## TODO
 
-- [ ] Ben: decisions 1-5.
+- [x] Ben: decisions 1-5 (2026-11-08).
 - [ ] Piece 1: the backfill in the schema upgrade, with a test that a store with old rows comes out typed.
 - [ ] Piece 2: `daat repair curate-chats` and `daat repair retire-transcripts` (with `--undo`). Tests: the dry run changes nothing; a failed curation keeps its transcript active; `--undo` restores what one run archived.
 - [ ] Piece 3: a test that the first prune keeps every token row.
