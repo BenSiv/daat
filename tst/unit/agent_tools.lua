@@ -130,9 +130,12 @@ function tests.declarations_translate_for_both_providers(db_path)
     }
     for _, pair in ipairs(translators) do
         provider = pair[1]
-        ok, translated = pcall(pair[2], declarations)
+        ok, translated, translate_err = pcall(pair[2], declarations)
         check(ok, provider .. ": translation raised: " .. tostring(translated))
         if ok == true then
+            check(translated != nil, provider .. ": translation refused the declarations: " .. tostring(translate_err))
+        end
+        if ok == true and translated != nil then
             check(#translated == #declarations, provider .. ": expected " .. #declarations .. " tools, got " .. #translated)
             encoded_ok, encoded = pcall(json.encode, translated)
             check(encoded_ok, provider .. ": the translated tools don't encode as JSON: " .. tostring(encoded))
@@ -141,6 +144,28 @@ function tests.declarations_translate_for_both_providers(db_path)
                     provider .. ": an empty properties object encodes as [] instead of {}")
             end
         end
+    end
+end
+
+-- Claude refuses a tool name outside ^[a-zA-Z0-9_-]{1,128}$ and a tool
+-- without an input_schema (#21). Every real name must make the round
+-- trip, so a tool_use block comes back under daat's own name.
+function tests.claude_receives_valid_names_and_schemas(db_path)
+    print("Testing every declaration reaches Claude under a valid name that maps back, with an input_schema")
+    declarations = agent.tool_declarations(db_path)
+    translated, err = agent_claude.claude_tools_from_canonical(declarations)
+    check(translated != nil, "claude_tools_from_canonical refused the declarations: " .. tostring(err))
+    if translated == nil then
+        return
+    end
+    for i, tool in ipairs(translated) do
+        original = declarations[i].name
+        check(#tool.name <= 128 and string.match(tool.name, "^[a-zA-Z0-9_-]+$") != nil,
+            original .. ": wire name '" .. tool.name .. "' is not a valid Claude tool name")
+        check(agent_claude.claude_canonical_tool_name(tool.name) == original,
+            original .. ": wire name '" .. tool.name .. "' maps back to '" .. tostring(agent_claude.claude_canonical_tool_name(tool.name)) .. "'")
+        check(type(tool.input_schema) == "table" and tool.input_schema.type == "object",
+            original .. ": no input_schema object")
     end
 end
 

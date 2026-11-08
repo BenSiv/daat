@@ -21,7 +21,7 @@ function tests.tools_from_canonical_passes_lowercase_schema_through()
     }
     out = agent_claude.claude_tools_from_canonical(tools)
     check(#out == 1, "expected one translated tool")
-    check(out[1].name == "document.search", "name should pass through unchanged")
+    check(out[1].name == "document__search", "the dot should go out as __ (#21), got: " .. tostring(out[1].name))
     check(out[1].input_schema.type == "object", "expected lowercase 'object', got: " .. tostring(out[1].input_schema.type))
     check(out[1].input_schema.properties.query.type == "string", "expected lowercase 'string' for nested property")
 end
@@ -49,6 +49,7 @@ function tests.messages_from_canonical_tool_call_and_result()
     out = agent_claude.claude_messages_from_canonical(messages)
     check(out[1].content[1].type == "tool_use", "expected tool_use block")
     check(out[1].content[1].id == "toolu_abc123", "expected Claude's own real id preserved, not a synthesized one")
+    check(out[1].content[1].name == "document__search", "a replayed tool_use must carry the wire name Claude was given, got: " .. tostring(out[1].content[1].name))
     check(out[1].content[1].input.query == "x", "expected arguments passed as input")
     check(out[2].role == "user", "a tool result must be sent back as a user-role message")
     check(out[2].content[1].type == "tool_result", "expected a tool_result content block")
@@ -61,7 +62,7 @@ function tests.blocks_from_content_all_three_types()
     print("Testing claude_blocks_from_content translates text/tool_use/thinking blocks to canonical shape")
     content = {
         {type = "text", text = "here's my answer"},
-        {type = "tool_use", id = "toolu_xyz", name = "entity.list", input = {entity_type = "sample"}},
+        {type = "tool_use", id = "toolu_xyz", name = "entity__list", input = {entity_type = "sample"}},
         {type = "thinking", thinking = "let me consider...", signature = "sig123"},
     }
     blocks = agent_claude.claude_blocks_from_content(content)
@@ -86,6 +87,28 @@ function tests.stop_reason_mapping()
     check(agent_claude.claude_stop_reason_to_canonical("pause_turn") == "error", "expected unreachable-in-practice 'pause_turn' -> 'error'")
     check(agent_claude.claude_stop_reason_to_canonical("stop_sequence") == "error", "expected 'stop_sequence' -> 'error'")
     check(agent_claude.claude_stop_reason_to_canonical(nil) == "error", "expected nil -> 'error'")
+end
+
+-- #21: Claude's names are ^[a-zA-Z0-9_-]{1,128}$. A name that can't make
+-- the round trip, or a tool without parameters, is refused here with the
+-- tool's name, not sent for a 400 that names nothing.
+function tests.tool_names_round_trip_and_bad_ones_are_refused()
+    print("Testing tool names map to Claude's charset and back, and unmappable tools are refused by name")
+    check(agent_claude.claude_wire_tool_name("entity.list_types") == "entity__list_types", "expected . -> __")
+    check(agent_claude.claude_canonical_tool_name("entity__list_types") == "entity.list_types", "expected __ -> .")
+    schema = {type = "object", properties = {}}
+    bad = {
+        {name = "my_ext.do__it", why = "a name containing __ can't map back"},
+        {name = "my ext.go", why = "a space is outside Claude's charset"},
+        {name = "x." .. string.rep("a", 130), why = "longer than 128 characters"},
+    }
+    for _, case in ipairs(bad) do
+        out, err = agent_claude.claude_tools_from_canonical({{name = case.name, description = "d", parameters = schema}})
+        check(out == nil, case.why .. ": expected a refusal")
+        check(err != nil and string.find(err, case.name, 1, true) != nil, case.why .. ": the error should name the tool, got: " .. tostring(err))
+    end
+    out, err = agent_claude.claude_tools_from_canonical({{name = "view.list", description = "d"}})
+    check(out == nil and err != nil and string.find(err, "view.list", 1, true) != nil, "a tool without parameters should be refused by name")
 end
 
 unit.run(tests)

@@ -108,6 +108,38 @@ function usage_from_response(response)
     }
 end
 
+-- Claude's tool names must match ^[a-zA-Z0-9_-]{1,128}$ (#21), and every
+-- daat tool name has a dot in it (document.search). The canonical names
+-- stay as they are: this provider meets its own rule in its translation,
+-- on the way out (tools, and tool_use blocks replayed from history) and
+-- back (tool_use blocks in a response), never in the tool records
+-- (doc/review-checklist.md, "A stable base, a flexible shell").
+-- "." becomes "__", which no built-in name contains. A name that can't
+-- make the round trip -- an extension tool with "__" or a character
+-- Claude refuses -- is an error here, naming the tool, rather than a 400
+-- from the API that names nothing.
+CLAUDE_TOOL_NAME_PATTERN = "^[a-zA-Z0-9_-]+$"
+CLAUDE_TOOL_NAME_MAX = 128
+
+function claude_wire_tool_name(name)
+    if type(name) != "string" or string.find(name, "__", 1, true) != nil then
+        return nil, "tool name " .. tostring(name) .. " can't be sent to Claude: it contains \"__\", which stands for \".\" on the wire"
+    end
+    wire = string.gsub(name, "%.", "__")
+    if #wire > CLAUDE_TOOL_NAME_MAX or string.match(wire, CLAUDE_TOOL_NAME_PATTERN) == nil then
+        return nil, "tool name " .. name .. " can't be sent to Claude: it must be at most " .. CLAUDE_TOOL_NAME_MAX .. " letters, digits, '.', '_' or '-'"
+    end
+    return wire, nil
+end
+
+function claude_canonical_tool_name(wire)
+    if type(wire) != "string" then
+        return wire
+    end
+    canonical = string.gsub(wire, "__", ".")
+    return canonical
+end
+
 -- agent.lua's own AGENT_TOOLS declares `parameters` as plain, standard
 -- JSON Schema already -- exactly what Claude's `input_schema` expects,
 -- so this is closer to a pass-through than agent_vertex.lua's
@@ -116,16 +148,28 @@ end
 -- depends on agent.lua's internal representation staying byte-for-byte
 -- identical to Claude's -- if the canonical schema ever needs a key
 -- Claude doesn't want (or vice versa), this is where that lives.
+-- Claude requires an input_schema on every tool. Every record declares
+-- its parameters (#20; extension manifests are refused without them),
+-- so a tool without them is a gap in the base, reported here rather
+-- than papered over with a schema only this provider would send.
+-- Returns (translated, nil) or (nil, err).
 function claude_tools_from_canonical(tools)
     translated = {}
     for _, tool in ipairs(tools) do
+        wire, err = claude_wire_tool_name(tool.name)
+        if wire == nil then
+            return nil, err
+        end
+        if type(tool.parameters) != "table" then
+            return nil, "tool " .. tostring(tool.name) .. " has no parameters; Claude requires an input_schema on every tool"
+        end
         table.insert(translated, {
-            name = tool.name,
+            name = wire,
             description = tool.description,
             input_schema = tool.parameters,
         })
     end
-    return translated
+    return translated, nil
 end
 
 -- Maps agent.lua's own canonical message-history shape (build_history_
@@ -157,7 +201,13 @@ function claude_messages_from_canonical(messages)
                     end
                     table.insert(blocks, thinking_block)
                 elseif block.type == "toolCall" then
-                    table.insert(blocks, {type = "tool_use", id = block.id, name = block.name, input = block.arguments})
+                    -- A call already accepted once can't fail here: its
+                    -- name came back through claude_canonical_tool_name.
+                    wire_name = claude_wire_tool_name(block.name)
+                    if wire_name == nil then
+                        wire_name = block.name
+                    end
+                    table.insert(blocks, {type = "tool_use", id = block.id, name = wire_name, input = block.arguments})
                 end
             end
             if #blocks > 0 then
@@ -193,7 +243,7 @@ function claude_blocks_from_content(content)
             end
             table.insert(blocks, canonical_block)
         elseif block.type == "tool_use" then
-            table.insert(blocks, {type = "toolCall", id = block.id, name = block.name, arguments = block.input})
+            table.insert(blocks, {type = "toolCall", id = block.id, name = claude_canonical_tool_name(block.name), arguments = block.input})
         end
         -- server_tool_use/*_tool_result blocks deliberately unhandled --
         -- this file never declares a server tool (see header), so none
@@ -246,7 +296,11 @@ function agent_claude.converse(model, system_prompt, messages, tools)
         payload.system = system_prompt
     end
     if tools != nil and #tools > 0 then
-        payload.tools = claude_tools_from_canonical(tools)
+        claude_tools, tools_err = claude_tools_from_canonical(tools)
+        if claude_tools == nil then
+            return nil, tools_err
+        end
+        payload.tools = claude_tools
     end
 
     response, err = claude_post(payload)
@@ -304,6 +358,8 @@ end
 -- as everything else in this module that already only calls these by
 -- their plain bare name internally.
 agent_claude.claude_tools_from_canonical = claude_tools_from_canonical
+agent_claude.claude_wire_tool_name = claude_wire_tool_name
+agent_claude.claude_canonical_tool_name = claude_canonical_tool_name
 agent_claude.claude_messages_from_canonical = claude_messages_from_canonical
 agent_claude.claude_blocks_from_content = claude_blocks_from_content
 agent_claude.claude_stop_reason_to_canonical = claude_stop_reason_to_canonical
