@@ -614,26 +614,6 @@ function agent_tools.hint_result_columns(names)
     return "actual columns: " .. table.concat(names, ", ")
 end
 
--- Levenshtein distance between two strings.
-function edit_distance(a, b)
-    previous = {}
-    for j = 0, string.len(b) do
-        previous[j] = j
-    end
-    for i = 1, string.len(a) do
-        current = {[0] = i}
-        for j = 1, string.len(b) do
-            cost = 1
-            if string.sub(a, i, i) == string.sub(b, j, j) then
-                cost = 0
-            end
-            current[j] = math.min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + cost)
-        end
-        previous = current
-    end
-    return previous[string.len(b)]
-end
-
 -- The column a guessed name most likely meant, or nil when none is close.
 -- Close is one holding the other as whole underscore-separated words
 -- (time_hours -> hours) or at most one edit per four letters (archived_id
@@ -656,7 +636,7 @@ function closest_column(guess, columns)
                     or string.find(wrapped_guess, wrapped_name, 1, true) != nil) then
             score = math.abs(string.len(name) - string.len(guess)) / 10
         else
-            distance = edit_distance(guess, name)
+            distance = schema.levenshtein(guess, name)
             if distance <= math.floor(string.len(guess) / 4) then
                 score = distance
             end
