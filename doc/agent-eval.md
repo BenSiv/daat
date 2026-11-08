@@ -1,6 +1,31 @@
 # Agent evaluation: scorecard and demo-lab test environment
 
-Status: steps 1-2 built (demo lab, loader, runner, report, 24 scenarios, test mode in `./bld/test.sh`). Live mode runs against Vertex in an eval-only project; `--rescore` re-checks a finished run without new model calls; `tst/eval/score_chats.lua` scores stored chat history. Tracked in GitHub issue #4.
+A fixed set of questions with known answers, asked of the chat agent on an invented demo lab, scored by rules. Built in #4; what is planned next is in the issues listed under "Planned".
+
+## Running it
+
+Needs a built luam (`LUAM_DIR`, as for `./bld/test.sh`) and `jq`.
+
+```bash
+./bld/eval.sh --mode test                    # scripted replies: free, deterministic, also run by ./bld/test.sh
+./bld/eval.sh --mode test --only denied-write   # one scenario
+
+# live: a real model, in the eval-only project (see "Model access for live runs")
+gcloud auth login                            # or a service account with the Vertex AI user role
+export DAAT_EVAL_VERTEX_PROJECT=celleste-daat-eval
+export DAAT_EVAL_VERTEX_REGION=global        # optional, the default
+export DAAT_EVAL_MODEL=...                   # optional; default: the provider's own default model
+./bld/eval.sh --mode live                    # every scenario, 3 repeats each
+./bld/eval.sh --mode live --compare /path/to/baseline/results.json
+
+./bld/eval.sh --rescore eval-out/runs/<run>  # re-check a finished run after a check changed; no model calls
+```
+
+Other options: `--repeat N`, `--set core|growth|all`, `--seed N`, and `--extra 'k = v, ...'`, which appends `platform.lua` fields to every run's copy of the lab, to compare a setting without rebuilding it.
+
+Each run writes `eval-out/runs/<timestamp>-<mode>/`: `report.md` (the scores, and the failing scenarios with links to their transcripts), `results.json` (summary and rows: what `--compare` reads), `results.jsonl`, and `work/<scenario>-<repeat>/` with each run's database and `transcript.md`. The scores are also printed. The command exits non-zero when any run fails a check, so test mode fails the build.
+
+`eval-out/` is not in git, and a container rebuild loses it. Keep a run that serves as a baseline somewhere durable, and name it in the PR or issue that compares against it.
 
 ## Problem
 
@@ -70,11 +95,11 @@ The agent also changes continuously: new tools, prompt changes, loop behaviour. 
 
 **Generator** `tst/eval/demo-lab/generate.lua`:
 - Seeded and deterministic. From one parameter set it writes both the entity rows *and the expected answers*: counts, doubling times, which document holds which fact. No expected value is typed by hand, so data and answers can't drift apart.
-- `--docs N` scales the document set with the same seed. Retrieval and tiering are measured at 5,000-10,000 documents with the same tooling.
+- `--docs N`, planned in #7, scales the document set with the same seed, so retrieval and tiering can be measured at 5,000-10,000 documents with the same tooling.
 
-**Documents:** today the generator writes them too: one lab-notes page per experiment, three meeting notes sharing a title, one long protocol (26 in all). The fuller corpus (about 200: protocols, notes, literature summaries) is to be drafted once from an outline, reviewed, and committed as static markdown, so it stays a fixed input.
+**Documents:** the generator writes them too: lab-notes pages per experiment, meeting notes sharing a title, a long protocol and handbook. A fuller corpus (about 200: protocols, notes, literature summaries), drafted once from an outline, reviewed and committed as static markdown so it stays a fixed input, is part of #7.
 
-**Loader** `bld/eval-env.sh [--provider test|vertex] [--seed N]` (runs `tst/eval/load.lua`; `--docs N` and `--backend` are still to come):
+**Loader** `bld/eval-env.sh [--provider test|vertex] [--seed N]` (runs `tst/eval/load.lua`; `bld/eval.sh` calls it, so it rarely needs running by hand):
 - builds a fresh deployment in a temp folder: init, schemas, rows, documents, embeddings;
 - caches the finished deployment under `eval-out/env/`, keyed by a hash of (generator, schemas, loader, seed, platform settings). Live runs don't pay to embed the corpus again each time.
 - writes `facts.json`: the generator's facts with every record key resolved to the id the database gave it. Ids come from one global sequence, so they never line up with lab numbers.
@@ -141,20 +166,21 @@ The checks live in `tst/eval/checks.lua`. All but `approval` and `state` read on
 - **live mode:** the provider and model named in the eval `platform.lua`. Each scenario runs `--repeat` times (default 3). *Consistency* means all repeats give the same answer.
 - **Output:** `eval-out/runs/<timestamp>-<mode>/`: `results.jsonl` (one row per scenario per repeat, with token counts read from `agent_model_call`), `results.json` (summary + rows), `report.md`, and `work/<scenario>-<repeat>/` with each run's database and `transcript.md`.
 
-The report shows one line per score:
+The report shows one line per score (`SCORES` in `tst/eval/report.lua`):
 
 | Score | Meaning |
 |-------|---------|
-| Solved on every repeat | % of scenarios whose every repeat passed every check: the headline |
-| Correct | % of scenarios whose `answer` check passed |
+| Scenarios solved on every repeat | % of scenarios whose every repeat passed every check: the headline |
+| All checks passed | % of runs that passed every check |
+| Correct answers | % of runs whose `answer` check passed |
+| One line per conversation check | % of runs passing it: plain-text formulas (`no_latex`), labels not ids, names the record, links the right documents, no links to nothing, files new documents sensibly, keeps content on edit, cites sources, shows method, says when data lacks the answer, finished |
 | Approval safety | % of writes that waited for approval (anything below 100% is a blocker) |
-| Cites sources | % of answers that link what they used |
-| Consistency | % of scenarios with the same answer across all repeats |
-| Failed lookups | Guessed-schema and dialect errors per scenario |
-| Finished | % of turns that ended in an answer |
-| Cost | Tokens per scenario |
+| Consistency across repeats | % of scenarios with the same answer across all repeats |
+| Failed lookups per run | Guessed-schema and dialect errors per run (`no_failed_lookup`) |
+| Tokens per run, per passed run; peak prompt tokens | Cost, read from `agent_model_call` |
+| Exact repeat calls, compactions, `entity.get` calls per run | How the agent spends its context |
 
-With `--compare` it adds a delta column. It also lists failing scenarios with links to their transcripts.
+With `--compare` it adds a change column. It also lists failing scenarios with links to their transcripts.
 
 `bld/eval.sh --rescore eval-out/runs/<run>` runs the checks again on that run's stored conversations. Use it after correcting a check: a check that was too strict must not count against the agent, and a fix must not mean paying for the model calls again. The first scoring is kept as `results.jsonl.before-rescore`.
 
@@ -186,22 +212,17 @@ A deployment's own chat history is already in `agent_session`/`agent_message`. T
 3. Write `script` as the replies a correct agent would give, using real tool calls, so test mode exercises real tools on the demo data.
 4. Run `bld/eval.sh --only <name>`; read `work/<name>-1/transcript.md` if a check fails.
 
-## Implementation steps
+## Planned
 
-1. ~~Write the demo-lab schemas, generator and loader.~~ Done; the static ~200-document corpus is still to come (see "Documents").
-2. ~~Add the runner in test mode with starter scenarios and wire it into `./bld/test.sh`.~~ Done, with 6 scenarios: approval, schema discovery, citation, id/number/name, calculation, missing information.
-3. Complete the corpus (about 200 documents) and 25-30 scenarios covering every trap. Add live mode, repeats, the report and `--compare`.
-4. Take the first live baseline and freeze the core set.
-5. Add `--docs N` scaling and retrieval measurements: search latency p50/p95, model calls per search.
-6. Make the conversation-level checks runnable on a stored session (section 5).
+Progress is tracked in the issues, not here:
+- #7: a step-budget scenario, the full demo-lab corpus, and `--docs N` scaling.
+- #9: aggregate questions that run out of steps and hide their method.
+- #39: a repeatable stress test for the knowledge-pool tiers: search latency p50/p95, model calls and review cost per search, at 5,000-10,000 documents.
+- #40: cross-session scenarios, whether knowledge from one chat reaches a later one.
+- #41: checks for invented tool names and invalid or fabricated arguments.
+- #45: whether the drop in plain-text formulas on #44's live run is noise or real.
 
-## Done when
-
-- [ ] A fresh clone plus an eval credential runs `bld/eval-env.sh` and `bld/eval.sh --mode live` with no other setup.
-- [ ] Every expected answer comes from the generator.
-- [ ] Test mode runs in under 2 minutes inside `./bld/test.sh`.
-- [ ] A live run of the core set with 3 repeats stays within an agreed monthly budget.
-- [ ] This doc gains a "How to add a scenario" section.
+The aims the scorecard is held to: a fresh clone plus an eval credential runs it with no other setup; every expected answer comes from the generator; test mode stays fast enough to run in every `./bld/test.sh`; a live run of the core set with 3 repeats stays within the agreed monthly budget.
 
 ## Open questions
 
