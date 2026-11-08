@@ -133,3 +133,68 @@ calling_message() {
     run store "SELECT data_type || ':' || loop_kind || ':' || in_context FROM agent_message WHERE session_id = '${chat}' AND parent_message_id IS NULL AND content LIKE '%Background research finished%';"
     [ "$output" = "answer:background:1" ]
 }
+
+# A proposed document.create waiting for approval; prints the pending id.
+propose_create() {
+    local cookie="session=$1; csrf=$2"
+    local resp
+    resp=$(raw_post_json "/api/chat-widget-send" "{\"session_id\":\"$3\",\"message\":\"create a page\"}" "$cookie" "$2" "$(tool_call_response "document.create" "$4")")
+    json_body "$resp" | jq -r '.pending.id'
+}
+
+@test "an approval is a decision row, a request out of context, between the call and its result" {
+    read session csrf < <(session_for admin secret123)
+    chat=$(start_chat "$session" "$csrf" "Decide")
+    pending=$(propose_create "$session" "$csrf" "$chat" '{"title":"Approved Page","content":"hello"}')
+    raw_post_json "/api/chat-widget-approve" "{\"pending_id\":${pending},\"session_id\":\"${chat}\"}" "session=${session}; csrf=${csrf}" "$csrf" "$(done_response "Created.")" > /dev/null
+
+    run store "SELECT role || ':' || COALESCE(data_type, '') || ':' || in_context FROM agent_message WHERE session_id = '${chat}' AND role IN ('assistant', 'decision', 'tool_result') ORDER BY id LIMIT 3;"
+    [ "${lines[0]}" = "assistant:answer:1" ]
+    [ "${lines[1]}" = "decision:request:0" ]
+    [ "${lines[2]}" = "tool_result:tool_trace:1" ]
+    run store "SELECT content FROM agent_message WHERE session_id = '${chat}' AND role = 'decision';"
+    [[ "$output" =~ "Approved document.create (pending action #${pending}): " ]]
+    [[ "$output" =~ "Approved Page" ]]
+    [[ ! "$output" =~ "Reason:" ]]
+
+    # Shown in the conversation, labelled as a decision.
+    run raw_get "/api/chat-widget-history" "session_id=${chat}" "session=${session}; csrf=${csrf}"
+    [[ "$output" =~ "Approved document.create" ]]
+
+    # A second approval loses the claim and writes nothing more.
+    raw_post_json "/api/chat-widget-approve" "{\"pending_id\":${pending},\"session_id\":\"${chat}\"}" "session=${session}; csrf=${csrf}" "$csrf" "$(done_response "Again.")" > /dev/null
+    [ "$(store "SELECT COUNT(*) FROM agent_message WHERE session_id = '${chat}' AND role = 'decision';")" = "1" ]
+}
+
+@test "a denial's reason goes into the decision row and the result the model reads; without one, neither has a reason" {
+    read session csrf < <(session_for admin secret123)
+    cookie="session=${session}; csrf=${csrf}"
+    chat=$(start_chat "$session" "$csrf" "Deny")
+    pending=$(propose_create "$session" "$csrf" "$chat" '{"title":"Denied Page","content":"hello"}')
+    raw_post_json "/api/chat-widget-deny" "{\"pending_id\":${pending},\"session_id\":\"${chat}\",\"reason\":\"  still in use for Exp412  \"}" "$cookie" "$csrf" "$(done_response "Understood.")" > /dev/null
+
+    run store "SELECT content FROM agent_message WHERE session_id = '${chat}' AND role = 'decision';"
+    [[ "$output" =~ "Denied document.create (pending action #${pending}): " ]]
+    [[ "$output" =~ ". Reason: still in use for Exp412" ]]
+    run latest_tool_result "$chat"
+    [[ "$output" =~ "User denied execution of this action. Reason: still in use for Exp412" ]]
+
+    chat2=$(start_chat "$session" "$csrf" "Deny again")
+    pending2=$(propose_create "$session" "$csrf" "$chat2" '{"title":"Other Page","content":"hello"}')
+    raw_post_json "/api/chat-widget-deny" "{\"pending_id\":${pending2},\"session_id\":\"${chat2}\",\"reason\":\"   \"}" "$cookie" "$csrf" "$(done_response "Understood.")" > /dev/null
+    run store "SELECT content FROM agent_message WHERE session_id = '${chat2}' AND role = 'decision';"
+    [[ "$output" =~ "Denied document.create" ]]
+    [[ ! "$output" =~ "Reason:" ]]
+    run latest_tool_result "$chat2"
+    [[ ! "$output" =~ "Reason:" ]]
+}
+
+@test "a decision row cuts long arguments" {
+    read session csrf < <(session_for admin secret123)
+    chat=$(start_chat "$session" "$csrf" "Long")
+    long=$(printf 'x%.0s' $(seq 1 2000))
+    pending=$(propose_create "$session" "$csrf" "$chat" "{\"title\":\"Long Page\",\"content\":\"${long}\"}")
+    raw_post_json "/api/chat-widget-deny" "{\"pending_id\":${pending},\"session_id\":\"${chat}\"}" "session=${session}; csrf=${csrf}" "$csrf" "$(done_response "Ok.")" > /dev/null
+    length=$(store "SELECT LENGTH(content) FROM agent_message WHERE session_id = '${chat}' AND role = 'decision';")
+    [ "$length" -lt 400 ]
+}

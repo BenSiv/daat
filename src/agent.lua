@@ -363,6 +363,7 @@ AGENT_MESSAGE_TYPES = {
     tool_result = "tool_trace",
     compaction_summary = "reasoning",
     self_check = "reasoning",
+    decision = "request",
     error = "control",
 }
 
@@ -419,7 +420,7 @@ end
 function agent.backfill_message_types(db_path)
     type_cases = {}
     loop_cases = {}
-    for _, role in ipairs({"user", "assistant", "progress", "tool_result", "compaction_summary", "self_check", "error"}) do
+    for _, role in ipairs({"user", "assistant", "progress", "tool_result", "compaction_summary", "self_check", "decision", "error"}) do
         table.insert(type_cases, string.format("WHEN %s THEN %s", db.quote(role), db.quote(AGENT_MESSAGE_TYPES[role])))
         table.insert(loop_cases, string.format("WHEN %s THEN %s", db.quote(role), db.quote(agent.message_loop(role))))
     end
@@ -3154,6 +3155,7 @@ function agent.approve_pending(db_path, pending_id, login, system_prompt, model,
         return nil, "action already " .. tostring(agent.get_pending_action(db_path, pending_id, login).status)
     end
 
+    agent.add_decision_message(db_path, pending, "approved", nil)
     -- run_tool reads the arguments from the claimed row itself.
     tool_result, tool_err = agent.run_tool(db_path, login, pending.session_id, pending.tool, pending.method, nil, nil,
         {id = pending_id, token = claim_token})
@@ -3172,11 +3174,49 @@ function agent.approve_pending(db_path, pending_id, login, system_prompt, model,
     return agent.run_turn(db_path, pending.session_id, login, system_prompt, model, nil)
 end
 
+-- doc/approval-request-rows.md: what the person decided about a
+-- proposed write, as a `request` row of the conversation, out of the
+-- model's context (it reads the decision as the tool result). Written
+-- after the claim and before the result. The arguments are cut: enough
+-- to say which record, not a document body a second time.
+DECISION_ARGS_CHARS = 300
+DECISION_REASON_CHARS = 1000
+
+-- A reason as given, trimmed and cut, or nil when there is none.
+function agent.decision_reason(reason)
+    if type(reason) != "string" then
+        return nil
+    end
+    reason = string.gsub(string.gsub(reason, "^%s+", ""), "%s+$", "")
+    if reason == "" then
+        return nil
+    end
+    return string.sub(reason, 1, DECISION_REASON_CHARS)
+end
+
+function agent.add_decision_message(db_path, pending, decision, reason)
+    verb = "Approved"
+    if decision == "denied" then
+        verb = "Denied"
+    end
+    args = tostring(pending.args_json)
+    if string.len(args) > DECISION_ARGS_CHARS then
+        args = string.sub(args, 1, DECISION_ARGS_CHARS) .. "..."
+    end
+    text = string.format("%s %s.%s (pending action #%d): %s", verb, tostring(pending.tool), tostring(pending.method),
+        tonumber(pending.id), args)
+    if reason != nil then
+        text = text .. ". Reason: " .. reason
+    end
+    return agent.add_message(db_path, pending.session_id, "decision", text, false)
+end
+
 -- Denies a pending action, records the denial as a tool_result (so the
 -- model sees it and can react), and resumes the turn loop -- a denial
 -- is just another outcome the model gets to respond to, not a dead end.
--- `resume` as for agent.approve_pending.
-function agent.deny_pending(db_path, pending_id, login, system_prompt, model, resume)
+-- `resume` as for agent.approve_pending. `reason`, when the person gave
+-- one, goes into the decision row and the result the model reads.
+function agent.deny_pending(db_path, pending_id, login, system_prompt, model, resume, reason)
     pending = agent.get_pending_action(db_path, pending_id, login)
     if pending == nil then
         return nil, "no such pending action"
@@ -3194,7 +3234,13 @@ function agent.deny_pending(db_path, pending_id, login, system_prompt, model, re
         return nil, "action already " .. tostring(agent.get_pending_action(db_path, pending_id, login).status)
     end
 
-    agent.add_tool_result_message(db_path, pending.session_id, pending.tool_call_id, pending.tool .. "." .. pending.method, "User denied execution of this action.", true)
+    reason = agent.decision_reason(reason)
+    agent.add_decision_message(db_path, pending, "denied", reason)
+    denial = "User denied execution of this action."
+    if reason != nil then
+        denial = denial .. " Reason: " .. reason
+    end
+    agent.add_tool_result_message(db_path, pending.session_id, pending.tool_call_id, pending.tool .. "." .. pending.method, denial, true)
     agent.resolve_pending_action(db_path, pending_id, "denied")
 
     if resume == false then
