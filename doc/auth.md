@@ -42,7 +42,7 @@ hmac    = HMAC-SHA256(session_secret, "<login>.<expiry>.<session_version>")
 
 ## CSRF
 
-Double-submit token: at login the server sets a random `csrf` cookie (readable by page scripts, on purpose), and every state-changing request must echo it back, either as the `X-CSRF-Token` header (fetch calls) or as a `csrf_token` form field (plain HTML forms). `require_csrf` compares the two in constant time.
+Double-submit token: at login the server sets a random `csrf` cookie (readable by page scripts, on purpose, with the same 7-day `Max-Age` as `session`, and re-issued on an authenticated `GET` if missing), and every state-changing request must echo it back, either as the `X-CSRF-Token` header (fetch calls) or as a `csrf_token` form field (plain HTML forms). `require_csrf` compares the two in constant time.
 
 - Why it works: another site can make the browser send daat's cookies, but it can't read them, so it can't put the matching value in the request.
 - Why double-submit instead of a server-stored token: same reason as sessions, no per-request server state. The token doesn't need signing because it's only compared with itself.

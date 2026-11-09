@@ -266,6 +266,7 @@ end
 -- threading it through each print_response call. nil before it's
 -- generated: those early error responses then allow no inline script.
 response_nonce = nil
+response_csrf_header = nil
 
 -- True when the browser reached us over TLS. The HTTPS env var is the
 -- standard CGI signal; behind a TLS-terminating load balancer the web
@@ -346,6 +347,9 @@ function print_response(status, content_type, body, extra_headers)
             io.write(header_line .. "\r\n")
         end
     end
+    if response_csrf_header != nil then
+        io.write(response_csrf_header .. "\r\n")
+    end
     io.write("Content-Length: " .. string.len(body) .. "\r\n")
     io.write("\r\n")
     io.write(body)
@@ -366,11 +370,12 @@ function parse_cookies(cookie_header)
     return cookies
 end
 
--- Builds one Set-Cookie header line. `max_age_seconds == nil` means a
--- session cookie (cleared on browser close, not just on expiry) --
--- used for CSRF, which is meant to live only as long as the login
--- session cookie it accompanies is being actively used, not persist as
--- its own independent lifetime. Marks Secure automatically whenever
+-- Builds one Set-Cookie header line. Both `session` and `csrf` pass
+-- `auth.SESSION_TTL_SECONDS` so the CSRF cookie lives as long as the
+-- persistent login session cookie it accompanies (an un-timed `csrf`
+-- cookie is cleared on browser close while the 7-day `session` cookie
+-- survives, leaving the user logged in on GET pages with every POST
+-- failing CSRF). Marks Secure automatically whenever
 -- the request itself arrived over HTTPS (HTTPS env var, the same
 -- signal most CGI-hosting web servers set) rather than hardcoding it,
 -- since a hardcoded Secure would silently break local plain-HTTP
@@ -613,7 +618,7 @@ function handle_login(root, db_path, method, nonce, theme, params)
         return print_response("302 Found", "text/plain", "", {
             "Location: /",
             set_cookie_header("session", session_cookie, auth.SESSION_TTL_SECONDS, true),
-            set_cookie_header("csrf", csrf_token, nil, false)
+            set_cookie_header("csrf", csrf_token, auth.SESSION_TTL_SECONDS, false)
         })
     end
 
@@ -724,6 +729,8 @@ function handle_verify_email(root, db_path, method, nonce, theme)
 end
 
 function cgi.handle_request()
+    response_nonce = nil
+    response_csrf_header = nil
     path_info = default_value(os.getenv("PATH_INFO"), "/register")
     query_string = default_value(os.getenv("QUERY_STRING"), "")
     method = default_value(os.getenv("REQUEST_METHOD"), "GET")
@@ -882,6 +889,14 @@ function cgi.handle_request()
             clear_cookie_header("session"),
             clear_cookie_header("csrf")
         })
+    end
+
+    if not via_api_key and method == "GET" and (cookies.csrf == nil or cookies.csrf == "") then
+        csrf_token = auth.generate_csrf_token()
+        if csrf_token != nil then
+            cookies.csrf = csrf_token
+            response_csrf_header = set_cookie_header("csrf", csrf_token, auth.SESSION_TTL_SECONDS, false)
+        end
     end
 
     if not cgi.has_capability(capabilities, REQUIRED_CAPABILITY) then

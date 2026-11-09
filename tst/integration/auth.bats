@@ -412,11 +412,13 @@ csrf_from() {
     printf '%s' "$1" | grep -o 'Set-Cookie: csrf=[^;]*' | head -1 | sed 's/Set-Cookie: csrf=//'
 }
 
-@test "the session cookie lasts 7 days, and is Secure only when the request came over HTTPS" {
+@test "the session and csrf cookies last 7 days, and are Secure only when the request came over HTTPS" {
     "$BIN" user add alice secret123 i
     run raw_login alice secret123
     [[ "$output" =~ "Set-Cookie: session=" ]]
     [[ "$output" =~ "Max-Age=604800; HttpOnly" ]]
+    [[ "$output" =~ "Set-Cookie: csrf=" ]]
+    [[ "$output" =~ "SameSite=Lax; Max-Age=604800" ]]
     [[ ! "$output" =~ "Secure" ]]
     [[ ! "$output" =~ "Strict-Transport-Security" ]]
 
@@ -424,6 +426,22 @@ csrf_from() {
         GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/login" QUERY_STRING="" "$BIN")
     [[ "$output" =~ "HttpOnly; Secure" ]]
     [[ "$output" =~ "Strict-Transport-Security: max-age=31536000" ]]
+}
+
+@test "an authenticated GET without a csrf cookie re-issues one and embeds it in the form" {
+    "$BIN" user add alice secret123 i
+    session=$(session_from "$(raw_login alice secret123)")
+
+    run raw_get "/document-edit" "" "session=${session}"
+    [[ "$output" =~ "200 OK" ]]
+    reissued_csrf=$(csrf_from "$output")
+    [ -n "$reissued_csrf" ]
+    [[ "$output" =~ "name=\"csrf_token\" value=\"${reissued_csrf}\"" ]]
+
+    run raw_post "/document-save" "csrf_token=${reissued_csrf}&entity_id=&title=SavedDoc&parent_id=&content=hello" \
+        "session=${session}; csrf=${reissued_csrf}"
+    [[ "$output" =~ "302 Found" ]]
+    [[ "$output" =~ "Location: document?entity_id=" ]]
 }
 
 @test "changing a password on /account ends other sessions but keeps this one" {
