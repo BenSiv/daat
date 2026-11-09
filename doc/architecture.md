@@ -9,7 +9,7 @@ The system is built around one idea: an entity type is data, not code you write 
 ```
                      +------------------+
                      |   web server     |   Apache + mod_cgid, PATH_INFO-based
-                     +--------+---------+   (src/cgi.lua is the single CGI entry point)
+                     +--------+---------+   (src/web.lua is the single CGI entry point)
                               |
                      +--------v---------+
                      |       daat       |

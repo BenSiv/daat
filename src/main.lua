@@ -34,7 +34,7 @@ do_repair = repair.do_repair
 tag_upkeep = require("tag_upkeep")
 do_tag = tag_upkeep.do_tag
 
--- Required explicitly here (not left to load transitively via cgi's
+-- Required explicitly here (not left to load transitively via web's
 -- own require) since knowledge.lua can't require agent.lua back itself
 -- (agent.lua already requires knowledge.lua; a real circular require,
 -- not just an ordering nuisance) -- the one thing that needs both,
@@ -44,19 +44,13 @@ agent = require("agent")
 agent_tools = require("agent_tools")
 
 cgi = require("cgi")
+web = require("web")
 
 function main()
-    -- Check if running in CGI environment
-    gateway = os.getenv("GATEWAY_INTERFACE")
-    method = os.getenv("REQUEST_METHOD")
-    is_cgi = (gateway != nil and gateway != "") or (method != nil and method != "")
-
-    if is_cgi then
-        ok, err = pcall(cgi.handle_request)
+    if cgi.is_cgi() then
+        ok, err = pcall(web.handle_request)
         if not ok then
-            io.write("Status: 500 Internal Server Error\r\n")
-            io.write("Content-Type: text/plain\r\n\r\n")
-            io.write("Internal Server Error: " .. tostring(err) .. "\n")
+            cgi.respond_error(err)
         end
         return
     end

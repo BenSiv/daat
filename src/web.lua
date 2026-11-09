@@ -5,7 +5,8 @@ entity = require("entity")
 ledger = require("ledger")
 view = require("view")
 template = require("template")
-html = require("html")
+html = require("ui")
+cgi_lib = require("cgi")
 json = require("dkjson")
 paths = require("paths")
 auth = require("auth")
@@ -136,18 +137,7 @@ function issues_to_message(issues)
     return table.concat(parts, "; ")
 end
 
-function parse_query(query_str)
-    params = {}
-    if query_str == nil then return params end
-    for k, v in string.gmatch(query_str, "([^&=]+)=([^&=]*)") do
-        -- simple url decoding for basic params
-        decoded_v = string.gsub(string.gsub(v, "+", " "), "%%(%x%x)", function(h)
-            return string.char(tonumber(h, 16))
-        end)
-        params[k] = decoded_v
-    end
-    return params
-end
+parse_query = cgi_lib.parse_query
 
 -- Filters/reorders a schema layout's fields to a comma-separated
 -- allowlist, e.g. "?columns=lab_name,volume_ul" -- lets one embedded
@@ -268,14 +258,11 @@ end
 response_nonce = nil
 response_csrf_header = nil
 
--- True when the browser reached us over TLS. The HTTPS env var is the
--- standard CGI signal; behind a TLS-terminating load balancer the web
+-- True when the browser reached us over TLS (HTTPS env var, see
+-- luam/lib/cgi.lua); behind a TLS-terminating load balancer the web
 -- server has to set it itself (the deployment's Apache config does,
 -- see doc/auth.md), or cookies go out without Secure.
-function request_is_https()
-    https = os.getenv("HTTPS")
-    return https != nil and https != "" and string.lower(https) != "off"
-end
+request_is_https = cgi_lib.is_https
 
 -- Headers every response carries. Why each one, and why these values,
 -- is in doc/auth.md ("Response headers"). In short: the CSP lets only
@@ -329,8 +316,7 @@ end
 -- a route sets itself (e.g. /reset-password's stricter
 -- Referrer-Policy) replaces the default rather than duplicating it.
 function print_response(status, content_type, body, extra_headers)
-    io.write("Status: " .. status .. "\r\n")
-    io.write("Content-Type: " .. content_type .. "\r\n")
+    headers = {}
     overridden = {}
     if extra_headers != nil then
         for _, header_line in ipairs(extra_headers) do
@@ -339,64 +325,28 @@ function print_response(status, content_type, body, extra_headers)
     end
     for _, header_line in ipairs(security_header_lines()) do
         if overridden[header_name(header_line)] != true then
-            io.write(header_line .. "\r\n")
+            table.insert(headers, header_line)
         end
     end
     if extra_headers != nil then
         for _, header_line in ipairs(extra_headers) do
-            io.write(header_line .. "\r\n")
+            table.insert(headers, header_line)
         end
     end
     if response_csrf_header != nil then
-        io.write(response_csrf_header .. "\r\n")
+        table.insert(headers, response_csrf_header)
     end
-    io.write("Content-Length: " .. string.len(body) .. "\r\n")
-    io.write("\r\n")
-    io.write(body)
+    cgi_lib.respond({
+        status = status,
+        content_type = content_type,
+        headers = headers,
+        body = body,
+    })
 end
 
--- Parses the raw "k1=v1; k2=v2" HTTP_COOKIE env var into a table.
-function parse_cookies(cookie_header)
-    cookies = {}
-    if cookie_header == nil then
-        return cookies
-    end
-    for pair in string.gmatch(cookie_header, "([^;]+)") do
-        key, value = string.match(pair, "%s*([^=]+)=(.*)")
-        if key != nil then
-            cookies[key] = value
-        end
-    end
-    return cookies
-end
-
--- Builds one Set-Cookie header line. Both `session` and `csrf` pass
--- `auth.SESSION_TTL_SECONDS` so the CSRF cookie lives as long as the
--- persistent login session cookie it accompanies (an un-timed `csrf`
--- cookie is cleared on browser close while the 7-day `session` cookie
--- survives, leaving the user logged in on GET pages with every POST
--- failing CSRF). Marks Secure automatically whenever
--- the request itself arrived over HTTPS (HTTPS env var, the same
--- signal most CGI-hosting web servers set) rather than hardcoding it,
--- since a hardcoded Secure would silently break local plain-HTTP
--- testing/dev.
-function set_cookie_header(name, value, max_age_seconds, http_only)
-    parts = {name .. "=" .. value, "Path=/", "SameSite=Lax"}
-    if max_age_seconds != nil then
-        table.insert(parts, "Max-Age=" .. tostring(max_age_seconds))
-    end
-    if http_only == true then
-        table.insert(parts, "HttpOnly")
-    end
-    if request_is_https() then
-        table.insert(parts, "Secure")
-    end
-    return "Set-Cookie: " .. table.concat(parts, "; ")
-end
-
-function clear_cookie_header(name)
-    return "Set-Cookie: " .. name .. "=; Path=/; Max-Age=0"
-end
+parse_cookies = cgi_lib.parse_cookies
+set_cookie_header = cgi_lib.set_cookie_header
+clear_cookie_header = cgi_lib.clear_cookie_header
 
 -- A new session cookie for `login`, signed with the account's current
 -- session_version -- used right after the caller changed their own

@@ -1,12 +1,12 @@
--- tst/unit/html.lua
--- Unit tests for src/html.lua. Originally just the "daat canvas"
+-- tst/unit/ui.lua
+-- Unit tests for src/ui.lua. Originally just the "daat canvas"
 -- (validate_canvas/render_canvas): the typed-element-table -> trusted-
 -- HTML-renderer pattern a UI plugin's page is built from, modeled on
 -- template.lua's own section.type dispatch. No prior test coverage
--- existed for html.lua at all before this file. Later extended with
+-- existed for ui.lua at all before this file. Later extended with
 -- apply_nav_hidden/apply_nav_order (brex 683042859).
 
-html = require("html")
+html = require("ui")
 
 unit = require("unit")
 check = unit.check

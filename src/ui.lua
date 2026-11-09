@@ -3,6 +3,7 @@ schema = require("schema")
 view = require("view")
 config = require("config")
 document = require("document")
+html_lib = require("html")
 
 html = {}
 
@@ -11,57 +12,12 @@ html = {}
 -- pre-declared, see ../../luam/doc/forward_references.md
 label_print_button_html, label_print_js, related_records_html, platform_chat_widget_css = nil, nil, nil, nil
 
--- Entity field values and (in principle) entity_type ultimately come
--- from user-submitted data -- escape before ever interpolating into
--- HTML text/attributes.
-function html.html_escape(s)
-    s = tostring(s)
-    s = string.gsub(s, "&", "&amp;")
-    s = string.gsub(s, "<", "&lt;")
-    s = string.gsub(s, ">", "&gt;")
-    s = string.gsub(s, "\"", "&quot;")
-    s = string.gsub(s, "'", "&#39;")
-    return s
-end
-
--- Two more escaping functions, deliberately distinct from html_escape
--- above: HTML tag content/attributes and inline-<script> content are
--- different injection contexts and need different escaping, the same
--- way Go's html/template picks an escaper per context rather than
--- applying one generic function everywhere. html_escape is correct for
--- values landing in HTML body text or an attribute; neither of the two
--- below is that context.
---
--- json_for_script: for an *already JSON-encoded* string (json.encode's
--- own output) that will be embedded inside an inline <script> body, e.g.
--- `const layout = ` .. json_for_script(json.encode(layout)) .. `;`. A
--- JSON encoder has no reason to escape "<" (not required by the JSON
--- spec), but a literal "</script>" sequence inside a JSON string value
--- (e.g. a schema field's own `label`) terminates the surrounding
--- <script> tag at the HTML-parser level -- before any JS engine even
--- looks at the content -- letting whatever follows execute as
--- newly-opened markup. < parses back to a literal "<" in JSON/JS,
--- so this changes nothing about the decoded value.
-function json_for_script(json_string)
-    return (string.gsub(json_string, "<", "\\u003c"))
-end
-
--- js_string_literal: for a plain (not-yet-JSON-encoded) Lua string
--- being embedded directly inside a JS string literal, e.g.
--- `const entityType = "` .. js_string_literal(entity_type) .. `";`.
--- Escapes backslash and double-quote (so the value can't break out of
--- the surrounding "..." literal) and "<" for the same script-tag-breakout
--- reason json_for_script exists.
-function js_string_literal(s)
-    s = tostring(s)
-    s = string.gsub(s, "\\", "\\\\")
-    s = string.gsub(s, "\"", "\\\"")
-    s = string.gsub(s, "\r\n", "\\n")
-    s = string.gsub(s, "\r", "\\n")
-    s = string.gsub(s, "\n", "\\n")
-    s = string.gsub(s, "<", "\\u003c")
-    return s
-end
+-- Context-aware HTML body/attribute, inline-<script> JSON, and JS
+-- string-literal escaping primitives live in luam/lib/html.lua.
+html.escape = html_lib.escape
+html.html_escape = html_lib.html_escape
+json_for_script = html_lib.json_for_script
+js_string_literal = html_lib.js_string_literal
 
 -- The ".platform-container" shell (card look: padding/shadow/border/
 -- rounded corners) was copy-pasted, identically byte-for-byte except

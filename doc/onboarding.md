@@ -63,7 +63,7 @@ cd dev && ./deploy.sh
 `src/*.lua` at a glance -- each module's top-of-file comment has the full story:
 
 - `main.lua` -- CLI/CGI entry point
-- `cgi.lua` -- route dispatch, capability checks
+- `web.lua` -- route dispatch, capability checks (the low-level CGI/HTTP/cookie and `multipart/form-data` helpers live in `../luam/lib/cgi.lua` and `../luam/lib/multipart.lua`)
 - `entity.lua` / `ledger.lua` / `schema.lua` -- the entity/history/schema model
 - `auth.lua` -- login, sessions, CSRF
 - `document.lua` -- the Document entity type and its tree/links
@@ -71,8 +71,8 @@ cd dev && ./deploy.sh
 - `agent.lua` + `agent_tools.lua` -- the chat/assistant subsystem: the turn loop, approval gate and tool registry in `agent.lua`, the tool records and their handlers in `agent_tools.lua` (`agent-tools.md`)
 - `agent_provider.lua` + `provider/agent_*.lua` -- the pluggable LLM backends (Vertex, Claude, and the scripted `test` provider)
 - `extension.lua` / `view.lua` -- the drop-in extensibility mechanisms (see below)
-- `html.lua` / `render.lua` / `template.lua` / `page.lua` -- rendering (`page.lua` is daat's own first-party page-section vocabulary, deliberately separate from `html.lua`'s extension canvas -- see `doc/templating.md`)
-- `config.lua` / `init.lua` / `multipart.lua` / `label.lua` -- deployment config, `daat init`, CGI form parsing, ZPL labels (the storage adapter itself, `database.lua` -- with the raw per-backend bindings one layer down in `database_adapter.lua` -- is shared infrastructure in `../luam/lib/`, not daat's own `src/`)
+- `ui.lua` / `template.lua` / `page.lua` -- rendering (`page.lua` is daat's own first-party page-section vocabulary, deliberately separate from `ui.lua`'s extension canvas -- see `doc/templating.md`; the low-level escaping and `{{ }}` interpolation modules `html.lua` and `render.lua` live in `../luam/lib/`)
+- `config.lua` / `init.lua` / `label.lua` -- deployment config, `daat init`, ZPL labels (the storage adapter `database.lua` -- with the raw per-backend bindings one layer down in `database_adapter.lua` -- and the subprocess helper `external_tool.lua` are shared infrastructure in `../luam/lib/`, not daat's own `src/`)
 
 ## Architecture concepts to know before contributing
 
