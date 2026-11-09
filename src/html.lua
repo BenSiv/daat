@@ -7153,7 +7153,7 @@ function html.render_chat_widget(nonce, attachments_enabled)
         return parts.join(' ');
     }
 
-    var ROLE_LABELS = {user: 'You', assistant: 'Assistant', tool_result: 'Tool result', compaction_summary: 'Compacted summary', self_check: 'Self-check', error: 'Error', progress: 'Progress'};
+    var ROLE_LABELS = {user: 'You', assistant: 'Assistant', tool_result: 'Tool result', compaction_summary: 'Compacted summary', self_check: 'Self-check', error: 'Error', progress: 'Progress', decision: 'Decision'};
     // Same roles as html.lua's own CHAT_MARKDOWN_ROLES -- the server
     // (chat_widget_state, cgi.lua) already rendered these through
     // cmark-gfm before this JSON ever reached the browser, so this JS
@@ -7181,7 +7181,7 @@ function html.render_chat_widget(nonce, attachments_enabled)
                 var extraClass = '';
                 if (isFinal) {
                     extraClass = ' platform-chat-final';
-                } else if (msg.role === 'assistant' || msg.role === 'tool_result' || msg.role === 'self_check' || msg.role === 'progress') {
+                } else if (msg.role === 'assistant' || msg.role === 'tool_result' || msg.role === 'self_check' || msg.role === 'progress' || msg.role === 'decision') {
                     extraClass = ' platform-chat-step';
                 }
                 html += '<div class="platform-chat-msg platform-chat-' + msg.role + extraClass + '"><strong>' + PlatformJS.escapeHtml(label) + ':</strong> ' + body + '</div>';
@@ -7203,7 +7203,8 @@ function html.render_chat_widget(nonce, attachments_enabled)
             for (var k in state.pending.args) { argsLines += '<div>' + PlatformJS.escapeHtml(k) + ' = ' + PlatformJS.escapeHtml(state.pending.args[k]) + '</div>'; }
             messagesEl.innerHTML += '<div class="platform-chat-pending"><p><strong>Run:</strong> ' + PlatformJS.escapeHtml(state.pending.tool) + '.' + PlatformJS.escapeHtml(state.pending.method) + '</p>' + argsLines +
                 '<button type="button" class="btn btn-primary" data-approve="' + state.pending.id + '">Approve</button> ' +
-                '<button type="button" class="btn btn-danger" data-deny="' + state.pending.id + '">Deny</button></div>';
+                '<button type="button" class="btn btn-danger" data-deny="' + state.pending.id + '">Deny</button> ' +
+                '<input type="text" class="platform-chat-deny-reason" maxlength="1000" placeholder="Why not? (optional)" aria-label="Reason for denying"></div>';
             form.style.display = 'none';
         } else {
             form.style.display = 'flex';
@@ -7644,7 +7645,11 @@ function html.render_chat_widget(nonce, attachments_enabled)
             pollWhilePending(sessionId, PlatformJS.postJSON('api/chat-widget-approve', {pending_id: e.target.getAttribute('data-approve'), session_id: sessionId}))
                 .catch(function(){ showFetchError(); });
         } else if (e.target.hasAttribute('data-deny')) {
-            pollWhilePending(sessionId, PlatformJS.postJSON('api/chat-widget-deny', {pending_id: e.target.getAttribute('data-deny'), session_id: sessionId}))
+            // The optional reason beside Deny goes to the decision row
+            // and the result the model reads (doc/approval-request-rows.md).
+            var reasonEl = e.target.parentNode.querySelector('.platform-chat-deny-reason');
+            var reason = reasonEl ? reasonEl.value : '';
+            pollWhilePending(sessionId, PlatformJS.postJSON('api/chat-widget-deny', {pending_id: e.target.getAttribute('data-deny'), session_id: sessionId, reason: reason}))
                 .catch(function(){ showFetchError(); });
         } else if (e.target.hasAttribute('data-stop')) {
             // Fire-and-forget: this doesn't resolve the in-flight

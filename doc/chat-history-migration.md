@@ -56,7 +56,7 @@ Each step needs one implementation piece of `doc/agent-data.md` to be deployed f
 
 Piece 2 makes the conversation the curation source (its `request`, `answer` and `reasoning` rows) and queues it after `agent_curate_quiet_minutes`. Every historical session is quiet and never curated with the new reader, so the new queue would pick up all of them on its first pass. The migration makes that pass explicit and paced:
 
-- `daat repair curate-chats [--dry-run] [--limit N] [--skip-login LOGIN]` lists every session that is due (by the piece-2 rule), with its owner, turns and input size, and then curates them in order, oldest first.
+- `daat repair curate-chats [--dry-run] [--limit N] [--skip-login LOGIN]` lists every session that is due (by the piece-2 rule), with its owner, title and input size, and then curates them in order, oldest first.
 - Scope: the 49 sessions with transcripts plus the 12 without, since piece 2 curates conversations and not documents (decision 2).
 - The 4 already curated are redone with the new reader, and each note is rewritten in place (`write_note` with its `note_id`), so links to it hold (decision 3).
 - Admin sessions follow decision 1.
@@ -66,8 +66,8 @@ Piece 2 makes the conversation the curation source (its `request`, `answer` and 
 
 ### 3. Retire the transcript documents (with piece 2, `agent_transcript_documents = off` deployed)
 
-- Order matters: transcripts are retired only once new turns have stopped writing them. Otherwise `sync_session_document` keeps updating an archived document whenever an old chat is resumed, and each new chat still gets a document.
-- `daat repair retire-transcripts [--dry-run]` archives each `chat_session` document whose session has a `curated` or `nothing` curation. It skips the rest and says why for each.
+- Order matters: transcripts are retired only once new turns have stopped writing them. Otherwise `sync_session_document` keeps updating an archived document whenever an old chat is resumed, and each new chat still gets a document. `off` is the default, and the command refuses while a deployment sets `"whole"`.
+- `daat repair retire-transcripts [--dry-run]` archives each `chat_session` document whose session has a `curated` or `nothing` curation. It skips the rest and says why for each. Its output is the run log: `--undo <log>` reads its `archived #N` lines.
 - Archiving sets `archived_at` only. Links, tags, aspects and retrieval hits stay as rows, and search already leaves archived documents out. Hits stay because link decisions read old co-retrievals (`doc/schema-revision.md`).
 - The curated note's source line points at the transcript document today. After retirement it should point at the conversation on `/chat`, which only the owner and admins can open (decision 5).
 - **Check:** no active `chat_session` documents. A search for a few questions old chats answered (picked from the dry-run list) returns the curated notes.
@@ -83,8 +83,8 @@ Piece 2 makes the conversation the curation source (its `request`, `answer` and 
 ## Order
 
 1. Piece 1 deployed, backfill checked (step 1).
-2. Piece 2 deployed with the transcript documents still on. Run `curate-chats --dry-run`, review the list, then run it (step 2).
-3. Switch `agent_transcript_documents` off and run `retire-transcripts --dry-run`, then run it (step 3).
+2. Piece 2 deployed. Transcript documents are off by default, so new chats stop writing them; the existing ones stay searchable until step 3. Run `curate-chats --dry-run --skip-login admin`, review the list, then run it (step 2). The jobs worker would also pick the old chats up on its own, a few per run, so run this soon after the deploy.
+3. Run `retire-transcripts --dry-run`, then run it, keeping its output as the run log (step 3).
 4. Piece 3 deployed: take a backup, then run the first prune (step 4).
 
 Steps 2 and 3 can run on daat-test first, though under `lean` there step 3 is followed by removing the raw knowledge after 30 days.
@@ -102,7 +102,7 @@ Settled 2026-11-08, each as recommended:
 ## TODO
 
 - [x] Ben: decisions 1-5 (2026-11-08).
-- [ ] Piece 1: the backfill in the schema upgrade, with a test that a store with old rows comes out typed.
-- [ ] Piece 2: `daat repair curate-chats` and `daat repair retire-transcripts` (with `--undo`). Tests: the dry run changes nothing; a failed curation keeps its transcript active; `--undo` restores what one run archived.
+- [x] Piece 1: the backfill in the schema upgrade (store migration 8), with a test that a store with old rows comes out typed. MySQL check: brex 545369662.
+- [x] Piece 2: `daat repair curate-chats` and `daat repair retire-transcripts` (with `--undo`), `tst/integration/curate.bats`.
 - [ ] Piece 3: a test that the first prune keeps every token row.
 - [ ] Run on daat-test, then on production, in the order above. Record before and after numbers here.

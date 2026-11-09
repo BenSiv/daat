@@ -71,6 +71,8 @@ search_for_bioreactor_extra() {
     # Found on daat-test: every [[title]] the agent or the person typed
     # became a link from the chat's transcript -- even "use [[title]]
     # links" -- so a chat turned into a hub in the knowledge graph.
+    # Only a deployment that keeps transcripts writes them.
+    write_platform_config ', link_passage_gate = 0, agent_transcript_documents = "whole"'
     "$BIN" entity create document title="Bioreactor SOP" content="How to run the bioreactor."
     resp=$(start_chat)
     session_id=$(extract_query_param "$resp" "session_id")
@@ -127,7 +129,9 @@ search_for_bioreactor_extra() {
 @test "document.search ranks chat-session transcripts like any other document" {
     # Knowledge is one level: a transcript is found by what it says and
     # ranked by usage, never left out for being a chat (it once was,
-    # 99fe276 -- reversed).
+    # 99fe276 -- reversed). Only a deployment that keeps transcripts
+    # (agent_transcript_documents = "whole") has any to find.
+    write_platform_config ', link_passage_gate = 0, agent_transcript_documents = "whole"'
     "$BIN" entity create document title="Bioreactor SOP" content="cleaning steps for the bioreactor procedure"
     search_for_bioreactor
     chat_doc_count=$(sqlite3 .store/store.db "SELECT COUNT(*) FROM document WHERE source_type='chat_session' AND content LIKE '%bioreactor%';")
@@ -144,12 +148,10 @@ search_for_bioreactor_extra() {
     search_for_bioreactor
 
     run "$BIN" knowledge stats
-    # tier0=2, notes=2: Bioreactor Notes itself, plus the chat session's
-    # own transcript document (task #108 follow-up -- every conversation
-    # is synced into its own document under the Knowledge Pool folder,
-    # which is itself a pool "note" the moment it's created).
-    [[ "$output" =~ "tier0=2 tier1=0 tier2=0 tier3=0" ]]
-    [[ "$output" =~ "notes=2 retrievals=1 reviewed=1 sessions=1" ]]
+    # tier0=1, notes=1: Bioreactor Notes itself. A chat writes no
+    # transcript document by default (doc/agent-data.md, "Curation").
+    [[ "$output" =~ "tier0=1 tier1=0 tier2=0 tier3=0" ]]
+    [[ "$output" =~ "notes=1 retrievals=1 reviewed=1 sessions=1" ]]
 
     run "$BIN" knowledge list 0
     [[ "$output" =~ "Bioreactor Notes" ]]
@@ -169,12 +171,11 @@ search_for_bioreactor_extra() {
     search_for_bioreactor
 
     run "$BIN" knowledge stats
-    # notes=3: Bioreactor Notes (still exactly one row -- a retrieved
+    # notes=1: Bioreactor Notes, still exactly one row -- a retrieved
     # document accrues heat/tier directly on itself, task #106, never a
-    # second row per search) plus two chat sessions' own transcript
-    # documents (task #108 follow-up -- each search_for_bioreactor call
-    # starts a fresh session).
-    [[ "$output" =~ "notes=3 retrievals=2" ]]
+    # second row per search (and a chat writes no transcript document by
+    # default).
+    [[ "$output" =~ "notes=1 retrievals=2" ]]
 
     # Retrieval alone -- however many times -- never promotes a document
     # past tier 0 under the content-maturity mechanism: nothing has
@@ -384,11 +385,9 @@ Assistant: Rinse, then autoclave."
     # directly (same pattern as latest_tool_result, test_helper.bash),
     # which is what the tool itself actually returned.
     run latest_tool_result "$session_id"
-    # notes=2: Bioreactor Notes plus the first session's own transcript
-    # document (task #108 follow-up) -- this second session's own
-    # transcript isn't synced yet at the moment its knowledge.stats tool
-    # call runs (sync happens once the turn concludes, not mid-turn).
-    [[ "$output" =~ "notes=2" ]]
+    # notes=1: Bioreactor Notes; a chat writes no transcript document by
+    # default.
+    [[ "$output" =~ "notes=1" ]]
     [[ "$output" =~ "retrievals=1" ]]
 }
 

@@ -1916,7 +1916,7 @@ function cgi.handle_request()
         end
         model = agent.default_model()
         inline = config.platform_config().agent_turn_mode == "inline"
-        result = agent.deny_pending(db_path, tonumber(body_data.pending_id), author, nil, model, inline)
+        result = agent.deny_pending(db_path, tonumber(body_data.pending_id), author, nil, model, inline, body_data.reason)
         if inline == false and result != nil then
             agent.start_detached_turn(db_path, root, result.session_id)
         end
