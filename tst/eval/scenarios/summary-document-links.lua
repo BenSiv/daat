@@ -27,12 +27,15 @@ return function(f, s)
         turns = {
             "Summarise the " .. medium .. " experiments: lab number, status and doubling time for each.",
             "Save that as a new document called \"" .. medium .. " experiments\", linking each experiment's notes.",
+            "At the top level.",
         },
         approval = "approve",
         script = {
             s.tool("entity.query", {sql = "SELECT e.lab_number, e.status FROM experiment e JOIN culture_medium m ON m.id = e.medium " ..
                 "WHERE m.label = '" .. medium .. "' AND e.archived_at IS NULL"}),
             s.final(table_text),
+            s.tool("document.children", {}),
+            s.tool("clarify.ask", {question = "Where should I create \"" .. medium .. " experiments\" -- under one of the existing documents, or at the top level?"}),
             s.tool("document.create", {title = medium .. " experiments",
                 content = "# " .. medium .. " experiments\n\n" .. table_text .. "\n\n## Notes\n\n" .. table.concat(links, "\n") .. "\n"}),
             s.final("Saved as \"" .. medium .. " experiments\", linking each experiment's notes."),

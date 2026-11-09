@@ -217,6 +217,22 @@ function tests.declarations_match_the_snapshots(db_path)
     end
 end
 
+function tests.document_create_asks_for_placement_when_unspecified()
+    print("Testing document.create and default_system_prompt instruct the agent to check folders and ask where to place a new document")
+    create_spec = agent_tools.AGENT_TOOLS.document.create
+    check(string.find(create_spec.description, "document.children", 1, true) != nil,
+        "document.create description should tell the model to check candidate folders with document.children")
+    check(string.find(create_spec.description, "clarify.ask", 1, true) != nil,
+        "document.create description should tell the model to ask where to put a new document with clarify.ask")
+    parent_desc = create_spec.parameters.properties.parent_id.description
+    check(string.find(parent_desc, "top-level", 1, true) != nil,
+        "document.create parent_id description should state when to omit parent_id")
+    prompt = agent_tools.default_system_prompt()
+    check(string.find(prompt, "document.create", 1, true) != nil and string.find(prompt, "document.children", 1, true) != nil
+        and string.find(prompt, "clarify.ask", 1, true) != nil,
+        "default_system_prompt should instruct the agent to inspect folders and ask where to file a new document")
+end
+
 dir = os.tmpname()
 os.remove(dir)
 lfs.mkdir(dir)
