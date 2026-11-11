@@ -37,14 +37,14 @@ RUN apt-get update -y && apt-get install -y libmariadb-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # luam is a required sibling checkout -- bld/build.sh looks for
-# ../luam by default. Public repo, no token needed. Pinned to match
-# ../bld/luam.commit (checked by tst/integration/build.bats; the build
-# context here is dev/ alone, see deploy.sh).
-ARG LUAM_COMMIT=2ecffd8ec50bcf05a561a0cc408f561832413cd9
+# ../luam by default. Public repo, no token needed. Defaults to latest
+# main; pass --build-arg LUAM_REF=<sha> to pin (or set ../bld/luam.pin
+# and keep this default in sync -- checked by tst/integration/build.bats).
+ARG LUAM_REF=main
 WORKDIR /root
 RUN git clone https://github.com/BenSiv/luam.git && \
     cd luam && \
-    git checkout "$LUAM_COMMIT" && \
+    git checkout "$LUAM_REF" && \
     bash bld/build_lang.sh && \
     bash bld/build_libs.sh
 

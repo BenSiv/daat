@@ -16,11 +16,14 @@ FROM debian:12-slim AS luam-builder
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git build-essential libreadline-dev libsqlite3-dev libcrypt-dev libssl-dev libmariadb-dev ca-certificates wget perl \
     && rm -rf /var/lib/apt/lists/*
-COPY bld/luam.commit /tmp/luam.commit
-RUN git init /luam \
-    && git -C /luam remote add origin https://github.com/BenSiv/luam.git \
-    && git -C /luam fetch --depth 1 origin "$(tr -d '[:space:]' < /tmp/luam.commit)" \
-    && git -C /luam checkout FETCH_HEAD
+# LUAM_REF overrides bld/luam.pin; when both are empty, builds latest main.
+# Full clone (not --depth 1) so bld/build.sh's ancestor check against
+# bld/luam.commit works as main moves ahead.
+ARG LUAM_REF=""
+COPY bld/luam.pin /tmp/luam.pin
+RUN ref="${LUAM_REF:-$(sed 's/#.*//' /tmp/luam.pin | tr -d '[:space:]')}" \
+    && git clone https://github.com/BenSiv/luam.git /luam \
+    && git -C /luam checkout "${ref:-main}"
 WORKDIR /luam
 RUN ./bld/build_lang.sh && ./bld/build_libs.sh
 
