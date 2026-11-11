@@ -49,6 +49,56 @@ function tests.rebuild_twice_keeps_every_name(db_path)
     check(tonumber(rows[1].n) == 1, "expected the shared prefix once")
 end
 
+function tests.rebuild_queries_scale_with_types_not_rows(db_path)
+    print("Testing rebuild_names reads entity_field per entity type, never once per row")
+    batch = {}
+    for i = 1, 25 do
+        table.insert(batch, {name = string.format("IMP-%04d", 1000 + i), label = "Imported " .. tostring(i)})
+    end
+    ids, issues = entity.create_batch(db_path, "gizmo", batch, "tester")
+    check(ids != nil and #ids == 25, "expected 25 imported gizmos")
+
+    type_count = #schema.list(db_path)
+    original_query = db.query
+    field_queries = 0
+    db.query = function(path, query, ...)
+        if string.find(query, "FROM entity_field", 1, true) != nil then
+            field_queries = field_queries + 1
+        end
+        return original_query(path, query, ...)
+    end
+    ok, err = pcall(reference.rebuild_names, db_path)
+    db.query = original_query
+    check(ok, "rebuild failed: " .. tostring(err))
+    check(field_queries <= type_count,
+        string.format("rebuild_names queried entity_field %d times across %d types (per-row N+1)", field_queries, type_count))
+end
+
+function tests.type_without_display_indexes_builtin_name_only(db_path)
+    print("Testing an entity type with no display field indexes imported row.name and skips unnamed rows cleanly")
+    instrument = {
+        name = "instrument",
+        fields = {
+            {name = "number", type = "number", required = true},
+            {name = "asset_code", type = "text", required = true},
+        },
+    }
+    schema.register(db_path, instrument)
+    schema.sync_table(db_path, instrument)
+    named_id, _ = entity.create(db_path, "instrument", {name = "SPEC-901", number = 1, asset_code = "EQ-001"}, "tester")
+    unnamed_id, _ = entity.create(db_path, "instrument", {number = 2, asset_code = "EQ-002"}, "tester")
+    check(named_id != nil and unnamed_id != nil, "created both instruments")
+
+    rows = db.query(db_path, "SELECT entity_id, name_key FROM entity_name_index WHERE entity_type = 'instrument';")
+    check(rows != nil and #rows == 1 and tonumber(rows[1].entity_id) == tonumber(named_id) and rows[1].name_key == "spec901",
+        "expected only SPEC-901 indexed on create")
+
+    reference.rebuild_names(db_path)
+    rows = db.query(db_path, "SELECT entity_id, name_key FROM entity_name_index WHERE entity_type = 'instrument';")
+    check(rows != nil and #rows == 1 and tonumber(rows[1].entity_id) == tonumber(named_id) and rows[1].name_key == "spec901",
+        "expected only SPEC-901 indexed after rebuild")
+end
+
 dir = os.tmpname()
 os.remove(dir)
 lfs.mkdir(dir)

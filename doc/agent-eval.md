@@ -70,9 +70,11 @@ The agent also changes continuously: new tools, prompt changes, loop behaviour. 
 
 `tst/eval/demo-lab/` is a small invented laboratory deployment, written for this purpose, with no content taken from any real deployment. It exists to reproduce, on purpose, the situations the agent has been seen to get wrong.
 
-**Schemas (about 8 types):** project, experiment, sample, culture medium, ingredient, measurement, person. They include at least:
+**Schemas (8 types):** project, experiment, sample, culture medium, ingredient, measurement, person, equipment. They include at least:
 - one junction field (medium to ingredients);
 - one `polymorphic_reference`;
+- one type (`equipment`) with no `display = true` field, mixing rows that carry an imported builtin `name` with locally registered rows whose `name` is unset;
+- `reference_aliases` in `platform.lua` (`"Experiment 027"` -> `exp027`);
 - archivable rows.
 
 **Built-in traps:**
@@ -147,7 +149,7 @@ end
 | `state` | A field of a row ends with the expected value (scenario runs only; needs the database) |
 | `no_latex` | The reply has no LaTeX (`\frac`, `$$`): the chat renders Markdown without math |
 | `labels_not_ids` | The reply names records by label, never by database id ("sample 41") |
-| `names_record` | The record's label appears in the reply's own words, not only inside a link to a document about it |
+| `names_record` | The record's label appears in the reply (including as the visible text of a `/detail` link to the record itself), not only inside a link to a document about it |
 | `links_documents` | The documents the conversation wrote hold stored, resolving links to the expected documents (a Markdown link to a page connects nothing) |
 | `no_dangling_links` | Those documents link no title that doesn't exist |
 | `not_filed_under` | No document the conversation wrote is filed under one of the given documents (e.g. under an experiment's notes) |

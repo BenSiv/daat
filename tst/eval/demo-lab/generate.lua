@@ -393,6 +393,38 @@ function generate(opts)
         screening_question = "Where is the stuff for checking flasks for those tiny wall-less microbes?",
     }
 
+    -- Lab equipment: a schema with no `display = true` field, mirroring
+    -- deployments whose schemas come from an importer. Two rows carry
+    -- the builtin `name` column as imported records do, one active row
+    -- is registered locally with `name` unset (so its label is nil), and
+    -- one retired row is archived. Appended after every other record and
+    -- without rng(), so earlier record ids and generated facts stay fixed.
+    equipment_rows = {
+        {key = "eq-1", values = {name = "Plate reader", number = 1, asset_code = "EQ-014",
+            kind = "spectrophotometer", room = "Room 201", calibrated_on = "2026-01-12", status = "in_service"}},
+        {key = "eq-2", values = {name = "Benchtop centrifuge", number = 2, asset_code = "EQ-029",
+            kind = "centrifuge", room = "Room 108", calibrated_on = "2026-02-04", status = "in_service"}},
+        {key = "eq-3", values = {number = 3, asset_code = "EQ-041",
+            kind = "spectrophotometer", room = "Room 204", calibrated_on = "2026-03-18", status = "in_service"}},
+        {key = "eq-4", values = {number = 4, asset_code = "EQ-052",
+            kind = "autoclave", room = "Wash room", calibrated_on = "2025-11-10", status = "retired"}, archive = true},
+    }
+    facts.equipment = {}
+    for _, eq in ipairs(equipment_rows) do
+        add(eq.key, "equipment", eq.values, eq.archive)
+        facts.equipment[eq.values.asset_code] = {
+            key = eq.key,
+            name = eq.values.name,
+            number = eq.values.number,
+            asset_code = eq.values.asset_code,
+            kind = eq.values.kind,
+            room = eq.values.room,
+            calibrated_on = eq.values.calibrated_on,
+            status = eq.values.status,
+            archived = eq.archive == true,
+        }
+    end
+
     -- Asked about, but recorded nowhere: the agent should say so.
     facts.unknown = {
         {question = "Which supplier provided the yeast extract?", subject = "yeast extract supplier"},
