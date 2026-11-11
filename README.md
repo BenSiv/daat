@@ -12,7 +12,7 @@ A self-maintaining knowledge base with a built-in AI agent. Documents, chat conv
 
 ## Building
 
-Requires a built `luam` checkout beside this one (`../luam`, or set `LUAM_DIR`), and `cmark-gfm` on `PATH` at runtime.
+Requires a built `luam` checkout beside this one (`../luam`, or set `LUAM_DIR`, at or past the commit in `bld/luam.commit`), and `cmark-gfm` on `PATH` at runtime.
 
 ```sh
 ./bld/build.sh          # -> bin/daat

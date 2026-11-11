@@ -26,7 +26,7 @@ cd dev && ./deploy.sh
 
 **Required** to build, run, and run most tests:
 
-- A sibling `luam` checkout, built (`../luam` with `obj/liblua.a` present) -- `bld/build.sh` looks there by default; override with the `LUAM_DIR` env var.
+- A sibling `luam` checkout, built (`../luam` with `obj/liblua.a` present, at or past the commit pinned in `bld/luam.commit`) -- `bld/build.sh` looks there by default and verifies the commit; override the path with the `LUAM_DIR` env var.
 - A C toolchain (`cc`/`make`) and the dev headers `bld/build.sh` compiles against: `libsqlite3-dev`, `libreadline-dev`, `libssl-dev`, `libcrypt-dev`.
 - `cmark-gfm` on `PATH` **at runtime** (`apt install cmark-gfm` / `brew install cmark-gfm`) -- Document rendering shells out to it; it is not compiled in. Not plain `cmark` -- a separate package/binary (GitHub's own fork, needed for the table/strikethrough/autolink extensions `document.lua` renders with); installing the wrong one is a real, previously-hit failure mode (missing `cmark-gfm` produces empty rendered content, not an error at install time).
 - `bats` on `PATH` (`apt install bats` / `brew install bats-core`) -- required to run `tst/integration/*.bats`.

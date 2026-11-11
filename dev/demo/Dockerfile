@@ -16,7 +16,11 @@ FROM debian:12-slim AS luam-builder
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git build-essential libreadline-dev libsqlite3-dev libcrypt-dev libssl-dev libmariadb-dev ca-certificates wget perl \
     && rm -rf /var/lib/apt/lists/*
-RUN git clone --depth 1 https://github.com/BenSiv/luam.git /luam
+COPY bld/luam.commit /tmp/luam.commit
+RUN git init /luam \
+    && git -C /luam remote add origin https://github.com/BenSiv/luam.git \
+    && git -C /luam fetch --depth 1 origin "$(tr -d '[:space:]' < /tmp/luam.commit)" \
+    && git -C /luam checkout FETCH_HEAD
 WORKDIR /luam
 RUN ./bld/build_lang.sh && ./bld/build_libs.sh
 
