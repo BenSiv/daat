@@ -5,7 +5,7 @@ return {
     name = "experiment",
     fields = {
         {name = "title", type = "text", required = true, display = true},
-        {name = "lab_number", type = "text", required = true},
+        {name = "lab_number", type = "text", required = true, identifier = true},
         {name = "project", type = "reference", required = false, entity_type = "project"},
         {name = "medium", type = "reference", required = false, entity_type = "culture_medium"},
         {name = "owner", type = "reference", required = false, entity_type = "person"},

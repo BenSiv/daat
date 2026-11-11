@@ -39,6 +39,18 @@ A `number` field may optionally declare `min`/`max` -- wired into the registrati
 
 Deferred: attachments/files, computed/formula fields, enforced numeric bounds. None of these are ruled out by the design -- they're just not needed to prove the core registration workflow end to end. (Rich text editing exists for the built-in Document entity type -- see `architecture.md`'s "Documents" section -- but a schema-defined `text` field on a custom entity type is still a plain string, no markup.)
 
+## Identifier fields (`identifier = true`) -- what people name an entity by
+
+```lua
+{name = "lab_number", type = "text", required = true, identifier = true},
+```
+
+A field people use to name an entity, without it being the display label: a lab number, a catalog number, an accession id. `entity.find` resolves it to the entity, and a document that mentions it gains a reference to the entity, the same as a mention of the label. A link or multivalue field can't be one.
+
+Mark only fields that name the entity. A notes or description field would turn `entity.find` into a text search, and references into noise.
+
+Run `daat repair references` once after marking a field on a type that already has rows: that indexes the existing values and re-reads every document's references. Until then, `entity.find` still finds those values with a slower per-type compare, but documents don't reference them yet.
+
 ## Multivalue fields (`multi_select`/`multi_reference`) -- a real
 ## junction table, not a delimited string column
 

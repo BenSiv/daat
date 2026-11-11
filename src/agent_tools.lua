@@ -24,6 +24,7 @@ json = require("dkjson")
 knowledge = require("knowledge")
 ledger = require("ledger")
 schema = require("schema")
+reference = require("reference")
 search_provider = require("search_provider")
 stats = require("stats")
 template = require("template")
@@ -137,6 +138,26 @@ agent_tools.AGENT_TOOLS = {
     -- their field names/types itself rather than the system prompt
     -- needing to hardcode every schema that might ever be registered.
     entity = {
+        find = {
+            destructive = false,
+            in_research = true,
+            repeat_safe = true,
+            recover = function(ctx, args, err)
+                if args == nil or args.entity_type == nil then
+                    return nil
+                end
+                return agent_tools.hint_entity_type(ctx, args.entity_type)
+            end,
+            description = "Turn a name or number as the user writes it (\"EXP-017\", \"exp 017\") into the entity it refers to: its type, real id and label. Use this first when the user names a specific entity, instead of guessing which type or field holds the name. A number in a name is not a row id, so don't pass it to entity.get. Exact on the whole name, ignoring case, spacing and separators; every match is listed. For documents about a topic use document.search; for rows by field value use entity.query.",
+            parameters = {
+                type = "object",
+                properties = {
+                    text = {type = "string", description = "the name or number, as the user wrote it"},
+                    entity_type = {type = "string", description = "optional: only this entity type"},
+                },
+                required = {"text"},
+            },
+        },
         list_types = {
             destructive = false,
             in_research = true,
@@ -1314,6 +1335,59 @@ function entity_relationships(ctx, args)
     return table.concat(lines, "\n")
 end
 
+function entity_find(ctx, args)
+    if args.text == nil or tostring(args.text) == "" then
+        return nil, "find requires text"
+    end
+    if args.entity_type != nil and schema.is_registered(ctx.db_path, args.entity_type) == false then
+        return nil, "unknown entity type: " .. tostring(args.entity_type)
+    end
+    text = tostring(args.text)
+    hits = reference.resolve(ctx.db_path, text, args.entity_type)
+    if #hits == 0 then
+        -- Saying what was checked, so the agent can take the answer as
+        -- final: told only "no match", it searched twice more for EXP-999.
+        scope = "every entity type"
+        if args.entity_type != nil then
+            scope = "every " .. tostring(args.entity_type)
+        end
+        message = "No entity is named '" .. text .. "': checked the label and identifier fields of " .. scope .. "."
+        if string.find(text, "%d") != nil then
+            message = message .. " A number in a name is not a row id, so don't pass it to entity.get."
+        end
+        return message
+    end
+    lines = {}
+    for _, hit in ipairs(hits) do
+        line = string.format("%s %d \"%s\"", hit.entity_type, hit.entity_id, tostring(hit.label))
+        -- A ready-made citation, as document.search gives one. Without it,
+        -- holding the id, the agent built the link itself and got the URL
+        -- wrong ("/?type=experiment&entity_id=24", "exp/24"), and put the
+        -- lab number only inside the link text, where the user reading
+        -- the reply can't see which experiment it is.
+        link_title = string.gsub(tostring(hit.label), "[%[%]]", "")
+        link = "[" .. link_title .. "](/detail?type=" .. hit.entity_type .. "&entity_id=" .. tostring(hit.entity_id) .. ")"
+        cite = link
+        if hit.value != hit.label then
+            line = line .. " (" .. hit.field .. " " .. hit.value .. ")"
+            cite = tostring(hit.value) .. " (" .. link .. ")"
+        end
+        table.insert(lines, line)
+        table.insert(lines, "cite as: " .. cite)
+    end
+    -- The id is the point of the lookup: given "experiment 24", the agent
+    -- still filtered its next query on lab_number = 'EXP-027', which only
+    -- works because it already knew which field held the name.
+    if #hits == 1 then
+        table.insert(lines, string.format(
+            "Use its id: entity.get with entity_type %s and entity_id %d, or %s.id = %d in entity.query.",
+            hits[1].entity_type, hits[1].entity_id, hits[1].entity_type, hits[1].entity_id))
+    else
+        table.insert(lines, "Several entities have this name. If the question doesn't say which one is meant, ask; then use its id with entity.get or entity.query.")
+    end
+    return table.concat(lines, "\n")
+end
+
 function entity_query(ctx, args)
     db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
     if args.sql == nil then
@@ -1572,6 +1646,7 @@ function entity_unarchive(ctx, args)
     return "Unarchived " .. tostring(args.entity_type) .. " #" .. tostring(unarchived_id)
 end
 
+agent_tools.AGENT_TOOLS.entity.find.handler = entity_find
 agent_tools.AGENT_TOOLS.entity.list_types.handler = entity_list_types
 agent_tools.AGENT_TOOLS.entity.fields.handler = entity_fields
 agent_tools.AGENT_TOOLS.entity.relationships.handler = entity_relationships
