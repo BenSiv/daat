@@ -5737,7 +5737,8 @@ function html.render_index(db_path, entity_types, edges, nonce)
         .platform-entity-search-results.platform-entity-search-open { display: block; }
         .platform-entity-search-results a { display: flex; justify-content: space-between; gap: 10px; padding: 8px 12px; font-size: 0.88rem; text-decoration: none; color: var(--platform-text, #334155); }
         .platform-entity-search-results a:hover { background: var(--platform-bg-2, #f1f5f9); }
-        .platform-entity-search-results a span.platform-entity-search-type { color: var(--platform-muted, #64748b); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; }
+        .platform-entity-search-results a span.platform-entity-search-sub { color: var(--platform-muted, #64748b); font-weight: 400; margin-left: 6px; }
+        .platform-entity-search-results a span.platform-entity-search-type { color: var(--platform-muted, #64748b); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; flex-shrink: 0; }
         .platform-entity-search-empty { padding: 10px 12px; color: var(--platform-muted, #64748b); font-size: 0.88rem; }
         .platform-index-list { list-style: none !important; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
         .platform-index-list li { list-style: none !important; background: var(--platform-bg, #f8fafc); border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-item, 10px); display: flex; align-items: center; transition: var(--platform-transition, all 0.2s cubic-bezier(0.4, 0, 0.2, 1)); }
@@ -5767,8 +5768,9 @@ function html.render_index(db_path, entity_types, edges, nonce)
                 results.innerHTML = '<div class="platform-entity-search-empty">No matching entities.</div>';
             } else {
                 results.innerHTML = items.map(function(item){
-                    return '<a href="detail?type=' + encodeURIComponent(item.entity_type) + '&entity_id=' + item.id + '">' +
-                        PlatformJS.escapeHtml(item.label) + '<span class="platform-entity-search-type">' + PlatformJS.escapeHtml(item.entity_type) + '</span></a>';
+                    var sub = item.subtitle ? '<span class="platform-entity-search-sub">&middot; ' + PlatformJS.escapeHtml(item.subtitle) + '</span>' : '';
+                    return '<a href="detail?type=' + encodeURIComponent(item.entity_type) + '&entity_id=' + item.id + '"><span>' +
+                        PlatformJS.escapeHtml(item.label) + sub + '</span><span class="platform-entity-search-type">' + PlatformJS.escapeHtml(item.entity_type) + '</span></a>';
                 }).join('');
             }
             results.classList.add('platform-entity-search-open');
@@ -6616,15 +6618,16 @@ function html.render_document_edit(doc, parent_options_html, csrf_token, error_m
         }
         .platform-mention-wrap { position: relative; }
         .platform-mention-results {
-            display: none; position: absolute; top: 40px; left: 8px; min-width: 220px; max-width: 340px;
+            display: none; position: absolute; top: 40px; left: 8px; min-width: 240px; max-width: 440px;
             background: #ffffff; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-sm, 8px);
-            max-height: 240px; overflow-y: auto; z-index: 1000;
+            max-height: 260px; overflow-y: auto; z-index: 1000;
             box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
         }
         .platform-mention-results.platform-mention-open { display: block; }
-        .platform-mention-item { display: flex; justify-content: space-between; gap: 10px; padding: 8px 12px; font-size: 0.88rem; cursor: pointer; }
-        .platform-mention-item:hover { background: var(--platform-bg-2, #f1f5f9); }
-        .platform-mention-item span.platform-mention-type { color: var(--platform-muted, #64748b); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; }
+        .platform-mention-item { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 8px 12px; font-size: 0.88rem; cursor: pointer; }
+        .platform-mention-item:hover, .platform-mention-item.platform-mention-active { background: var(--platform-bg-2, #f1f5f9); }
+        .platform-mention-item span.platform-mention-sub { color: var(--platform-muted, #64748b); font-weight: 400; margin-left: 6px; }
+        .platform-mention-item span.platform-mention-type { color: var(--platform-muted, #64748b); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; flex-shrink: 0; }
         .platform-mention-empty { padding: 10px 12px; color: var(--platform-muted, #64748b); font-size: 0.88rem; }
     </style>
     <div class="platform-container">
@@ -6670,7 +6673,7 @@ function html.render_document_edit(doc, parent_options_html, csrf_token, error_m
             // blocks it too; this stops it being attempted at all.
             usageStatistics: false,
             initialValue: "%s",
-            placeholder: 'Write in Markdown. Link to other documents with [[title]] or [[folder/title]], or type @ to reference an entity.',
+            placeholder: 'Write in Markdown. Type [[ to link another document, or @ to reference an entity.',
             // WYSIWYG mode has no built-in notion of this project's own
             // "[[title]]" link syntax -- without a widget rule it shows
             // as inert literal text. This only styles it as recognized
@@ -6690,56 +6693,235 @@ function html.render_document_edit(doc, parent_options_html, csrf_token, error_m
         });
         var form = document.getElementById('platform-document-edit-form');
         var hiddenContent = document.getElementById('platform-document-content-hidden');
+        var currentDocId = form.elements['entity_id'] ? form.elements['entity_id'].value : '';
         form.addEventListener('submit', function(){
-            hiddenContent.value = editor.getMarkdown();
+            // ToastUI v3's Markdown mode unwraps `widgetRules` nodes in
+            // getMarkdown(), whereas its WYSIWYG convertor leaves
+            // `$$widget0 [[...]]$$` intact -- strip the wrapper here so
+            // saving from either tab writes plain `[[...]]` Markdown.
+            hiddenContent.value = editor.getMarkdown().replace(/\$\$widget\d+\s(\[\[[^\[\]\n]+\]\])\$\$/g, '$1');
         });
 
-        // @mention: type @ to search entities (entity.search_across_types
-        // via /api/entity-search, the same endpoint the global entity-
-        // search page already uses) and insert a real Markdown link on
-        // selection -- [label](detail?type=...&entity_id=...), not this
-        // project's own [[title]] syntax, so document.sync_links' own
-        // [[...]] regex (src/document.lua) never sees it: a mention can
-        // never become a document_link row or a knowledge-graph edge,
-        // by construction, not by a separate filter.
+        // One shared inline link picker for both grammars in a document:
+        //   1. `[[` searches active documents (/api/document-search ->
+        //      document.search_for_link) and inserts `item.link_ref`
+        //      (`[[title]]` or `[[folder/title]]`), so saved content
+        //      keeps human titles rather than internal ids.
+        //   2. `@` searches entities across types (/api/entity-search ->
+        //      entity.search_across_types, including `identifier = true`
+        //      fields) and inserts `[label](detail?type=...&entity_id=...)`
+        //      so document.sync_links' [[...]] regex never turns an
+        //      entity mention into a document_link edge.
+        //
+        // ToastUI v3's Markdown-mode selection coordinates are 1-based
+        // (`[1, 1]` is line 1, col 1), so reading the current line via
+        // `editor.getSelectedText([line, 1], [line, ch])` avoids both
+        // the 0-vs-1 line offset bug and re-serializing the whole
+        // document on every keystroke; WYSIWYG mode uses numeric
+        // ProseMirror offsets (`[from, to]`).
+        var mentionWrap = document.querySelector('.platform-mention-wrap');
         var mentionResults = document.getElementById('platform-mention-results');
-        var mentionState = null; // {line, atCh, ch} while a "@query" is live
+        var mentionState = null;
+        var activeIndex = -1;
+        var requestSeq = 0;
+
         function closeMentions() {
             mentionState = null;
+            activeIndex = -1;
+            requestSeq++;
             mentionResults.classList.remove('platform-mention-open');
             mentionResults.innerHTML = '';
         }
-        function renderMentions(items) {
-            if (!mentionState) { return; }
+
+        function positionPopover() {
+            var topPx = 40, leftPx = 8;
+            var domSel = window.getSelection ? window.getSelection() : null;
+            if (domSel && domSel.rangeCount > 0 && mentionWrap) {
+                var range = domSel.getRangeAt(0);
+                if (mentionWrap.contains(range.startContainer)) {
+                    var rect = range.getBoundingClientRect();
+                    var wrapRect = mentionWrap.getBoundingClientRect();
+                    if (rect && (rect.height > 0 || rect.top > 0)) {
+                        topPx = Math.max(36, Math.round(rect.bottom - wrapRect.top + 6));
+                        leftPx = Math.max(8, Math.min(Math.round(rect.left - wrapRect.left), Math.max(8, Math.round(wrapRect.width - 320))));
+                    }
+                }
+            }
+            mentionResults.style.top = topPx + 'px';
+            mentionResults.style.left = leftPx + 'px';
+        }
+
+        function setActiveItem(nextIdx) {
+            var nodes = mentionResults.querySelectorAll('.platform-mention-item');
+            if (nodes.length === 0) { activeIndex = -1; return; }
+            if (nextIdx < 0) { nextIdx = nodes.length - 1; }
+            if (nextIdx >= nodes.length) { nextIdx = 0; }
+            activeIndex = nextIdx;
+            for (var i = 0; i < nodes.length; i++) {
+                nodes[i].classList.toggle('platform-mention-active', i === activeIndex);
+            }
+            if (nodes[activeIndex] && nodes[activeIndex].scrollIntoView) {
+                nodes[activeIndex].scrollIntoView({block: 'nearest'});
+            }
+        }
+
+        function renderDocumentItems(items, seq) {
+            if (!mentionState || mentionState.kind !== 'document' || seq !== requestSeq) { return; }
+            activeIndex = -1;
+            if (items.length === 0) {
+                mentionResults.innerHTML = '<div class="platform-mention-empty">No matching documents.</div>';
+            } else {
+                mentionResults.innerHTML = items.map(function(item){
+                    var badge = item.parent_title ? PlatformJS.escapeHtml(item.parent_title) : 'document';
+                    return '<div class="platform-mention-item" data-kind="document" data-ref="' + PlatformJS.escapeHtml(item.link_ref) + '">' +
+                        '<span>' + PlatformJS.escapeHtml(item.title) + '</span>' +
+                        '<span class="platform-mention-type">' + badge + '</span></div>';
+                }).join('');
+            }
+            positionPopover();
+            mentionResults.classList.add('platform-mention-open');
+        }
+
+        function renderEntityItems(items, seq) {
+            if (!mentionState || mentionState.kind !== 'entity' || seq !== requestSeq) { return; }
+            activeIndex = -1;
             if (items.length === 0) {
                 mentionResults.innerHTML = '<div class="platform-mention-empty">No matching entities.</div>';
             } else {
                 mentionResults.innerHTML = items.map(function(item){
-                    return '<div class="platform-mention-item" data-label="' + PlatformJS.escapeHtml(item.label) +
+                    var sub = item.subtitle ? '<span class="platform-mention-sub">&middot; ' + PlatformJS.escapeHtml(item.subtitle) + '</span>' : '';
+                    return '<div class="platform-mention-item" data-kind="entity" data-label="' + PlatformJS.escapeHtml(item.label) +
                         '" data-type="' + PlatformJS.escapeHtml(item.entity_type) + '" data-id="' + item.id + '">' +
-                        PlatformJS.escapeHtml(item.label) + '<span class="platform-mention-type">' + PlatformJS.escapeHtml(item.entity_type) + '</span></div>';
+                        '<span>' + PlatformJS.escapeHtml(item.label) + sub + '</span>' +
+                        '<span class="platform-mention-type">' + PlatformJS.escapeHtml(item.entity_type) + '</span></div>';
                 }).join('');
             }
+            positionPopover();
             mentionResults.classList.add('platform-mention-open');
         }
-        var searchMentions = PlatformJS.debounce(function(query){
-            PlatformJS.fetchJSON('api/entity-search?query=' + encodeURIComponent(query)).then(renderMentions);
+
+        var searchDocuments = PlatformJS.debounce(function(query, seq){
+            var url = 'api/document-search?query=' + encodeURIComponent(query);
+            if (currentDocId) { url += '&exclude_id=' + encodeURIComponent(currentDocId); }
+            PlatformJS.fetchJSON(url).then(function(items){ renderDocumentItems(items, seq); });
+        }, 150);
+
+        var searchEntities = PlatformJS.debounce(function(query, seq){
+            PlatformJS.fetchJSON('api/entity-search?query=' + encodeURIComponent(query)).then(function(items){ renderEntityItems(items, seq); });
         }, 200);
-        editor.on('keyup', function(){
+
+        function safeSelectedText(startPos, endPos) {
+            try { return editor.getSelectedText(startPos, endPos) || ''; } catch (_) { return ''; }
+        }
+
+        function getCursorLineContext() {
             var sel = editor.getSelection();
-            var pos = sel[1]; // [line, ch] -- end of selection, the cursor when collapsed
-            var lineText = editor.getMarkdown().split('\n')[pos[0]] || '';
-            var beforeCursor = lineText.slice(0, pos[1]);
-            // Requires @ to start a token (line start or preceded by
-            // whitespace) so "user@example.com" never triggers this,
-            // same convention Slack/GitHub mentions use.
-            var match = beforeCursor.match(/(^|\s)@([\w-]*)$/);
-            if (!match) { closeMentions(); return; }
-            var query = match[2];
-            mentionState = {line: pos[0], atCh: pos[1] - query.length - 1, ch: pos[1]};
-            if (query.length === 0) { closeMentions(); mentionState = {line: pos[0], atCh: pos[1] - 1, ch: pos[1]}; return; }
-            searchMentions(query);
+            if (!sel || sel.length < 2) { return null; }
+            if (editor.isMarkdownMode && editor.isMarkdownMode()) {
+                if (!Array.isArray(sel[0]) || !Array.isArray(sel[1])) { return null; }
+                if (sel[0][0] !== sel[1][0] || sel[0][1] !== sel[1][1]) { return null; }
+                var line = sel[1][0], ch = sel[1][1];
+                return {
+                    mode: 'markdown',
+                    line: line,
+                    ch: ch,
+                    before: safeSelectedText([line, 1], [line, ch]),
+                    afterTwo: safeSelectedText([line, ch], [line, ch + 2])
+                };
+            }
+            if (typeof sel[0] === 'number' && typeof sel[1] === 'number' && sel[0] === sel[1]) {
+                var pos = sel[1];
+                var chunk = safeSelectedText(Math.max(1, pos - 200), pos);
+                var parts = chunk.split('\n');
+                return {
+                    mode: 'wysiwyg',
+                    pos: pos,
+                    before: parts[parts.length - 1] || '',
+                    afterTwo: safeSelectedText(pos, pos + 2)
+                };
+            }
+            return null;
+        }
+
+        function applyMentionItem(itemEl) {
+            if (!itemEl || !mentionState) { return; }
+            var state = mentionState;
+            var kind = itemEl.getAttribute('data-kind');
+            if (kind === 'document') {
+                var refText = itemEl.getAttribute('data-ref') || '';
+                if (state.mode === 'markdown') {
+                    editor.replaceSelection(refText, [state.line, state.ch - state.tokenLen], [state.line, state.ch + state.closingLen]);
+                } else {
+                    editor.replaceSelection(refText, state.pos - state.tokenLen, state.pos + state.closingLen);
+                }
+            } else if (kind === 'entity') {
+                var label = itemEl.getAttribute('data-label') || '';
+                var url = 'detail?type=' + itemEl.getAttribute('data-type') + '&entity_id=' + itemEl.getAttribute('data-id');
+                if (state.mode === 'markdown') {
+                    editor.replaceSelection('[' + label + '](' + url + ')', [state.line, state.ch - state.tokenLen], [state.line, state.ch]);
+                } else {
+                    editor.deleteSelection(state.pos - state.tokenLen, state.pos);
+                    editor.exec('addLink', {linkText: label, linkUrl: url});
+                }
+            }
+            closeMentions();
+        }
+
+        editor.on('changeMode', closeMentions);
+        editor.on('keyup', function(editorType, ev){
+            if (ev && (ev.key === 'ArrowDown' || ev.key === 'ArrowUp' || ev.key === 'Enter' || ev.key === 'Escape')) {
+                return;
+            }
+            var ctx = getCursorLineContext();
+            if (!ctx) { closeMentions(); return; }
+
+            // Open `[[...` without a closing bracket on this line: document link picker.
+            var docMatch = ctx.before.match(/\[\[([^\[\]]*)$/);
+            if (docMatch) {
+                var docQuery = docMatch[1];
+                var closingLen = ctx.afterTwo === ']]' ? 2 : 0;
+                mentionState = {
+                    kind: 'document',
+                    mode: ctx.mode,
+                    line: ctx.line,
+                    ch: ctx.ch,
+                    pos: ctx.pos,
+                    tokenLen: docMatch[0].length,
+                    closingLen: closingLen
+                };
+                var seq = ++requestSeq;
+                searchDocuments(docQuery, seq);
+                return;
+            }
+
+            // `@query` at line start or after whitespace (never inside user@example.com): entity picker.
+            var entMatch = ctx.before.match(/(^|\s)@([\w-]*)$/);
+            if (entMatch) {
+                var entQuery = entMatch[2];
+                mentionState = {
+                    kind: 'entity',
+                    mode: ctx.mode,
+                    line: ctx.line,
+                    ch: ctx.ch,
+                    pos: ctx.pos,
+                    tokenLen: entQuery.length + 1,
+                    closingLen: 0
+                };
+                var entSeq = ++requestSeq;
+                if (entQuery.length === 0) {
+                    activeIndex = -1;
+                    mentionResults.innerHTML = '<div class="platform-mention-empty">Type to search entities&hellip;</div>';
+                    positionPopover();
+                    mentionResults.classList.add('platform-mention-open');
+                    return;
+                }
+                searchEntities(entQuery, entSeq);
+                return;
+            }
+
+            closeMentions();
         });
+
         mentionResults.addEventListener('mousedown', function(e){
             // mousedown, not click -- fires before the editor's own
             // blur/selection-change handling, so mentionState is still
@@ -6747,14 +6929,32 @@ function html.render_document_edit(doc, parent_options_html, csrf_token, error_m
             var item = e.target.closest('.platform-mention-item');
             if (!item || !mentionState) { return; }
             e.preventDefault();
-            var link = '[' + item.getAttribute('data-label') + '](detail?type=' + item.getAttribute('data-type') + '&entity_id=' + item.getAttribute('data-id') + ')';
-            editor.replaceSelection(link, [mentionState.line, mentionState.atCh], [mentionState.line, mentionState.ch]);
-            closeMentions();
+            applyMentionItem(item);
         });
         PlatformJS.onOutsideClick(null, function(){ return mentionState ? mentionResults : null; }, closeMentions);
         document.addEventListener('keydown', function(e){
-            if (e.key === 'Escape' && mentionState) { closeMentions(); }
-        });
+            if (!mentionState || !mentionResults.classList.contains('platform-mention-open')) { return; }
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                closeMentions();
+                return;
+            }
+            var items = mentionResults.querySelectorAll('.platform-mention-item');
+            if (items.length === 0) { return; }
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                e.stopPropagation();
+                setActiveItem(activeIndex + 1);
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                e.stopPropagation();
+                setActiveItem(activeIndex <= 0 ? items.length - 1 : activeIndex - 1);
+            } else if (e.key === 'Enter' && activeIndex >= 0 && items[activeIndex]) {
+                e.preventDefault();
+                e.stopPropagation();
+                applyMentionItem(items[activeIndex]);
+            }
+        }, true);
     })();
     </script>
 </div>

@@ -1940,6 +1940,16 @@ function cgi.handle_request()
         return print_response("200 OK", "application/json", json.encode(results))
     end
 
+    -- /document-edit's `[[` link dropdown: resolves matching active
+    -- documents to their canonical `[[title]]` / `[[folder/title]]`
+    -- reference (document.search_for_link) without shipping every
+    -- document title inside the edit page's HTML.
+    if path_info == "/api/document-search" then
+        query_str = default_value(params.query, "")
+        results = document.search_for_link(db_path, query_str, 20, params.exclude_id)
+        return print_response("200 OK", "application/json", json.encode(results))
+    end
+
     if path_info == "/api/preview" then
         return handle_preview(db_path, params)
     end

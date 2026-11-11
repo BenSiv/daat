@@ -573,3 +573,34 @@ EOF
     run "$BIN" document resync-links
     [[ "$output" =~ "Usage: daat document <create-json|embed-pending|embedding-text>" ]]
 }
+
+@test "/api/document-search returns canonical [[title]] and [[folder/title]] refs, omitting exclude_id and archived pages" {
+    save_document "csrf_token=${CSRF}&title=Home&parent_id=&content=Welcome." >/dev/null
+    save_document "csrf_token=${CSRF}&title=Guides&parent_id=&content=Folder." >/dev/null
+    save_document "csrf_token=${CSRF}&title=Setup&parent_id=&content=Root setup." >/dev/null
+    save_document "csrf_token=${CSRF}&title=Setup&parent_id=2&content=Folder setup." >/dev/null
+    save_document "csrf_token=${CSRF}&title=Setup+Old&parent_id=&content=Archived." >/dev/null
+    "$BIN" entity archive document 5 >/dev/null
+
+    run get_route "/api/document-search" "query=Set&exclude_id=1"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "200 OK" ]]
+    [[ "$output" =~ '"link_ref":"[[Setup]]"' ]]
+    [[ "$output" =~ '"link_ref":"[[Guides/Setup]]"' ]]
+    [[ "$output" =~ '"parent_title":"Guides"' ]]
+    [[ ! "$output" =~ "Setup Old" ]]
+
+    # Editing document #3 excludes #3 itself from suggestions.
+    run get_route "/api/document-search" "query=Setup&exclude_id=3"
+    [[ "$output" =~ '"link_ref":"[[Guides/Setup]]"' ]]
+    [[ ! "$output" =~ '"link_ref":"[[Setup]]"' ]]
+}
+
+@test "/document-edit wires both [[ document search and @ entity search into the inline link dropdown" {
+    run get_route "/document-edit" ""
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "200 OK" ]]
+    [[ "$output" =~ "api/document-search" ]]
+    [[ "$output" =~ "api/entity-search" ]]
+    [[ "$output" =~ "platform-mention-results" ]]
+}

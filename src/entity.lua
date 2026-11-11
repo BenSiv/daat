@@ -830,61 +830,122 @@ function entity.count_by_field(db_path, entity_type, field_name, value, include_
     return tonumber(rows[1].n)
 end
 
--- The schema-declared {display = true} field for this type, if any --
--- same second-priority source html.lua's own_row_label/
--- entity_display_label use (the builtin "name" column is always the
--- first source, checked directly by search_across_types below since
--- it needs both, not either/or). Reimplemented here rather than
--- shared: html.lua requires entity.lua, so the reverse require would
--- cycle. nil means this schema declared no display field.
-function display_field_name(db_path, entity_type)
+-- The schema-declared {display = true} field (if any) and every
+-- {identifier = true} field for this type. Builtin "name" is always
+-- checked first by search_across_types; display and identifier fields
+-- give locally created rows and code-named records (lab_number,
+-- asset_code) the same discoverability in /data's search box and the
+-- document editor's @mention dropdown.
+function search_fields_for_type(db_path, entity_type)
+    display_field = nil
+    identifier_fields = {}
     for _, field in ipairs(schema.fields(db_path, entity_type)) do
-        if tonumber(field.display) == 1 then
-            return field.name
+        if display_field == nil and tonumber(field.display) == 1 then
+            display_field = field.name
+        end
+        if tonumber(field.identifier) == 1 then
+            table.insert(identifier_fields, field.name)
         end
     end
-    return nil
+    return display_field, identifier_fields
 end
 
--- Cross-type "find this row" search for /data's own search box. A
--- single client-side index across every entity type doesn't scale the
--- way /documents' title index does
--- (many types, some already in the hundreds of rows each), so this is
--- a server-side query instead: one bounded, indexable LIKE per type,
--- against the builtin "name" column (populated for e.g. Benchling-
--- imported rows, empty otherwise -- every table has it, but not every
--- row uses it) OR'd with the schema's own display field if one is
--- declared. A type with neither ever populated simply matches nothing,
--- rather than needing an explicit skip step -- same effect, no special
--- case. per_type_limit bounds each individual query; total_limit
--- truncates the combined, concatenated result -- both needed since a
--- broad query could otherwise return per_type_limit rows from every
--- registered type at once.
+-- Picks the primary label and optional subtitle for a search hit:
+-- builtin `name` first, then the schema's display field, falling back
+-- to a matching (or first) identifier value on display-less schemas.
+-- When the query matched an identifier rather than the primary label
+-- (e.g. "EXP-027" on an experiment titled "Growth of S. demo..."),
+-- the identifier becomes `label` -- so @mention inserts "[EXP-027](...)"
+-- matching what the author typed -- and the primary label rides along
+-- as `subtitle` so the dropdown still shows which record it is.
+function search_row_label(row, display_field, identifier_fields, query_lower)
+    primary_label = nil
+    if row.name != nil and tostring(row.name) != "" then
+        primary_label = tostring(row.name)
+    elseif display_field != nil and row[display_field] != nil and tostring(row[display_field]) != "" then
+        primary_label = tostring(row[display_field])
+    end
+    first_id_val = nil
+    matched_id_val = nil
+    for _, id_field in ipairs(identifier_fields) do
+        raw_val = row[id_field]
+        if raw_val != nil and tostring(raw_val) != "" then
+            val_str = tostring(raw_val)
+            if first_id_val == nil then
+                first_id_val = val_str
+            end
+            if matched_id_val == nil and string.find(string.lower(val_str), query_lower, 1, true) != nil then
+                matched_id_val = val_str
+            end
+        end
+    end
+    if primary_label == nil then
+        if matched_id_val != nil then
+            return matched_id_val, nil
+        end
+        return first_id_val, nil
+    end
+    primary_matches = string.find(string.lower(primary_label), query_lower, 1, true) != nil
+    if primary_matches == false and matched_id_val != nil then
+        subtitle = nil
+        if matched_id_val != primary_label then
+            subtitle = primary_label
+        end
+        return matched_id_val, subtitle
+    end
+    subtitle = nil
+    if first_id_val != nil and first_id_val != primary_label then
+        subtitle = first_id_val
+    end
+    return primary_label, subtitle
+end
+
+-- Cross-type "find this row" search for /data's search box and the
+-- document editor's @mention dropdown: one bounded LIKE per type
+-- against builtin `name`, the schema's display field (if any), and any
+-- `identifier = true` fields. A type with none of those populated
+-- matches nothing without needing a special-case skip list.
+-- `per_type_limit` bounds each query; `total_limit` truncates the
+-- combined result.
 function entity.search_across_types(db_path, query_text, per_type_limit, total_limit)
     if query_text == nil or query_text == "" then
         return {}
     end
-    like_value = db.quote("%" .. tostring(query_text) .. "%")
+    query_str = tostring(query_text)
+    query_lower = string.lower(query_str)
+    like_value = db.quote("%" .. query_str .. "%")
     results = {}
     for _, entity_type_row in ipairs(schema.list(db_path)) do
         entity_type = entity_type_row.name
         if entity_type != "document" and db.table_exists(db_path, entity_type) == true then
-            display_field = display_field_name(db_path, entity_type)
-            label_expr = "name"
-            where_expr = "name LIKE " .. like_value
+            display_field, identifier_fields = search_fields_for_type(db_path, entity_type)
+            select_cols = {"id", "name"}
+            where_parts = {"name LIKE " .. like_value}
+            seen_cols = {id = true, name = true}
+            extra_cols = {}
             if display_field != nil then
-                quoted_field = db.quote_ident(display_field)
-                label_expr = "COALESCE(NULLIF(name, ''), " .. quoted_field .. ")"
-                where_expr = "(name LIKE " .. like_value .. " OR " .. quoted_field .. " LIKE " .. like_value .. ")"
+                table.insert(extra_cols, display_field)
+            end
+            for _, id_field in ipairs(identifier_fields) do
+                table.insert(extra_cols, id_field)
+            end
+            for _, col in ipairs(extra_cols) do
+                if seen_cols[col] == nil then
+                    seen_cols[col] = true
+                    quoted_col = db.quote_ident(col)
+                    table.insert(select_cols, quoted_col)
+                    table.insert(where_parts, quoted_col .. " LIKE " .. like_value)
+                end
             end
             rows = db.query(db_path, string.format(
-                "SELECT id, %s AS label FROM %s WHERE %s AND (archived_at IS NULL) LIMIT %d;",
-                label_expr, entity_type, where_expr, tonumber(per_type_limit)
+                "SELECT %s FROM %s WHERE (%s) AND (archived_at IS NULL OR archived_at = '') LIMIT %d;",
+                table.concat(select_cols, ", "), entity_type, table.concat(where_parts, " OR "), tonumber(per_type_limit)
             ))
             if rows != nil then
                 for _, row in ipairs(rows) do
-                    if row.label != nil and tostring(row.label) != "" then
-                        table.insert(results, {entity_type = entity_type, id = row.id, label = tostring(row.label)})
+                    label, subtitle = search_row_label(row, display_field, identifier_fields, query_lower)
+                    if label != nil and label != "" then
+                        table.insert(results, {entity_type = entity_type, id = row.id, label = label, subtitle = subtitle})
                     end
                 end
             end
