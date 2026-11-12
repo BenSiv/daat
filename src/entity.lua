@@ -873,7 +873,7 @@ function entity.count(db_path, entity_type, include_archived)
     if db.table_exists(db_path, entity_type) == false then
         return 0
     end
-    query = "SELECT COUNT(*) AS n FROM " .. entity_type
+    query = "SELECT COUNT(*) AS n FROM " .. db.quote_ident(entity_type)
     if include_archived != true then
         query = query .. " WHERE archived_at IS NULL"
     end
@@ -882,6 +882,177 @@ function entity.count(db_path, entity_type, include_archived)
         return 0
     end
     return tonumber(rows[1].n)
+end
+
+-- Batched active row counts across a list of registered entity types for
+-- `/data`. Every create, archive and unarchive of a registered entity
+-- appends an `entity_event` row, so `MAX(event_id)` + the sorted type list
+-- uniquely identifies when active counts can change:
+--   1. Exact cache hit in `system_state` ('entity.active_counts_cache'):
+--      0 table scans and 0 `information_schema` round-trips.
+--   2. Incremental refresh when new ledger events arrived: recounts only
+--      the distinct `entity_type`s with create/archive/unarchive events
+--      after the cached `max_event_id` (leaving 70k-row unchanged tables
+--      untouched).
+--   3. Cold start or schema-set change: checks table existence once via
+--      `db.get_tables` and batches `SELECT COUNT(*)` in `UNION ALL` chunks.
+ACTIVE_COUNTS_STATE_KEY = "entity.active_counts_cache"
+COUNT_UNION_CHUNK_SIZE = 25
+
+function to_int_or_zero(v)
+    n = tonumber(v)
+    if n == nil then
+        return 0
+    end
+    return n
+end
+
+function run_batched_active_counts(db_path, target_names, existing_set)
+    computed = {}
+    present = {}
+    for _, name in ipairs(target_names) do
+        computed[name] = 0
+        if existing_set[name] == true then
+            table.insert(present, name)
+        end
+    end
+    idx = 1
+    while idx <= #present do
+        parts = {}
+        chunk_end = math.min(#present, idx + COUNT_UNION_CHUNK_SIZE - 1)
+        for i = idx, chunk_end do
+            tname = present[i]
+            table.insert(parts, string.format(
+                "SELECT %s AS entity_name, COUNT(*) AS n FROM %s WHERE archived_at IS NULL",
+                db.quote(tname), db.quote_ident(tname)
+            ))
+        end
+        q = table.concat(parts, " UNION ALL ") .. ";"
+        rows = db.query(db_path, q)
+        if rows != nil then
+            for _, r in ipairs(rows) do
+                if r.entity_name != nil then
+                    computed[r.entity_name] = to_int_or_zero(r.n)
+                end
+            end
+        end
+        idx = chunk_end + 1
+    end
+    return computed
+end
+
+function existing_tables_set(db_path)
+    set = {}
+    tables = db.get_tables(db_path)
+    if tables != nil then
+        for _, t in ipairs(tables) do
+            set[t] = true
+        end
+    end
+    return set
+end
+
+function entity.counts_by_type(db_path, entity_types)
+    type_names = {}
+    items = entity_types
+    if items == nil then
+        items = {}
+    end
+    for _, item in ipairs(items) do
+        name = item
+        if type(item) == "table" then
+            name = item.name
+        end
+        if type(name) == "string" and name != "" and schema.valid_name_syntax(name) then
+            table.insert(type_names, name)
+        end
+    end
+    if #type_names == 0 then
+        return {}
+    end
+
+    sorted_names = {}
+    for i, name in ipairs(type_names) do
+        sorted_names[i] = name
+    end
+    table.sort(sorted_names)
+    types_sig = table.concat(sorted_names, ",")
+
+    store_mod = require("store")
+    max_ok, max_rows = pcall(db.query, db_path, "SELECT COALESCE(MAX(event_id), 0) AS max_id FROM entity_event;")
+    cache_usable = (max_ok == true and max_rows != nil and max_rows[1] != nil)
+    current_max_id = 0
+    if cache_usable then
+        current_max_id = to_int_or_zero(max_rows[1].max_id)
+    end
+
+    cached = nil
+    if cache_usable then
+        raw_ok, raw_json = pcall(store_mod.get_text, db_path, ACTIVE_COUNTS_STATE_KEY)
+        if raw_ok == true and type(raw_json) == "string" and raw_json != "" then
+            decoded = json.decode(raw_json)
+            if type(decoded) == "table" and type(decoded.counts) == "table" then
+                cached = decoded
+            end
+        end
+    end
+
+    if cached != nil and cached.types_sig == types_sig and tonumber(cached.max_event_id) != nil then
+        cached_max = tonumber(cached.max_event_id)
+        if cached_max == current_max_id then
+            result = {}
+            for _, name in ipairs(type_names) do
+                result[name] = to_int_or_zero(cached.counts[name])
+            end
+            return result
+        end
+        if current_max_id > cached_max then
+            dirty_ok, dirty_rows = pcall(db.query, db_path, string.format(
+                "SELECT DISTINCT entity_type FROM entity_event WHERE event_id > %d AND event_type IN ('create', 'archive', 'unarchive');",
+                cached_max
+            ))
+            if dirty_ok == true then
+                requested_set = {}
+                for _, name in ipairs(type_names) do
+                    requested_set[name] = true
+                end
+                dirty_names = {}
+                if dirty_rows != nil then
+                    for _, dr in ipairs(dirty_rows) do
+                        if dr.entity_type != nil and requested_set[dr.entity_type] == true then
+                            table.insert(dirty_names, dr.entity_type)
+                        end
+                    end
+                end
+                counts = {}
+                for _, name in ipairs(type_names) do
+                    counts[name] = to_int_or_zero(cached.counts[name])
+                end
+                if #dirty_names > 0 then
+                    recounted = run_batched_active_counts(db_path, dirty_names, existing_tables_set(db_path))
+                    for k, v in pairs(recounted) do
+                        counts[k] = v
+                    end
+                end
+                pcall(store_mod.set_text, db_path, ACTIVE_COUNTS_STATE_KEY, json.encode({
+                    max_event_id = current_max_id,
+                    types_sig = types_sig,
+                    counts = counts,
+                }))
+                return counts
+            end
+        end
+    end
+
+    counts = run_batched_active_counts(db_path, type_names, existing_tables_set(db_path))
+    if cache_usable then
+        pcall(store_mod.set_text, db_path, ACTIVE_COUNTS_STATE_KEY, json.encode({
+            max_event_id = current_max_id,
+            types_sig = types_sig,
+            counts = counts,
+        }))
+    end
+    return counts
 end
 
 -- Filtered siblings of entity.list/entity.count, for "every X that

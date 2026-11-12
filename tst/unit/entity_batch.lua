@@ -151,6 +151,80 @@ function tests.ctx_query_supports_in_list_and_batched_overrides(db_path)
     check(by_code["T2"] != nil and #by_code["T2"].tags == 1 and by_code["T2"].tags[1] == "beta", "expected 1 tag on T2")
 end
 
+function tests.counts_by_type_and_preload_all_fields_cache_and_delta_refresh(db_path)
+    print("Testing entity.counts_by_type cold UNION ALL, warm 0-scan cache hit, and dirty-type-only delta refresh")
+    types = schema.list(db_path)
+    cold = entity.counts_by_type(db_path, types)
+    for _, t in ipairs(types) do
+        expected = entity.count(db_path, t.name)
+        check(cold[t.name] == expected, "cold count mismatch for " .. t.name .. ": " .. tostring(cold[t.name]) .. " vs " .. tostring(expected))
+    end
+
+    -- Warm hit: zero SELECT COUNT(*) table scans when MAX(event_id) is unchanged.
+    original_query = db.query
+    count_queries = 0
+    db.query = function(path, statement, ...)
+        if string.find(string.upper(statement), "COUNT%(%*%)") != nil then
+            count_queries = count_queries + 1
+        end
+        return original_query(path, statement, ...)
+    end
+    warm = entity.counts_by_type(db_path, types)
+    db.query = original_query
+    check(count_queries == 0, "expected 0 COUNT(*) queries on warm cache hit, got " .. tostring(count_queries))
+    check(warm["widget"] == cold["widget"], "warm widget count mismatch")
+
+    -- An update-only event does not change active counts -> 0 COUNT(*) scans.
+    w_rows = db.query(db_path, "SELECT id FROM widget WHERE archived_at IS NULL LIMIT 1;")
+    entity.update(db_path, "widget", tonumber(w_rows[1].id), {label = "W-Updated"}, "tester")
+    count_queries = 0
+    db.query = function(path, statement, ...)
+        if string.find(string.upper(statement), "COUNT%(%*%)") != nil then
+            count_queries = count_queries + 1
+        end
+        return original_query(path, statement, ...)
+    end
+    after_update = entity.counts_by_type(db_path, types)
+    db.query = original_query
+    check(count_queries == 0, "expected 0 COUNT(*) queries after update-only event, got " .. tostring(count_queries))
+    check(after_update["widget"] == cold["widget"], "update must not alter active count")
+
+    -- Creating and archiving a widget recounts only 'widget', never 'tagged_item'.
+    new_id, _ = entity.create(db_path, "widget", {label = "W-Delta"}, "tester")
+    scanned_tagged = false
+    db.query = function(path, statement, ...)
+        if string.find(statement, "COUNT%(%*%)") != nil and string.find(statement, "tagged_item") != nil then
+            scanned_tagged = true
+        end
+        return original_query(path, statement, ...)
+    end
+    after_create = entity.counts_by_type(db_path, types)
+    db.query = original_query
+    check(scanned_tagged == false, "delta refresh must not rescan unchanged tagged_item table")
+    check(after_create["widget"] == cold["widget"] + 1, "expected widget count + 1 after create")
+
+    entity.archive(db_path, "widget", new_id, "tester")
+    after_archive = entity.counts_by_type(db_path, types)
+    check(after_archive["widget"] == cold["widget"], "expected widget count restored after archive")
+
+    -- schema.relationships preloads all entity_field rows in 1 query.
+    schema.clear_cache(db_path)
+    field_queries = 0
+    db.query = function(path, statement, ...)
+        if string.find(statement, "FROM entity_field") != nil then
+            field_queries = field_queries + 1
+        end
+        return original_query(path, statement, ...)
+    end
+    edges = schema.relationships(db_path, types)
+    for _, t in ipairs(types) do
+        schema.fields(db_path, t.name)
+    end
+    db.query = original_query
+    check(field_queries == 1, "expected 1 entity_field preload query across all types, got " .. tostring(field_queries))
+    check(#edges >= 1, "expected at least 1 relationship edge")
+end
+
 dir = os.tmpname()
 os.remove(dir)
 lfs.mkdir(dir)

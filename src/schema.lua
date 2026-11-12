@@ -25,10 +25,17 @@ function schema_cache_key(db_path)
 end
 
 function invalidate_schema_cache(db_path)
+    if db_path == nil then
+        _fields_cache = {}
+        _registered_cache = {}
+        return
+    end
     key = schema_cache_key(db_path)
     _fields_cache[key] = nil
     _registered_cache[key] = nil
 end
+
+schema.clear_cache = invalidate_schema_cache
 
 function shallow_copy_list(items)
     out = {}
@@ -1403,13 +1410,70 @@ function schema.fields(db_path, entity_type)
     return shallow_copy_list(rows)
 end
 
+-- Preloads `entity_field` rows for every registered entity type in one query
+-- instead of issuing N sequential `SELECT * FROM entity_field WHERE
+-- entity_type = ?` round-trips (used by `/data`'s schema.relationships and
+-- relation diagram across 40+ entity types).
+function schema.preload_all_fields(db_path, entity_types)
+    types = entity_types
+    if types == nil then
+        types = schema.list(db_path)
+    end
+    cache_key = schema_cache_key(db_path)
+    fields_bucket = _fields_cache[cache_key]
+    if fields_bucket == nil then
+        fields_bucket = {}
+        _fields_cache[cache_key] = fields_bucket
+    end
+    reg_bucket = _registered_cache[cache_key]
+    if reg_bucket == nil then
+        reg_bucket = {}
+        _registered_cache[cache_key] = reg_bucket
+    end
+    grouped = {}
+    missing = false
+    for _, t in ipairs(types) do
+        name = t
+        if type(t) == "table" then
+            name = t.name
+        end
+        if name != nil and name != "" then
+            grouped[name] = {}
+            reg_bucket[name] = true
+            if fields_bucket[name] == nil then
+                missing = true
+            end
+        end
+    end
+    if missing == false then
+        return
+    end
+    all_rows = db.query(db_path, "SELECT * FROM entity_field ORDER BY entity_type ASC, field_order ASC;")
+    if all_rows != nil then
+        for _, row in ipairs(all_rows) do
+            et = row.entity_type
+            if grouped[et] == nil then
+                grouped[et] = {}
+            end
+            table.insert(grouped[et], row)
+        end
+    end
+    for et, list in pairs(grouped) do
+        fields_bucket[et] = list
+    end
+end
+
 -- Every reference relationship between registered entity types --
 -- {from_type, to_type, field_name}, one per reference-typed field, across
 -- every registered schema. Backs the Data page's entity-relation diagram;
 -- a pure introspection query (like schema.fields()), so it belongs here
 -- rather than in html.lua/cgi.lua alongside the rendering.
-function schema.relationships(db_path)
-    types = schema.list(db_path)
+function schema.relationships(db_path, entity_types)
+    types = entity_types
+    if types == nil then
+        types = schema.list(db_path)
+    end
+    schema.preload_all_fields(db_path, types)
     edges = {}
     for _, t in ipairs(types) do
         fields = schema.fields(db_path, t.name)

@@ -456,6 +456,14 @@ Assistant: Rinse, then autoclave."
     [[ "$output" =~ 'id="platform-kg-forces-reset"' ]]
 }
 
+@test "/knowledge-graph caches linked topology in platform-kg-layout-v2 and skips physics on exact reload" {
+    run raw_get "/knowledge-graph" "" "$COOKIE"
+    [[ "$output" =~ "200 OK" ]]
+    [[ "$output" =~ "platform-kg-layout-v2" ]]
+    [[ "$output" =~ "graphTopologySignature" ]]
+    [[ "$output" =~ "cached.graphSig === currentSig" ]]
+}
+
 @test "/knowledge-graph-data returns real nodes and edges as JSON" {
     "$BIN" user add erin erinpass123 isa
     raw_erin=$(printf 'login=erin&password=erinpass123' | \

@@ -1034,8 +1034,13 @@ function cgi.handle_request()
     -- /sql directly, linked from /system).
     if path_info == "/data" then
         entity_types = schema.list(db_path)
+        counts_by_name = entity.counts_by_type(db_path, entity_types)
         for _, row in ipairs(entity_types) do
-            row.count = entity.count(db_path, row.name)
+            c = counts_by_name[row.name]
+            if c == nil then
+                c = 0
+            end
+            row.count = c
         end
         table.sort(entity_types, function(a, b)
             if a.count != b.count then
@@ -1043,7 +1048,7 @@ function cgi.handle_request()
             end
             return a.name < b.name
         end)
-        edges = schema.relationships(db_path)
+        edges = schema.relationships(db_path, entity_types)
         body = html.render_index(db_path, entity_types, edges, nonce)
         return print_response("200 OK", "text/html",
             html.page_shell("Data", "data", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))

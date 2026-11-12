@@ -2976,8 +2976,19 @@ function html.render_relation_diagram(db_path, entity_types, edges)
         return "<p class=\"platform-empty\">No entity types registered yet.</p>"
     end
 
-    index_by_name = {}
+    -- Pack diagram boxes in deterministic alphabetical order rather than
+    -- `entity_types`'s row-count order so a count change on one table never
+    -- reshuffles base coordinates across the diagram.
+    diagram_types = {}
     for i, row in ipairs(entity_types) do
+        diagram_types[i] = row
+    end
+    table.sort(diagram_types, function(a, b)
+        return a.name < b.name
+    end)
+
+    index_by_name = {}
+    for i, row in ipairs(diagram_types) do
         index_by_name[row.name] = i
     end
 
@@ -2985,7 +2996,7 @@ function html.render_relation_diagram(db_path, entity_types, edges)
     -- for layout packing below and for locating a specific field's row
     -- when drawing edges).
     boxes = {}
-    for i, row in ipairs(entity_types) do
+    for i, row in ipairs(diagram_types) do
         box_rows = diagram_box_rows(db_path, row.name)
         row_index_by_field = {}
         for j, box_row in ipairs(box_rows) do
@@ -3025,7 +3036,7 @@ function html.render_relation_diagram(db_path, entity_types, edges)
     total_width = DIAGRAM_PADDING * 2 + columns * DIAGRAM_BOX_WIDTH + (columns - 1) * DIAGRAM_COLUMN_GAP
     total_height = max_height + DIAGRAM_PADDING
 
-    edges_svg = ""
+    edges_parts = {}
     for _, edge in ipairs(edges) do
         from_i = index_by_name[edge.from_type]
         to_i = index_by_name[edge.to_type]
@@ -3065,7 +3076,7 @@ function html.render_relation_diagram(db_path, entity_types, edges)
                 if to_x < from_x then
                     label_dx = -14
                 end
-                edges_svg = edges_svg .. string.format(
+                table.insert(edges_parts, string.format(
                     "<g class=\"platform-diagram-edge\" data-from=\"%s\" data-to=\"%s\">" ..
                     "<line x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\"></line>" ..
                     "<text class=\"platform-diagram-card\" x=\"%.1f\" y=\"%.1f\">%s</text>" ..
@@ -3075,16 +3086,17 @@ function html.render_relation_diagram(db_path, entity_types, edges)
                     from_x, from_y, to_x, to_y,
                     from_x + label_dx, from_y - 4, from_label,
                     to_x - label_dx, to_y - 4, to_label
-                )
+                ))
             end
         end
     end
+    edges_svg = table.concat(edges_parts)
 
-    boxes_svg = ""
-    for i, row in ipairs(entity_types) do
+    boxes_parts = {}
+    for i, row in ipairs(diagram_types) do
         box = boxes[i]
         escaped_name = html.html_escape(row.name)
-        rows_svg = ""
+        rows_parts = {}
         for j, box_row in ipairs(box.rows) do
             row_y = box.y + DIAGRAM_HEADER_HEIGHT + (j - 1) * DIAGRAM_ROW_HEIGHT
             name_class = "platform-diagram-row-name"
@@ -3093,14 +3105,15 @@ function html.render_relation_diagram(db_path, entity_types, edges)
             elseif box_row.required then
                 name_class = name_class .. " platform-diagram-row-required"
             end
-            rows_svg = rows_svg .. string.format(
+            table.insert(rows_parts, string.format(
                 "<text class=\"%s\" x=\"%.1f\" y=\"%.1f\">%s</text>" ..
                 "<text class=\"platform-diagram-row-type\" x=\"%.1f\" y=\"%.1f\">%s</text>",
                 name_class, box.x + 8, row_y + DIAGRAM_ROW_HEIGHT - 5, html.html_escape(box_row.name),
                 box.x + box.width - 8, row_y + DIAGRAM_ROW_HEIGHT - 5, html.html_escape(box_row.type_label)
-            )
+            ))
         end
-        boxes_svg = boxes_svg .. string.format(
+        rows_svg = table.concat(rows_parts)
+        table.insert(boxes_parts, string.format(
             "<g class=\"platform-diagram-node\" data-entity-type=\"%s\" tabindex=\"0\">" ..
             "<rect class=\"platform-diagram-box\" x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\"></rect>" ..
             "<rect class=\"platform-diagram-box-header\" x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%d\"></rect>" ..
@@ -3111,8 +3124,9 @@ function html.render_relation_diagram(db_path, entity_types, edges)
             box.x, box.y, box.width, DIAGRAM_HEADER_HEIGHT,
             box.x + box.width / 2, box.y + DIAGRAM_HEADER_HEIGHT - 8, escaped_name,
             rows_svg
-        )
+        ))
     end
+    boxes_svg = table.concat(boxes_parts)
 
     return string.format("""
 <div class="platform-diagram-hint">
@@ -3273,7 +3287,14 @@ function html.diagram_js(nonce)
         } catch(err) { return null; }
     }
     function saveCachedOffsets(){
-        try { window.localStorage.setItem(LAYOUT_CACHE_KEY, JSON.stringify(nodeOffsets)); }
+        try {
+            var out = {};
+            Object.keys(nodeOffsets).forEach(function(type){
+                var base = nodeBase[type], off = nodeOffsets[type];
+                out[type] = base ? {dx: off.dx, dy: off.dy, x: base.x + off.dx, y: base.y + off.dy} : off;
+            });
+            window.localStorage.setItem(LAYOUT_CACHE_KEY, JSON.stringify(out));
+        }
         catch(err) { /* private browsing / storage disabled / quota -- skip, not load-bearing */ }
     }
     function svgPoint(ev){
@@ -3533,7 +3554,10 @@ function html.diagram_js(nonce)
         node.addEventListener('blur', clear);
 
         if(cached && cached[type]){
-            nodeOffsets[type] = {dx: cached[type].dx, dy: cached[type].dy};
+            var c = cached[type], base = nodeBase[type];
+            var dx = (typeof c.x === 'number' && base) ? (c.x - base.x) : (c.dx || 0);
+            var dy = (typeof c.y === 'number' && base) ? (c.y - base.y) : (c.dy || 0);
+            nodeOffsets[type] = {dx: dx, dy: dy};
             node.setAttribute('transform', 'translate(' + nodeOffsets[type].dx + ',' + nodeOffsets[type].dy + ')');
             updateEdgesFor(type);
         }
@@ -5097,7 +5121,8 @@ function html.render_knowledge_graph(nonce)
                 // Un-pin -- the node rejoins the live simulation instead
                 // of staying frozen wherever it was dropped.
                 dragNode.fixed = false;
-                wakeSimulation();
+                saveCachedLayout();
+                wakeSimulation(1.0);
             }
             dragNode = null;
         }
@@ -5446,14 +5471,15 @@ function html.render_knowledge_graph(nonce)
             return centres;
         }
 
-        function simStep(w, h) {
+        function simStep(w, h, alpha) {
+            var aScale = (typeof alpha === 'number') ? alpha : 1.0;
             for (var i = 0; i < simNodes.length; i++) {
                 for (var j = i + 1; j < simNodes.length; j++) {
                     var a = simNodes[i], b = simNodes[j];
                     var dx = a.x - b.x, dy = a.y - b.y;
                     var distSq = (dx * dx + dy * dy) || 0.01;
                     var dist = Math.sqrt(distSq);
-                    var force = REPULSION / distSq;
+                    var force = (REPULSION / distSq) * aScale;
                     var fx = (dx / dist) * force, fy = (dy / dist) * force;
                     if (!a.fixed) { a.vx += fx; a.vy += fy; }
                     if (!b.fixed) { b.vx -= fx; b.vy -= fy; }
@@ -5469,7 +5495,7 @@ function html.render_knowledge_graph(nonce)
                 var pull = Math.min(SPRING_STRENGTH_CAP, Math.max(0.2, strength));
                 var dx = b.x - a.x, dy = b.y - a.y;
                 var dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
-                var force = (dist - SPRING_LENGTH) * SPRING * pull;
+                var force = (dist - SPRING_LENGTH) * SPRING * pull * aScale;
                 var fx = (dx / dist) * force, fy = (dy / dist) * force;
                 if (!a.fixed) { a.vx += fx; a.vy += fy; }
                 if (!b.fixed) { b.vx -= fx; b.vy -= fy; }
@@ -5483,16 +5509,16 @@ function html.render_knowledge_graph(nonce)
                     var tags = groupTags(n).filter(function(tag) { return centres[tag].count > 1; });
                     tags.forEach(function(tag) {
                         var c = centres[tag];
-                        n.vx += (c.x - n.x) * TAG_PULL / tags.length;
-                        n.vy += (c.y - n.y) * TAG_PULL / tags.length;
+                        n.vx += (c.x - n.x) * TAG_PULL * aScale / tags.length;
+                        n.vy += (c.y - n.y) * TAG_PULL * aScale / tags.length;
                     });
                 });
             }
             simNodes.forEach(function(n) {
                 if (n.fixed) { n.vx = 0; n.vy = 0; return; }
                 var centerBoost = 1 + CENTER_CONNECTIVITY_GAIN * Math.log(1 + (n.connWeight || 0));
-                n.vx += (w / 2 - n.x) * CENTER_PULL * centerBoost;
-                n.vy += (h / 2 - n.y) * CENTER_PULL * centerBoost;
+                n.vx += (w / 2 - n.x) * CENTER_PULL * centerBoost * aScale;
+                n.vy += (h / 2 - n.y) * CENTER_PULL * centerBoost * aScale;
                 n.vx *= DAMPING;
                 n.vy *= DAMPING;
                 n.vx = Math.max(-MAX_SPEED, Math.min(MAX_SPEED, n.vx));
@@ -5546,15 +5572,33 @@ function html.render_knowledge_graph(nonce)
             });
         }
 
+        // Alpha cooling (`simAlpha`) guarantees convergence to sleep even on
+        // dense tag/collision clusters where un-cooled forces would keep
+        // `avgEnergy` hovering above `SLEEP_ENERGY` indefinitely (which
+        // previously prevented `saveCachedLayout()` from ever running). While
+        // a node is actively held (`dragNode != null`), `simAlpha` stays at
+        // 1.0 so live neighbor reactions remain immediate.
+        var simAlpha = 1.0;
+        var simFrames = 0;
+        var ALPHA_DECAY = 0.982;
+        var MIN_SIM_ALPHA = 0.02;
+        var MAX_SIM_FRAMES = 240;
+
         function simLoop() {
-            var energy = simStep(canvas.width, canvas.height);
+            if (dragNode != null) {
+                simAlpha = 1.0;
+                simFrames = 0;
+            } else {
+                simFrames += 1;
+                simAlpha *= ALPHA_DECAY;
+            }
+            var energy = simStep(canvas.width, canvas.height, simAlpha);
             draw();
-            // Per-node average, not the raw sum -- a sum grows with the
-            // pool's own size regardless of how settled any individual
-            // node is, so on a real-sized graph it could sit above a
-            // fixed threshold indefinitely and never actually sleep.
             var avgEnergy = simNodes.length > 0 ? energy / simNodes.length : 0;
-            if (avgEnergy > SLEEP_ENERGY) {
+            if (dragNode != null || (avgEnergy > SLEEP_ENERGY && simAlpha >= MIN_SIM_ALPHA && simFrames < MAX_SIM_FRAMES)) {
+                if (simFrames > 0 && (simFrames %% 30) === 0) {
+                    saveCachedLayout();
+                }
                 requestAnimationFrame(simLoop);
             } else {
                 simRunning = false;
@@ -5564,7 +5608,9 @@ function html.render_knowledge_graph(nonce)
             }
         }
 
-        function wakeSimulation() {
+        function wakeSimulation(initialAlpha) {
+            simAlpha = (typeof initialAlpha === 'number') ? initialAlpha : 1.0;
+            simFrames = 0;
             if (!simRunning) {
                 simRunning = true;
                 requestAnimationFrame(simLoop);
@@ -5572,37 +5618,87 @@ function html.render_knowledge_graph(nonce)
         }
 
         // Settled positions persist across page loads in this browser
-        // (per viewer, not shared/synced -- purely a return-visit
-        // convenience, never load-bearing for the graph itself, which
-        // always still comes from /knowledge-graph-data). Saved once
-        // the sim goes idle -- including after a manual drag resettles,
-        // so a rearrangement sticks too, not just the original
-        // auto-layout.
-        var LAYOUT_CACHE_KEY = 'platform-kg-layout-v1';
+        // (`platform-kg-layout-v2`). Two rules keep return visits genuinely
+        // cached instead of replaying the latest connection's settle on every
+        // reload:
+        //   1. Only linked (`simNodes`, degree > 0) positions and manually
+        //      dragged orphans go into the cache -- never auto-placed grid
+        //      orphans. Otherwise an orphan that later gains a link restores
+        //      its old bottom-grid coordinates instead of spawning beside its
+        //      new neighbor.
+        //   2. `graphSig` records the linked topology (sorted linked node IDs,
+        //      sorted `from>to` edges, and force slider values). When a reload
+        //      matches `graphSig` with zero uncached linked nodes, `layout()`
+        //      restores exact coordinates and skips physics altogether; when a
+        //      new connection arrives, `layout()` saves immediately after its
+        //      initial pre-settle (plus periodic/pagehide/sleep checkpoints)
+        //      so the next reload is already warm.
+        var LAYOUT_CACHE_KEY = 'platform-kg-layout-v2';
+        var LEGACY_LAYOUT_CACHE_KEY = 'platform-kg-layout-v1';
+
+        function graphTopologySignature() {
+            var nodeIds = simNodes.map(function(n) { return n.id; }).sort(function(a, b) { return a - b; });
+            var edgeKeys = links.map(function(e) { return e.from + '>' + e.to; }).sort();
+            var forceKey = [REPULSION, SPRING, SPRING_LENGTH, CENTER_PULL, TAG_PULL].join('|');
+            return 'v2|' + forceKey + '|N:' + nodeIds.join(',') + '|E:' + edgeKeys.join(',');
+        }
 
         function loadCachedLayout() {
             try {
                 var raw = window.localStorage.getItem(LAYOUT_CACHE_KEY);
-                return raw ? JSON.parse(raw) : null;
+                if (!raw) { return null; }
+                var parsed = JSON.parse(raw);
+                if (!parsed || parsed.v !== 2 || typeof parsed.positions !== 'object' || parsed.positions === null) {
+                    return null;
+                }
+                return parsed;
             } catch (err) {
                 return null;
             }
         }
 
+        function roundCoord(v) {
+            return Math.round(v * 100) / 100;
+        }
+
         function saveCachedLayout() {
+            if (nodes.length === 0) { return; }
             try {
                 var positions = {};
-                nodes.forEach(function(n) { positions[n.id] = { x: n.x, y: n.y }; });
-                window.localStorage.setItem(LAYOUT_CACHE_KEY, JSON.stringify(positions));
+                simNodes.forEach(function(n) {
+                    if (typeof n.x === 'number' && typeof n.y === 'number') {
+                        positions[n.id] = { x: roundCoord(n.x), y: roundCoord(n.y) };
+                    }
+                });
+                var manualOrphans = {};
+                orphans.forEach(function(n) {
+                    if (n.manual && typeof n.x === 'number' && typeof n.y === 'number') {
+                        manualOrphans[n.id] = { x: roundCoord(n.x), y: roundCoord(n.y) };
+                    }
+                });
+                window.localStorage.setItem(LAYOUT_CACHE_KEY, JSON.stringify({
+                    v: 2,
+                    graphSig: graphTopologySignature(),
+                    positions: positions,
+                    manualOrphans: manualOrphans
+                }));
+                window.localStorage.removeItem(LEGACY_LAYOUT_CACHE_KEY);
             } catch (err) {
                 // Private browsing, storage disabled, quota -- fine to
                 // skip; next load just falls back to a fresh layout.
             }
         }
 
+        window.addEventListener('pagehide', function() {
+            if (simRunning) { saveCachedLayout(); }
+        });
+
         function layout() {
             var w = canvas.width, h = canvas.height;
             var cached = loadCachedLayout();
+            var cachedPositions = cached ? cached.positions : null;
+            var cachedManual = (cached && cached.manualOrphans) ? cached.manualOrphans : null;
+            var currentSig = graphTopologySignature();
             var neighborsOf = {};
             links.forEach(function(e) {
                 if (!neighborsOf[e.from]) { neighborsOf[e.from] = []; }
@@ -5610,25 +5706,36 @@ function html.render_knowledge_graph(nonce)
                 neighborsOf[e.from].push(e.to);
                 neighborsOf[e.to].push(e.from);
             });
+            orphans.forEach(function(n) {
+                var mp = cachedManual ? cachedManual[n.id] : null;
+                if (mp && typeof mp.x === 'number' && typeof mp.y === 'number') {
+                    n.x = mp.x;
+                    n.y = mp.y;
+                    n.manual = true;
+                }
+                n.vx = 0;
+                n.vy = 0;
+                n.fixed = false;
+            });
             var uncachedCount = 0;
-            nodes.forEach(function(n) {
-                var pos = cached ? cached[n.id] : null;
-                if (pos) {
+            simNodes.forEach(function(n) {
+                var pos = cachedPositions ? cachedPositions[n.id] : null;
+                if (pos && typeof pos.x === 'number' && typeof pos.y === 'number') {
                     n.x = pos.x;
                     n.y = pos.y;
                 } else {
                     uncachedCount++;
-                    // A node with no cached position (new since the
-                    // last visit, or no cache at all) spawns near any
-                    // already-positioned neighbor instead of a random
-                    // spot -- reads as "joining its connections," not
-                    // flying in from nowhere -- falling back to random
-                    // only when it has no positioned neighbor either.
+                    // A newly-linked node (new document or former orphan that
+                    // just gained an edge) spawns near its already-positioned
+                    // neighbors rather than flying in from the orphan grid or
+                    // a random corner.
                     var neighborIds = neighborsOf[n.id] || [];
                     var sumX = 0, sumY = 0, count = 0;
                     neighborIds.forEach(function(nid) {
-                        var np = cached ? cached[nid] : null;
-                        if (np) { sumX += np.x; sumY += np.y; count++; }
+                        var np = cachedPositions ? cachedPositions[nid] : null;
+                        if (np && typeof np.x === 'number' && typeof np.y === 'number') {
+                            sumX += np.x; sumY += np.y; count++;
+                        }
                     });
                     if (count > 0) {
                         n.x = (sumX / count) + (Math.random() - 0.5) * 40;
@@ -5642,17 +5749,22 @@ function html.render_knowledge_graph(nonce)
                 n.vy = 0;
                 n.fixed = false;
             });
-            // A layout that's fully or mostly cached starts near
-            // equilibrium already -- only a from-scratch or
-            // mostly-new-nodes layout needs the larger synchronous
-            // pre-settle so the initial paint isn't a chaotic scatter.
-            var settleIterations = (cached == null || uncachedCount > nodes.length / 2) ? 120 : 20;
-            // Time-boxed: this runs before first paint and blocks the page,
-            // so it stops early on a large graph; the live loop finishes.
-            var settleUntil = Date.now() + 400;
-            for (var iter = 0; iter < settleIterations && Date.now() < settleUntil; iter++) { simStep(w, h); }
+            // Exact cache hit: linked nodes, edges, and force settings are
+            // unchanged since the last saved layout -- paint immediately
+            // without running synchronous steps or waking the simulation.
+            if (cached != null && uncachedCount === 0 && cached.graphSig === currentSig) {
+                placeOrphans();
+                return;
+            }
+            var coldStart = (cached == null || uncachedCount > Math.max(1, simNodes.length / 2));
+            var settleIterations = coldStart ? 120 : 24;
+            var settleUntil = Date.now() + (coldStart ? 400 : 160);
+            for (var iter = 0; iter < settleIterations && Date.now() < settleUntil; iter++) {
+                simStep(w, h, 1.0);
+            }
             placeOrphans();
-            wakeSimulation();
+            saveCachedLayout();
+            wakeSimulation(coldStart ? 1.0 : 0.65);
         }
 
         fetch('knowledge-graph-data').then(function(r) {
@@ -5807,7 +5919,7 @@ function html.render_knowledge_retrievals(rows)
 end
 
 function html.render_index(db_path, entity_types, edges, nonce)
-    items = ""
+    items_parts = {}
     for _, row in ipairs(entity_types) do
         escaped_name = html.html_escape(row.name)
         -- Row count used to be an always-visible inline badge; moved to
@@ -5827,9 +5939,10 @@ function html.render_index(db_path, entity_types, edges, nonce)
         if row.count != nil then
             row_count = row.count
         end
-        items = items .. "<li data-count=\"" .. tostring(row_count) .. "\"><a href=\"browse?type=" .. escaped_name .. "\" class=\"" .. trigger_class .. "\" tabindex=\"0\">" .. escaped_name ..
-            count_popover .. "</a></li>"
+        table.insert(items_parts, "<li data-count=\"" .. tostring(row_count) .. "\"><a href=\"browse?type=" .. escaped_name .. "\" class=\"" .. trigger_class .. "\" tabindex=\"0\">" .. escaped_name ..
+            count_popover .. "</a></li>")
     end
+    items = table.concat(items_parts)
 
     list_or_empty = "<ul class=\"platform-index-list\">" .. items .. "</ul>"
     if #entity_types == 0 then
