@@ -57,7 +57,7 @@ COPY --from=daat-builder /daat/tst/eval /app/tst/eval
 COPY dev/demo/seed-demo-lab.sh /app/seed-demo-lab.sh
 COPY dev/demo/theme.lua /app/seed/theme.lua
 
-RUN a2enmod cgid
+RUN a2enmod cgid deflate
 COPY dev/demo/apache.conf /etc/apache2/sites-available/daat.conf
 RUN a2dissite 000-default && a2ensite daat
 

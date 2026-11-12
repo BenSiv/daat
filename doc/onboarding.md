@@ -119,11 +119,12 @@ Two other files in this directory are written for the maintainer's own productio
 - `data-durability.md` -- the SQLite-durability reasoning is general and useful; skip the specific Terraform file paths and GCP instance names it references.
 - `mariadb-migration.md` -- the MariaDB-portability/dialect content (what changes between SQLite and MariaDB, why) is general and useful; skip the specific Cloud SQL instance names, container names, and private-repo paths it references partway through.
 
-Everything else in `doc/` (`architecture.md`, `schema.md`, `extensibility.md`, `glossary.md`, `api.md`, `agent-protocol.md`, `heat-decay-redesign.md`) is fully general -- no private context needed.
+Everything else in `doc/` (`architecture.md`, `performance.md`, `schema.md`, `extensibility.md`, `glossary.md`, `api.md`, `agent-protocol.md`, `heat-decay-redesign.md`) is fully general -- no private context needed.
 
 ## Where to go next
 
 - `architecture.md` -- the full entity-history model, sandboxing, and auth/session design (the big one -- start here for depth).
+- `performance.md` -- request lifecycle invariants, SQLite/MariaDB benchmarks, and saved optimization roadmap.
 - `schema.md` -- defining entity types.
 - `extensibility.md` -- the extension system in full.
 - `api.md` -- the HTTP API surface.

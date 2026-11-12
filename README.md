@@ -42,4 +42,4 @@ Run as a CGI program under a web server, it serves the web application instead (
 
 ## Contributing
 
-Start with [onboarding.md](doc/onboarding.md): prerequisites, repository layout, an architecture primer and a one-command dev container. Open work is tracked in [GitHub issues](https://github.com/BenSiv/daat/issues). Terms are defined in [glossary.md](doc/glossary.md), and [why-luam.md](doc/why-luam.md) and [prior-art.md](doc/prior-art.md) explain the project's choices.
+Start with [onboarding.md](doc/onboarding.md): prerequisites, repository layout, an architecture primer and a one-command dev container. Open work is tracked in [GitHub issues](https://github.com/BenSiv/daat/issues). Terms are defined in [glossary.md](doc/glossary.md), and [why-luam.md](doc/why-luam.md), [performance.md](doc/performance.md) and [prior-art.md](doc/prior-art.md) explain the project's choices and performance design.
