@@ -627,15 +627,38 @@ function ensure_knowledge_pool_state_log_scale_column(db_path)
     end
 end
 
+_pool_state_ready = {}
+
+function pool_state_cache_key(db_path)
+    if db.is_mariadb(db_path) then
+        return "mariadb:" .. tostring(db_path.host) .. ":" .. tostring(db_path.port) .. ":" .. tostring(db_path.database)
+    end
+    attr = lfs.attributes(tostring(db_path))
+    if attr != nil then
+        return "sqlite:" .. tostring(db_path) .. ":" .. tostring(attr.ino)
+    end
+    return "sqlite:" .. tostring(db_path)
+end
+
 -- Seeds the single state row exactly once, from a one-time COUNT(*) --
 -- the only place this design scans the whole pool (see "Migration of
 -- existing values" in doc/heat-decay-redesign.md). A no-op every call
 -- after the first.
 function document.ensure_pool_state(db_path)
+    cache_key = pool_state_cache_key(db_path)
+    if _pool_state_ready[cache_key] == true then
+        return
+    end
+    ok_fast, fast_rows = pcall(db.query, db_path, "SELECT log_pool_scale FROM knowledge_pool_state WHERE id = 1;")
+    if ok_fast == true and fast_rows != nil and fast_rows[1] != nil then
+        _pool_state_ready[cache_key] = true
+        return
+    end
     db.exec(db_path, KNOWLEDGE_POOL_STATE_SCHEMA)
     ensure_knowledge_pool_state_log_scale_column(db_path)
     rows = db.query(db_path, "SELECT id FROM knowledge_pool_state WHERE id = 1;")
     if rows != nil and rows[1] != nil then
+        _pool_state_ready[cache_key] = true
         return
     end
     count_rows = db.query(db_path,
@@ -648,6 +671,7 @@ function document.ensure_pool_state(db_path)
         "%s knowledge_pool_state (id, pool_scale, log_pool_scale, document_count) VALUES (1, 1.0, 0.0, %d);",
         db.insert_ignore(db_path), count
     ))
+    _pool_state_ready[cache_key] = true
 end
 
 -- Backfill for document_count drift -- the manual correction for

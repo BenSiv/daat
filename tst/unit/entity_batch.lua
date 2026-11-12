@@ -107,9 +107,48 @@ end
 
 function tests.keep_open_is_restored(db_path)
     print("Testing SQLite's kept-open connection is closed again after a batch that opened it")
-    database_adapter.sqlite_close_all()
+    database_adapter.sqlite_keep_open(false)
     entity.create_batch(db_path, "widget", {{label = "W-401"}}, "tester")
     check(database_adapter.sqlite_connection_count() == 0, "expected no cached connection left behind")
+end
+
+function tests.keep_open_preserved_when_already_enabled(db_path)
+    print("Testing SQLite keep-open stays enabled when caller enabled it before create_batch")
+    database_adapter.sqlite_keep_open(true)
+    entity.create_batch(db_path, "widget", {{label = "W-402"}}, "tester")
+    check(database_adapter.is_sqlite_keep_open() == true, "expected keep_open to remain enabled")
+    database_adapter.sqlite_keep_open(false)
+end
+
+function tests.ctx_query_supports_in_list_and_batched_overrides(db_path)
+    print("Testing ctx.query IN-list filter and multi-row computed field overrides")
+    tagged_def = {
+        name = "tagged_item",
+        fields = {
+            {name = "code", type = "text", required = true},
+            {name = "tags", type = "multi_select", values = {"alpha", "beta", "gamma"}},
+            {name = "origin", type = "polymorphic_reference", allowed_entity_types = {"widget"}},
+        },
+    }
+    schema.register(db_path, tagged_def)
+    w_ids, _ = entity.create_batch(db_path, "widget", {{label = "Origin-A"}, {label = "Origin-B"}}, "tester")
+    id1, _ = entity.create(db_path, "tagged_item", {code = "T1", tags = {"alpha", "gamma"}, origin = {{type = "widget", id = w_ids[1]}}}, "tester")
+    id2, _ = entity.create(db_path, "tagged_item", {code = "T2", tags = {"beta"}, origin = {{type = "widget", id = w_ids[2]}}}, "tester")
+    entity.create(db_path, "tagged_item", {code = "T3", tags = {"alpha"}}, "tester")
+
+    ctx = entity.build_ctx(db_path, {name = "perf_test", capabilities = {read = {"entity"}}})
+    empty_res = ctx.query("tagged_item", {code = {}})
+    check(#empty_res == 0, "expected empty table filter to return 0 rows")
+
+    matched = ctx.query("tagged_item", {id = {id1, id2}})
+    check(#matched == 2, "expected 2 rows from IN filter, got " .. tostring(#matched))
+    by_code = {}
+    for _, r in ipairs(matched) do
+        by_code[r.code] = r
+    end
+    check(by_code["T1"] != nil and #by_code["T1"].tags == 2, "expected 2 tags on T1")
+    check(by_code["T1"].origin != nil and #by_code["T1"].origin == 1 and tonumber(by_code["T1"].origin[1].id) == tonumber(w_ids[1]), "expected polymorphic origin on T1")
+    check(by_code["T2"] != nil and #by_code["T2"].tags == 1 and by_code["T2"].tags[1] == "beta", "expected 1 tag on T2")
 end
 
 dir = os.tmpname()

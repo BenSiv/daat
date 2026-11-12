@@ -75,11 +75,24 @@ function entity.build_ctx(db_path, manifest)
             end
         end
         where = {}
-        for k, v in pairs(filter) do
-            if columns[k] != true and schema.is_reserved_field_name(k) == false then
-                error("ctx.query: '" .. tostring(k) .. "' is not a filterable field of " .. target_type)
+        if filter != nil then
+            for k, v in pairs(filter) do
+                if columns[k] != true and schema.is_reserved_field_name(k) == false then
+                    error("ctx.query: '" .. tostring(k) .. "' is not a filterable field of " .. target_type)
+                end
+                if type(v) == "table" then
+                    if #v == 0 then
+                        return {}
+                    end
+                    quoted_items = {}
+                    for _, item in ipairs(v) do
+                        table.insert(quoted_items, db.quote(tostring(item)))
+                    end
+                    table.insert(where, db.quote_ident(k) .. " IN (" .. table.concat(quoted_items, ", ") .. ")")
+                else
+                    table.insert(where, db.quote_ident(k) .. " = " .. db.quote(tostring(v)))
+                end
             end
-            table.insert(where, db.quote_ident(k) .. " = " .. db.quote(tostring(v)))
         end
         q = "SELECT * FROM " .. target_type
         if #where > 0 then
@@ -651,7 +664,9 @@ function entity.create_batch(db_path, entity_type, rows_values, author, source)
     -- means someone did -- and turned back off afterwards.
     created_ids = {}
     opened_sqlite = false
-    if db.is_mariadb(db_path) == false and database_adapter.sqlite_connection_count() == 0 then
+    already_keep_open = (database_adapter.is_sqlite_keep_open != nil and database_adapter.is_sqlite_keep_open() == true)
+        or database_adapter.sqlite_connection_count() > 0
+    if db.is_mariadb(db_path) == false and already_keep_open == false then
         database_adapter.sqlite_keep_open(true)
         opened_sqlite = true
     end
@@ -707,16 +722,96 @@ end
 -- a polymorphic column's stale string value reaching code that expects
 -- the real {type=,id=} table shape (e.g. `ipairs` on a plain string).
 function entity.apply_computed_field_overrides(db_path, entity_type, rows)
+    if rows == nil or #rows == 0 then
+        return rows
+    end
     multi_fields = schema.multi_fields_by_name(db_path, entity_type)
     polymorphic_fields = schema.polymorphic_fields_by_name(db_path, entity_type)
-    for _, row in ipairs(rows) do
+    has_multi = next(multi_fields) != nil
+    has_poly = next(polymorphic_fields) != nil
+    if not has_multi and not has_poly then
+        return rows
+    end
+    if #rows == 1 then
+        row = rows[1]
         for name, field in pairs(multi_fields) do
             row[name] = schema.read_multi_field(db_path, entity_type, row.id, field)
         end
         for name, field in pairs(polymorphic_fields) do
             row[name] = schema.read_polymorphic_field(db_path, entity_type, row.id, field)
         end
+        return rows
     end
+
+    id_list = {}
+    rows_by_id = {}
+    for _, row in ipairs(rows) do
+        rid = tonumber(row.id)
+        if rid != nil then
+            if rows_by_id[rid] == nil then
+                table.insert(id_list, tostring(rid))
+                rows_by_id[rid] = {}
+            end
+            table.insert(rows_by_id[rid], row)
+        end
+        for name, _ in pairs(multi_fields) do
+            row[name] = {}
+        end
+        for name, _ in pairs(polymorphic_fields) do
+            row[name] = {}
+        end
+    end
+    if #id_list == 0 then
+        return rows
+    end
+    id_sql = table.concat(id_list, ", ")
+
+    for name, field in pairs(multi_fields) do
+        table_name = schema.multi_field_table_name(entity_type, field.name)
+        if db.table_exists(db_path, table_name) then
+            parent_col = entity_type .. "_id"
+            value_col = "value"
+            if field.type == "multi_reference" then
+                value_col = field.name .. "_id"
+            end
+            m_rows = db.query(db_path, string.format(
+                "SELECT %s AS pid, %s AS v FROM %s WHERE %s IN (%s);",
+                parent_col, value_col, table_name, parent_col, id_sql
+            ))
+            if m_rows != nil then
+                for _, mr in ipairs(m_rows) do
+                    targets = rows_by_id[tonumber(mr.pid)]
+                    if targets != nil then
+                        for _, target_row in ipairs(targets) do
+                            table.insert(target_row[name], mr.v)
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    if has_poly and db.table_exists(db_path, "entity_ref") then
+        p_rows = db.query(db_path, string.format(
+            "SELECT from_id, field_name, to_type, to_id FROM entity_ref WHERE from_type = %s AND from_id IN (%s) ORDER BY id ASC;",
+            db.quote(entity_type), id_sql
+        ))
+        if p_rows != nil then
+            for _, pr in ipairs(p_rows) do
+                fname = pr.field_name
+                if polymorphic_fields[fname] != nil then
+                    targets = rows_by_id[tonumber(pr.from_id)]
+                    if targets != nil then
+                        item = {type = pr.to_type, id = tonumber(pr.to_id)}
+                        for _, target_row in ipairs(targets) do
+                            table.insert(target_row[fname], item)
+                        end
+                    end
+                end
+            end
+        end
+    end
+
     return rows
 end
 

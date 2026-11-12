@@ -354,27 +354,28 @@ function view.run_sql(db_path, sql_text, param_type, param_value)
         return rows
     end
 
+    database_adapter = require("database_adapter")
     sqlite3 = require("sqlite3")
-    conn = sqlite3.open(db_path)
-    if conn == nil then
+    ok_open, conn, owned = pcall(database_adapter.acquire_sqlite_connection, db_path)
+    if not ok_open or conn == nil then
         return nil, "cannot open database"
     end
 
     vm, err = sqlite3.prepare(conn, sql_text)
     if vm == nil then
-        sqlite3.close(conn)
+        database_adapter.release_sqlite_connection(conn, owned, false)
         return nil, "invalid sql: " .. tostring(err)
     end
     if sqlite3.stmt.bind_parameter_count(vm) != 1 then
         sqlite3.stmt.finalize(vm)
-        sqlite3.close(conn)
+        database_adapter.release_sqlite_connection(conn, owned, false)
         return nil, "sql doesn't have exactly one '?' placeholder"
     end
 
     bind_rc = sqlite3.stmt.bind(vm, 1, bind_value)
     if bind_rc != 0 then
         sqlite3.stmt.finalize(vm)
-        sqlite3.close(conn)
+        database_adapter.release_sqlite_connection(conn, owned, false)
         return nil, "failed to bind parameter"
     end
 
@@ -383,7 +384,7 @@ function view.run_sql(db_path, sql_text, param_type, param_value)
         table.insert(rows, row)
     end
     sqlite3.stmt.finalize(vm)
-    sqlite3.close(conn)
+    database_adapter.release_sqlite_connection(conn, owned, false)
     return rows
 end
 

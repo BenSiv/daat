@@ -678,6 +678,55 @@ function handle_verify_email(root, db_path, method, nonce, theme)
         html.page_shell("Confirm email", "login", body_html, nonce, false, false, has_tasks_view, nav_extensions, theme, nil), headers)
 end
 
+function builtin_schema_signature()
+    lfs_mod = require("lfs")
+    store_mod = require("store")
+    parts = {"v=" .. tostring(store_mod.latest_schema_version())}
+    exe_attr = lfs_mod.attributes("/proc/self/exe")
+    if exe_attr != nil then
+        table.insert(parts, "exe=" .. tostring(exe_attr.modification) .. ":" .. tostring(exe_attr.size) .. ":" .. tostring(exe_attr.ino))
+    end
+    src_attr = lfs_mod.attributes("src/web.lua")
+    if src_attr != nil then
+        src_files = {}
+        for f in lfs_mod.dir("src") do
+            if string.match(f, "%.lua$") != nil then
+                table.insert(src_files, f)
+            end
+        end
+        table.sort(src_files)
+        for _, f in ipairs(src_files) do
+            fa = lfs_mod.attributes("src/" .. f)
+            if fa != nil then
+                table.insert(parts, f .. ":" .. tostring(fa.modification) .. ":" .. tostring(fa.size))
+            end
+        end
+    end
+    return table.concat(parts, "|")
+end
+
+function ensure_builtin_schemas(db_path)
+    store_mod = require("store")
+    expected_sig = builtin_schema_signature()
+    ok_sig, stored_sig = pcall(store_mod.get_text, db_path, "web.builtin_schema_signature")
+    if ok_sig == true and stored_sig == expected_sig then
+        -- Probe document_link.link_hash (0 rows fetched) so out-of-band
+        -- legacy table swaps still trigger document.init_schema.
+        ok_probe, _ = pcall(db.query, db_path, "SELECT link_hash FROM document_link LIMIT 0;")
+        if ok_probe == true then
+            return
+        end
+    end
+    store_mod.ensure_system_tables(db_path)
+    ledger.init_schema(db_path)
+    schema.init_schema(db_path)
+    auth.init_schema(db_path)
+    document.init_schema(db_path)
+    knowledge.init_schema(db_path)
+    agent.init_schema(db_path)
+    store_mod.set_text(db_path, "web.builtin_schema_signature", expected_sig)
+end
+
 function cgi.handle_request()
     response_nonce = nil
     response_csrf_header = nil
@@ -688,48 +737,11 @@ function cgi.handle_request()
     cookies = parse_cookies(os.getenv("HTTP_COOKIE"))
 
     root = config.find_root()
-    db_path = config.db_path(root)
-    theme = config.load_theme(root)
-
-    -- Auto-initialize or sync database schemas on request. Directory
-    -- creation is naturally tied to "does this deployment look
-    -- bootstrapped yet" (only needed once), but every schema/table init
-    -- call below is idempotent (CREATE TABLE IF NOT EXISTS, INSERT OR
-    -- IGNORE) and runs unconditionally every request instead, matching
-    -- schema.sync_all's own already-established pattern just below --
-    -- otherwise a store initialized before some built-in schema existed
-    -- would never pick it up (a real, if latent, gap this closes for
-    -- auth/document both, not just newly-added ones going forward).
-    if not config.is_initialized(root) then
-        paths.create_dir_if_not_exists(config.store_dir(root))
-        paths.create_dir_if_not_exists(config.schemas_dir(root))
-        paths.create_dir_if_not_exists(config.extensions_dir(root))
-        paths.create_dir_if_not_exists(config.views_dir(root))
-        paths.create_dir_if_not_exists(config.templates_dir(root))
-        paths.create_dir_if_not_exists(config.dropdowns_dir(root))
-    end
-    -- Before any module creates its tables (see store.lua's header).
-    require("store").migrate(db_path)
-    ledger.init_schema(db_path)
-    schema.init_schema(db_path)
-    auth.init_schema(db_path)
-    document.init_schema(db_path)
-    knowledge.init_schema(db_path)
-    agent.init_schema(db_path)
-    secret_ok, secret_err = auth.ensure_session_secret(root)
-    if secret_ok == nil then
-        return print_response("500 Internal Server Error", "text/html", "<h3>Error: " .. tostring(secret_err) .. "</h3>")
-    end
-    schema.sync_all(db_path, root)
-
     nonce = auth.generate_nonce()
     response_nonce = nonce
 
-    -- No auth required -- browsers request the favicon (and page_shell
-    -- requests the sidebar logo) on every page load, including /login,
-    -- before any session exists. `name` is checked against a fixed
-    -- allowlist, not used to build the path directly, so this can't be
-    -- turned into a path-traversal read of arbitrary files on disk.
+    -- Static theme and vendored assets never read or write the database;
+    -- serve them directly from disk before touching store migration or sync.
     if path_info == "/theme-asset" then
         allowed_names = {["favicon.png"] = true, ["logo.png"] = true, ["logo-full.png"] = true}
         if allowed_names[params.name] != true then
@@ -745,11 +757,6 @@ function cgi.handle_request()
         return print_response("200 OK", "image/png", asset_bytes, {"Cache-Control: public, max-age=86400"})
     end
 
-    -- Vendored third-party assets (e.g. the Toast UI Editor bundle) --
-    -- allowlisted by exact name + content-type, same "never path-build
-    -- from user input" reasoning as /theme-asset above, just a
-    -- platform-owned vnd/ directory rather than a deployment's own
-    -- DOCUMENT_ROOT-relative theme-assets/.
     if path_info == "/vendor" then
         allowed_vendor_assets = {
             ["toastui-editor-all.min.js"] = {path = "toastui/toastui-editor-all.min.js", content_type = "application/javascript"},
@@ -769,6 +776,36 @@ function cgi.handle_request()
         io.close(asset_file)
         return print_response("200 OK", asset.content_type, asset_bytes, {"Cache-Control: public, max-age=86400"})
     end
+
+    db_path = config.db_path(root)
+    theme = config.load_theme(root)
+
+    -- Auto-initialize or sync database schemas on request. Directory
+    -- creation is naturally tied to "does this deployment look
+    -- bootstrapped yet" (only needed once), and built-in module schemas
+    -- run whenever the store is uninitialized, migrated, or running a new
+    -- binary (tracked via web.builtin_schema_signature in system_state,
+    -- mirroring schema.sync_all's own signature check below).
+    was_initialized = config.is_initialized(root)
+    if not was_initialized then
+        paths.create_dir_if_not_exists(config.store_dir(root))
+        paths.create_dir_if_not_exists(config.schemas_dir(root))
+        paths.create_dir_if_not_exists(config.extensions_dir(root))
+        paths.create_dir_if_not_exists(config.views_dir(root))
+        paths.create_dir_if_not_exists(config.templates_dir(root))
+        paths.create_dir_if_not_exists(config.dropdowns_dir(root))
+    end
+    -- Before any module creates its tables (see store.lua's header).
+    require("store").migrate(db_path)
+    if not was_initialized then
+        require("store").set_text(db_path, "web.builtin_schema_signature", nil)
+    end
+    ensure_builtin_schemas(db_path)
+    secret_ok, secret_err = auth.ensure_session_secret(root)
+    if secret_ok == nil then
+        return print_response("500 Internal Server Error", "text/html", "<h3>Error: " .. tostring(secret_err) .. "</h3>")
+    end
+    schema.sync_all(db_path, root)
 
     if path_info == "/login" then
         return handle_login(root, db_path, method, nonce, theme, params)

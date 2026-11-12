@@ -2140,7 +2140,9 @@ function format_display_label(entity_type, field, raw_value)
     return tostring(raw_value)
 end
 
-function html.entity_display_label(db_path, entity_type, entity_id)
+_display_label_cache = nil
+
+function compute_entity_display_label(db_path, entity_type, entity_id)
     rows = db.query(db_path, string.format(
         "SELECT name FROM %s WHERE id = %s;", entity_type, db.quote(entity_id)
     ))
@@ -2170,6 +2172,26 @@ function html.entity_display_label(db_path, entity_type, entity_id)
         return nil
     end
     return format_display_label(entity_type, display_field, rows[1].label)
+end
+
+function html.entity_display_label(db_path, entity_type, entity_id)
+    if _display_label_cache != nil then
+        ckey = tostring(entity_type) .. ":" .. tostring(entity_id)
+        cached = _display_label_cache[ckey]
+        if cached == false then
+            return nil
+        elseif cached != nil then
+            return cached
+        end
+        computed = compute_entity_display_label(db_path, entity_type, entity_id)
+        if computed == nil then
+            _display_label_cache[ckey] = false
+        else
+            _display_label_cache[ckey] = computed
+        end
+        return computed
+    end
+    return compute_entity_display_label(db_path, entity_type, entity_id)
 end
 
 -- Same two-source priority as entity_display_label, but for a row this
@@ -2280,6 +2302,100 @@ function html.display_field_value(db_path, field, value)
     return display_value(value)
 end
 
+function prefetch_browse_display_labels(db_path, layout, rows)
+    cache = {}
+    if rows == nil or #rows == 0 or layout == nil or layout.fields == nil then
+        return cache
+    end
+    ids_by_type = {}
+    function add_ref(ref_type, ref_id)
+        if ref_type == nil or ref_type == "" or ref_id == nil then
+            return
+        end
+        s_id = tostring(ref_id)
+        if s_id == "" then
+            return
+        end
+        if ids_by_type[ref_type] == nil then
+            ids_by_type[ref_type] = {}
+        end
+        ids_by_type[ref_type][s_id] = true
+    end
+
+    for _, field in ipairs(layout.fields) do
+        ftype = field.type
+        if ftype == "reference" and field.ref_entity_type != nil then
+            for _, row in ipairs(rows) do
+                add_ref(field.ref_entity_type, row[field.name])
+            end
+        elseif ftype == "multi_reference" and field.ref_entity_type != nil then
+            for _, row in ipairs(rows) do
+                vals = row[field.name]
+                if type(vals) == "table" then
+                    for _, v in ipairs(vals) do
+                        add_ref(field.ref_entity_type, v)
+                    end
+                end
+            end
+        elseif ftype == "polymorphic_reference" or ftype == "multi_polymorphic_reference" then
+            for _, row in ipairs(rows) do
+                vals = row[field.name]
+                if type(vals) == "table" then
+                    for _, v in ipairs(vals) do
+                        if type(v) == "table" then
+                            add_ref(v.type, v.id)
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    for ref_type, id_set in pairs(ids_by_type) do
+        if schema.valid_name_syntax(ref_type) and schema.is_registered(db_path, ref_type) and db.table_exists(db_path, ref_type) then
+            display_field = nil
+            fields = schema.fields(db_path, ref_type)
+            if fields != nil then
+                for _, f in ipairs(fields) do
+                    if tonumber(f.display) == 1 and schema.is_multi_field_type(f.type) == false and schema.is_polymorphic_field_type(f.type) == false then
+                        display_field = f
+                        break
+                    end
+                end
+            end
+
+            quoted_ids = {}
+            for s_id, _ in pairs(id_set) do
+                cache[ref_type .. ":" .. s_id] = false
+                table.insert(quoted_ids, db.quote(s_id))
+            end
+
+            if #quoted_ids > 0 then
+                select_cols = "id, name"
+                if display_field != nil then
+                    select_cols = "id, name, " .. db.quote_ident(display_field.name) .. " AS display_val"
+                end
+                q_rows = db.query(db_path, string.format(
+                    "SELECT %s FROM %s WHERE id IN (%s);",
+                    select_cols, ref_type, table.concat(quoted_ids, ", ")
+                ))
+                if q_rows != nil then
+                    for _, qr in ipairs(q_rows) do
+                        ckey = ref_type .. ":" .. tostring(qr.id)
+                        if qr.name != nil and tostring(qr.name) != "" then
+                            cache[ckey] = tostring(qr.name)
+                        elseif display_field != nil and qr.display_val != nil and tostring(qr.display_val) != "" then
+                            cache[ckey] = format_display_label(ref_type, display_field, qr.display_val)
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return cache
+end
+
 -- Browse view: a read-only table of every entity of a type, linking to
 -- each one's detail page. Pure server-rendered HTML -- no JS, so none
 -- of the CSP/nonce concerns the registration table's client-side JS
@@ -2299,25 +2415,38 @@ function html.render_browse(db_path, entity_type, layout, rows, page, page_size,
         filter_query_suffix = "&filter_field=" .. html.html_escape(filter_field) .. "&filter_value=" .. html.html_escape(tostring(filter_value))
     end
 
-    header_cells = "<th>ID</th>"
+    header_parts = {"<th>ID</th>"}
     for _, field in ipairs(layout.fields) do
-        header_cells = header_cells .. "<th>" .. html.html_escape(field.label) .. "</th>"
+        table.insert(header_parts, "<th>" .. html.html_escape(field.label) .. "</th>")
     end
+    header_cells = table.concat(header_parts)
 
-    body_rows = ""
-    for _, row in ipairs(rows) do
-        own_label = html.own_row_label(db_path, entity_type, row)
-        id_link_text = "#" .. tostring(row.id)
-        if own_label != nil then
-            id_link_text = html.html_escape(own_label)
+    prev_cache = _display_label_cache
+    _display_label_cache = prefetch_browse_display_labels(db_path, layout, rows)
+    ok_rows, body_rows_or_err = pcall(function()
+        row_parts = {}
+        for _, row in ipairs(rows) do
+            own_label = html.own_row_label(db_path, entity_type, row)
+            id_link_text = "#" .. tostring(row.id)
+            if own_label != nil then
+                id_link_text = html.html_escape(own_label)
+            end
+            cell_parts = {
+                "<td><a href=\"detail?type=" .. escaped_type .. "&entity_id=" .. tostring(row.id) ..
+                "\">" .. id_link_text .. "</a></td>"
+            }
+            for _, field in ipairs(layout.fields) do
+                table.insert(cell_parts, "<td>" .. html.display_field_value(db_path, field, row[field.name]) .. "</td>")
+            end
+            table.insert(row_parts, "<tr>" .. table.concat(cell_parts) .. "</tr>")
         end
-        cells = "<td><a href=\"detail?type=" .. escaped_type .. "&entity_id=" .. tostring(row.id) ..
-            "\">" .. id_link_text .. "</a></td>"
-        for _, field in ipairs(layout.fields) do
-            cells = cells .. "<td>" .. html.display_field_value(db_path, field, row[field.name]) .. "</td>"
-        end
-        body_rows = body_rows .. "<tr>" .. cells .. "</tr>"
+        return table.concat(row_parts)
+    end)
+    _display_label_cache = prev_cache
+    if not ok_rows then
+        error(body_rows_or_err, 0)
     end
+    body_rows = body_rows_or_err
 
     table_or_empty = "<div class=\"platform-table-wrapper\"><table id=\"browse-table\"><thead><tr>" ..
         header_cells .. "</tr></thead><tbody>" .. body_rows .. "</tbody></table></div>"
@@ -2671,27 +2800,30 @@ end
 -- lives in exactly one place. Uses a class, not an id, since a single
 -- document can embed more than one view -- an id would collide.
 function html.render_view_table(view_def, rows)
-    header_cells = ""
+    header_parts = {}
     for _, col in ipairs(view_def.columns) do
         label = col.label
         if label == nil then
             label = col.name
         end
-        header_cells = header_cells .. "<th>" .. html.html_escape(label) .. "</th>"
+        table.insert(header_parts, "<th>" .. html.html_escape(label) .. "</th>")
     end
-
-    body_rows = ""
-    for _, row in ipairs(rows) do
-        cells = ""
-        for _, col in ipairs(view_def.columns) do
-            cells = cells .. "<td>" .. display_value(row[col.name]) .. "</td>"
-        end
-        body_rows = body_rows .. "<tr>" .. cells .. "</tr>"
-    end
+    header_cells = table.concat(header_parts)
 
     if #rows == 0 then
         return "<p class=\"platform-empty\">No rows.</p>"
     end
+
+    row_parts = {}
+    for _, row in ipairs(rows) do
+        cell_parts = {}
+        for _, col in ipairs(view_def.columns) do
+            table.insert(cell_parts, "<td>" .. display_value(row[col.name]) .. "</td>")
+        end
+        table.insert(row_parts, "<tr>" .. table.concat(cell_parts) .. "</tr>")
+    end
+    body_rows = table.concat(row_parts)
+
     return "<div class=\"platform-table-wrapper\"><table class=\"platform-view-table\"><thead><tr>" ..
         header_cells .. "</tr></thead><tbody>" .. body_rows .. "</tbody></table></div>"
 end

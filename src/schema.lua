@@ -10,6 +10,34 @@ lfs = require("lfs")
 
 schema = {}
 
+_fields_cache = {}
+_registered_cache = {}
+
+function schema_cache_key(db_path)
+    if db.is_mariadb(db_path) then
+        return "mariadb:" .. tostring(db_path.host) .. ":" .. tostring(db_path.port) .. ":" .. tostring(db_path.database)
+    end
+    attr = lfs.attributes(tostring(db_path))
+    if attr != nil then
+        return "sqlite:" .. tostring(db_path) .. ":" .. tostring(attr.ino)
+    end
+    return "sqlite:" .. tostring(db_path)
+end
+
+function invalidate_schema_cache(db_path)
+    key = schema_cache_key(db_path)
+    _fields_cache[key] = nil
+    _registered_cache[key] = nil
+end
+
+function shallow_copy_list(items)
+    out = {}
+    for i, v in ipairs(items) do
+        out[i] = v
+    end
+    return out
+end
+
 FIELD_TYPES = {"text", "number", "date", "select", "reference", "multi_select", "multi_reference", "sql_select", "polymorphic_reference", "multi_polymorphic_reference"}
 
 -- Field types stored in a companion junction table (schema.
@@ -87,6 +115,7 @@ CREATE TABLE IF NOT EXISTS entity_dropdown_value (
 """
 
 function schema.init_schema(db_path)
+    invalidate_schema_cache(db_path)
     db.exec(db_path, DROPDOWN_SCHEMA)
 end
 
@@ -492,6 +521,7 @@ function schema.register(db_path, def)
     db.exec(db_path, retired_sql .. ";")
 
     schema.sync_table(db_path, def)
+    invalidate_schema_cache(db_path)
     return true
 end
 
@@ -1239,11 +1269,24 @@ end
 -- so callers must not use "schema.fields() returned nothing" as a
 -- stand-in for "this type doesn't exist" -- that conflates the two.
 function schema.is_registered(db_path, entity_type)
+    cache_key = schema_cache_key(db_path)
+    reg_bucket = _registered_cache[cache_key]
+    if reg_bucket != nil and reg_bucket[entity_type] == true then
+        return true
+    end
     rows = db.query(db_path, string.format(
         "SELECT 1 FROM entity_type WHERE name = %s;",
         db.quote(entity_type)
     ))
-    return rows != nil and #rows > 0
+    found = rows != nil and #rows > 0
+    if found then
+        if reg_bucket == nil then
+            reg_bucket = {}
+            _registered_cache[cache_key] = reg_bucket
+        end
+        reg_bucket[entity_type] = true
+    end
+    return found
 end
 
 -- Plain Levenshtein edit distance -- used to guess an intended entity type
@@ -1338,14 +1381,26 @@ end
 -- The registered field list for an entity type, in declaration order --
 -- what entity.lua validates rows against.
 function schema.fields(db_path, entity_type)
+    cache_key = schema_cache_key(db_path)
+    fields_bucket = _fields_cache[cache_key]
+    if fields_bucket != nil and fields_bucket[entity_type] != nil then
+        return shallow_copy_list(fields_bucket[entity_type])
+    end
     rows = db.query(db_path, string.format(
         "SELECT * FROM entity_field WHERE entity_type = %s ORDER BY field_order ASC;",
         db.quote(entity_type)
     ))
     if rows == nil then
-        return {}
+        rows = {}
     end
-    return rows
+    if #rows > 0 or schema.is_registered(db_path, entity_type) then
+        if fields_bucket == nil then
+            fields_bucket = {}
+            _fields_cache[cache_key] = fields_bucket
+        end
+        fields_bucket[entity_type] = rows
+    end
+    return shallow_copy_list(rows)
 end
 
 -- Every reference relationship between registered entity types --

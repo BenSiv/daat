@@ -45,8 +45,9 @@ agent_tools = require("agent_tools")
 
 cgi = require("cgi")
 web = require("web")
+database_adapter = require("database_adapter")
 
-function main()
+function run_main()
     if cgi.is_cgi() then
         ok, err = pcall(web.handle_request)
         if not ok then
@@ -224,6 +225,15 @@ function main()
     end
 
     func(cmd_args, db_path)
+end
+
+function main()
+    database_adapter.sqlite_keep_open(true)
+    ok_run, run_err = pcall(run_main)
+    database_adapter.sqlite_close_all()
+    if not ok_run then
+        error(run_err, 0)
+    end
 end
 
 main()

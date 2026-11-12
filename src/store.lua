@@ -363,8 +363,12 @@ end
 -- store.migrate(db_path): brings the store's tables to the current
 -- layout. Cheap when already current: one query.
 function store.migrate(db_path)
-    store.ensure_system_tables(db_path)
     target = latest_version()
+    ok_ver, ver = pcall(current_version, db_path)
+    if ok_ver == true and ver >= target then
+        return
+    end
+    store.ensure_system_tables(db_path)
     if current_version(db_path) >= target then
         return
     end
@@ -373,11 +377,16 @@ function store.migrate(db_path)
         db.query(db_path, "SELECT GET_LOCK('daat_store_migrate', 600) AS got;")
     end
     ok, err = pcall(function()
+        ran_migration = false
         for _, m in ipairs(MIGRATIONS) do
             if current_version(db_path) < m.version then
                 m.run(db_path)
                 store.set_number(db_path, "store.schema_version", m.version)
+                ran_migration = true
             end
+        end
+        if ran_migration then
+            store.set_text(db_path, "web.builtin_schema_signature", nil)
         end
     end)
     if locked then
