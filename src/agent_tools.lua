@@ -2258,7 +2258,7 @@ plain words, and the result.
 
 Replies and documents render Markdown with no math support, so LaTeX shows
 up as raw source. Write formulas in plain text -- "doubling time = ln(2) /
-0.2511 = 2.76 h" -- never $...$, \frac, \text{}, \approx or \ln.
+0.2511 = 2.76 h" -- never $...$, \\frac, \\text{}, \\approx or \\ln.
 
 Queries (entity.query/plot.from_query) run in the """ .. view.sql_dialect_name() .. """.
 Every number you present -- a count, an average, a per-group value in a

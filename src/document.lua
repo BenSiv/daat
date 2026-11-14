@@ -1693,12 +1693,12 @@ end
 function document.render_plot(spec_text)
     spec, _, decode_err = json.decode(spec_text)
     if spec == nil then
-        return '<div class="platform-plot platform-plot-error">Could not render plot: invalid JSON.</div>'
+        return "<div class=\"platform-plot platform-plot-error\">Could not render plot: invalid JSON.</div>"
     end
 
     cfg, cfg_err = document.plot_spec_to_gnuplot_cfg(spec)
     if cfg == nil then
-        return '<div class="platform-plot platform-plot-error">Could not render plot: ' .. tostring(cfg_err) .. '.</div>'
+        return "<div class=\"platform-plot platform-plot-error\">Could not render plot: " .. tostring(cfg_err) .. ".</div>"
     end
 
     plot = gnuplot.create(cfg)
@@ -1709,22 +1709,22 @@ function document.render_plot(spec_text)
     end
     if ok != true then
         os.remove(out_path)
-        return '<div class="platform-plot platform-plot-error">Could not render plot: gnuplot failed.</div>'
+        return "<div class=\"platform-plot platform-plot-error\">Could not render plot: gnuplot failed.</div>"
     end
 
     file = io.open(out_path, "r")
     if file == nil then
         os.remove(out_path)
-        return '<div class="platform-plot platform-plot-error">Could not render plot: no output produced.</div>'
+        return "<div class=\"platform-plot platform-plot-error\">Could not render plot: no output produced.</div>"
     end
     svg = io.read(file, "*all")
     io.close(file)
     os.remove(out_path)
     if svg == nil or string.find(svg, "<svg", 1, true) == nil then
-        return '<div class="platform-plot platform-plot-error">Could not render plot: no output produced.</div>'
+        return "<div class=\"platform-plot platform-plot-error\">Could not render plot: no output produced.</div>"
     end
 
-    return '<div class="platform-plot">' .. svg .. '</div>'
+    return "<div class=\"platform-plot\">" .. svg .. "</div>"
 end
 
 -- Post-processes cmark-gfm's rendered HTML, replacing every
@@ -1734,7 +1734,7 @@ end
 -- only ever sees content cmark itself already decided was a code fence,
 -- with cmark's own HTML-escaping already applied.
 function document.render_plot_fences(html)
-    return (string.gsub(html, '<pre><code class="language%-plot">(.-)</code></pre>', function(escaped_json)
+    return (string.gsub(html, "<pre><code class=\"language%-plot\">(.-)</code></pre>", function(escaped_json)
         return document.render_plot(document.html_unescape(escaped_json))
     end))
 end
@@ -1747,7 +1747,7 @@ function document.render_html(db_path, content)
         return ""
     end
     html = document.render_markdown(document.inline_links_to_markdown(db_path, tag.inline_text_tags(db_path, content)))
-    html, _ = string.gsub(html, '<a href="detail%?type=tag&amp;entity_id=', '<a class="platform-tag-chip" href="detail?type=tag&amp;entity_id=')
+    html, _ = string.gsub(html, "<a href=\"detail%?type=tag&amp;entity_id=", "<a class=\"platform-tag-chip\" href=\"detail?type=tag&amp;entity_id=")
     return html
 end
 

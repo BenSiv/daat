@@ -789,7 +789,7 @@ function html.popover_css()
    (var(--platform-accent, ...)), this only guarantees THIS rule is the
    one that wins, not a hardcoded value. */
 .platform-entity-ref { color: var(--platform-accent, #4f46e5) !important; text-decoration: none !important; font-weight: 600 !important; }
-.platform-entity-ref::after { content: " \2197"; font-size: 0.85em; }
+.platform-entity-ref::after { content: " \\2197"; font-size: 0.85em; }
 .platform-entity-ref:hover { text-decoration: underline !important; }
 </style>
 """
@@ -1400,7 +1400,7 @@ function html.page_shell(title, active, body, nonce, show_sql, show_admin, has_t
     brand_html = ""
     if theme.has_logo == true then
         brand_html = string.format(
-            '<a class="platform-nav-brand" href="/" title="%s"><img src="theme-asset?name=logo.png" alt="%s"></a>',
+            "<a class=\"platform-nav-brand\" href=\"/\" title=\"%s\"><img src=\"theme-asset?name=logo.png\" alt=\"%s\"></a>",
             html.html_escape(theme.site_name), html.html_escape(theme.site_name)
         )
     end
@@ -1412,7 +1412,7 @@ function html.page_shell(title, active, body, nonce, show_sql, show_admin, has_t
             link_class = link_class .. " platform-nav-link-active"
         end
         table.insert(nav_links, string.format(
-            '<a class="%s" href="%s" title="%s">%s<span class="platform-nav-label">%s</span></a>',
+            "<a class=\"%s\" href=\"%s\" title=\"%s\">%s<span class=\"platform-nav-label\">%s</span></a>",
             link_class, item.href, html.html_escape(item.label), item.icon, html.html_escape(item.label)
         ))
     end
@@ -1628,7 +1628,7 @@ function html.render(entity_type, layout_json, nonce, locked_fields)
         const layout = %s;
         const entityType = "%s";
         const lockedFields = %s;
-        const baseUrl = window.location.pathname.replace(/\/register\/?$/, "");
+        const baseUrl = window.location.pathname.replace(/\\/register\\/?$/, "");
         let rowCounter = 0;
 
         // Which document this registration table is embedded in, for
@@ -1855,7 +1855,7 @@ function html.render_entity_edit(entity_type, layout_json, row_json, entity_id, 
         const row = %s;
         const entityType = "%s";
         const entityId = %s;
-        const baseUrl = window.location.pathname.replace(/\/entity-edit\/?$/, "");
+        const baseUrl = window.location.pathname.replace(/\\/entity-edit\\/?$/, "");
 
         // Field lookup stays bespoke here (document-global, not
         // row-scoped like register's) -- only the "mark this input
@@ -4363,7 +4363,7 @@ function html.render_home(theme, show_sql, show_admin, has_tasks_view, nav_exten
     logo_html = ""
     if has_logo then
         logo_html = string.format(
-            '<img class="platform-home-logo" src="theme-asset?name=logo-full.png" alt="%s">',
+            "<img class=\"platform-home-logo\" src=\"theme-asset?name=logo-full.png\" alt=\"%s\">",
             html.html_escape(site_name)
         )
     end
@@ -4654,8 +4654,8 @@ function html.render_knowledge_pool(stats)
     tier_tiles = ""
     for tier = 0, 3 do
         tier_tiles = tier_tiles .. string.format(
-            '<a class="platform-knowledge-tier" href="knowledge-documents?tier=%d" style="border-left: 4px solid var(--platform-tier-%d, %s);"><strong>%s</strong><span class="dimmed">%d note(s)</span>' ..
-            '<p class="platform-knowledge-tier-caption">%s</p></a>',
+            "<a class=\"platform-knowledge-tier\" href=\"knowledge-documents?tier=%d\" style=\"border-left: 4px solid var(--platform-tier-%d, %s);\"><strong>%s</strong><span class=\"dimmed\">%d note(s)</span>" ..
+            "<p class=\"platform-knowledge-tier-caption\">%s</p></a>",
             tier, tier, KNOWLEDGE_TIER_COLORS[tier], html.html_escape(KNOWLEDGE_TIER_LABELS[tier]), stats.tier_counts[tier],
             html.html_escape(KNOWLEDGE_TIER_CAPTIONS[tier])
         )
@@ -5178,8 +5178,8 @@ function html.render_knowledge_graph(nonce)
                 canvas.style.cursor = 'pointer';
                 var heat = (typeof n.heat === 'number') ? n.heat : 1.0;
                 var groupLine = (n.groups && n.groups.length && n.groups.join(', ') !== (n.tags || []).join(', ')) ? n.groups.join(', ') + ' › ' : '';
-                var tagLine = (n.tags && n.tags.length) ? '\n' + groupLine + n.tags.join(', ') : '';
-                showTooltip(ev.clientX, ev.clientY, n.title + tagLine + '\nheat ' + heat.toFixed(2));
+                var tagLine = (n.tags && n.tags.length) ? '\\n' + groupLine + n.tags.join(', ') : '';
+                showTooltip(ev.clientX, ev.clientY, n.title + tagLine + '\\nheat ' + heat.toFixed(2));
                 return;
             }
             var e = edgeAt(w.x, w.y);
@@ -5187,7 +5187,7 @@ function html.render_knowledge_graph(nonce)
                 canvas.style.cursor = 'default';
                 var a = byId[e.from], b = byId[e.to];
                 var strength = (typeof e.strength === 'number') ? e.strength : 1.0;
-                var edgeText = a.title + ' ↔ ' + b.title + '\nstrength ' + strength.toFixed(2);
+                var edgeText = a.title + ' ↔ ' + b.title + '\\nstrength ' + strength.toFixed(2);
                 showTooltip(ev.clientX, ev.clientY, edgeText);
                 return;
             }
@@ -5791,7 +5791,7 @@ function html.render_knowledge_graph(nonce)
             // "Colour by sub-tag" only means something once some tag has a
             // broader tag (tag.parent); until then it would match "by tag".
             var nested = nodes.some(function(n) {
-                return n.groups && n.tags && n.groups.join('\n') !== n.tags.join('\n');
+                return n.groups && n.tags && n.groups.join('\\n') !== n.tags.join('\\n');
             });
             if (!nested) {
                 var subOption = colorBy.querySelector('option[value="subtag"]');
@@ -6926,9 +6926,9 @@ function html.render_document_edit(doc, parent_options_html, csrf_token, error_m
             // computed server-side (document.render_html), same as
             // before -- getMarkdown() on submit is untouched either way.
             widgetRules: [{
-                rule: /\[\[([^\]]+)\]\]/,
+                rule: /\\[\\[([^\\]]+)\\]\\]/,
                 toDOM: function(text) {
-                    var matched = text.match(/\[\[([^\]]+)\]\]/);
+                    var matched = text.match(/\\[\\[([^\\]]+)\\]\\]/);
                     var span = document.createElement('span');
                     span.className = 'platform-wikilink';
                     span.textContent = '[[' + matched[1] + ']]';
@@ -6944,7 +6944,7 @@ function html.render_document_edit(doc, parent_options_html, csrf_token, error_m
             // getMarkdown(), whereas its WYSIWYG convertor leaves
             // `$$widget0 [[...]]$$` intact -- strip the wrapper here so
             // saving from either tab writes plain `[[...]]` Markdown.
-            hiddenContent.value = editor.getMarkdown().replace(/\$\$widget\d+\s(\[\[[^\[\]\n]+\]\])\$\$/g, '$1');
+            hiddenContent.value = editor.getMarkdown().replace(/\\$\\$widget\\d+\\s(\\[\\[[^\\[\\]\\n]+\\]\\])\\$\\$/g, '$1');
         });
 
         // One shared inline link picker for both grammars in a document:
@@ -7077,7 +7077,7 @@ function html.render_document_edit(doc, parent_options_html, csrf_token, error_m
             if (typeof sel[0] === 'number' && typeof sel[1] === 'number' && sel[0] === sel[1]) {
                 var pos = sel[1];
                 var chunk = safeSelectedText(Math.max(1, pos - 200), pos);
-                var parts = chunk.split('\n');
+                var parts = chunk.split('\\n');
                 return {
                     mode: 'wysiwyg',
                     pos: pos,
@@ -7121,7 +7121,7 @@ function html.render_document_edit(doc, parent_options_html, csrf_token, error_m
             if (!ctx) { closeMentions(); return; }
 
             // Open `[[...` without a closing bracket on this line: document link picker.
-            var docMatch = ctx.before.match(/\[\[([^\[\]]*)$/);
+            var docMatch = ctx.before.match(/\\[\\[([^\\[\\]]*)$/);
             if (docMatch) {
                 var docQuery = docMatch[1];
                 var closingLen = ctx.afterTwo === ']]' ? 2 : 0;
@@ -7140,7 +7140,7 @@ function html.render_document_edit(doc, parent_options_html, csrf_token, error_m
             }
 
             // `@query` at line start or after whitespace (never inside user@example.com): entity picker.
-            var entMatch = ctx.before.match(/(^|\s)@([\w-]*)$/);
+            var entMatch = ctx.before.match(/(^|\\s)@([\\w-]*)$/);
             if (entMatch) {
                 var entQuery = entMatch[2];
                 mentionState = {
@@ -8016,10 +8016,10 @@ function html.render_chat_widget(nonce, attachments_enabled)
         // it's on wherever the chat happened to start.
         var pageDescription = describeCurrentPage();
         if (pageDescription) {
-            text = '[Current page: ' + pageDescription + ']\n\n' + text;
+            text = '[Current page: ' + pageDescription + ']\\n\\n' + text;
         }
         if (window.PLATFORM_PAGE_CONTEXT && window.PLATFORM_PAGE_CONTEXT.current_user) {
-            text = '[Current user: ' + window.PLATFORM_PAGE_CONTEXT.current_user + ']\n' + text;
+            text = '[Current user: ' + window.PLATFORM_PAGE_CONTEXT.current_user + ']\\n' + text;
         }
         // Outermost wrapper (matches agent.display_content's own strip
         // order, agent.lua -- it peels this off first, then Current
@@ -8031,7 +8031,7 @@ function html.render_chat_widget(nonce, attachments_enabled)
             // that same triple-double-quote token, so using it here
             // too would terminate the outer string early (confirmed --
             // it did, as a real parse error, before this fix).
-            text = '[Attached file: ' + pendingAttachment.filename + ']\n---\n' + pendingAttachment.text + '\n---\n\n' + text;
+            text = '[Attached file: ' + pendingAttachment.filename + ']\\n---\\n' + pendingAttachment.text + '\\n---\\n\\n' + text;
             clearAttachment();
         }
         appendOptimisticUserMessage(typedText);
@@ -8080,7 +8080,7 @@ function html.render_chat_widget(nonce, attachments_enabled)
                 e.target.classList.add('platform-feedback-pressed');
             }
             function showFeedbackError() {
-                if (container) { container.innerHTML = '<span class="platform-chat-feedback-error">Couldn\'t record feedback.</span>'; }
+                if (container) { container.innerHTML = '<span class="platform-chat-feedback-error">Couldn\\\'t record feedback.</span>'; }
             }
             PlatformJS.postJSON('api/chat-widget-feedback', {message_id: messageId, feedback: feedback}).then(function(result){
                 if (!container) return;

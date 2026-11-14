@@ -86,7 +86,7 @@ function agent_test.generate(model, system_prompt, prompt)
     if own_raw != nil and own_raw != "" then
         TEST_GENERATE_INDEX = TEST_GENERATE_INDEX + 1
         own = {}
-        for piece in string.gmatch(own_raw, "([^\1]+)") do
+        for piece in string.gmatch(own_raw, "([^\x01]+)") do
             table.insert(own, piece)
         end
         result = own[#own]
@@ -106,7 +106,7 @@ function agent_test.generate(model, system_prompt, prompt)
     result = "<done>Test response.</done>"
     if raw != nil and raw != "" then
         responses = {}
-        for piece in string.gmatch(raw, "([^\1]+)") do
+        for piece in string.gmatch(raw, "([^\x01]+)") do
             table.insert(responses, piece)
         end
         if responses[TEST_RESPONSE_INDEX] != nil then
@@ -188,7 +188,7 @@ function agent_test.converse(model, system_prompt, messages, tools)
     scripted = nil
     if raw != nil and raw != "" then
         responses = {}
-        for piece in string.gmatch(raw, "([^\1]+)") do
+        for piece in string.gmatch(raw, "([^\x01]+)") do
             table.insert(responses, piece)
         end
         if responses[TEST_RESPONSE_INDEX] != nil then

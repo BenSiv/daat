@@ -1689,7 +1689,7 @@ function cgi.handle_request()
         for _, spec in ipairs(upload_specs) do
             uploaded = form[spec.field]
             if type(uploaded) == "table" and uploaded.data != nil and uploaded.data != "" then
-                if string.sub(uploaded.data, 1, 8) != "\137PNG\r\n\026\n" then
+                if string.sub(uploaded.data, 1, 8) != "\x89PNG\r\n\x1A\n" then
                     upload_error = "'" .. spec.filename .. "' must be a real PNG file."
                 end
             end

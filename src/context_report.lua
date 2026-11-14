@@ -51,7 +51,7 @@ function context_report.count_exact_repeats(rows)
     for _, row in ipairs(rows) do
         if row.role == "assistant" then
             for _, call in ipairs(assistant_tool_calls(row.content)) do
-                key = tostring(row.session_id) .. "\1" .. call.name .. "\1" .. call.args_key
+                key = tostring(row.session_id) .. "\x01" .. call.name .. "\x01" .. call.args_key
                 stats = by_tool[call.name]
                 if stats == nil then
                     stats = {calls = 0, repeats = 0}

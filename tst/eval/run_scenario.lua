@@ -102,7 +102,7 @@ function print_script(scenario)
     if scenario.script != nil then
         script = flatten(scenario.script, {})
     end
-    io.write(table.concat(script, "\1"))
+    io.write(table.concat(script, "\x01"))
 end
 
 -- Plays every turn of the scenario in a new session, answering pending
