@@ -25,6 +25,15 @@ fi
 echo "Building"
 LUAM_DIR="$LUAM_DIR" ./bld/build.sh
 
+if command -v node > /dev/null 2>&1; then
+    echo
+    echo "Checking extracted JS syntax (src/**/*.js)"
+    while IFS= read -r -d '' js_file; do
+        echo "--- $js_file ---"
+        node --check "$js_file"
+    done < <(find src -type f -name '*.js' -print0 | sort -z)
+fi
+
 echo
 echo "Running Luam unit tests (tst/unit/)"
 export LUA_PATH="./tst/lib/?.lua;./src/?.lua;${LUAM_DIR}/lib/?.lua;${LUAM_DIR}/lib/?/init.lua;;"

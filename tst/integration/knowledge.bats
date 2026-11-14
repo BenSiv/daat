@@ -494,7 +494,8 @@ Assistant: Rinse, then autoclave."
     [[ "$output" =~ '<option value="tag">Colour by tag</option>' ]]
     [[ "$output" =~ 'id="platform-kg-hide-orphans"' ]]
     [[ ! "$output" =~ 'id="platform-kg-hide-orphans" checked' ]]
-    [[ "$output" =~ 'var TIER_LEGEND = [' ]]
+    [[ "$output" =~ 'id="platform-kg-boot">{"tier_legend":[' ]]
+    [[ "$output" =~ 'var TIER_LEGEND = boot.tier_legend;' ]]
 }
 
 @test "/knowledge-graph-data gives each node its tags -- pinned and computed, best first, excluded left out" {

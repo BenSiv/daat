@@ -251,4 +251,23 @@ function tests.word_diff_html_returns_nil_past_the_word_cap()
         "a diff over DIFF_MAX_WORDS words should return nil, not attempt the O(n*m) LCS")
 end
 
+function tests.knowledge_graph_view_model_escapes_script_closing_tags_in_boot_json()
+    print("Testing ui.knowledge_graph.view_model escapes </script> in boot_json and binds CSP nonce")
+    kg = require("ui.knowledge_graph")
+    labels = {[0] = "Raw </script> Intake", [1] = "Draft", [2] = "Reference", [3] = "Atomic"}
+    colors = {[0] = "#111111", [1] = "#222222", [2] = "#333333", [3] = "#444444"}
+    vm = kg.view_model(labels, colors, "<h2>Header</h2>", ".base {}", "nonce-abc<1>")
+    check(not string.contains(vm.boot_json, "</script>"),
+        "boot_json must never contain a raw </script> tag: " .. vm.boot_json)
+    check(string.contains(vm.boot_json, "\\u003c/script>"),
+        "boot_json should escape '<' as \\u003c: " .. vm.boot_json)
+    rendered = kg.render(labels, colors, "<h2>Header</h2>", ".base {}", "nonce-abc<1>")
+    check(string.contains(rendered, "id=\"platform-kg-boot\""),
+        "rendered knowledge graph should carry the JSON boot element")
+    check(string.contains(rendered, "nonce=\"nonce-abc&lt;1&gt;\""),
+        "rendered knowledge graph should HTML-escape the CSP nonce attribute")
+    check(string.contains(rendered, "JSON.parse(document.getElementById('platform-kg-boot').textContent)"),
+        "rendered knowledge graph should include the extracted JS asset")
+end
+
 unit.run(tests)

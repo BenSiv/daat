@@ -1,0 +1,28 @@
+<div class="fossil-doc" data-title="Knowledge Graph">
+    <style>
+{{{ base_css }}}
+{{{ page_css }}}
+    </style>
+    <div class="platform-container">
+        {{{ header_html }}}
+        <div class="platform-kg-canvas-wrap">
+            <canvas id="platform-kg-canvas" height="400"></canvas>
+            <p id="platform-kg-status" class="platform-kg-status">Loading graph...</p>
+        </div>
+        <div class="platform-kg-legend"><span class="platform-kg-controls"><select id="platform-kg-color-by" aria-label="Colour by"><option value="tier">Colour by tier</option><option value="tag">Colour by tag</option><option value="subtag">Colour by sub-tag</option></select><label><input type="checkbox" id="platform-kg-hide-orphans"> Hide orphans</label></span><span class="platform-kg-legend-items" id="platform-kg-legend-items"></span><button type="button" class="platform-kg-forces-toggle" id="platform-kg-forces-toggle">Forces</button><button type="button" class="platform-kg-legend-reset" id="platform-kg-reset">Reset view</button></div>
+        <div class="platform-kg-forces" id="platform-kg-forces">
+            <div class="platform-kg-force-row"><label for="platform-kg-repel">Repel force</label><input type="range" id="platform-kg-repel" min="1000" max="20000" step="500" value="6000"><span id="platform-kg-repel-val">6000</span></div>
+            <div class="platform-kg-force-row"><label for="platform-kg-link-force">Link force</label><input type="range" id="platform-kg-link-force" min="0" max="0.1" step="0.005" value="0.02"><span id="platform-kg-link-force-val">0.02</span></div>
+            <div class="platform-kg-force-row"><label for="platform-kg-link-distance">Link distance</label><input type="range" id="platform-kg-link-distance" min="30" max="200" step="5" value="70"><span id="platform-kg-link-distance-val">70</span></div>
+            <div class="platform-kg-force-row"><label for="platform-kg-center">Center force</label><input type="range" id="platform-kg-center" min="0" max="0.005" step="0.0001" value="0.001"><span id="platform-kg-center-val">0.001</span></div>
+            <div class="platform-kg-force-row"><label for="platform-kg-tag-force">Tag force</label><input type="range" id="platform-kg-tag-force" min="0" max="0.05" step="0.001" value="0.005"><span id="platform-kg-tag-force-val">0.005</span></div>
+            <button type="button" class="platform-kg-forces-reset" id="platform-kg-forces-reset">Reset to defaults</button>
+        </div>
+        <div class="platform-kg-tooltip" id="platform-kg-tooltip"></div>
+    </div>
+    <script type="application/json" id="platform-kg-boot">{{{ boot_json }}}</script>
+    <script nonce="{{ nonce }}">
+{{{ page_js }}}
+    </script>
+</div>
+
