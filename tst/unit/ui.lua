@@ -270,4 +270,16 @@ function tests.knowledge_graph_view_model_escapes_script_closing_tags_in_boot_js
         "rendered knowledge graph should include the extracted JS asset")
 end
 
+function tests.chat_widget_view_model_toggles_attachment_controls_and_escapes_nonce()
+    print("Testing ui.chat_widget.view_model toggles attachment controls and escapes CSP nonce")
+    cw = require("ui.chat_widget")
+    vm_off = cw.view_model("nonce\"1", false, "<svg></svg>")
+    vm_on = cw.view_model("nonce\"1", true, "<svg></svg>")
+    check(vm_off.attach_html == "", "attachments=false should omit attach controls")
+    check(string.contains(vm_on.attach_html, "platform-chat-widget-file"), "attachments=true should include file input")
+    rendered = cw.render("nonce\"1", true, "<svg></svg>")
+    check(string.contains(rendered, "nonce=\"nonce&quot;1\""), "CSP nonce should be HTML-escaped")
+    check(string.contains(rendered, "platform_chat_widget_session"), "extracted chat widget JS should render")
+end
+
 unit.run(tests)
