@@ -293,4 +293,53 @@ function tests.plugin_page_and_inline_assets_emit_valid_css_and_escaped_nonce()
         "canvas_js CSP nonce should be HTML-escaped")
 end
 
+function tests.document_tree_view_model_escapes_search_index_and_renders_boot_island()
+    print("Testing ui.document_tree escapes </script> in search index JSON and renders boot island")
+    rendered = html.render_document_tree(
+        {{id = 1, title = "Alpha </script> doc", parent_id = nil}},
+        true,
+        "nonce-dt<1>",
+        "q<1>",
+        nil
+    )
+    check(not string.contains(rendered, "</script> doc"),
+        "search index JSON must never contain a raw </script> tag")
+    check(string.contains(rendered, "id=\"platform-document-search-boot\""),
+        "document tree should carry the JSON boot element")
+    check(string.contains(rendered, "nonce=\"nonce-dt&lt;1&gt;\""),
+        "document tree should HTML-escape the CSP nonce")
+    check(string.contains(rendered, "value=\"q&lt;1&gt;\""),
+        "document tree should HTML-escape query_value")
+end
+
+function tests.document_edit_view_model_resolves_prefill_and_escapes_boot_json()
+    print("Testing ui.document_edit resolves prefill vs doc and escapes </script> in boot_json")
+    de = require("ui.document_edit")
+    prefilled = de.resolve_initial_fields(nil, {title = "Draft <A>", content = "Body </script> [[Link]]"})
+    check(prefilled.heading_text == "New document", "new doc heading should be 'New document'")
+    check(prefilled.title_value == "Draft <A>", "prefill title should be preserved raw for single escaping")
+    existing = de.resolve_initial_fields({id = 7, title = "Saved <B>", content = "Real"}, {title = "Ignored", content = "Ignored"})
+    check(existing.heading_text == "Edit: Saved <B>", "existing doc should override prefill")
+    check(existing.entity_id_value == "7", "existing doc entity_id should be stringified")
+
+    rendered = html.render_document_edit(
+        nil,
+        "<option value=\"1\">Root</option>",
+        "csrf\"1",
+        "Bad <input>",
+        "nonce-de<1>",
+        {title = "Draft <A>", content = "Body </script> [[CRISPR/Cas9 in fungi]]"}
+    )
+    check(not string.contains(rendered, "Body </script>"),
+        "document edit boot JSON must escape </script>")
+    check(string.contains(rendered, "[[CRISPR/Cas9 in fungi]]"),
+        "document edit boot JSON should preserve [[title/with/slash]] verbatim")
+    check(string.contains(rendered, "id=\"platform-document-edit-boot\""),
+        "document edit should carry the JSON boot element")
+    check(string.contains(rendered, "Bad &lt;input&gt;"),
+        "document edit should HTML-escape error_message")
+    check(string.contains(rendered, "nonce=\"nonce-de&lt;1&gt;\""),
+        "document edit should HTML-escape CSP nonce")
+end
+
 unit.run(tests)

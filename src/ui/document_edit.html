@@ -1,0 +1,33 @@
+<div class="fossil-doc" data-title="{{ heading_text }}">
+    <link rel="stylesheet" href="vendor?name=toastui-editor.min.css">
+    <style>
+{{{ base_css }}}
+{{{ page_css }}}
+    </style>
+    <div class="platform-container">
+        {{{ header_html }}}
+        {{{ error_html }}}
+        <form method="POST" action="document-save" id="platform-document-edit-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="entity_id" value="{{ entity_id_value }}">
+            <input type="hidden" name="content" id="platform-document-content-hidden">
+            <div class="platform-document-edit-fields">
+                <input type="text" name="title" value="{{ title_value }}" placeholder="Title" required>
+                <select name="parent_id">
+                    <option value="">(top level)</option>
+                    {{{ parent_options_html }}}
+                </select>
+                <button type="submit" class="btn btn-primary">Save</button>
+            </div>
+            <div class="platform-mention-wrap">
+                <div id="platform-toastui-editor"></div>
+                <div class="platform-mention-results" id="platform-mention-results"></div>
+            </div>
+        </form>
+    </div>
+    <script src="vendor?name=toastui-editor-all.min.js" nonce="{{ nonce }}"></script>
+    <script type="application/json" id="platform-document-edit-boot">{{{ boot_json }}}</script>
+    <script nonce="{{ nonce }}">
+{{{ page_js }}}
+    </script>
+</div>
