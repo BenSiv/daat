@@ -342,4 +342,52 @@ function tests.document_edit_view_model_resolves_prefill_and_escapes_boot_json()
         "document edit should HTML-escape CSP nonce")
 end
 
+function tests.register_and_entity_edit_emit_valid_css_and_json_boot_islands()
+    print("Testing /register and /entity-edit emit valid 100% CSS (no 100%%) and JSON boot islands")
+    reg_html = html.render(
+        "sample",
+        "{\"fields\":[{\"name\":\"lot\",\"label\":\"Lot </script>\",\"type\":\"text\",\"required\":true}]}",
+        "nonce-r<1>",
+        {experiment = {value = "1", label = "Exp </script> 1"}}
+    )
+    check(not string.contains(reg_html, "100%%"),
+        "/register CSS must never contain doubled 100%%: " .. reg_html)
+    check(string.contains(reg_html, "width: 100%;") and string.contains(reg_html, "top: 100%;"),
+        "/register CSS should contain valid width: 100%; and top: 100%;")
+    check(not string.contains(reg_html, "</script> 1") and not string.contains(reg_html, "Lot </script>"),
+        "/register JSON islands must escape </script>")
+    check(string.contains(reg_html, "id=\"platform-register-layout\"") and string.contains(reg_html, "id=\"platform-register-boot\""),
+        "/register should render both layout and boot JSON islands")
+    check(string.contains(reg_html, "nonce=\"nonce-r&lt;1&gt;\""),
+        "/register should HTML-escape CSP nonce")
+
+    edit_html = html.render_entity_edit(
+        "sample",
+        "{\"fields\":[{\"name\":\"lot\",\"label\":\"Lot\",\"type\":\"text\"}]}",
+        "{\"lot\":\"LOT </script> 42\"}",
+        3,
+        "nonce-ee<1>"
+    )
+    check(not string.contains(edit_html, "100%%"),
+        "/entity-edit CSS must never contain doubled 100%%")
+    check(not string.contains(edit_html, "LOT </script> 42"),
+        "/entity-edit row JSON island must escape </script>")
+    check(string.contains(edit_html, "id=\"platform-entity-edit-row\"") and string.contains(edit_html, "id=\"platform-entity-edit-boot\""),
+        "/entity-edit should render row and boot JSON islands")
+    check(string.contains(edit_html, "nonce=\"nonce-ee&lt;1&gt;\""),
+        "/entity-edit should HTML-escape CSP nonce")
+end
+
+function tests.reset_password_and_verify_email_share_hash_token_asset()
+    print("Testing render_reset_password and render_verify_email inline shared hash_token.js with escaped nonce")
+    reset_html = html.render_reset_password(nil, nil, false, "n\"reset")
+    verify_html = html.render_verify_email(nil, nil, false, "n\"verify")
+    check(string.contains(reset_html, "id=\"reset-token\"") and string.contains(reset_html, "window.location.hash"),
+        "reset password should carry reset-token input and hash reader")
+    check(string.contains(verify_html, "id=\"verify-token\"") and string.contains(verify_html, "window.location.hash"),
+        "verify email should carry verify-token input and hash reader")
+    check(string.contains(reset_html, "nonce=\"n&quot;reset\"") and string.contains(verify_html, "nonce=\"n&quot;verify\""),
+        "both routes should HTML-escape their CSP nonces")
+end
+
 unit.run(tests)

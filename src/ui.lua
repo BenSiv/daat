@@ -14,12 +14,11 @@ html = {}
 -- pre-declared, see ../../luam/doc/forward_references.md
 label_print_button_html, label_print_js, related_records_html, platform_chat_widget_css = nil, nil, nil, nil
 
--- Context-aware HTML body/attribute, inline-<script> JSON, and JS
--- string-literal escaping primitives live in luam/lib/html.lua.
+-- Context-aware HTML body/attribute and inline-<script> JSON escaping
+-- primitives live in luam/lib/html.lua.
 html.escape = html_lib.escape
 html.html_escape = html_lib.html_escape
 json_for_script = html_lib.json_for_script
-js_string_literal = html_lib.js_string_literal
 
 -- The ".platform-container" shell (card look: padding/shadow/border/
 -- rounded corners) was copy-pasted, identically byte-for-byte except
@@ -221,87 +220,7 @@ end
 -- small override after this, same as platform_table_wrapper_css's own
 -- per-page overrides.
 function platform_cell_editor_css()
-    return """
-        .cell-input {
-            width: 100%%;
-            padding: 9px 12px;
-            border: 1px solid var(--platform-border-2, #cbd5e1);
-            border-radius: var(--platform-radius-sm, 8px);
-            font-size: 0.9rem;
-            background: #ffffff;
-            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-            box-sizing: border-box;
-            color: var(--platform-input-text, #1e293b);
-        }
-        .cell-input:focus {
-            border-color: var(--platform-accent-2, #6366f1);
-            outline: none;
-            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
-            background: #fff;
-        }
-        .cell-input.error {
-            border-color: #f87171;
-            background-color: #fef2f2;
-            box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.08);
-        }
-        .error-badge {
-            color: #ef4444;
-            font-size: 0.75rem;
-            margin-top: 4px;
-            display: block;
-            font-weight: 500;
-        }
-        .autocomplete-results {
-            position: absolute;
-            top: 100%%;
-            left: 0;
-            right: 0;
-            background: #ffffff;
-            border: 1px solid var(--platform-border, #e2e8f0);
-            border-radius: var(--platform-radius-sm, 8px);
-            max-height: 220px;
-            overflow-y: auto;
-            z-index: 1000;
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
-            margin-top: 6px;
-            padding: 4px 0;
-        }
-        .autocomplete-results div {
-            padding: 9px 14px;
-            cursor: pointer;
-            font-size: 0.85rem;
-            transition: all 0.15s ease;
-            color: var(--platform-text, #334155);
-        }
-        .autocomplete-results div:hover { background: var(--platform-bg-2, #f1f5f9); color: var(--platform-heading, #0f172a); }
-        .status-msg {
-            margin-top: 24px;
-            padding: 14px 20px;
-            border-radius: var(--platform-radius-sm, 8px);
-            font-size: 0.95rem;
-            display: none;
-            font-weight: 500;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.02);
-        }
-        .status-msg.success {
-            display: block;
-            background: #f0fdf4;
-            color: #166534;
-            border: 1px solid #bbf7d0;
-            animation: fadeIn 0.25s ease;
-        }
-        .status-msg.error {
-            display: block;
-            background: #fef2f2;
-            color: #991b1b;
-            border: 1px solid #fecaca;
-            animation: fadeIn 0.25s ease;
-        }
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(4px); }
-            to   { opacity: 1; transform: translateY(0); }
-        }
-"""
+    return asset.read("ui/cell_editor.css")
 end
 
 -- Shared .btn/.btn-primary/.btn-secondary/.btn-delete/.btn-danger rules --
@@ -1049,280 +968,14 @@ end
 -- CSP, so an inline <script> without the matching nonce is silently
 -- blocked by the browser: the page loads, but no JS in it ever runs.
 function html.render(entity_type, layout_json, nonce, locked_fields)
+    register = require("ui.register")
     escaped_type = html.html_escape(entity_type)
-    if locked_fields == nil then
-        locked_fields = {}
-    end
-    json = require("dkjson")
-    locked_fields_json = json.encode(locked_fields)
     register_header = render_page_header("Register " .. escaped_type,
         "<p>Fill out the sheet. Fields marked with <span class=\"req-dot\">*</span> are required.</p>",
         "<a class=\"btn btn-secondary\" href=\"browse?type=" .. escaped_type .. "\">Browse " .. escaped_type .. "</a>")
-
-    -- The action buttons and status placeholder are the only pieces of
-    -- this page's static shell that recur elsewhere verbatim (render_
-    -- entity_edit's own single-row edit page has the exact same two
-    -- shapes) -- everything else here (the always-JS-populated table
-    -- shell, the CSS block, the templated inline <script>) stays direct
-    -- string composition, same as before: see doc/templating.md's
-    -- scope-boundary note on why those don't fit page.lua's vocabulary.
-    page_lib = require("page")
-    sections = {
-        {
-            type = "actions",
-            buttons = {
-                {label = "+ Add Row", id = "btn-add-row", css_class = "btn btn-secondary"},
-                {label = "Submit Batch", id = "btn-submit-batch", css_class = "btn btn-primary"},
-            },
-        },
-        {type = "status_placeholder", id = "status-message", css_class = "status-msg"},
-    }
-    validate_err = page_lib.validate(sections)
-    if validate_err != nil then
-        error(validate_err)
-    end
-    actions_html = page_lib.render(sections)
-    return string.format("""
-<div class="fossil-doc" data-title="Register %s">
-    <style>
-%s
-%s
-        .platform-header span.req-dot {
-            color: #ef4444;
-            font-weight: bold;
-        }
-        %s
-        /* The registration grid is editable cells, not a plain
-           read-only table -- the inset shadow and bottom margin are
-           deliberate on top of the shared base, not drift. */
-        .platform-table-wrapper { margin-bottom: 24px; box-shadow: inset 0 2px 4px 0 rgba(0,0,0,0.02); }
-        #registration-table {
-            width: 100%%;
-            border-collapse: separate;
-            border-spacing: 0;
-            min-width: 700px;
-        }
-        #registration-table th, #registration-table td {
-            padding: 14px 16px;
-            text-align: left;
-            border-bottom: 1px solid var(--platform-border, #e2e8f0);
-        }
-        #registration-table th {
-            background: var(--platform-bg-2, #f1f5f9);
-            font-weight: 600;
-            font-size: 0.8rem;
-            color: var(--platform-th-text, #475569);
-            text-transform: uppercase;
-            letter-spacing: 0.06em;
-            border-top: 1px solid var(--platform-border, #e2e8f0);
-        }
-        #registration-table th:first-child { border-top-left-radius: 10px; }
-        #registration-table th:last-child  { border-top-right-radius: 10px; }
-        #registration-table td { background: #ffffff; }
-        #registration-table tr:last-child td { border-bottom: none; }
-        #registration-table tr:last-child td:first-child { border-bottom-left-radius: 10px; }
-        #registration-table tr:last-child td:last-child  { border-bottom-right-radius: 10px; }
-        #registration-table th.required::after {
-            content: " *";
-            color: #ef4444;
-        }
-        .cell-input-wrapper { position: relative; }
-        .cell-locked-value {
-            display: inline-block;
-            padding: 9px 12px;
-            font-size: 0.9rem;
-            color: var(--platform-muted, #64748b);
-            font-style: italic;
-        }
-        .platform-actions {
-            display: flex;
-            gap: 14px;
-            justify-content: flex-start;
-            align-items: center;
-        }
-        %s
-    </style>
-
-    <div class="platform-container">
-        %s
-
-        <div class="platform-table-wrapper">
-            <table id="registration-table">
-                <thead>
-                    <tr id="table-headers">
-                        <!-- headers dynamically injected -->
-                    </tr>
-                </thead>
-                <tbody id="table-body">
-                    <!-- rows dynamically injected -->
-                </tbody>
-            </table>
-        </div>
-
-        %s
-    </div>
-
-    <script nonce="%s">
-        const layout = %s;
-        const entityType = "%s";
-        const lockedFields = %s;
-        const baseUrl = window.location.pathname.replace(/\\/register\\/?$/, "");
-        let rowCounter = 0;
-
-        // Which document this registration table is embedded in, for
-        // ledger provenance (source_notebook_entry_id).
-        // An explicit ?entry= on this iframe's own src overrides
-        // auto-detection via document.referrer (the parent page's URL,
-        // set by the browser for a same-origin iframe navigation) --
-        // useful when referrer policies strip it, or to label it by
-        // something other than a raw URL.
-        const urlParams = new URLSearchParams(window.location.search);
-        let notebookEntry = urlParams.get("entry");
-        if (!notebookEntry && document.referrer) {
-            notebookEntry = document.referrer;
-        }
-
-        function initTable() {
-            const headerRow = document.getElementById("table-headers");
-            headerRow.innerHTML = "";
-
-            layout.fields.forEach(field => {
-                const th = document.createElement("th");
-                th.innerText = field.label;
-                if (field.required) { th.classList.add("required"); }
-                headerRow.appendChild(th);
-            });
-
-            const deleteTh = document.createElement("th");
-            deleteTh.style.width = "40px";
-            headerRow.appendChild(deleteTh);
-
-            addRow();
-        }
-
-        function addRow() {
-            rowCounter++;
-            const tbody = document.getElementById("table-body");
-            const tr = document.createElement("tr");
-            tr.id = `row-${rowCounter}`;
-
-            layout.fields.forEach(field => {
-                const td = document.createElement("td");
-                const wrapper = document.createElement("div");
-                wrapper.classList.add("cell-input-wrapper");
-
-                // A locked field (?lock_<name>=<value>) shows a fixed,
-                // read-only display -- e.g. which mixture these
-                // ingredients belong to -- plus a same-named hidden
-                // input so submitBatch()'s existing
-                // querySelector(`[name="..."]`) collection picks up the
-                // value with no changes needed there at all.
-                const locked = lockedFields[field.name];
-                PlatformJS.buildFieldInput(field, wrapper, { locked: locked, baseUrl: baseUrl });
-                td.appendChild(wrapper);
-                tr.appendChild(td);
-            });
-
-            const deleteTd = document.createElement("td");
-            const deleteBtn = document.createElement("button");
-            deleteBtn.type = "button";
-            deleteBtn.classList.add("btn-delete");
-            deleteBtn.innerHTML = "&times;";
-            deleteBtn.onclick = () => {
-                const rows = tbody.getElementsByTagName("tr");
-                if (rows.length > 1) {
-                    tr.remove();
-                } else {
-                    alert("Cannot delete the only row.");
-                }
-            };
-            deleteTd.appendChild(deleteBtn);
-            tr.appendChild(deleteTd);
-            tbody.appendChild(tr);
-        }
-
-        // Row/field lookup stays bespoke here (register's inputs share
-        // one bare `name` per <tr>, so a lookup needs the row too) --
-        // only the "mark this input errored" mechanics are shared.
-        function highlightError(rowIndex, fieldName, message) {
-            const tbody = document.getElementById("table-body");
-            const tr = tbody.getElementsByTagName("tr")[rowIndex];
-            if (!tr) return;
-            const input = tr.querySelector(`[name="${fieldName}"]`);
-            if (!input) return;
-            PlatformJS.highlightError(input, message);
-        }
-
-        function clearAllErrors() {
-            PlatformJS.clearAllErrors(document, document.getElementById("status-message"));
-        }
-
-        function submitBatch() {
-            clearAllErrors();
-            const tbody = document.getElementById("table-body");
-            const trs = tbody.getElementsByTagName("tr");
-            const payload = [];
-
-            for (let i = 0; i < trs.length; i++) {
-                const tr = trs[i];
-                const rowData = {};
-                layout.fields.forEach(field => {
-                    const el = tr.querySelector(`[name="${field.name}"]`);
-                    if (el) {
-                        let val = el.value;
-                        if (field.type === "number" && val !== "") { val = parseFloat(val); }
-                        // Both multivalue types send a real JSON array
-                        // in the payload, not a joined string -- /api/
-                        // submit's body is already JSON, so there's no
-                        // wire-format reason to flatten one.
-                        if (field.type === "multi_select") {
-                            val = Array.from(el.selectedOptions).map(o => o.value);
-                        } else if (field.type === "multi_reference" || field.type === "multi_polymorphic_reference") {
-                            val = val.split(",").map(s => s.trim()).filter(s => s.length > 0);
-                        }
-                        rowData[field.name] = val;
-                    }
-                });
-                payload.push(rowData);
-            }
-
-            const msg = document.getElementById("status-message");
-            msg.className = "status-msg";
-            msg.innerText = "Validating and submitting...";
-            msg.style.display = "block";
-
-            const entryParam = notebookEntry ? `&entry=${encodeURIComponent(notebookEntry)}` : "";
-            PlatformJS.postJSON(`${baseUrl}/api/submit?type=${entityType}${entryParam}`, payload)
-            .then(data => {
-                if (data.success) {
-                    msg.className = "status-msg success";
-                    msg.innerText = `Successfully registered ${data.created_ids.length} entities (IDs: ${data.created_ids.join(", ")}).`;
-                    tbody.innerHTML = "";
-                    rowCounter = 0;
-                    addRow();
-                } else {
-                    msg.className = "status-msg error";
-                    msg.innerText = "Submission failed. Please check highlighted errors in the form.";
-                    if (data.issues && data.issues.length > 0) {
-                        data.issues.forEach(issue => {
-                            highlightError(issue.row_index - 1, issue.field, issue.message);
-                        });
-                    }
-                }
-            })
-            .catch(err => {
-                console.error("Submit error", err);
-                msg.className = "status-msg error";
-                msg.innerText = "An unexpected error occurred during submission.";
-            });
-        }
-
-        window.onload = initTable;
-        document.getElementById("btn-add-row").addEventListener("click", addRow);
-        document.getElementById("btn-submit-batch").addEventListener("click", submitBatch);
-    </script>
-</div>
-""", escaped_type, platform_container_css(), platform_page_header_css(), platform_table_wrapper_css(), platform_button_css() .. platform_cell_editor_css(), register_header, actions_html, nonce, json_for_script(layout_json), js_string_literal(entity_type), json_for_script(locked_fields_json))
+    base_css = platform_container_css() .. "\n" .. platform_page_header_css() .. "\n" ..
+        platform_table_wrapper_css() .. "\n" .. platform_button_css() .. "\n" .. platform_cell_editor_css()
+    return register.render(entity_type, layout_json, locked_fields, register_header, base_css, nonce)
 end
 
 -- Single-row edit form for an existing entity -- the generic-entity
@@ -1338,152 +991,14 @@ end
 -- exactly what's needed here too, just for one row instead of many,
 -- submitting to /api/update instead of /api/submit.
 function html.render_entity_edit(entity_type, layout_json, row_json, entity_id, nonce)
+    entity_edit = require("ui.entity_edit")
     escaped_type = html.html_escape(entity_type)
     escaped_entity_id = tostring(entity_id)
     edit_header = render_page_header("Edit " .. escaped_type .. " #" .. escaped_entity_id,
         "<a class=\"btn btn-secondary\" href=\"detail?type=" .. escaped_type .. "&entity_id=" .. escaped_entity_id .. "\">&larr; Back to detail</a>", nil)
-
-    -- Same two shapes html.render's own registration grid already
-    -- built these types for (see doc/templating.md) -- reused verbatim
-    -- here, no new vocabulary needed. This page's own `style` is the
-    -- real reason `actions.style` exists at all: this fields list
-    -- carries no bottom margin of its own (unlike register's neighbor,
-    -- a table wrapper that already does), so its action group needs
-    -- the extra top margin explicitly.
-    page_lib = require("page")
-    sections = {
-        {
-            type = "actions",
-            buttons = {{label = "Save changes", id = "btn-save", css_class = "btn btn-primary"}},
-            style = "margin-top: 20px;",
-        },
-        {type = "status_placeholder", id = "status-message", css_class = "status-msg"},
-    }
-    validate_err = page_lib.validate(sections)
-    if validate_err != nil then
-        error(validate_err)
-    end
-    actions_html = page_lib.render(sections)
-    return string.format("""
-<div class="fossil-doc" data-title="Edit %s #%s">
-    <style>
-%s
-%s
-%s
-        .platform-edit-fields { display: flex; flex-direction: column; gap: 14px; max-width: 640px; }
-        .platform-edit-field label { display: block; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--platform-muted, #64748b); font-weight: 600; margin-bottom: 6px; }
-        .platform-edit-field label .req-dot { color: #ef4444; font-weight: bold; }
-        .platform-edit-field { position: relative; }
-        /* This form is a single narrow column (.platform-edit-fields'
-           own max-width: 640px above) -- keep the shared status-msg
-           the same width rather than letting it stretch full-width. */
-        .status-msg { max-width: 640px; }
-    </style>
-
-    <div class="platform-container">
-        %s
-
-        <div class="platform-edit-fields" id="edit-fields"><!-- fields injected --></div>
-
-        %s
-    </div>
-
-    <script nonce="%s">
-        const layout = %s;
-        const row = %s;
-        const entityType = "%s";
-        const entityId = %s;
-        const baseUrl = window.location.pathname.replace(/\\/entity-edit\\/?$/, "");
-
-        // Field lookup stays bespoke here (document-global, not
-        // row-scoped like register's) -- only the "mark this input
-        // errored" mechanics are shared.
-        function highlightError(fieldName, message) {
-            const input = document.querySelector(`[name="${fieldName}"]`);
-            if (!input) return;
-            PlatformJS.highlightError(input, message);
-        }
-
-        function buildFields() {
-            const container = document.getElementById("edit-fields");
-            layout.fields.forEach(field => {
-                const wrapper = document.createElement("div");
-                wrapper.classList.add("platform-edit-field");
-                const label = document.createElement("label");
-                label.innerHTML = field.label + (field.required ? ' <span class="req-dot">*</span>' : '');
-                wrapper.appendChild(label);
-
-                const current = row[field.name];
-                PlatformJS.buildFieldInput(field, wrapper, { value: current, baseUrl: baseUrl });
-                container.appendChild(wrapper);
-            });
-
-            const reasonWrapper = document.createElement("div");
-            reasonWrapper.classList.add("platform-edit-field");
-            const reasonLabel = document.createElement("label");
-            reasonLabel.innerText = "Reason for this change (optional unless required)";
-            reasonWrapper.appendChild(reasonLabel);
-            const reasonInput = document.createElement("input");
-            reasonInput.type = "text";
-            reasonInput.classList.add("cell-input");
-            reasonInput.id = "platform-edit-reason";
-            reasonInput.placeholder = "Why is this changing?";
-            reasonWrapper.appendChild(reasonInput);
-            container.appendChild(reasonWrapper);
-        }
-
-        function submitEdit() {
-            document.querySelectorAll(".cell-input").forEach(PlatformJS.clearCellError);
-            const payload = {};
-            layout.fields.forEach(field => {
-                const el = document.querySelector(`[name="${field.name}"]`);
-                if (!el) return;
-                let val = el.value;
-                if (field.type === "number" && val !== "") { val = parseFloat(val); }
-                if (field.type === "multi_select") {
-                    val = Array.from(el.selectedOptions).map(o => o.value);
-                } else if (field.type === "multi_reference" || field.type === "multi_polymorphic_reference") {
-                    val = val.split(",").map(s => s.trim()).filter(s => s.length > 0);
-                }
-                payload[field.name] = val;
-            });
-
-            const msg = document.getElementById("status-message");
-            msg.className = "status-msg";
-            msg.innerText = "Saving...";
-            msg.style.display = "block";
-
-            const reasonEl = document.getElementById("platform-edit-reason");
-            const reasonParam = reasonEl.value ? `&reason=${encodeURIComponent(reasonEl.value)}` : "";
-            PlatformJS.postJSON(`${baseUrl}/api/update?type=${entityType}&entity_id=${entityId}${reasonParam}`, payload)
-            .then(data => {
-                if (data.success) {
-                    window.location.href = `${baseUrl}/detail?type=${entityType}&entity_id=${entityId}`;
-                } else {
-                    msg.className = "status-msg error";
-                    msg.innerText = "Save failed. Please check highlighted errors below.";
-                    if (data.issues && data.issues.length > 0) {
-                        data.issues.forEach(issue => {
-                            if (issue.field) { highlightError(issue.field, issue.message); }
-                            else { msg.innerText = issue.message; }
-                        });
-                    }
-                }
-            })
-            .catch(err => {
-                console.error("Save error", err);
-                msg.className = "status-msg error";
-                msg.innerText = "An unexpected error occurred while saving.";
-            });
-        }
-
-        buildFields();
-        document.getElementById("btn-save").addEventListener("click", submitEdit);
-    </script>
-</div>
-""", escaped_type, escaped_entity_id, platform_container_css(), platform_button_css(), platform_page_header_css() .. platform_cell_editor_css(),
-     edit_header, actions_html,
-     nonce, json_for_script(layout_json), json_for_script(row_json), js_string_literal(entity_type), tostring(entity_id))
+    base_css = platform_container_css() .. "\n" .. platform_button_css() .. "\n" ..
+        platform_page_header_css() .. "\n" .. platform_cell_editor_css()
+    return entity_edit.render(entity_type, layout_json, row_json, entity_id, edit_header, base_css, nonce)
 end
 
 -- A multivalue field's value is a plain Lua array, not a
@@ -2080,9 +1595,13 @@ function html.render_detail(db_path, entity_type, layout, row, history, nonce, h
     print_label_html = ""
     print_label_js_block = ""
     if has_label_template == true then
-        print_label_html = label_print_button_html()
-        print_label_js_block = string.format("<script src=\"vendor?name=BrowserPrint-3.0.216.min.js\" nonce=\"%s\"></script>", nonce) ..
-            label_print_js(nonce, entity_type, id_str)
+        safe_nonce = nonce
+        if safe_nonce == nil then
+            safe_nonce = ""
+        end
+        print_label_html = label_print_button_html(entity_type, id_str)
+        print_label_js_block = string.format("<script src=\"vendor?name=BrowserPrint-3.0.216.min.js\" nonce=\"%s\"></script>", html.html_escape(safe_nonce)) ..
+            label_print_js(nonce)
     end
 
     fields_html = ""
@@ -2251,80 +1770,24 @@ end
 -- Markup for the print-label control, only ever emitted when a
 -- label_template row exists for this entity_type (has_label_template,
 -- computed by cgi.lua's /detail route -- see label.has_template).
-function label_print_button_html()
-    return """
+function label_print_button_html(entity_type, entity_id)
+    return string.format("""
 <div class="platform-print-label">
     <select id="platform-label-printer"></select>
-    <button type="button" id="platform-print-label-btn" class="btn btn-secondary">Print Label</button>
+    <button type="button" id="platform-print-label-btn" class="btn btn-secondary" data-entity-type="%s" data-entity-id="%s">Print Label</button>
     <span id="platform-print-label-status"></span>
 </div>
-"""
+""", html.html_escape(entity_type), html.html_escape(tostring(entity_id)))
 end
 
 -- Discovers local Zebra printers via the vendored Browser Print SDK
 -- (loaded separately, see render_detail) and sends this entity's
--- rendered ZPL (fetched from /label) to whichever one is selected.
+-- rendered ZPL (fetched from /label using the button's data-*
+-- attributes) to whichever one is selected.
 -- `nonce` must be Fossil's own per-request CSP nonce (see
 -- html.popover_js's own comment) since this emits an inline <script>.
-function label_print_js(nonce, entity_type, entity_id)
-    return string.format("""
-<script nonce="%s">
-(function(){
-    var select = document.getElementById('platform-label-printer');
-    var btn = document.getElementById('platform-print-label-btn');
-    var status = document.getElementById('platform-print-label-status');
-    var devices = [];
-
-    function showStatus(msg, isError){
-        status.textContent = msg;
-        status.className = isError ? 'platform-admin-message-error' : '';
-    }
-
-    if(typeof BrowserPrint === 'undefined'){
-        showStatus('Zebra Browser Print not detected -- install it from zebra.com/us/en/support-downloads/software/printer-setup-utilities/browser-print.html and reload this page.', true);
-        btn.disabled = true;
-        return;
-    }
-
-    BrowserPrint.getLocalDevices(function(deviceList){
-        devices = deviceList || [];
-        select.innerHTML = '';
-        if(devices.length === 0){
-            showStatus('No local Zebra printers found.', true);
-            btn.disabled = true;
-            return;
-        }
-        devices.forEach(function(d, i){
-            var opt = document.createElement('option');
-            opt.value = i;
-            opt.textContent = d.name;
-            select.appendChild(opt);
-        });
-    }, function(){
-        showStatus('Could not reach Zebra Browser Print -- is the app running?', true);
-        btn.disabled = true;
-    }, 'printer');
-
-    btn.addEventListener('click', function(){
-        var device = devices[parseInt(select.value, 10)];
-        if(!device){ showStatus('No printer selected.', true); return; }
-        showStatus('Printing...', false);
-        fetch("label?type=%s&entity_id=%s").then(function(resp){
-            if(!resp.ok){ throw new Error('label render failed'); }
-            return resp.text();
-        }).then(function(zpl){
-            device.send(zpl, function(){
-                showStatus('Sent to ' + device.name + '.', false);
-            }, function(err){
-                showStatus('Print failed: ' + err, true);
-            });
-        }).catch(function(){
-            showStatus('Could not fetch label content.', true);
-        });
-    });
-})();
-</script>
-""", nonce, js_string_literal(entity_type), js_string_literal(tostring(entity_id)))
+function label_print_js(nonce)
+    return ui_assets.inline_script(nonce, asset.read("ui/label_print.js"))
 end
 
 -- Generic view: any approved custom SQL view rendered as a table.
@@ -2849,22 +2312,7 @@ function html.render_reset_password(token, error_message, invalid, nonce)
             submit_label = "Set password",
         },
     }, "<span id=\"reset-missing\" hidden>This link is incomplete. Open it straight from the email, or <a href=\"/forgot-password\">request a new one</a>.</span>")
-    return card .. string.format("""
-<script nonce="%s">
-(function() {
-    var field = document.getElementById('reset-token');
-    var match = /(?:^#|&)token=([0-9a-f]+)/.exec(window.location.hash);
-    if (match) {
-        field.value = match[1];
-        history.replaceState(null, '', window.location.pathname);
-    }
-    if (!field.value) {
-        field.form.hidden = true;
-        document.getElementById('reset-missing').hidden = false;
-    }
-})();
-</script>
-""", nonce)
+    return card .. ui_assets.inline_script(nonce, asset.read("ui/hash_token.js"))
 end
 
 -- /verify-email#token=...: confirms a new address for an account that
@@ -2900,22 +2348,7 @@ function html.render_verify_email(token, error_message, invalid, nonce)
             submit_label = "Confirm email",
         },
     }, "<span id=\"verify-missing\" hidden>This link is incomplete. Open it straight from the email.</span>")
-    return card .. string.format("""
-<script nonce="%s">
-(function() {
-    var field = document.getElementById('verify-token');
-    var match = /(?:^#|&)token=([0-9a-f]+)/.exec(window.location.hash);
-    if (match) {
-        field.value = match[1];
-        history.replaceState(null, '', window.location.pathname);
-    }
-    if (!field.value) {
-        field.form.hidden = true;
-        document.getElementById('verify-missing').hidden = false;
-    }
-})();
-</script>
-""", nonce)
+    return card .. ui_assets.inline_script(nonce, asset.read("ui/hash_token.js"))
 end
 
 -- Self-service password change -- every capability level (baseline "i"
@@ -3651,41 +3084,10 @@ function html.render_admin_triggers(triggers, nonce)
         %s
 %s    </div>
 
-    <script nonce="%s">
-(function(){
-    var container = document.querySelector('.platform-actions');
-    var status = document.getElementById('status-message');
-    if (!container || !status) { return; }
-    container.addEventListener('click', function(e){
-        var btn = e.target.closest('button[data-ext]');
-        if (!btn) { return; }
-        var ext = btn.getAttribute('data-ext');
-        var trigger = btn.getAttribute('data-trigger');
-        btn.disabled = true;
-        status.className = "status-msg";
-        status.innerText = "Running...";
-        PlatformJS.postJSON('/admin-triggers/' + encodeURIComponent(ext) + '/' + encodeURIComponent(trigger), {})
-            .then(function(result){
-                btn.disabled = false;
-                if (result && result.success) {
-                    status.className = "status-msg success";
-                    status.innerText = result.message || "Done.";
-                } else {
-                    status.className = "status-msg error";
-                    status.innerText = (result && result.error) || "Trigger failed.";
-                }
-            })
-            .catch(function(){
-                btn.disabled = false;
-                status.className = "status-msg error";
-                status.innerText = "An unexpected error occurred.";
-            });
-    });
-})();
-    </script>
-</div>
+%s</div>
 """, platform_container_css(), platform_page_header_css(), platform_button_css(),
-     render_page_header("Manual Triggers", nil, nil), actions_html, nonce)
+     render_page_header("Manual Triggers", nil, nil), actions_html,
+     ui_assets.inline_script(nonce, asset.read("ui/admin_triggers.js")))
 end
 
 -- Content-maturity ladder (see document.promotion_target_tier's own
@@ -3996,44 +3398,12 @@ function html.render_index(db_path, entity_types, edges, nonce)
         <div id="platform-view-list">%s</div>
         <div id="platform-view-diagram" style="display:none;">%s</div>
     </div>
-    <script nonce="%s">
-    (function(){
-        var input = document.getElementById('platform-entity-search-input');
-        var results = document.getElementById('platform-entity-search-results');
-
-        function render(items) {
-            if (items.length === 0) {
-                results.innerHTML = '<div class="platform-entity-search-empty">No matching entities.</div>';
-            } else {
-                results.innerHTML = items.map(function(item){
-                    var sub = item.subtitle ? '<span class="platform-entity-search-sub">&middot; ' + PlatformJS.escapeHtml(item.subtitle) + '</span>' : '';
-                    return '<a href="detail?type=' + encodeURIComponent(item.entity_type) + '&entity_id=' + item.id + '"><span>' +
-                        PlatformJS.escapeHtml(item.label) + sub + '</span><span class="platform-entity-search-type">' + PlatformJS.escapeHtml(item.entity_type) + '</span></a>';
-                }).join('');
-            }
-            results.classList.add('platform-entity-search-open');
-        }
-
-        var doSearch = PlatformJS.debounce(function(query){
-            PlatformJS.fetchJSON('api/entity-search?query=' + encodeURIComponent(query)).then(render);
-        }, 200);
-        input.addEventListener('input', function(){
-            var query = input.value.trim();
-            if (!query) { results.classList.remove('platform-entity-search-open'); results.innerHTML = ''; return; }
-            doSearch(query);
-        });
-        PlatformJS.onOutsideClick(input, function(){ return results; }, function(){
-            results.classList.remove('platform-entity-search-open');
-        });
-        input.addEventListener('keydown', function(e){
-            if (e.key === 'Escape') { results.classList.remove('platform-entity-search-open'); }
-        });
-    })();
-    </script>
-</div>
+%s</div>
 %s
 """, platform_container_css(), platform_page_header_css(), html.relation_diagram_css() .. platform_table_wrapper_css(), html.popover_css(),
-     index_header, list_or_empty, diagram_html, nonce, html.diagram_js(nonce))
+     index_header, list_or_empty, diagram_html,
+     ui_assets.inline_script(nonce, asset.read("ui/data_index.js")),
+     html.diagram_js(nonce))
 end
 
 -- Every entry template found (whether it loaded cleanly or not), each

@@ -1,0 +1,9 @@
+.platform-edit-fields { display: flex; flex-direction: column; gap: 14px; max-width: 640px; }
+.platform-edit-field label { display: block; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--platform-muted, #64748b); font-weight: 600; margin-bottom: 6px; }
+.platform-edit-field label .req-dot { color: #ef4444; font-weight: bold; }
+.platform-edit-field { position: relative; }
+/* This form is a single narrow column (.platform-edit-fields'
+   own max-width: 640px above) -- keep the shared status-msg
+   the same width rather than letting it stretch full-width. */
+.status-msg { max-width: 640px; }
+

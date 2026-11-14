@@ -105,7 +105,8 @@ teardown() {
     read TEST_SESSION_COOKIE TEST_CSRF_TOKEN < <(login_test_user "viewer5" "i")
     GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/register" QUERY_STRING="type=component&lock_composite=1" \
         HTTP_COOKIE="session=${TEST_SESSION_COOKIE}; csrf=${TEST_CSRF_TOKEN}" run "$BIN"
-    [[ "$output" =~ 'lockedFields = {"composite":{"value":"1","label":"Batch-42"}};' ]]
+    [[ "$output" =~ '"locked_fields":{"composite":{"value":"1","label":"Batch-42"}}' ]]
+    [[ "$output" =~ 'const lockedFields = boot.locked_fields;' ]]
 }
 
 @test "a submission that includes the locked field's value (as the hidden input would send) creates the row normally" {
