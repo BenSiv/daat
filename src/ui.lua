@@ -5,6 +5,7 @@ view = require("view")
 config = require("config")
 document = require("document")
 html_lib = require("html")
+render_lib = require("render")
 ui_assets = require("ui.assets")
 
 html = {}
@@ -87,96 +88,14 @@ PLATFORM_LAYOUT = {
 }
 
 function platform_container_css()
-    render_lib = require("render")
-    return render_lib.render("""
-        .platform-container {
-            font-family: 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            color: var(--platform-text, #334155);
-            background: #ffffff;
-            padding: 28px;
-            border-radius: var(--platform-radius-lg, 16px);
-            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.05);
-            margin: {{{layout.gutter}}}px auto;
-            max-width: min({{{layout.content_max_width}}}px, calc(100% - {{{layout.gutter_x2}}}px));
-            border: 1px solid var(--platform-bg-2, #f1f5f9);
-        }
-""", {layout = PLATFORM_LAYOUT})
+    return render_lib.render(asset.read("ui/container.css"), {layout = PLATFORM_LAYOUT})
 end
 
 -- Extracted out of html.page_shell's own giant template literal so
 -- PLATFORM_NAV_WIDTH can reach the one CSS rule that needs it
--- (.platform-nav's own width) without renumbering that literal's
--- existing, already-long positional string.format argument list --
--- same "small format() island, threaded in as one more %s" technique
--- platform_chat_widget_css uses internally.
+-- (.platform-nav's own width) via PLATFORM_LAYOUT.
 function platform_nav_css()
-    render_lib = require("render")
-    return render_lib.render("""
-.platform-nav {
-    width: {{{layout.nav_width}}}px;
-    flex-shrink: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 2px;
-    padding: 12px 8px;
-    background: var(--platform-bg, #ffffff);
-    border-right: 1px solid var(--platform-border, #e2e8f0);
-    min-height: 100vh;
-}
-""", {layout = PLATFORM_LAYOUT}) .. """
-.platform-nav-link {
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 12px;
-    border-radius: var(--platform-radius-sm, 8px);
-    color: var(--platform-th-text, #475569);
-    text-decoration: none;
-    transition: var(--platform-transition, all 0.15s ease);
-}
-.platform-nav-link:hover { background: var(--platform-bg-2, #f1f5f9); color: var(--platform-heading, #0f172a); }
-.platform-nav-link-active { background: var(--platform-accent, #4f46e5); color: #ffffff; }
-.platform-nav-spacer { flex: 1; }
-.platform-nav-label {
-    position: absolute;
-    left: calc(100% + 8px);
-    top: 50%;
-    transform: translateY(-50%);
-    padding: 6px 10px;
-    white-space: nowrap;
-    background: var(--platform-heading, #1e293b);
-    color: #ffffff;
-    border-radius: var(--platform-radius-sm, 8px);
-    font-size: 0.8rem;
-    font-weight: 600;
-    opacity: 0;
-    visibility: hidden;
-    pointer-events: none;
-    z-index: 20;
-    transition: var(--platform-transition, all 0.15s ease);
-}
-.platform-nav-link:hover .platform-nav-label, .platform-nav-link:focus .platform-nav-label { opacity: 1; visibility: visible; }
-.platform-nav-user {
-    padding: 10px 6px;
-    border-top: 1px solid var(--platform-border, #e2e8f0);
-    text-align: center;
-}
-.platform-nav-user-name {
-    font-size: 0.7rem;
-    font-weight: 600;
-    color: var(--platform-muted, #64748b);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    margin-bottom: 4px;
-}
-.platform-nav-user a { display: block; font-size: 0.75rem; color: var(--platform-accent, #4f46e5); text-decoration: none; font-weight: 600; }
-.platform-nav-user a:hover { text-decoration: underline; }
-.platform-nav-brand { display: block; padding: 4px; margin-bottom: 8px; text-align: center; }
-.platform-nav-brand img { width: 100%; max-width: 40px; height: auto; display: block; margin: 0 auto; }
-"""
+    return render_lib.render(asset.read("ui/nav.css"), {layout = PLATFORM_LAYOUT})
 end
 
 -- .platform-table-wrapper (the scroll/border/background shell around a
@@ -235,66 +154,7 @@ end
 -- this not-yet-saved row" icon-button use, or a reversible toggle like
 -- Unarchive/Approve, which stay .btn-secondary/.btn-primary.
 function platform_button_css()
-    return """
-        .btn {
-            padding: 10px 20px;
-            border-radius: var(--platform-radius-sm, 8px);
-            font-weight: 600;
-            font-size: 0.9rem;
-            cursor: pointer;
-            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-            border: none;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            /* !important on both of these: a generic "a { color:
-               var(--platform-accent) }"/"a:hover { text-decoration:
-               underline }" rule scoped to some surrounding wrapper
-               (.platform-header a and friends, hand-copied across ~18
-               render_* functions) has higher specificity than a bare
-               .btn-* class, so a <a class="btn btn-primary"> sitting
-               inside one can silently lose its own white text to the
-               wrapper's accent-color rule -- on an amber accent theme,
-               that makes the button's text exactly match its own
-               background: invisible, not just low-contrast. Centralized
-               here (the one shared place every .btn already comes from)
-               instead of chasing down every current and future
-               wrapper-link rule with its own :not(.btn) exception. */
-            text-decoration: none !important;
-        }
-        .btn:hover { text-decoration: none !important; }
-        .btn-primary {
-            background: var(--platform-accent, #4f46e5);
-            color: #ffffff !important;
-        }
-        .btn-primary:hover { filter: brightness(1.08); }
-        .btn-primary:active { transform: scale(0.98); }
-        .btn-secondary {
-            background: var(--platform-bg, #f8fafc);
-            color: var(--platform-th-text, #475569) !important;
-            border: 1px solid var(--platform-border, #e2e8f0);
-        }
-        .btn-secondary:hover { background: var(--platform-bg-2, #f1f5f9); color: var(--platform-heading, #0f172a) !important; }
-        .btn-secondary:active { transform: scale(0.98); }
-        .btn-secondary:disabled { opacity: 0.6; cursor: default; transform: none; }
-        .btn-danger {
-            background: var(--platform-bg, #f8fafc);
-            color: #b91c1c !important;
-            border: 1px solid #fecaca;
-        }
-        .btn-danger:hover { background: #fef2f2; color: #b91c1c !important; }
-        .btn-danger:active { transform: scale(0.98); }
-        .btn-delete {
-            background: transparent;
-            color: var(--platform-muted-2, #94a3b8);
-            font-size: 1.25rem;
-            cursor: pointer;
-            transition: color 0.15s ease;
-            border: none;
-            padding: 4px;
-        }
-        .btn-delete:hover { color: #ef4444; }
-"""
+    return asset.read("ui/button.css")
 end
 
 -- Shared "sitemap" card-grid CSS -- was hand-copied identically across
@@ -900,66 +760,28 @@ function html.page_shell(title, active, body, nonce, show_sql, show_admin, has_t
         chat_widget_html = html.render_chat_widget(nonce, config.platform_config().chat_attachments_enabled == true)
     end
 
-    return string.format("""<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<!-- Every relative href/src in this app (nav links, theme-asset,
-     vendor, etc.) is written assuming it resolves against the site
-     root -- true by construction for every route that existed before
-     capabilities.ui extensions (all single-segment: /documents, /data,
-     /chat, ...), so it never needed stating explicitly. /ext/<name>
-     (and its .../action sibling) is the first real nested path
-     (confirmed live: the sidebar logo and every nav link 404'd on that
-     page, each silently resolving one level too deep, e.g.
-     /ext/theme-asset instead of /theme-asset) -- pin the base
-     explicitly rather than rewrite every existing relative reference,
-     since a root base changes nothing for the already-root-relative
-     pages and fixes any current or future nested one. -->
-<base href="/">
-<title>%s</title>
-<link rel="icon" type="image/png" href="theme-asset?name=favicon.png">
-<script nonce="%s">window.PLATFORM_PAGE_CONTEXT = %s;</script>
-%s
-<style>
-%s
-* { box-sizing: border-box; }
-/* min-height, not height -- height:100%% pins body's own box (and its
-   background paint) to exactly one viewport tall; a page whose content
-   is taller than that overflows the box while its background stops
-   dead at the one-screen mark, which is exactly what showed up as
-   "background/sidebar end partway down a long page." min-height lets
-   the box grow to the real content height while still guaranteeing a
-   full screen on short pages, so .platform-nav's own min-height:100vh
-   below (a floor, not a cap) still reaches the bottom of the viewport
-   there too. */
-html, body { margin: 0; min-height: 100vh; }
-body {
-    display: flex;
-    font-family: 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    background: var(--platform-bg-2, #f1f5f9);
-}
-%s
-.platform-main { flex: 1; min-width: 0; }
-%s
-</style>
-</head>
-<body>
-<nav class="platform-nav">
-%s
-%s
-<div class="platform-nav-spacer"></div>
-%s
-</nav>
-<div class="platform-main">
-%s
-</div>
-%s
-</body>
-</html>
-""", html.html_escape(title), nonce, page_context_json, platform_common_js(nonce), root_css, platform_nav_css(), platform_chat_widget_css(), brand_html, table.concat(nav_links, ""), user_box, body,
-     chat_widget_html)
+    safe_nonce = nonce
+    if safe_nonce == nil then
+        safe_nonce = ""
+    end
+    safe_title = title
+    if safe_title == nil then
+        safe_title = ""
+    end
+    return render_lib.render(asset.read("ui/page_shell.html"), {
+        title = safe_title,
+        nonce = safe_nonce,
+        page_context_json = page_context_json,
+        common_js_html = platform_common_js(nonce),
+        root_css = root_css,
+        nav_css = platform_nav_css(),
+        chat_widget_css = platform_chat_widget_css(),
+        brand_html = brand_html,
+        nav_links_html = table.concat(nav_links, ""),
+        user_box = user_box,
+        body = body,
+        chat_widget_html = chat_widget_html,
+    })
 end
 
 -- `nonce` must be Fossil's own per-request CSP nonce (the FOSSIL_NONCE

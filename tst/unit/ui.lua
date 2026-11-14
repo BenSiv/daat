@@ -390,4 +390,29 @@ function tests.reset_password_and_verify_email_share_hash_token_asset()
         "both routes should HTML-escape their CSP nonces")
 end
 
+function tests.page_shell_renders_extracted_shell_nav_and_escapes_context()
+    print("Testing page_shell renders extracted shell/nav CSS and escapes </script> in PLATFORM_PAGE_CONTEXT")
+    shell_html = html.page_shell(
+        "Title </script> <1>",
+        "home",
+        "<p>Body</p>",
+        "nonce-sh<1>",
+        true,
+        true,
+        true,
+        nil,
+        nil,
+        "alice",
+        nil
+    )
+    check(string.contains(shell_html, "<title>Title &lt;/script&gt; &lt;1&gt;</title>"),
+        "page_shell should HTML-escape <title>")
+    check(not string.contains(shell_html, "Title </script>"),
+        "page_shell PLATFORM_PAGE_CONTEXT JSON must escape </script>")
+    check(string.contains(shell_html, "nonce=\"nonce-sh&lt;1&gt;\""),
+        "page_shell should HTML-escape CSP nonce")
+    check(string.contains(shell_html, ".platform-nav {") and string.contains(shell_html, "width: 72px;"),
+        "page_shell should render nav.css with PLATFORM_LAYOUT width")
+end
+
 unit.run(tests)
