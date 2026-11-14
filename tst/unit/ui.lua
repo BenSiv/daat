@@ -282,4 +282,15 @@ function tests.chat_widget_view_model_toggles_attachment_controls_and_escapes_no
     check(string.contains(rendered, "platform_chat_widget_session"), "extracted chat widget JS should render")
 end
 
+function tests.plugin_page_and_inline_assets_emit_valid_css_and_escaped_nonce()
+    print("Testing render_plugin_page emits valid 100% CSS (no 100%% format leak) and escapes CSP nonce")
+    rendered = html.render_plugin_page("Demo", {{type = "heading", text = "Hello"}}, "n<1>")
+    check(not string.contains(rendered, "100%%"),
+        "render_plugin_page CSS must never leak doubled %%: " .. rendered)
+    check(string.contains(rendered, "width: 100%;"),
+        "render_plugin_page CSS should carry valid width: 100%;")
+    check(string.contains(rendered, "nonce=\"n&lt;1&gt;\""),
+        "canvas_js CSP nonce should be HTML-escaped")
+end
+
 unit.run(tests)
