@@ -100,7 +100,7 @@ end
 
 function tests.repeat_safe_and_pinned_are_the_lists_they_replace()
     print("Testing repeat_safe and pin_on_compaction mark exactly the tools the old lists named")
-    check(names_with("repeat_safe") == "document.children, document.search, entity.fields, entity.get, entity.list_types, entity.relationships",
+    check(names_with("repeat_safe") == "document.children, document.search, entity.fields, entity.find, entity.get, entity.list_types, entity.relationships",
         "repeat_safe tools changed: " .. names_with("repeat_safe"))
     check(names_with("pin_on_compaction") == "entity.fields, entity.list_types, entity.relationships",
         "pin_on_compaction tools changed: " .. names_with("pin_on_compaction"))

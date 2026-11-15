@@ -39,6 +39,22 @@ A `number` field may optionally declare `min`/`max` -- wired into the registrati
 
 Deferred: attachments/files, computed/formula fields, enforced numeric bounds. None of these are ruled out by the design -- they're just not needed to prove the core registration workflow end to end. (Rich text editing exists for the built-in Document entity type -- see `architecture.md`'s "Documents" section -- but a schema-defined `text` field on a custom entity type is still a plain string, no markup.)
 
+## Identifier fields (`identifier = true`) -- what people name an entity by
+
+```lua
+{name = "lab_number", type = "text", required = true, identifier = true},
+```
+
+A field people use to name an entity, without it being the display label: a lab number, a catalog number, an accession id. `entity.find` resolves it to the entity, and a document that mentions it gains a reference to the entity, the same as a mention of the label. Only a `text` or `select` field can be one: a link names another entity, a multivalue field isn't a column, a `number` reads back changed (SQLite stores 17 as 17.0), and an `sql_select` holds another row's id.
+
+It's also how an entity with no display field gets a name. On a display-less type, a row registered in daat (not imported, so with no builtin `name`) has no label at all, and `entity.find` shows it by its identifier: `equipment 3 (asset_code EQ-041)`.
+
+Mark only fields that name the entity. A notes or description field would turn `entity.find` into a text search, and references into noise.
+
+Run `daat repair references --names-only` once after marking a field on a type that already has rows: that indexes the existing values, which is all `entity.find` reads, in seconds. Until then `entity.find` doesn't find them. A full `daat repair references` also re-reads every document, so documents that already mention those values reference them too; without it, each document catches up on its next save.
+
+`entity_name_index` holds every label and identifier value, each marked `distinctive` or not (`reference.name_key`). `entity.find` reads all of them, so "YPD" resolves; document references read only distinctive ones, so a medium called "Water" doesn't attach to every document that mentions water.
+
 ## Multivalue fields (`multi_select`/`multi_reference`) -- a real
 ## junction table, not a delimited string column
 

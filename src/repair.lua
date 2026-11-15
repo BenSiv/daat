@@ -166,8 +166,21 @@ function repair_tag_evidence(cmd_args, db_path)
     print(string.format("Refreshed core tag evidence: %d row(s) written", written))
 end
 
+-- --names-only rebuilds just entity_name_index, which is all entity.find
+-- reads: seconds after a field is newly marked `identifier = true`, rather
+-- than re-reading every document's prose too (~6,400 on celleste-lims).
+-- Document references then catch up on each document's next save, or on a
+-- full `repair references`.
 function repair_references(cmd_args, db_path)
+    if #cmd_args > 2 or (cmd_args[2] != nil and cmd_args[2] != "--names-only") then
+        print("Usage: daat repair references [--names-only]")
+        return
+    end
     names = reference.rebuild_names(db_path)
+    if cmd_args[2] == "--names-only" then
+        print(string.format("Indexed %d entity name(s); document references left as they are", names))
+        return
+    end
     documents = reference.resync_all_documents(db_path)
     print(string.format("Indexed %d entity name(s); re-read references in %d document(s)", names, documents))
 end
@@ -310,8 +323,8 @@ REPAIRS = {
      description = "Rebuild tag centres from memberships (and the upkeep baselines), re-place one document by nearest tag, place every untagged document that has a subject (--place-untagged), re-check every computed tag's label with its distinctive words and neighbours (--relabel), or split/merge/re-check tags with the agent's judgment."},
     {name = "tag-evidence", usage = "tag-evidence", run = repair_tag_evidence,
      description = "Recompute core tag evidence (link, connection) from links and memberships."},
-    {name = "references", usage = "references", run = repair_references,
-     description = "Re-index entity names, then re-read every document's references to them."},
+    {name = "references", usage = "references [--names-only]", run = repair_references,
+     description = "Re-index entity names, then re-read every document's references to them (--names-only: the name index entity.find reads, without re-reading documents)."},
     {name = "knowledge", usage = "knowledge [--dry-run]", run = repair_knowledge,
      description = "Remove rows derived from archived documents or tags (embeddings, references; links archived); counts embeddings from another model."},
     {name = "connections", usage = "connections [--all] [--dry-run]", run = repair_connections,

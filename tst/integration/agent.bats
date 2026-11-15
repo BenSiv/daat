@@ -508,6 +508,34 @@ EOF
     [[ "$output" =~ "task_note.task -> task (reference)" ]]
 }
 
+@test "entity.find resolves a name on an identifier field to the entity's real id" {
+    mkdir -p schemas
+    cat > schemas/batch.lua <<'EOF'
+return {
+  name = "batch",
+  fields = {
+    {name = "title", type = "text", required = true, display = true},
+    {name = "code", type = "text", required = true, identifier = true},
+  },
+}
+EOF
+    "$BIN" schema add schemas/batch.lua >/dev/null
+    "$BIN" entity create batch title="Light stress trial" code="EXP-017" >/dev/null
+    batch_id=$(sqlite3 "$TEST_DIR/.store/store.db" "SELECT id FROM batch WHERE code = 'EXP-017';")
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(tool_call_response "entity.find" '{"text":"exp 017"}')"$'\1'"$(done_response "Found.")"
+    run raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"when did EXP-017 start?\"}" "$COOKIE" "$CSRF" "$scripted"
+    [[ "$output" =~ "200 OK" ]]
+
+    run latest_tool_result "$session_id"
+    # A stored result is JSON, so the label's quotes are escaped there.
+    [[ "$output" =~ "batch ${batch_id} " ]]
+    [[ "$output" =~ "Light stress trial" ]]
+    [[ "$output" =~ "(code EXP-017)" ]]
+}
+
 @test "entity.query answers a real join+aggregate question entity.list's own single-table filter can't express" {
     write_task_schema
     write_task_note_schema

@@ -26,16 +26,6 @@ function fresh_db()
     return dir, db_path
 end
 
-function ensure_identifier_column(db_path)
-    cols = {}
-    for _, name in ipairs(db.get_columns(db_path, "entity_field")) do
-        cols[name] = true
-    end
-    if cols["identifier"] == nil then
-        db.exec(db_path, "ALTER TABLE entity_field ADD COLUMN identifier INTEGER DEFAULT 0;")
-    end
-end
-
 function tests.document_search_disambiguates_and_skips_unlinkable()
     print("Testing document.search_for_link returns canonical [[ref]], excludes self/archived, and skips unlinkable duplicates")
     dir, db_path = fresh_db()
@@ -100,7 +90,7 @@ function tests.entity_search_matches_identifier_fields()
     experiment_def = {
         name = "experiment",
         fields = {
-            {name = "lab_number", type = "text", required = true},
+            {name = "lab_number", type = "text", required = true, identifier = true},
             {name = "title", type = "text", required = true, display = true},
         },
     }
@@ -108,16 +98,13 @@ function tests.entity_search_matches_identifier_fields()
         name = "equipment",
         fields = {
             {name = "number", type = "number", required = true},
-            {name = "asset_code", type = "text", required = true},
+            {name = "asset_code", type = "text", required = true, identifier = true},
         },
     }
     schema.register(db_path, experiment_def)
     schema.sync_table(db_path, experiment_def)
     schema.register(db_path, equipment_def)
     schema.sync_table(db_path, equipment_def)
-
-    ensure_identifier_column(db_path)
-    db.exec(db_path, "UPDATE entity_field SET identifier = 1 WHERE (entity_type = 'experiment' AND name = 'lab_number') OR (entity_type = 'equipment' AND name = 'asset_code');")
 
     exp_id, _ = entity.create(db_path, "experiment", {lab_number = "EXP-027", title = "Growth of S. demo on Molasses medium"}, "tester")
     eq_local_id, _ = entity.create(db_path, "equipment", {number = 41, asset_code = "EQ-041"}, "tester")

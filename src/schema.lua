@@ -379,6 +379,20 @@ function schema.validate(def)
                 end
             end
         end
+        -- A field people name an entity by, without it being the label
+        -- (lab_number, a catalog number): reference.lua indexes it, so
+        -- entity.find and document references can resolve it. Only text
+        -- and select hold a name as written. A link names another entity
+        -- and a multivalue field isn't a column; a number reads back
+        -- changed (SQLite stores 17 as REAL 17.0), and an sql_select holds
+        -- another row's id or token, not a name anyone writes.
+        if field.identifier != nil and field.identifier != true and field.identifier != false then
+            return string.format("schema '%s' field '%s': 'identifier' must be true or false", def.name, field.name)
+        end
+        if field.identifier == true and field.type != "text" and field.type != "select" then
+            return string.format("schema '%s' field '%s': type '%s' can't be an identifier, only text and select can",
+                def.name, field.name, field.type)
+        end
         -- Optional bounds on a "number" field -- UI-hint only for now
         -- (wired into the registration table's <input type="number">
         -- min/max, see html.lua), not yet enforced server-side. A real
@@ -427,6 +441,10 @@ function ensure_entity_field_display_column(db_path)
     -- fixed ref_entity_type a plain reference/multi_reference declares.
     if have["allowed_entity_types"] == nil then
         db.exec(db_path, "ALTER TABLE entity_field ADD COLUMN allowed_entity_types LONGTEXT;")
+    end
+    -- Same pattern again, for the `identifier` flag (see schema.validate).
+    if have["identifier"] == nil then
+        db.exec(db_path, "ALTER TABLE entity_field ADD COLUMN identifier INTEGER DEFAULT 0;")
     end
 end
 
@@ -498,8 +516,12 @@ function schema.register(db_path, def)
         if field.display == true then
             display_flag = 1
         end
+        identifier_flag = 0
+        if field.identifier == true then
+            identifier_flag = 1
+        end
         db.exec(db_path, string.format(
-            "%s entity_field (entity_type, name, type, required, enum_values, ref_entity_type, field_order, display, allowed_entity_types) VALUES (%s, %s, %s, %d, %s, %s, %d, %d, %s);",
+            "%s entity_field (entity_type, name, type, required, enum_values, ref_entity_type, field_order, display, allowed_entity_types, identifier) VALUES (%s, %s, %s, %d, %s, %s, %d, %d, %s, %d);",
             db.replace_into(db_path),
             db.quote(def.name), db.quote(field.name), db.quote(field.type),
             required_flag,
@@ -507,7 +529,8 @@ function schema.register(db_path, def)
             db.literal(field.entity_type),
             i,
             display_flag,
-            db.literal(allowed_types_json)
+            db.literal(allowed_types_json),
+            identifier_flag
         ))
     end
 

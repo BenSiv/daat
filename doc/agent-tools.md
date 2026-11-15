@@ -333,6 +333,8 @@ That's all. What the contributor doesn't have to touch, and what checks it for t
 
 A wrong `entity_type` such as `"tasks"` then comes back as `unknown entity type: tasks -- did you mean 'task'?`, worded exactly like every other `entity.*` tool.
 
+A `repeat_safe` or `pin_on_compaction` tool also has to be added to the expected names in `tst/unit/agent_tool_registry.lua`: that test pins both lists, so the flag is a decision someone made on purpose. The worked example's `entity.count` is `repeat_safe`, so it needs this too.
+
 The registry tests (`tst/unit/agent_tool_registry.lua`) fail if the record has no handler, a non-boolean flag, an unknown `control` kind, `repeat_safe` on a destructive tool, or a `precheck` on a read-only one. `tst/unit/agent_tools.lua` checks that it has a description and an object schema, that it translates for every provider, and that the fixtures match.
 
 ## Decisions (2026-11-03)

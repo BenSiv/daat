@@ -99,6 +99,56 @@ function tests.type_without_display_indexes_builtin_name_only(db_path)
         "expected only SPEC-901 indexed after rebuild")
 end
 
+function tests.rebuild_migrates_legacy_index_and_tolerates_add_column_race()
+    print("Testing rebuild_names adds distinctive before CLI repair and init_schema tolerates concurrent ADD COLUMN")
+    legacy_dir = os.tmpname()
+    os.remove(legacy_dir)
+    lfs.mkdir(legacy_dir)
+    init.do_init({}, legacy_dir)
+    legacy_db = legacy_dir .. "/.store/store.db"
+    schema.register(legacy_db, GIZMO)
+    schema.sync_table(legacy_db, GIZMO)
+    entity.create(legacy_db, "gizmo", {label = "GX-2001"}, "tester")
+
+    -- Simulate a store built before #38 whose first command after deploy is
+    -- `daat repair references` from the CLI, before any web request ran init_schema.
+    db.exec(legacy_db, "DROP TABLE entity_name_index;")
+    db.exec(legacy_db, "CREATE TABLE entity_name_index (name_key VARCHAR(255) NOT NULL, entity_type VARCHAR(64) NOT NULL, entity_id INTEGER NOT NULL);")
+    count = reference.rebuild_names(legacy_db)
+    check(count == 1, "rebuild_names migrated legacy table and indexed GX-2001, got " .. tostring(count))
+
+    -- Simulate a concurrent CGI request winning `ADD COLUMN distinctive` right
+    -- before our ALTER runs, vs a genuine ALTER failure where the column stays absent.
+    db.exec(legacy_db, "DROP TABLE entity_name_index;")
+    db.exec(legacy_db, "CREATE TABLE entity_name_index (name_key VARCHAR(255) NOT NULL, entity_type VARCHAR(64) NOT NULL, entity_id INTEGER NOT NULL);")
+    original_exec = db.exec
+    db.exec = function(path, statement, ...)
+        if string.find(statement, "ADD COLUMN distinctive", 1, true) != nil then
+            original_exec(path, statement, ...)
+            error("duplicate column name: distinctive")
+        end
+        return original_exec(path, statement, ...)
+    end
+    ok_race, race_err = pcall(reference.init_schema, legacy_db)
+    db.exec = original_exec
+    check(ok_race, "concurrent ADD COLUMN should succeed once column exists: " .. tostring(race_err))
+
+    db.exec(legacy_db, "DROP TABLE entity_name_index;")
+    db.exec(legacy_db, "CREATE TABLE entity_name_index (name_key VARCHAR(255) NOT NULL, entity_type VARCHAR(64) NOT NULL, entity_id INTEGER NOT NULL);")
+    db.exec = function(path, statement, ...)
+        if string.find(statement, "ADD COLUMN distinctive", 1, true) != nil then
+            error("disk full")
+        end
+        return original_exec(path, statement, ...)
+    end
+    ok_fail, fail_err = pcall(reference.init_schema, legacy_db)
+    db.exec = original_exec
+    check(ok_fail == false and string.find(tostring(fail_err), "disk full", 1, true) != nil,
+        "real ADD COLUMN failure still raises when column is missing: " .. tostring(fail_err))
+
+    os.execute("rm -rf '" .. legacy_dir .. "'")
+end
+
 dir = os.tmpname()
 os.remove(dir)
 lfs.mkdir(dir)
