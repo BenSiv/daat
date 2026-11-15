@@ -1,12 +1,12 @@
--- tst/unit/html.lua
--- Unit tests for src/html.lua. Originally just the "daat canvas"
+-- tst/unit/ui.lua
+-- Unit tests for src/ui.lua. Originally just the "daat canvas"
 -- (validate_canvas/render_canvas): the typed-element-table -> trusted-
 -- HTML-renderer pattern a UI plugin's page is built from, modeled on
 -- template.lua's own section.type dispatch. No prior test coverage
--- existed for html.lua at all before this file. Later extended with
+-- existed for ui.lua at all before this file. Later extended with
 -- apply_nav_hidden/apply_nav_order (brex 683042859).
 
-html = require("html")
+html = require("ui")
 
 unit = require("unit")
 check = unit.check
@@ -249,6 +249,170 @@ function tests.word_diff_html_returns_nil_past_the_word_cap()
     huge_new[1] = "different"
     check(html.word_diff_html(table.concat(huge_old, " "), table.concat(huge_new, " ")) == nil,
         "a diff over DIFF_MAX_WORDS words should return nil, not attempt the O(n*m) LCS")
+end
+
+function tests.knowledge_graph_view_model_escapes_script_closing_tags_in_boot_json()
+    print("Testing ui.knowledge_graph.view_model escapes </script> in boot_json and binds CSP nonce")
+    kg = require("ui.knowledge_graph")
+    labels = {[0] = "Raw </script> Intake", [1] = "Draft", [2] = "Reference", [3] = "Atomic"}
+    colors = {[0] = "#111111", [1] = "#222222", [2] = "#333333", [3] = "#444444"}
+    vm = kg.view_model(labels, colors, "<h2>Header</h2>", ".base {}", "nonce-abc<1>")
+    check(not string.contains(vm.boot_json, "</script>"),
+        "boot_json must never contain a raw </script> tag: " .. vm.boot_json)
+    check(string.contains(vm.boot_json, "\\u003c/script>"),
+        "boot_json should escape '<' as \\u003c: " .. vm.boot_json)
+    rendered = kg.render(labels, colors, "<h2>Header</h2>", ".base {}", "nonce-abc<1>")
+    check(string.contains(rendered, "id=\"platform-kg-boot\""),
+        "rendered knowledge graph should carry the JSON boot element")
+    check(string.contains(rendered, "nonce=\"nonce-abc&lt;1&gt;\""),
+        "rendered knowledge graph should HTML-escape the CSP nonce attribute")
+    check(string.contains(rendered, "JSON.parse(document.getElementById('platform-kg-boot').textContent)"),
+        "rendered knowledge graph should include the extracted JS asset")
+end
+
+function tests.chat_widget_view_model_toggles_attachment_controls_and_escapes_nonce()
+    print("Testing ui.chat_widget.view_model toggles attachment controls and escapes CSP nonce")
+    cw = require("ui.chat_widget")
+    vm_off = cw.view_model("nonce\"1", false, "<svg></svg>")
+    vm_on = cw.view_model("nonce\"1", true, "<svg></svg>")
+    check(vm_off.attach_html == "", "attachments=false should omit attach controls")
+    check(string.contains(vm_on.attach_html, "platform-chat-widget-file"), "attachments=true should include file input")
+    rendered = cw.render("nonce\"1", true, "<svg></svg>")
+    check(string.contains(rendered, "nonce=\"nonce&quot;1\""), "CSP nonce should be HTML-escaped")
+    check(string.contains(rendered, "platform_chat_widget_session"), "extracted chat widget JS should render")
+end
+
+function tests.plugin_page_and_inline_assets_emit_valid_css_and_escaped_nonce()
+    print("Testing render_plugin_page emits valid 100% CSS (no 100%% format leak) and escapes CSP nonce")
+    rendered = html.render_plugin_page("Demo", {{type = "heading", text = "Hello"}}, "n<1>")
+    check(not string.contains(rendered, "100%%"),
+        "render_plugin_page CSS must never leak doubled %%: " .. rendered)
+    check(string.contains(rendered, "width: 100%;"),
+        "render_plugin_page CSS should carry valid width: 100%;")
+    check(string.contains(rendered, "nonce=\"n&lt;1&gt;\""),
+        "canvas_js CSP nonce should be HTML-escaped")
+end
+
+function tests.document_tree_view_model_escapes_search_index_and_renders_boot_island()
+    print("Testing ui.document_tree escapes </script> in search index JSON and renders boot island")
+    rendered = html.render_document_tree(
+        {{id = 1, title = "Alpha </script> doc", parent_id = nil}},
+        true,
+        "nonce-dt<1>",
+        "q<1>",
+        nil
+    )
+    check(not string.contains(rendered, "</script> doc"),
+        "search index JSON must never contain a raw </script> tag")
+    check(string.contains(rendered, "id=\"platform-document-search-boot\""),
+        "document tree should carry the JSON boot element")
+    check(string.contains(rendered, "nonce=\"nonce-dt&lt;1&gt;\""),
+        "document tree should HTML-escape the CSP nonce")
+    check(string.contains(rendered, "value=\"q&lt;1&gt;\""),
+        "document tree should HTML-escape query_value")
+end
+
+function tests.document_edit_view_model_resolves_prefill_and_escapes_boot_json()
+    print("Testing ui.document_edit resolves prefill vs doc and escapes </script> in boot_json")
+    de = require("ui.document_edit")
+    prefilled = de.resolve_initial_fields(nil, {title = "Draft <A>", content = "Body </script> [[Link]]"})
+    check(prefilled.heading_text == "New document", "new doc heading should be 'New document'")
+    check(prefilled.title_value == "Draft <A>", "prefill title should be preserved raw for single escaping")
+    existing = de.resolve_initial_fields({id = 7, title = "Saved <B>", content = "Real"}, {title = "Ignored", content = "Ignored"})
+    check(existing.heading_text == "Edit: Saved <B>", "existing doc should override prefill")
+    check(existing.entity_id_value == "7", "existing doc entity_id should be stringified")
+
+    rendered = html.render_document_edit(
+        nil,
+        "<option value=\"1\">Root</option>",
+        "csrf\"1",
+        "Bad <input>",
+        "nonce-de<1>",
+        {title = "Draft <A>", content = "Body </script> [[CRISPR/Cas9 in fungi]]"}
+    )
+    check(not string.contains(rendered, "Body </script>"),
+        "document edit boot JSON must escape </script>")
+    check(string.contains(rendered, "[[CRISPR/Cas9 in fungi]]"),
+        "document edit boot JSON should preserve [[title/with/slash]] verbatim")
+    check(string.contains(rendered, "id=\"platform-document-edit-boot\""),
+        "document edit should carry the JSON boot element")
+    check(string.contains(rendered, "Bad &lt;input&gt;"),
+        "document edit should HTML-escape error_message")
+    check(string.contains(rendered, "nonce=\"nonce-de&lt;1&gt;\""),
+        "document edit should HTML-escape CSP nonce")
+end
+
+function tests.register_and_entity_edit_emit_valid_css_and_json_boot_islands()
+    print("Testing /register and /entity-edit emit valid 100% CSS (no 100%%) and JSON boot islands")
+    reg_html = html.render(
+        "sample",
+        "{\"fields\":[{\"name\":\"lot\",\"label\":\"Lot </script>\",\"type\":\"text\",\"required\":true}]}",
+        "nonce-r<1>",
+        {experiment = {value = "1", label = "Exp </script> 1"}}
+    )
+    check(not string.contains(reg_html, "100%%"),
+        "/register CSS must never contain doubled 100%%: " .. reg_html)
+    check(string.contains(reg_html, "width: 100%;") and string.contains(reg_html, "top: 100%;"),
+        "/register CSS should contain valid width: 100%; and top: 100%;")
+    check(not string.contains(reg_html, "</script> 1") and not string.contains(reg_html, "Lot </script>"),
+        "/register JSON islands must escape </script>")
+    check(string.contains(reg_html, "id=\"platform-register-layout\"") and string.contains(reg_html, "id=\"platform-register-boot\""),
+        "/register should render both layout and boot JSON islands")
+    check(string.contains(reg_html, "nonce=\"nonce-r&lt;1&gt;\""),
+        "/register should HTML-escape CSP nonce")
+
+    edit_html = html.render_entity_edit(
+        "sample",
+        "{\"fields\":[{\"name\":\"lot\",\"label\":\"Lot\",\"type\":\"text\"}]}",
+        "{\"lot\":\"LOT </script> 42\"}",
+        3,
+        "nonce-ee<1>"
+    )
+    check(not string.contains(edit_html, "100%%"),
+        "/entity-edit CSS must never contain doubled 100%%")
+    check(not string.contains(edit_html, "LOT </script> 42"),
+        "/entity-edit row JSON island must escape </script>")
+    check(string.contains(edit_html, "id=\"platform-entity-edit-row\"") and string.contains(edit_html, "id=\"platform-entity-edit-boot\""),
+        "/entity-edit should render row and boot JSON islands")
+    check(string.contains(edit_html, "nonce=\"nonce-ee&lt;1&gt;\""),
+        "/entity-edit should HTML-escape CSP nonce")
+end
+
+function tests.reset_password_and_verify_email_share_hash_token_asset()
+    print("Testing render_reset_password and render_verify_email inline shared hash_token.js with escaped nonce")
+    reset_html = html.render_reset_password(nil, nil, false, "n\"reset")
+    verify_html = html.render_verify_email(nil, nil, false, "n\"verify")
+    check(string.contains(reset_html, "id=\"reset-token\"") and string.contains(reset_html, "window.location.hash"),
+        "reset password should carry reset-token input and hash reader")
+    check(string.contains(verify_html, "id=\"verify-token\"") and string.contains(verify_html, "window.location.hash"),
+        "verify email should carry verify-token input and hash reader")
+    check(string.contains(reset_html, "nonce=\"n&quot;reset\"") and string.contains(verify_html, "nonce=\"n&quot;verify\""),
+        "both routes should HTML-escape their CSP nonces")
+end
+
+function tests.page_shell_renders_extracted_shell_nav_and_escapes_context()
+    print("Testing page_shell renders extracted shell/nav CSS and escapes </script> in PLATFORM_PAGE_CONTEXT")
+    shell_html = html.page_shell(
+        "Title </script> <1>",
+        "home",
+        "<p>Body</p>",
+        "nonce-sh<1>",
+        true,
+        true,
+        true,
+        nil,
+        nil,
+        "alice",
+        nil
+    )
+    check(string.contains(shell_html, "<title>Title &lt;/script&gt; &lt;1&gt;</title>"),
+        "page_shell should HTML-escape <title>")
+    check(not string.contains(shell_html, "Title </script>"),
+        "page_shell PLATFORM_PAGE_CONTEXT JSON must escape </script>")
+    check(string.contains(shell_html, "nonce=\"nonce-sh&lt;1&gt;\""),
+        "page_shell should HTML-escape CSP nonce")
+    check(string.contains(shell_html, ".platform-nav {") and string.contains(shell_html, "width: 72px;"),
+        "page_shell should render nav.css with PLATFORM_LAYOUT width")
 end
 
 unit.run(tests)

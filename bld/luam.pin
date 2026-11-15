@@ -1,0 +1,2 @@
+# Optional exact luam commit/ref pin. Leave blank to track latest main in
+# containers and allow any luam commit at or past bld/luam.commit locally.

@@ -39,7 +39,7 @@ return function(f, s)
         set = "growth",
         traps = {"write", "document-links", "multi-turn", "long-write"},
         turns = {
-            "Make a summary document for the " .. f.media[1].label .. " experiments, linking each one's notes.",
+            "Make a top-level summary document for the " .. f.media[1].label .. " experiments, linking each one's notes.",
             "Do the same for each of the other media, one document per medium.",
         },
         approval = "approve",

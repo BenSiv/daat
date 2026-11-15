@@ -1,0 +1,58 @@
+        .btn {
+            padding: 10px 20px;
+            border-radius: var(--platform-radius-sm, 8px);
+            font-weight: 600;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            border: none;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            /* !important on both of these: a generic "a { color:
+               var(--platform-accent) }"/"a:hover { text-decoration:
+               underline }" rule scoped to some surrounding wrapper
+               (.platform-header a and friends, hand-copied across ~18
+               render_* functions) has higher specificity than a bare
+               .btn-* class, so a <a class="btn btn-primary"> sitting
+               inside one can silently lose its own white text to the
+               wrapper's accent-color rule -- on an amber accent theme,
+               that makes the button's text exactly match its own
+               background: invisible, not just low-contrast. Centralized
+               here (the one shared place every .btn already comes from)
+               instead of chasing down every current and future
+               wrapper-link rule with its own :not(.btn) exception. */
+            text-decoration: none !important;
+        }
+        .btn:hover { text-decoration: none !important; }
+        .btn-primary {
+            background: var(--platform-accent, #4f46e5);
+            color: #ffffff !important;
+        }
+        .btn-primary:hover { filter: brightness(1.08); }
+        .btn-primary:active { transform: scale(0.98); }
+        .btn-secondary {
+            background: var(--platform-bg, #f8fafc);
+            color: var(--platform-th-text, #475569) !important;
+            border: 1px solid var(--platform-border, #e2e8f0);
+        }
+        .btn-secondary:hover { background: var(--platform-bg-2, #f1f5f9); color: var(--platform-heading, #0f172a) !important; }
+        .btn-secondary:active { transform: scale(0.98); }
+        .btn-secondary:disabled { opacity: 0.6; cursor: default; transform: none; }
+        .btn-danger {
+            background: var(--platform-bg, #f8fafc);
+            color: #b91c1c !important;
+            border: 1px solid #fecaca;
+        }
+        .btn-danger:hover { background: #fef2f2; color: #b91c1c !important; }
+        .btn-danger:active { transform: scale(0.98); }
+        .btn-delete {
+            background: transparent;
+            color: var(--platform-muted-2, #94a3b8);
+            font-size: 1.25rem;
+            cursor: pointer;
+            transition: color 0.15s ease;
+            border: none;
+            padding: 4px;
+        }
+        .btn-delete:hover { color: #ef4444; }

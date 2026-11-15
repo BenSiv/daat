@@ -158,9 +158,15 @@ function tests.labels_not_ids_catches_internal_ids_but_not_lab_numbers_or_link_u
 end
 
 function tests.names_record_needs_the_label_outside_a_link()
-    print("Testing names_record fails when the label only appears inside a document link")
-    inside = checks.conversation({user("q"), said("The doubling time of [Notes: Growth on Molasses (EXP-018)](/document?entity_id=263) was 2.76 hours.")}, {})
-    check(checks.names_record(inside, {label = "EXP-018"}, CTX).pass == false, "a label only in a link should fail")
+    print("Testing names_record fails when the label only appears inside a document link, and passes on a record link")
+    inside_doc = checks.conversation({user("q"), said("The doubling time of [Notes: Growth on Molasses (EXP-018)](/document?entity_id=263) was 2.76 hours.")}, {})
+    check(checks.names_record(inside_doc, {label = "EXP-018"}, CTX).pass == false, "a label only in a /document link should fail")
+    detail_doc = checks.conversation({user("q"), said("See [Notes (EXP-018)](/detail?type=document&entity_id=263).")}, {})
+    check(checks.names_record(detail_doc, {label = "EXP-018"}, CTX).pass == false, "a label only in a type=document link should fail")
+    titled_only = checks.conversation({user("q"), said("[Growth on Molasses](/detail?type=experiment&entity_id=24) doubled every 2.76 hours.")}, {})
+    check(checks.names_record(titled_only, {label = "EXP-018"}, CTX).pass == false, "a record link whose label omits EXP-018 should fail")
+    linked_record = checks.conversation({user("q"), said("[EXP-018](/detail?type=experiment&entity_id=24) doubled every 2.76 hours.")}, {})
+    check(checks.names_record(linked_record, {label = "EXP-018"}, CTX).pass == true, "linking the record itself by its label should pass")
     named = checks.conversation({user("q"), said("EXP-018 doubled every 2.76 hours ([notes](/document?entity_id=263)).")}, {})
     check(checks.names_record(named, {label = "EXP-018"}, CTX).pass == true, "the label in the text should pass")
 end

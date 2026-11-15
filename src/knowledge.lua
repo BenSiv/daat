@@ -1007,30 +1007,84 @@ end
 -- the other review gates, since forming pairs needs the whole batch.
 function knowledge.maybe_link_co_retrieved(db_path, author, document_ids)
     pairs_found = knowledge.co_retrieval_pairs(db_path, document_ids)
+    if #pairs_found == 0 then
+        return
+    end
+
+    -- Batch-fetch all active direct links within this retrieval's document
+    -- set in one query instead of probing documents_connected per pair.
+    id_list = {}
+    for _, id in ipairs(document_ids) do
+        table.insert(id_list, tostring(tonumber(id)))
+    end
+    id_list_sql = table.concat(id_list, ", ")
+    direct_pairs = {}
+    direct_rows = db.query(db_path, string.format("""
+        SELECT from_document_id, to_document_id FROM document_link
+        WHERE from_document_id IN (%s) AND to_document_id IN (%s)
+          AND (archived_at IS NULL OR archived_at = '');
+    """, id_list_sql, id_list_sql))
+    if direct_rows != nil then
+        for _, r in ipairs(direct_rows) do
+            fa = tonumber(r.from_document_id)
+            tb = tonumber(r.to_document_id)
+            if fa != nil and tb != nil then
+                if fa < tb then
+                    direct_pairs[tostring(fa) .. ":" .. tostring(tb)] = true
+                else
+                    direct_pairs[tostring(tb) .. ":" .. tostring(fa)] = true
+                end
+            end
+        end
+    end
+
+    docs_by_id = {}
+    function get_cached_doc(doc_id)
+        cached = docs_by_id[doc_id]
+        if cached == false then
+            return nil
+        end
+        if cached != nil then
+            return cached
+        end
+        fetched = knowledge.get_document(db_path, doc_id)
+        if fetched == nil then
+            docs_by_id[doc_id] = false
+            return nil
+        end
+        docs_by_id[doc_id] = fetched
+        return fetched
+    end
+
     for _, pair in ipairs(pairs_found) do
         doc_a_id = tonumber(pair.doc_a)
         doc_b_id = tonumber(pair.doc_b)
         co_count = tonumber(pair.co_count)
+        pair_key = tostring(doc_a_id) .. ":" .. tostring(doc_b_id)
 
-        -- Connected through a third document: nothing to do here --
-        -- retrieving either end already heats that document by spreading
-        -- activation, which is where the pair's shared relevance belongs.
-        connected = knowledge.documents_connected(db_path, doc_a_id, doc_b_id)
-        if connected == "direct" then
+        if direct_pairs[pair_key] == true then
             knowledge.reinforce_link_strength(db_path, doc_a_id, doc_b_id)
-        elseif connected == nil then
-            review = knowledge.get_link_review(db_path, doc_a_id, doc_b_id)
-            if knowledge.due_for_link_review(review, co_count) then
-                doc_a = knowledge.get_document(db_path, doc_a_id)
-                doc_b = knowledge.get_document(db_path, doc_b_id)
-                -- A connection document is never one end of another:
-                -- retrieved with its own two ends it was judged connected
-                -- to them again, building chains of connections of
-                -- connections (found live: celleste-lims, 248 of 672).
-                if doc_a != nil and doc_b != nil and not document.is_connection_title(doc_a.title)
-                        and not document.is_connection_title(doc_b.title) then
-                    if knowledge.co_retrieval_eligible(co_count, tonumber(doc_a.retrieval_count), tonumber(doc_b.retrieval_count)) then
-                        knowledge.evaluate_co_retrieval_pair(db_path, author, doc_a, doc_b, co_count)
+        elseif co_count >= CO_RETRIEVAL_LINK_THRESHOLD then
+            -- Only pairs that have crossed CO_RETRIEVAL_LINK_THRESHOLD can
+            -- pass co_retrieval_eligible; check indirect connectivity and
+            -- review state only for those candidates.
+            connected = knowledge.documents_connected(db_path, doc_a_id, doc_b_id)
+            if connected == "direct" then
+                knowledge.reinforce_link_strength(db_path, doc_a_id, doc_b_id)
+            elseif connected == nil then
+                review = knowledge.get_link_review(db_path, doc_a_id, doc_b_id)
+                if knowledge.due_for_link_review(review, co_count) then
+                    doc_a = get_cached_doc(doc_a_id)
+                    doc_b = get_cached_doc(doc_b_id)
+                    -- A connection document is never one end of another:
+                    -- retrieved with its own two ends it was judged connected
+                    -- to them again, building chains of connections of
+                    -- connections (found live: celleste-lims, 248 of 672).
+                    if doc_a != nil and doc_b != nil and not document.is_connection_title(doc_a.title)
+                            and not document.is_connection_title(doc_b.title) then
+                        if knowledge.co_retrieval_eligible(co_count, tonumber(doc_a.retrieval_count), tonumber(doc_b.retrieval_count)) then
+                            knowledge.evaluate_co_retrieval_pair(db_path, author, doc_a, doc_b, co_count)
+                        end
                     end
                 end
             end

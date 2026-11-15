@@ -26,7 +26,7 @@ cd dev && ./deploy.sh
 
 **Required** to build, run, and run most tests:
 
-- A sibling `luam` checkout, built (`../luam` with `obj/liblua.a` present) -- `bld/build.sh` looks there by default; override with the `LUAM_DIR` env var.
+- A sibling `luam` checkout, built (`../luam` with `obj/liblua.a` present, at or past the minimum commit in `bld/luam.commit`; optional exact pinning lives in `bld/luam.pin`) -- `bld/build.sh` looks there by default and verifies the commit; override the path with the `LUAM_DIR` env var.
 - A C toolchain (`cc`/`make`) and the dev headers `bld/build.sh` compiles against: `libsqlite3-dev`, `libreadline-dev`, `libssl-dev`, `libcrypt-dev`.
 - `cmark-gfm` on `PATH` **at runtime** (`apt install cmark-gfm` / `brew install cmark-gfm`) -- Document rendering shells out to it; it is not compiled in. Not plain `cmark` -- a separate package/binary (GitHub's own fork, needed for the table/strikethrough/autolink extensions `document.lua` renders with); installing the wrong one is a real, previously-hit failure mode (missing `cmark-gfm` produces empty rendered content, not an error at install time).
 - `bats` on `PATH` (`apt install bats` / `brew install bats-core`) -- required to run `tst/integration/*.bats`.
@@ -63,7 +63,7 @@ cd dev && ./deploy.sh
 `src/*.lua` at a glance -- each module's top-of-file comment has the full story:
 
 - `main.lua` -- CLI/CGI entry point
-- `cgi.lua` -- route dispatch, capability checks
+- `web.lua` -- route dispatch, capability checks (the low-level CGI/HTTP/cookie and `multipart/form-data` helpers live in `../luam/lib/cgi.lua` and `../luam/lib/multipart.lua`)
 - `entity.lua` / `ledger.lua` / `schema.lua` -- the entity/history/schema model
 - `auth.lua` -- login, sessions, CSRF
 - `document.lua` -- the Document entity type and its tree/links
@@ -71,8 +71,8 @@ cd dev && ./deploy.sh
 - `agent.lua` + `agent_tools.lua` -- the chat/assistant subsystem: the turn loop, approval gate and tool registry in `agent.lua`, the tool records and their handlers in `agent_tools.lua` (`agent-tools.md`)
 - `agent_provider.lua` + `provider/agent_*.lua` -- the pluggable LLM backends (Vertex, Claude, and the scripted `test` provider)
 - `extension.lua` / `view.lua` -- the drop-in extensibility mechanisms (see below)
-- `html.lua` / `render.lua` / `template.lua` / `page.lua` -- rendering (`page.lua` is daat's own first-party page-section vocabulary, deliberately separate from `html.lua`'s extension canvas -- see `doc/templating.md`)
-- `config.lua` / `init.lua` / `multipart.lua` / `label.lua` -- deployment config, `daat init`, CGI form parsing, ZPL labels (the storage adapter itself, `database.lua` -- with the raw per-backend bindings one layer down in `database_adapter.lua` -- is shared infrastructure in `../luam/lib/`, not daat's own `src/`)
+- `ui.lua` / `template.lua` / `page.lua` -- rendering (`page.lua` is daat's own first-party page-section vocabulary, deliberately separate from `ui.lua`'s extension canvas -- see `doc/templating.md`; the low-level escaping and `{{ }}` interpolation modules `html.lua` and `render.lua` live in `../luam/lib/`)
+- `config.lua` / `init.lua` / `label.lua` -- deployment config, `daat init`, ZPL labels (the storage adapter `database.lua` -- with the raw per-backend bindings one layer down in `database_adapter.lua` -- and the subprocess helper `external_tool.lua` are shared infrastructure in `../luam/lib/`, not daat's own `src/`)
 
 ## Architecture concepts to know before contributing
 
@@ -119,11 +119,12 @@ Two other files in this directory are written for the maintainer's own productio
 - `data-durability.md` -- the SQLite-durability reasoning is general and useful; skip the specific Terraform file paths and GCP instance names it references.
 - `mariadb-migration.md` -- the MariaDB-portability/dialect content (what changes between SQLite and MariaDB, why) is general and useful; skip the specific Cloud SQL instance names, container names, and private-repo paths it references partway through.
 
-Everything else in `doc/` (`architecture.md`, `schema.md`, `extensibility.md`, `glossary.md`, `api.md`, `agent-protocol.md`, `heat-decay-redesign.md`) is fully general -- no private context needed.
+Everything else in `doc/` (`architecture.md`, `performance.md`, `schema.md`, `extensibility.md`, `glossary.md`, `api.md`, `agent-protocol.md`, `heat-decay-redesign.md`) is fully general -- no private context needed.
 
 ## Where to go next
 
 - `architecture.md` -- the full entity-history model, sandboxing, and auth/session design (the big one -- start here for depth).
+- `performance.md` -- request lifecycle invariants, SQLite/MariaDB benchmarks, and saved optimization roadmap.
 - `schema.md` -- defining entity types.
 - `extensibility.md` -- the extension system in full.
 - `api.md` -- the HTTP API surface.

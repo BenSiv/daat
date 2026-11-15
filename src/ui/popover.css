@@ -1,0 +1,31 @@
+.platform-popover-trigger { position: relative; cursor: help; }
+.platform-popover-trigger[data-platform-popover-src] { cursor: pointer; }
+.platform-popover {
+    position: absolute; z-index: 100; left: 0; top: 100%; margin-top: 6px;
+    min-width: 180px; max-width: 320px; padding: 10px 12px;
+    background: var(--platform-bg, #ffffff); border: 1px solid var(--platform-border, #e2e8f0);
+    border-radius: var(--platform-radius-sm, 8px); box-shadow: 0 6px 20px rgba(0,0,0,0.12);
+    font-size: 0.85rem; font-weight: 400; color: var(--platform-text, #334155);
+    text-align: left; white-space: normal;
+    opacity: 0; visibility: hidden; transform: translateY(-4px);
+    transition: var(--platform-transition, all 0.2s cubic-bezier(0.4, 0, 0.2, 1));
+    pointer-events: none;
+}
+.platform-popover-trigger:hover .platform-popover,
+.platform-popover-trigger:focus .platform-popover { opacity: 1; visibility: visible; transform: translateY(0); pointer-events: auto; }
+.platform-popover-loading, .platform-popover-error { color: var(--platform-muted, #94a3b8); font-style: italic; }
+/* Was hand-copied identically across render_browse/render_detail/
+   render_document_tree (~3 drifting copies) -- centralized here since
+   every .platform-entity-ref always travels with this same popover
+   mechanism anyway. !important on color/text-decoration/font-weight for
+   the same reason .btn's own rules have it (see platform_button_css's
+   own comment): a page-specific ancestor rule like ".platform-header a"
+   or "#browse-table a" has higher specificity than a bare class alone,
+   so without this guard, whichever wrapper a reference link happened to
+   render inside could silently win over this component's own look --
+   the underlying color is still fully theme-configurable
+   (var(--platform-accent, ...)), this only guarantees THIS rule is the
+   one that wins, not a hardcoded value. */
+.platform-entity-ref { color: var(--platform-accent, #4f46e5) !important; text-decoration: none !important; font-weight: 600 !important; }
+.platform-entity-ref::after { content: " \2197"; font-size: 0.85em; }
+.platform-entity-ref:hover { text-decoration: underline !important; }

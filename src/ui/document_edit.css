@@ -1,0 +1,21 @@
+.platform-document-edit-fields { display: flex; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+.platform-document-edit-fields input[type=text], .platform-document-edit-fields select {
+    padding: 8px 10px; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-sm, 8px); font-size: 0.9rem;
+}
+.platform-wikilink {
+    color: var(--platform-accent, #4f46e5); background: var(--platform-bg-2, #f1f5f9);
+    border-radius: 4px; padding: 0 4px; font-weight: 600;
+}
+.platform-mention-wrap { position: relative; }
+.platform-mention-results {
+    display: none; position: absolute; top: 40px; left: 8px; min-width: 240px; max-width: 440px;
+    background: #ffffff; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-sm, 8px);
+    max-height: 260px; overflow-y: auto; z-index: 1000;
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+}
+.platform-mention-results.platform-mention-open { display: block; }
+.platform-mention-item { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 8px 12px; font-size: 0.88rem; cursor: pointer; }
+.platform-mention-item:hover, .platform-mention-item.platform-mention-active { background: var(--platform-bg-2, #f1f5f9); }
+.platform-mention-item span.platform-mention-sub { color: var(--platform-muted, #64748b); font-weight: 400; margin-left: 6px; }
+.platform-mention-item span.platform-mention-type { color: var(--platform-muted, #64748b); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; flex-shrink: 0; }
+.platform-mention-empty { padding: 10px 12px; color: var(--platform-muted, #64748b); font-size: 0.88rem; }

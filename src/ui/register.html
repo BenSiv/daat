@@ -1,0 +1,32 @@
+<div class="fossil-doc" data-title="Register {{ entity_type }}">
+    <style>
+{{{ base_css }}}
+{{{ page_css }}}
+    </style>
+
+    <div class="platform-container">
+        {{{ header_html }}}
+
+        <div class="platform-table-wrapper">
+            <table id="registration-table">
+                <thead>
+                    <tr id="table-headers">
+                        <!-- headers dynamically injected -->
+                    </tr>
+                </thead>
+                <tbody id="table-body">
+                    <!-- rows dynamically injected -->
+                </tbody>
+            </table>
+        </div>
+
+        {{{ actions_html }}}
+    </div>
+
+    <script type="application/json" id="platform-register-layout">{{{ layout_json }}}</script>
+    <script type="application/json" id="platform-register-boot">{{{ boot_json }}}</script>
+    <script nonce="{{ nonce }}">
+{{{ page_js }}}
+    </script>
+</div>
+

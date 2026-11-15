@@ -17,7 +17,7 @@ check = unit.check
 tests = unit.suite()
 
 -- Referenced types first, so each reference resolves when it's registered.
-DEMO_SCHEMAS = {"person", "ingredient", "culture_medium", "project", "experiment", "sample", "measurement"}
+DEMO_SCHEMAS = {"person", "ingredient", "culture_medium", "project", "experiment", "sample", "measurement", "equipment"}
 
 function query_error(db_path, sql_text)
     result, err = agent_tools.execute_tool(db_path, "test", 0, "entity", "query", {sql = sql_text})

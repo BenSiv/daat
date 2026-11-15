@@ -627,15 +627,38 @@ function ensure_knowledge_pool_state_log_scale_column(db_path)
     end
 end
 
+_pool_state_ready = {}
+
+function pool_state_cache_key(db_path)
+    if db.is_mariadb(db_path) then
+        return "mariadb:" .. tostring(db_path.host) .. ":" .. tostring(db_path.port) .. ":" .. tostring(db_path.database)
+    end
+    attr = lfs.attributes(tostring(db_path))
+    if attr != nil then
+        return "sqlite:" .. tostring(db_path) .. ":" .. tostring(attr.ino)
+    end
+    return "sqlite:" .. tostring(db_path)
+end
+
 -- Seeds the single state row exactly once, from a one-time COUNT(*) --
 -- the only place this design scans the whole pool (see "Migration of
 -- existing values" in doc/heat-decay-redesign.md). A no-op every call
 -- after the first.
 function document.ensure_pool_state(db_path)
+    cache_key = pool_state_cache_key(db_path)
+    if _pool_state_ready[cache_key] == true then
+        return
+    end
+    ok_fast, fast_rows = pcall(db.query, db_path, "SELECT log_pool_scale FROM knowledge_pool_state WHERE id = 1;")
+    if ok_fast == true and fast_rows != nil and fast_rows[1] != nil then
+        _pool_state_ready[cache_key] = true
+        return
+    end
     db.exec(db_path, KNOWLEDGE_POOL_STATE_SCHEMA)
     ensure_knowledge_pool_state_log_scale_column(db_path)
     rows = db.query(db_path, "SELECT id FROM knowledge_pool_state WHERE id = 1;")
     if rows != nil and rows[1] != nil then
+        _pool_state_ready[cache_key] = true
         return
     end
     count_rows = db.query(db_path,
@@ -648,6 +671,7 @@ function document.ensure_pool_state(db_path)
         "%s knowledge_pool_state (id, pool_scale, log_pool_scale, document_count) VALUES (1, 1.0, 0.0, %d);",
         db.insert_ignore(db_path), count
     ))
+    _pool_state_ready[cache_key] = true
 end
 
 -- Backfill for document_count drift -- the manual correction for
@@ -857,7 +881,7 @@ function document.resolve_link(db_path, subject, title)
         return rows[1].id
     end
     for _, row in ipairs(rows) do
-        if row.parent_id != nil then
+        if tonumber(row.parent_id) != nil then
             parent = entity.get(db_path, "document", tonumber(row.parent_id))
             if parent != nil and parent.title == subject then
                 return row.id
@@ -920,6 +944,130 @@ function document.link_ref(db_path, document_id)
         return "[[" .. parent.title .. "/" .. doc.title .. "]]"
     end
     return nil
+end
+
+-- Ordered-subsequence score matching /documents' client-side title
+-- search: every character of `query_lower` must appear in `candidate`
+-- in order, with adjacent matches scoring higher (+3 vs +1), a
+-- contiguous substring outranking scattered letters (+1000), and a
+-- prefix outranking that (+2000). -1 when `query_lower` doesn't match.
+function fuzzy_link_score(query_lower, candidate)
+    cand_lower = string.lower(candidate)
+    q_len = #query_lower
+    c_len = #cand_lower
+    qi = 1
+    score = 0
+    last_match = -2
+    ti = 1
+    while ti <= c_len and qi <= q_len do
+        if string.byte(cand_lower, ti) == string.byte(query_lower, qi) then
+            if ti == last_match + 1 then
+                score = score + 3
+            else
+                score = score + 1
+            end
+            last_match = ti
+            qi = qi + 1
+        end
+        ti = ti + 1
+    end
+    if qi <= q_len then
+        return -1
+    end
+    at = string.find(cand_lower, query_lower, 1, true)
+    if at == 1 then
+        score = score + 2000
+    elseif at != nil then
+        score = score + 1000
+    end
+    return score
+end
+
+-- Active documents matching `query_text` for /document-edit's `[[` link
+-- dropdown. Scores headers in memory from `document.all_active` (one
+-- SELECT, no content column) and calls `document.link_ref` only on the
+-- top `limit` candidates -- so 6k+ prod documents don't pay per-row
+-- queries, every returned `link_ref` (`[[title]]` or `[[folder/title]]`)
+-- is guaranteed to resolve back to that document on save, and raw
+-- internal ids never enter the editor. `exclude_id` omits the document
+-- being edited so typing `[[` doesn't suggest self-linking first.
+function document.search_for_link(db_path, query_text, limit, exclude_id)
+    max_results = tonumber(limit)
+    if max_results == nil or max_results < 1 then
+        max_results = 20
+    end
+    excluded = tonumber(exclude_id)
+    rows = document.all_active(db_path)
+    by_id = {}
+    for _, row in ipairs(rows) do
+        by_id[tonumber(row.id)] = row
+    end
+    query_str = ""
+    if query_text != nil then
+        query_str = string.gsub(tostring(query_text), "^%s*(.-)%s*$", "%1")
+    end
+    query_lower = string.lower(query_str)
+    scored = {}
+    for _, row in ipairs(rows) do
+        doc_id = tonumber(row.id)
+        if (excluded == nil or doc_id != excluded)
+                and row.title != nil and row.title != ""
+                and string.find(row.title, "[%[%]\n]") == nil then
+            parent_title = nil
+            if row.parent_id != nil and row.parent_id != "" then
+                parent_row = by_id[tonumber(row.parent_id)]
+                if parent_row != nil and parent_row.title != nil and parent_row.title != "" then
+                    parent_title = parent_row.title
+                end
+            end
+            score = 0
+            if query_lower != "" then
+                score = fuzzy_link_score(query_lower, row.title)
+                if parent_title != nil then
+                    path_score = fuzzy_link_score(query_lower, parent_title .. "/" .. row.title)
+                    if path_score >= 0 then
+                        adjusted = path_score - 200
+                        if adjusted < 0 then
+                            adjusted = 0
+                        end
+                        if score < 0 or adjusted > score then
+                            score = adjusted
+                        end
+                    end
+                end
+            end
+            if score >= 0 then
+                table.insert(scored, {row = row, doc_id = doc_id, parent_title = parent_title, score = score})
+            end
+        end
+    end
+    if query_lower != "" then
+        table.sort(scored, function(a, b)
+            if a.score != b.score then
+                return a.score > b.score
+            end
+            if a.row.title != b.row.title then
+                return a.row.title < b.row.title
+            end
+            return a.doc_id < b.doc_id
+        end)
+    end
+    results = {}
+    for _, entry in ipairs(scored) do
+        if #results >= max_results then
+            break
+        end
+        ref = document.link_ref(db_path, entry.doc_id)
+        if ref != nil then
+            table.insert(results, {
+                id = entry.doc_id,
+                title = entry.row.title,
+                parent_title = entry.parent_title,
+                link_ref = ref,
+            })
+        end
+    end
+    return results
 end
 
 -- Bytes, not characters -- document.clip_text backs off to a UTF-8
@@ -1545,12 +1693,12 @@ end
 function document.render_plot(spec_text)
     spec, _, decode_err = json.decode(spec_text)
     if spec == nil then
-        return '<div class="platform-plot platform-plot-error">Could not render plot: invalid JSON.</div>'
+        return "<div class=\"platform-plot platform-plot-error\">Could not render plot: invalid JSON.</div>"
     end
 
     cfg, cfg_err = document.plot_spec_to_gnuplot_cfg(spec)
     if cfg == nil then
-        return '<div class="platform-plot platform-plot-error">Could not render plot: ' .. tostring(cfg_err) .. '.</div>'
+        return "<div class=\"platform-plot platform-plot-error\">Could not render plot: " .. tostring(cfg_err) .. ".</div>"
     end
 
     plot = gnuplot.create(cfg)
@@ -1561,22 +1709,22 @@ function document.render_plot(spec_text)
     end
     if ok != true then
         os.remove(out_path)
-        return '<div class="platform-plot platform-plot-error">Could not render plot: gnuplot failed.</div>'
+        return "<div class=\"platform-plot platform-plot-error\">Could not render plot: gnuplot failed.</div>"
     end
 
     file = io.open(out_path, "r")
     if file == nil then
         os.remove(out_path)
-        return '<div class="platform-plot platform-plot-error">Could not render plot: no output produced.</div>'
+        return "<div class=\"platform-plot platform-plot-error\">Could not render plot: no output produced.</div>"
     end
     svg = io.read(file, "*all")
     io.close(file)
     os.remove(out_path)
     if svg == nil or string.find(svg, "<svg", 1, true) == nil then
-        return '<div class="platform-plot platform-plot-error">Could not render plot: no output produced.</div>'
+        return "<div class=\"platform-plot platform-plot-error\">Could not render plot: no output produced.</div>"
     end
 
-    return '<div class="platform-plot">' .. svg .. '</div>'
+    return "<div class=\"platform-plot\">" .. svg .. "</div>"
 end
 
 -- Post-processes cmark-gfm's rendered HTML, replacing every
@@ -1586,7 +1734,7 @@ end
 -- only ever sees content cmark itself already decided was a code fence,
 -- with cmark's own HTML-escaping already applied.
 function document.render_plot_fences(html)
-    return (string.gsub(html, '<pre><code class="language%-plot">(.-)</code></pre>', function(escaped_json)
+    return (string.gsub(html, "<pre><code class=\"language%-plot\">(.-)</code></pre>", function(escaped_json)
         return document.render_plot(document.html_unescape(escaped_json))
     end))
 end
@@ -1599,7 +1747,7 @@ function document.render_html(db_path, content)
         return ""
     end
     html = document.render_markdown(document.inline_links_to_markdown(db_path, tag.inline_text_tags(db_path, content)))
-    html, _ = string.gsub(html, '<a href="detail%?type=tag&amp;entity_id=', '<a class="platform-tag-chip" href="detail?type=tag&amp;entity_id=')
+    html, _ = string.gsub(html, "<a href=\"detail%?type=tag&amp;entity_id=", "<a class=\"platform-tag-chip\" href=\"detail?type=tag&amp;entity_id=")
     return html
 end
 

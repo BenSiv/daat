@@ -1,0 +1,19 @@
+
+<div class="platform-chat-widget" id="platform-chat-widget">
+    <div class="platform-chat-widget-panel">
+        <div class="platform-chat-widget-resize-handle" id="platform-chat-widget-resize-handle"></div>
+        <div class="platform-chat-widget-header">Chat<button type="button" class="platform-chat-widget-new" id="platform-chat-widget-new" title="Start a new chat">+ New chat</button></div>
+        <div class="platform-chat-widget-messages" id="platform-chat-widget-messages">
+            <p class="platform-chat-widget-empty">Ask something, or ask the assistant to search or create a document...</p>
+        </div>
+        <div class="platform-chat-widget-attachment" id="platform-chat-widget-attachment"></div>
+        <form class="platform-chat-widget-input" id="platform-chat-widget-form">
+            {{{ attach_html }}}
+            <input type="text" id="platform-chat-widget-text" placeholder="Message" required autofocus>
+            <button type="submit" class="btn btn-primary">Send</button>
+        </form>
+    </div>
+    <button type="button" class="platform-chat-widget-toggle" id="platform-chat-widget-toggle" aria-label="Chat">{{{ icon_svg }}}</button>
+</div>
+<script nonce="{{ nonce }}">
+{{{ widget_js }}}</script>

@@ -290,7 +290,7 @@ end
 
 function tests.gnuplot_safe_string_strips_quotes_and_backslashes()
     print("Testing gnuplot_safe_string strips characters that could break out of a gnuplot \"...\" literal")
-    check(document.gnuplot_safe_string('foo"; system("rm -rf /"); set title "bar') == "foo; system(rm -rf /); set title bar",
+    check(document.gnuplot_safe_string("foo\"; system(\"rm -rf /\"); set title \"bar") == "foo; system(rm -rf /); set title bar",
         "should strip every double-quote and backslash")
     check(document.gnuplot_safe_string("line one\nline two") == "line one line two",
         "should collapse newlines to a space")
@@ -322,7 +322,7 @@ end
 
 function tests.plot_spec_to_gnuplot_cfg_sanitizes_labels()
     print("Testing plot_spec_to_gnuplot_cfg strips gnuplot-command-breaking characters out of labels")
-    cfg, err = document.plot_spec_to_gnuplot_cfg({title = 'a" set title "b', series = {{x = {1}, y = {1}}}})
+    cfg, err = document.plot_spec_to_gnuplot_cfg({title = "a\" set title \"b", series = {{x = {1}, y = {1}}}})
     check(err == nil, "should not error, got: " .. tostring(err))
     check(string.find(cfg.title, "\"", 1, true) == nil, "sanitized title should contain no double-quote")
 end

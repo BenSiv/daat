@@ -1,0 +1,22 @@
+<div class="fossil-doc" data-title="Edit {{ entity_type }} #{{ entity_id }}">
+    <style>
+{{{ base_css }}}
+{{{ page_css }}}
+    </style>
+
+    <div class="platform-container">
+        {{{ header_html }}}
+
+        <div class="platform-edit-fields" id="edit-fields"><!-- fields injected --></div>
+
+        {{{ actions_html }}}
+    </div>
+
+    <script type="application/json" id="platform-entity-edit-layout">{{{ layout_json }}}</script>
+    <script type="application/json" id="platform-entity-edit-row">{{{ row_json }}}</script>
+    <script type="application/json" id="platform-entity-edit-boot">{{{ boot_json }}}</script>
+    <script nonce="{{ nonce }}">
+{{{ page_js }}}
+    </script>
+</div>
+

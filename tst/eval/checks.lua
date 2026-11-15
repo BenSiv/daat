@@ -369,9 +369,18 @@ function link_urls_removed(text)
     return (string.gsub(text, "%]%([^%)]*%)", "]"))
 end
 
--- Markdown links removed entirely, label and all.
-function links_removed(text)
-    return (string.gsub(text, "%[[^%]]*%]%([^%)]*%)", ""))
+-- Links to documents removed entirely (label and all), and links to
+-- other records reduced to their visible labels: [EXP-018](/detail?type=experiment&entity_id=24)
+-- names the experiment itself, whereas [Notes (EXP-018)](/document?entity_id=263)
+-- only names a document about it.
+function document_links_removed(text)
+    return (string.gsub(text, "%[([^%]]*)%]%(([^%)]*)%)", function(label, url)
+        if string.match(url, "^/?document") != nil or string.find(url, "/document?", 1, true) != nil
+                or string.find(url, "type=document", 1, true) != nil then
+            return ""
+        end
+        return label
+    end))
 end
 
 -- Words a reply puts before a number when it names a record by its
@@ -407,9 +416,9 @@ end
 -- time of [Notes: Growth of ... (EXP-018)](...)" names the experiment
 -- by its notes document's title. spec.label: e.g. the lab number.
 function checks.names_record(conv, spec, ctx)
-    text = links_removed(final_or_empty(conv))
+    text = document_links_removed(final_or_empty(conv))
     if string.find(string.lower(text), string.lower(spec.label), 1, true) == nil then
-        return {pass = false, detail = spec.label .. " appears only inside a link, or not at all"}
+        return {pass = false, detail = spec.label .. " appears only inside a document link, or not at all"}
     end
     return {pass = true, detail = ""}
 end

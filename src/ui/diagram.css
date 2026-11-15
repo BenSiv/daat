@@ -1,0 +1,22 @@
+
+        .platform-diagram-hint { display: flex; align-items: center; gap: 14px; color: var(--platform-muted, #64748b); font-size: 0.85rem; margin-bottom: 10px; }
+        .platform-diagram-auto-arrange { margin-left: auto; background: none; border: none; padding: 0; color: var(--platform-accent, #4f46e5); font-size: 0.85rem; font-weight: 600; cursor: pointer; text-decoration: underline; flex-shrink: 0; }
+        .platform-diagram-scroll { overflow: hidden; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); background: var(--platform-bg, #f8fafc); }
+        #platform-diagram-svg { display: block; width: 100%; height: 70vh; cursor: grab; touch-action: none; }
+        #platform-diagram-svg.platform-diagram-panning { cursor: grabbing; }
+        .platform-diagram-edge line { stroke: var(--platform-border, #cbd5e1); stroke-width: 1.5; transition: stroke 0.15s ease, opacity 0.15s ease; }
+        .platform-diagram-edge.platform-diagram-edge-active line { stroke: var(--platform-accent, #4f46e5); stroke-width: 2.5; }
+        .platform-diagram-edge.platform-diagram-edge-dim { opacity: 0.15; }
+        .platform-diagram-card { font-size: 11px; font-weight: 700; fill: var(--platform-muted, #64748b); }
+        .platform-diagram-edge.platform-diagram-edge-active .platform-diagram-card { fill: var(--platform-accent, #4f46e5); }
+        .platform-diagram-box { fill: var(--platform-bg, #ffffff); stroke: var(--platform-border, #cbd5e1); stroke-width: 1.5; transition: var(--platform-transition, all 0.2s cubic-bezier(0.4, 0, 0.2, 1)); }
+        .platform-diagram-box-header { fill: var(--platform-accent, #4f46e5); }
+        .platform-diagram-box-title { font-size: 12px; font-weight: 700; text-anchor: middle; fill: #ffffff; text-transform: capitalize; }
+        .platform-diagram-row-name { font-size: 11px; fill: var(--platform-text, #334155); }
+        .platform-diagram-row-name.platform-diagram-row-pk { font-weight: 700; text-decoration: underline; fill: var(--platform-heading, #0f172a); }
+        .platform-diagram-row-name.platform-diagram-row-required { font-weight: 700; }
+        .platform-diagram-row-type { font-size: 10px; fill: var(--platform-muted, #94a3b8); text-anchor: end; }
+        .platform-diagram-node { cursor: grab; }
+        .platform-diagram-node.platform-diagram-node-dragging { cursor: grabbing; }
+        .platform-diagram-node:hover .platform-diagram-box, .platform-diagram-node:focus .platform-diagram-box { stroke: var(--platform-accent, #4f46e5); stroke-width: 2.5; }
+        .platform-diagram-node.platform-diagram-node-dim { opacity: 0.25; }

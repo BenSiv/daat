@@ -5,7 +5,8 @@ entity = require("entity")
 ledger = require("ledger")
 view = require("view")
 template = require("template")
-html = require("html")
+html = require("ui")
+cgi_lib = require("cgi")
 json = require("dkjson")
 paths = require("paths")
 auth = require("auth")
@@ -136,18 +137,7 @@ function issues_to_message(issues)
     return table.concat(parts, "; ")
 end
 
-function parse_query(query_str)
-    params = {}
-    if query_str == nil then return params end
-    for k, v in string.gmatch(query_str, "([^&=]+)=([^&=]*)") do
-        -- simple url decoding for basic params
-        decoded_v = string.gsub(string.gsub(v, "+", " "), "%%(%x%x)", function(h)
-            return string.char(tonumber(h, 16))
-        end)
-        params[k] = decoded_v
-    end
-    return params
-end
+parse_query = cgi_lib.parse_query
 
 -- Filters/reorders a schema layout's fields to a comma-separated
 -- allowlist, e.g. "?columns=lab_name,volume_ul" -- lets one embedded
@@ -268,14 +258,11 @@ end
 response_nonce = nil
 response_csrf_header = nil
 
--- True when the browser reached us over TLS. The HTTPS env var is the
--- standard CGI signal; behind a TLS-terminating load balancer the web
+-- True when the browser reached us over TLS (HTTPS env var, see
+-- luam/lib/cgi.lua); behind a TLS-terminating load balancer the web
 -- server has to set it itself (the deployment's Apache config does,
 -- see doc/auth.md), or cookies go out without Secure.
-function request_is_https()
-    https = os.getenv("HTTPS")
-    return https != nil and https != "" and string.lower(https) != "off"
-end
+request_is_https = cgi_lib.is_https
 
 -- Headers every response carries. Why each one, and why these values,
 -- is in doc/auth.md ("Response headers"). In short: the CSP lets only
@@ -329,8 +316,7 @@ end
 -- a route sets itself (e.g. /reset-password's stricter
 -- Referrer-Policy) replaces the default rather than duplicating it.
 function print_response(status, content_type, body, extra_headers)
-    io.write("Status: " .. status .. "\r\n")
-    io.write("Content-Type: " .. content_type .. "\r\n")
+    headers = {}
     overridden = {}
     if extra_headers != nil then
         for _, header_line in ipairs(extra_headers) do
@@ -339,64 +325,28 @@ function print_response(status, content_type, body, extra_headers)
     end
     for _, header_line in ipairs(security_header_lines()) do
         if overridden[header_name(header_line)] != true then
-            io.write(header_line .. "\r\n")
+            table.insert(headers, header_line)
         end
     end
     if extra_headers != nil then
         for _, header_line in ipairs(extra_headers) do
-            io.write(header_line .. "\r\n")
+            table.insert(headers, header_line)
         end
     end
     if response_csrf_header != nil then
-        io.write(response_csrf_header .. "\r\n")
+        table.insert(headers, response_csrf_header)
     end
-    io.write("Content-Length: " .. string.len(body) .. "\r\n")
-    io.write("\r\n")
-    io.write(body)
+    cgi_lib.respond({
+        status = status,
+        content_type = content_type,
+        headers = headers,
+        body = body,
+    })
 end
 
--- Parses the raw "k1=v1; k2=v2" HTTP_COOKIE env var into a table.
-function parse_cookies(cookie_header)
-    cookies = {}
-    if cookie_header == nil then
-        return cookies
-    end
-    for pair in string.gmatch(cookie_header, "([^;]+)") do
-        key, value = string.match(pair, "%s*([^=]+)=(.*)")
-        if key != nil then
-            cookies[key] = value
-        end
-    end
-    return cookies
-end
-
--- Builds one Set-Cookie header line. Both `session` and `csrf` pass
--- `auth.SESSION_TTL_SECONDS` so the CSRF cookie lives as long as the
--- persistent login session cookie it accompanies (an un-timed `csrf`
--- cookie is cleared on browser close while the 7-day `session` cookie
--- survives, leaving the user logged in on GET pages with every POST
--- failing CSRF). Marks Secure automatically whenever
--- the request itself arrived over HTTPS (HTTPS env var, the same
--- signal most CGI-hosting web servers set) rather than hardcoding it,
--- since a hardcoded Secure would silently break local plain-HTTP
--- testing/dev.
-function set_cookie_header(name, value, max_age_seconds, http_only)
-    parts = {name .. "=" .. value, "Path=/", "SameSite=Lax"}
-    if max_age_seconds != nil then
-        table.insert(parts, "Max-Age=" .. tostring(max_age_seconds))
-    end
-    if http_only == true then
-        table.insert(parts, "HttpOnly")
-    end
-    if request_is_https() then
-        table.insert(parts, "Secure")
-    end
-    return "Set-Cookie: " .. table.concat(parts, "; ")
-end
-
-function clear_cookie_header(name)
-    return "Set-Cookie: " .. name .. "=; Path=/; Max-Age=0"
-end
+parse_cookies = cgi_lib.parse_cookies
+set_cookie_header = cgi_lib.set_cookie_header
+clear_cookie_header = cgi_lib.clear_cookie_header
 
 -- A new session cookie for `login`, signed with the account's current
 -- session_version -- used right after the caller changed their own
@@ -728,6 +678,55 @@ function handle_verify_email(root, db_path, method, nonce, theme)
         html.page_shell("Confirm email", "login", body_html, nonce, false, false, has_tasks_view, nav_extensions, theme, nil), headers)
 end
 
+function builtin_schema_signature()
+    lfs_mod = require("lfs")
+    store_mod = require("store")
+    parts = {"v=" .. tostring(store_mod.latest_schema_version())}
+    exe_attr = lfs_mod.attributes("/proc/self/exe")
+    if exe_attr != nil then
+        table.insert(parts, "exe=" .. tostring(exe_attr.modification) .. ":" .. tostring(exe_attr.size) .. ":" .. tostring(exe_attr.ino))
+    end
+    src_attr = lfs_mod.attributes("src/web.lua")
+    if src_attr != nil then
+        src_files = {}
+        for f in lfs_mod.dir("src") do
+            if string.match(f, "%.lua$") != nil then
+                table.insert(src_files, f)
+            end
+        end
+        table.sort(src_files)
+        for _, f in ipairs(src_files) do
+            fa = lfs_mod.attributes("src/" .. f)
+            if fa != nil then
+                table.insert(parts, f .. ":" .. tostring(fa.modification) .. ":" .. tostring(fa.size))
+            end
+        end
+    end
+    return table.concat(parts, "|")
+end
+
+function ensure_builtin_schemas(db_path)
+    store_mod = require("store")
+    expected_sig = builtin_schema_signature()
+    ok_sig, stored_sig = pcall(store_mod.get_text, db_path, "web.builtin_schema_signature")
+    if ok_sig == true and stored_sig == expected_sig then
+        -- Probe document_link.link_hash (0 rows fetched) so out-of-band
+        -- legacy table swaps still trigger document.init_schema.
+        ok_probe, _ = pcall(db.query, db_path, "SELECT link_hash FROM document_link LIMIT 0;")
+        if ok_probe == true then
+            return
+        end
+    end
+    store_mod.ensure_system_tables(db_path)
+    ledger.init_schema(db_path)
+    schema.init_schema(db_path)
+    auth.init_schema(db_path)
+    document.init_schema(db_path)
+    knowledge.init_schema(db_path)
+    agent.init_schema(db_path)
+    store_mod.set_text(db_path, "web.builtin_schema_signature", expected_sig)
+end
+
 function cgi.handle_request()
     response_nonce = nil
     response_csrf_header = nil
@@ -738,48 +737,11 @@ function cgi.handle_request()
     cookies = parse_cookies(os.getenv("HTTP_COOKIE"))
 
     root = config.find_root()
-    db_path = config.db_path(root)
-    theme = config.load_theme(root)
-
-    -- Auto-initialize or sync database schemas on request. Directory
-    -- creation is naturally tied to "does this deployment look
-    -- bootstrapped yet" (only needed once), but every schema/table init
-    -- call below is idempotent (CREATE TABLE IF NOT EXISTS, INSERT OR
-    -- IGNORE) and runs unconditionally every request instead, matching
-    -- schema.sync_all's own already-established pattern just below --
-    -- otherwise a store initialized before some built-in schema existed
-    -- would never pick it up (a real, if latent, gap this closes for
-    -- auth/document both, not just newly-added ones going forward).
-    if not config.is_initialized(root) then
-        paths.create_dir_if_not_exists(config.store_dir(root))
-        paths.create_dir_if_not_exists(config.schemas_dir(root))
-        paths.create_dir_if_not_exists(config.extensions_dir(root))
-        paths.create_dir_if_not_exists(config.views_dir(root))
-        paths.create_dir_if_not_exists(config.templates_dir(root))
-        paths.create_dir_if_not_exists(config.dropdowns_dir(root))
-    end
-    -- Before any module creates its tables (see store.lua's header).
-    require("store").migrate(db_path)
-    ledger.init_schema(db_path)
-    schema.init_schema(db_path)
-    auth.init_schema(db_path)
-    document.init_schema(db_path)
-    knowledge.init_schema(db_path)
-    agent.init_schema(db_path)
-    secret_ok, secret_err = auth.ensure_session_secret(root)
-    if secret_ok == nil then
-        return print_response("500 Internal Server Error", "text/html", "<h3>Error: " .. tostring(secret_err) .. "</h3>")
-    end
-    schema.sync_all(db_path, root)
-
     nonce = auth.generate_nonce()
     response_nonce = nonce
 
-    -- No auth required -- browsers request the favicon (and page_shell
-    -- requests the sidebar logo) on every page load, including /login,
-    -- before any session exists. `name` is checked against a fixed
-    -- allowlist, not used to build the path directly, so this can't be
-    -- turned into a path-traversal read of arbitrary files on disk.
+    -- Static theme and vendored assets never read or write the database;
+    -- serve them directly from disk before touching store migration or sync.
     if path_info == "/theme-asset" then
         allowed_names = {["favicon.png"] = true, ["logo.png"] = true, ["logo-full.png"] = true}
         if allowed_names[params.name] != true then
@@ -795,11 +757,6 @@ function cgi.handle_request()
         return print_response("200 OK", "image/png", asset_bytes, {"Cache-Control: public, max-age=86400"})
     end
 
-    -- Vendored third-party assets (e.g. the Toast UI Editor bundle) --
-    -- allowlisted by exact name + content-type, same "never path-build
-    -- from user input" reasoning as /theme-asset above, just a
-    -- platform-owned vnd/ directory rather than a deployment's own
-    -- DOCUMENT_ROOT-relative theme-assets/.
     if path_info == "/vendor" then
         allowed_vendor_assets = {
             ["toastui-editor-all.min.js"] = {path = "toastui/toastui-editor-all.min.js", content_type = "application/javascript"},
@@ -819,6 +776,36 @@ function cgi.handle_request()
         io.close(asset_file)
         return print_response("200 OK", asset.content_type, asset_bytes, {"Cache-Control: public, max-age=86400"})
     end
+
+    db_path = config.db_path(root)
+    theme = config.load_theme(root)
+
+    -- Auto-initialize or sync database schemas on request. Directory
+    -- creation is naturally tied to "does this deployment look
+    -- bootstrapped yet" (only needed once), and built-in module schemas
+    -- run whenever the store is uninitialized, migrated, or running a new
+    -- binary (tracked via web.builtin_schema_signature in system_state,
+    -- mirroring schema.sync_all's own signature check below).
+    was_initialized = config.is_initialized(root)
+    if not was_initialized then
+        paths.create_dir_if_not_exists(config.store_dir(root))
+        paths.create_dir_if_not_exists(config.schemas_dir(root))
+        paths.create_dir_if_not_exists(config.extensions_dir(root))
+        paths.create_dir_if_not_exists(config.views_dir(root))
+        paths.create_dir_if_not_exists(config.templates_dir(root))
+        paths.create_dir_if_not_exists(config.dropdowns_dir(root))
+    end
+    -- Before any module creates its tables (see store.lua's header).
+    require("store").migrate(db_path)
+    if not was_initialized then
+        require("store").set_text(db_path, "web.builtin_schema_signature", nil)
+    end
+    ensure_builtin_schemas(db_path)
+    secret_ok, secret_err = auth.ensure_session_secret(root)
+    if secret_ok == nil then
+        return print_response("500 Internal Server Error", "text/html", "<h3>Error: " .. tostring(secret_err) .. "</h3>")
+    end
+    schema.sync_all(db_path, root)
 
     if path_info == "/login" then
         return handle_login(root, db_path, method, nonce, theme, params)
@@ -1047,8 +1034,13 @@ function cgi.handle_request()
     -- /sql directly, linked from /system).
     if path_info == "/data" then
         entity_types = schema.list(db_path)
+        counts_by_name = entity.counts_by_type(db_path, entity_types)
         for _, row in ipairs(entity_types) do
-            row.count = entity.count(db_path, row.name)
+            c = counts_by_name[row.name]
+            if c == nil then
+                c = 0
+            end
+            row.count = c
         end
         table.sort(entity_types, function(a, b)
             if a.count != b.count then
@@ -1056,7 +1048,7 @@ function cgi.handle_request()
             end
             return a.name < b.name
         end)
-        edges = schema.relationships(db_path)
+        edges = schema.relationships(db_path, entity_types)
         body = html.render_index(db_path, entity_types, edges, nonce)
         return print_response("200 OK", "text/html",
             html.page_shell("Data", "data", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
@@ -1697,7 +1689,7 @@ function cgi.handle_request()
         for _, spec in ipairs(upload_specs) do
             uploaded = form[spec.field]
             if type(uploaded) == "table" and uploaded.data != nil and uploaded.data != "" then
-                if string.sub(uploaded.data, 1, 8) != "\137PNG\r\n\026\n" then
+                if string.sub(uploaded.data, 1, 8) != "\x89PNG\r\n\x1A\n" then
                     upload_error = "'" .. spec.filename .. "' must be a real PNG file."
                 end
             end
@@ -1987,6 +1979,16 @@ function cgi.handle_request()
     if path_info == "/api/entity-search" then
         query_str = default_value(params.query, "")
         results = entity.search_across_types(db_path, query_str, 5, 20)
+        return print_response("200 OK", "application/json", json.encode(results))
+    end
+
+    -- /document-edit's `[[` link dropdown: resolves matching active
+    -- documents to their canonical `[[title]]` / `[[folder/title]]`
+    -- reference (document.search_for_link) without shipping every
+    -- document title inside the edit page's HTML.
+    if path_info == "/api/document-search" then
+        query_str = default_value(params.query, "")
+        results = document.search_for_link(db_path, query_str, 20, params.exclude_id)
         return print_response("200 OK", "application/json", json.encode(results))
     end
 

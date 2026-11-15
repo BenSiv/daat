@@ -75,11 +75,24 @@ function entity.build_ctx(db_path, manifest)
             end
         end
         where = {}
-        for k, v in pairs(filter) do
-            if columns[k] != true and schema.is_reserved_field_name(k) == false then
-                error("ctx.query: '" .. tostring(k) .. "' is not a filterable field of " .. target_type)
+        if filter != nil then
+            for k, v in pairs(filter) do
+                if columns[k] != true and schema.is_reserved_field_name(k) == false then
+                    error("ctx.query: '" .. tostring(k) .. "' is not a filterable field of " .. target_type)
+                end
+                if type(v) == "table" then
+                    if #v == 0 then
+                        return {}
+                    end
+                    quoted_items = {}
+                    for _, item in ipairs(v) do
+                        table.insert(quoted_items, db.quote(tostring(item)))
+                    end
+                    table.insert(where, db.quote_ident(k) .. " IN (" .. table.concat(quoted_items, ", ") .. ")")
+                else
+                    table.insert(where, db.quote_ident(k) .. " = " .. db.quote(tostring(v)))
+                end
             end
-            table.insert(where, db.quote_ident(k) .. " = " .. db.quote(tostring(v)))
         end
         q = "SELECT * FROM " .. target_type
         if #where > 0 then
@@ -651,7 +664,9 @@ function entity.create_batch(db_path, entity_type, rows_values, author, source)
     -- means someone did -- and turned back off afterwards.
     created_ids = {}
     opened_sqlite = false
-    if db.is_mariadb(db_path) == false and database_adapter.sqlite_connection_count() == 0 then
+    already_keep_open = (database_adapter.is_sqlite_keep_open != nil and database_adapter.is_sqlite_keep_open() == true)
+        or database_adapter.sqlite_connection_count() > 0
+    if db.is_mariadb(db_path) == false and already_keep_open == false then
         database_adapter.sqlite_keep_open(true)
         opened_sqlite = true
     end
@@ -707,16 +722,96 @@ end
 -- a polymorphic column's stale string value reaching code that expects
 -- the real {type=,id=} table shape (e.g. `ipairs` on a plain string).
 function entity.apply_computed_field_overrides(db_path, entity_type, rows)
+    if rows == nil or #rows == 0 then
+        return rows
+    end
     multi_fields = schema.multi_fields_by_name(db_path, entity_type)
     polymorphic_fields = schema.polymorphic_fields_by_name(db_path, entity_type)
-    for _, row in ipairs(rows) do
+    has_multi = next(multi_fields) != nil
+    has_poly = next(polymorphic_fields) != nil
+    if not has_multi and not has_poly then
+        return rows
+    end
+    if #rows == 1 then
+        row = rows[1]
         for name, field in pairs(multi_fields) do
             row[name] = schema.read_multi_field(db_path, entity_type, row.id, field)
         end
         for name, field in pairs(polymorphic_fields) do
             row[name] = schema.read_polymorphic_field(db_path, entity_type, row.id, field)
         end
+        return rows
     end
+
+    id_list = {}
+    rows_by_id = {}
+    for _, row in ipairs(rows) do
+        rid = tonumber(row.id)
+        if rid != nil then
+            if rows_by_id[rid] == nil then
+                table.insert(id_list, tostring(rid))
+                rows_by_id[rid] = {}
+            end
+            table.insert(rows_by_id[rid], row)
+        end
+        for name, _ in pairs(multi_fields) do
+            row[name] = {}
+        end
+        for name, _ in pairs(polymorphic_fields) do
+            row[name] = {}
+        end
+    end
+    if #id_list == 0 then
+        return rows
+    end
+    id_sql = table.concat(id_list, ", ")
+
+    for name, field in pairs(multi_fields) do
+        table_name = schema.multi_field_table_name(entity_type, field.name)
+        if db.table_exists(db_path, table_name) then
+            parent_col = entity_type .. "_id"
+            value_col = "value"
+            if field.type == "multi_reference" then
+                value_col = field.name .. "_id"
+            end
+            m_rows = db.query(db_path, string.format(
+                "SELECT %s AS pid, %s AS v FROM %s WHERE %s IN (%s);",
+                parent_col, value_col, table_name, parent_col, id_sql
+            ))
+            if m_rows != nil then
+                for _, mr in ipairs(m_rows) do
+                    targets = rows_by_id[tonumber(mr.pid)]
+                    if targets != nil then
+                        for _, target_row in ipairs(targets) do
+                            table.insert(target_row[name], mr.v)
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    if has_poly and db.table_exists(db_path, "entity_ref") then
+        p_rows = db.query(db_path, string.format(
+            "SELECT from_id, field_name, to_type, to_id FROM entity_ref WHERE from_type = %s AND from_id IN (%s) ORDER BY id ASC;",
+            db.quote(entity_type), id_sql
+        ))
+        if p_rows != nil then
+            for _, pr in ipairs(p_rows) do
+                fname = pr.field_name
+                if polymorphic_fields[fname] != nil then
+                    targets = rows_by_id[tonumber(pr.from_id)]
+                    if targets != nil then
+                        item = {type = pr.to_type, id = tonumber(pr.to_id)}
+                        for _, target_row in ipairs(targets) do
+                            table.insert(target_row[fname], item)
+                        end
+                    end
+                end
+            end
+        end
+    end
+
     return rows
 end
 
@@ -778,7 +873,7 @@ function entity.count(db_path, entity_type, include_archived)
     if db.table_exists(db_path, entity_type) == false then
         return 0
     end
-    query = "SELECT COUNT(*) AS n FROM " .. entity_type
+    query = "SELECT COUNT(*) AS n FROM " .. db.quote_ident(entity_type)
     if include_archived != true then
         query = query .. " WHERE archived_at IS NULL"
     end
@@ -787,6 +882,177 @@ function entity.count(db_path, entity_type, include_archived)
         return 0
     end
     return tonumber(rows[1].n)
+end
+
+-- Batched active row counts across a list of registered entity types for
+-- `/data`. Every create, archive and unarchive of a registered entity
+-- appends an `entity_event` row, so `MAX(event_id)` + the sorted type list
+-- uniquely identifies when active counts can change:
+--   1. Exact cache hit in `system_state` ('entity.active_counts_cache'):
+--      0 table scans and 0 `information_schema` round-trips.
+--   2. Incremental refresh when new ledger events arrived: recounts only
+--      the distinct `entity_type`s with create/archive/unarchive events
+--      after the cached `max_event_id` (leaving 70k-row unchanged tables
+--      untouched).
+--   3. Cold start or schema-set change: checks table existence once via
+--      `db.get_tables` and batches `SELECT COUNT(*)` in `UNION ALL` chunks.
+ACTIVE_COUNTS_STATE_KEY = "entity.active_counts_cache"
+COUNT_UNION_CHUNK_SIZE = 25
+
+function to_int_or_zero(v)
+    n = tonumber(v)
+    if n == nil then
+        return 0
+    end
+    return n
+end
+
+function run_batched_active_counts(db_path, target_names, existing_set)
+    computed = {}
+    present = {}
+    for _, name in ipairs(target_names) do
+        computed[name] = 0
+        if existing_set[name] == true then
+            table.insert(present, name)
+        end
+    end
+    idx = 1
+    while idx <= #present do
+        parts = {}
+        chunk_end = math.min(#present, idx + COUNT_UNION_CHUNK_SIZE - 1)
+        for i = idx, chunk_end do
+            tname = present[i]
+            table.insert(parts, string.format(
+                "SELECT %s AS entity_name, COUNT(*) AS n FROM %s WHERE archived_at IS NULL",
+                db.quote(tname), db.quote_ident(tname)
+            ))
+        end
+        q = table.concat(parts, " UNION ALL ") .. ";"
+        rows = db.query(db_path, q)
+        if rows != nil then
+            for _, r in ipairs(rows) do
+                if r.entity_name != nil then
+                    computed[r.entity_name] = to_int_or_zero(r.n)
+                end
+            end
+        end
+        idx = chunk_end + 1
+    end
+    return computed
+end
+
+function existing_tables_set(db_path)
+    set = {}
+    tables = db.get_tables(db_path)
+    if tables != nil then
+        for _, t in ipairs(tables) do
+            set[t] = true
+        end
+    end
+    return set
+end
+
+function entity.counts_by_type(db_path, entity_types)
+    type_names = {}
+    items = entity_types
+    if items == nil then
+        items = {}
+    end
+    for _, item in ipairs(items) do
+        name = item
+        if type(item) == "table" then
+            name = item.name
+        end
+        if type(name) == "string" and name != "" and schema.valid_name_syntax(name) then
+            table.insert(type_names, name)
+        end
+    end
+    if #type_names == 0 then
+        return {}
+    end
+
+    sorted_names = {}
+    for i, name in ipairs(type_names) do
+        sorted_names[i] = name
+    end
+    table.sort(sorted_names)
+    types_sig = table.concat(sorted_names, ",")
+
+    store_mod = require("store")
+    max_ok, max_rows = pcall(db.query, db_path, "SELECT COALESCE(MAX(event_id), 0) AS max_id FROM entity_event;")
+    cache_usable = (max_ok == true and max_rows != nil and max_rows[1] != nil)
+    current_max_id = 0
+    if cache_usable then
+        current_max_id = to_int_or_zero(max_rows[1].max_id)
+    end
+
+    cached = nil
+    if cache_usable then
+        raw_ok, raw_json = pcall(store_mod.get_text, db_path, ACTIVE_COUNTS_STATE_KEY)
+        if raw_ok == true and type(raw_json) == "string" and raw_json != "" then
+            decoded = json.decode(raw_json)
+            if type(decoded) == "table" and type(decoded.counts) == "table" then
+                cached = decoded
+            end
+        end
+    end
+
+    if cached != nil and cached.types_sig == types_sig and tonumber(cached.max_event_id) != nil then
+        cached_max = tonumber(cached.max_event_id)
+        if cached_max == current_max_id then
+            result = {}
+            for _, name in ipairs(type_names) do
+                result[name] = to_int_or_zero(cached.counts[name])
+            end
+            return result
+        end
+        if current_max_id > cached_max then
+            dirty_ok, dirty_rows = pcall(db.query, db_path, string.format(
+                "SELECT DISTINCT entity_type FROM entity_event WHERE event_id > %d AND event_type IN ('create', 'archive', 'unarchive');",
+                cached_max
+            ))
+            if dirty_ok == true then
+                requested_set = {}
+                for _, name in ipairs(type_names) do
+                    requested_set[name] = true
+                end
+                dirty_names = {}
+                if dirty_rows != nil then
+                    for _, dr in ipairs(dirty_rows) do
+                        if dr.entity_type != nil and requested_set[dr.entity_type] == true then
+                            table.insert(dirty_names, dr.entity_type)
+                        end
+                    end
+                end
+                counts = {}
+                for _, name in ipairs(type_names) do
+                    counts[name] = to_int_or_zero(cached.counts[name])
+                end
+                if #dirty_names > 0 then
+                    recounted = run_batched_active_counts(db_path, dirty_names, existing_tables_set(db_path))
+                    for k, v in pairs(recounted) do
+                        counts[k] = v
+                    end
+                end
+                pcall(store_mod.set_text, db_path, ACTIVE_COUNTS_STATE_KEY, json.encode({
+                    max_event_id = current_max_id,
+                    types_sig = types_sig,
+                    counts = counts,
+                }))
+                return counts
+            end
+        end
+    end
+
+    counts = run_batched_active_counts(db_path, type_names, existing_tables_set(db_path))
+    if cache_usable then
+        pcall(store_mod.set_text, db_path, ACTIVE_COUNTS_STATE_KEY, json.encode({
+            max_event_id = current_max_id,
+            types_sig = types_sig,
+            counts = counts,
+        }))
+    end
+    return counts
 end
 
 -- Filtered siblings of entity.list/entity.count, for "every X that
@@ -830,61 +1096,122 @@ function entity.count_by_field(db_path, entity_type, field_name, value, include_
     return tonumber(rows[1].n)
 end
 
--- The schema-declared {display = true} field for this type, if any --
--- same second-priority source html.lua's own_row_label/
--- entity_display_label use (the builtin "name" column is always the
--- first source, checked directly by search_across_types below since
--- it needs both, not either/or). Reimplemented here rather than
--- shared: html.lua requires entity.lua, so the reverse require would
--- cycle. nil means this schema declared no display field.
-function display_field_name(db_path, entity_type)
+-- The schema-declared {display = true} field (if any) and every
+-- {identifier = true} field for this type. Builtin "name" is always
+-- checked first by search_across_types; display and identifier fields
+-- give locally created rows and code-named records (lab_number,
+-- asset_code) the same discoverability in /data's search box and the
+-- document editor's @mention dropdown.
+function search_fields_for_type(db_path, entity_type)
+    display_field = nil
+    identifier_fields = {}
     for _, field in ipairs(schema.fields(db_path, entity_type)) do
-        if tonumber(field.display) == 1 then
-            return field.name
+        if display_field == nil and tonumber(field.display) == 1 then
+            display_field = field.name
+        end
+        if tonumber(field.identifier) == 1 then
+            table.insert(identifier_fields, field.name)
         end
     end
-    return nil
+    return display_field, identifier_fields
 end
 
--- Cross-type "find this row" search for /data's own search box. A
--- single client-side index across every entity type doesn't scale the
--- way /documents' title index does
--- (many types, some already in the hundreds of rows each), so this is
--- a server-side query instead: one bounded, indexable LIKE per type,
--- against the builtin "name" column (populated for e.g. Benchling-
--- imported rows, empty otherwise -- every table has it, but not every
--- row uses it) OR'd with the schema's own display field if one is
--- declared. A type with neither ever populated simply matches nothing,
--- rather than needing an explicit skip step -- same effect, no special
--- case. per_type_limit bounds each individual query; total_limit
--- truncates the combined, concatenated result -- both needed since a
--- broad query could otherwise return per_type_limit rows from every
--- registered type at once.
+-- Picks the primary label and optional subtitle for a search hit:
+-- builtin `name` first, then the schema's display field, falling back
+-- to a matching (or first) identifier value on display-less schemas.
+-- When the query matched an identifier rather than the primary label
+-- (e.g. "EXP-027" on an experiment titled "Growth of S. demo..."),
+-- the identifier becomes `label` -- so @mention inserts "[EXP-027](...)"
+-- matching what the author typed -- and the primary label rides along
+-- as `subtitle` so the dropdown still shows which record it is.
+function search_row_label(row, display_field, identifier_fields, query_lower)
+    primary_label = nil
+    if row.name != nil and tostring(row.name) != "" then
+        primary_label = tostring(row.name)
+    elseif display_field != nil and row[display_field] != nil and tostring(row[display_field]) != "" then
+        primary_label = tostring(row[display_field])
+    end
+    first_id_val = nil
+    matched_id_val = nil
+    for _, id_field in ipairs(identifier_fields) do
+        raw_val = row[id_field]
+        if raw_val != nil and tostring(raw_val) != "" then
+            val_str = tostring(raw_val)
+            if first_id_val == nil then
+                first_id_val = val_str
+            end
+            if matched_id_val == nil and string.find(string.lower(val_str), query_lower, 1, true) != nil then
+                matched_id_val = val_str
+            end
+        end
+    end
+    if primary_label == nil then
+        if matched_id_val != nil then
+            return matched_id_val, nil
+        end
+        return first_id_val, nil
+    end
+    primary_matches = string.find(string.lower(primary_label), query_lower, 1, true) != nil
+    if primary_matches == false and matched_id_val != nil then
+        subtitle = nil
+        if matched_id_val != primary_label then
+            subtitle = primary_label
+        end
+        return matched_id_val, subtitle
+    end
+    subtitle = nil
+    if first_id_val != nil and first_id_val != primary_label then
+        subtitle = first_id_val
+    end
+    return primary_label, subtitle
+end
+
+-- Cross-type "find this row" search for /data's search box and the
+-- document editor's @mention dropdown: one bounded LIKE per type
+-- against builtin `name`, the schema's display field (if any), and any
+-- `identifier = true` fields. A type with none of those populated
+-- matches nothing without needing a special-case skip list.
+-- `per_type_limit` bounds each query; `total_limit` truncates the
+-- combined result.
 function entity.search_across_types(db_path, query_text, per_type_limit, total_limit)
     if query_text == nil or query_text == "" then
         return {}
     end
-    like_value = db.quote("%" .. tostring(query_text) .. "%")
+    query_str = tostring(query_text)
+    query_lower = string.lower(query_str)
+    like_value = db.quote("%" .. query_str .. "%")
     results = {}
     for _, entity_type_row in ipairs(schema.list(db_path)) do
         entity_type = entity_type_row.name
         if entity_type != "document" and db.table_exists(db_path, entity_type) == true then
-            display_field = display_field_name(db_path, entity_type)
-            label_expr = "name"
-            where_expr = "name LIKE " .. like_value
+            display_field, identifier_fields = search_fields_for_type(db_path, entity_type)
+            select_cols = {"id", "name"}
+            where_parts = {"name LIKE " .. like_value}
+            seen_cols = {id = true, name = true}
+            extra_cols = {}
             if display_field != nil then
-                quoted_field = db.quote_ident(display_field)
-                label_expr = "COALESCE(NULLIF(name, ''), " .. quoted_field .. ")"
-                where_expr = "(name LIKE " .. like_value .. " OR " .. quoted_field .. " LIKE " .. like_value .. ")"
+                table.insert(extra_cols, display_field)
+            end
+            for _, id_field in ipairs(identifier_fields) do
+                table.insert(extra_cols, id_field)
+            end
+            for _, col in ipairs(extra_cols) do
+                if seen_cols[col] == nil then
+                    seen_cols[col] = true
+                    quoted_col = db.quote_ident(col)
+                    table.insert(select_cols, quoted_col)
+                    table.insert(where_parts, quoted_col .. " LIKE " .. like_value)
+                end
             end
             rows = db.query(db_path, string.format(
-                "SELECT id, %s AS label FROM %s WHERE %s AND (archived_at IS NULL) LIMIT %d;",
-                label_expr, entity_type, where_expr, tonumber(per_type_limit)
+                "SELECT %s FROM %s WHERE (%s) AND (archived_at IS NULL OR archived_at = '') LIMIT %d;",
+                table.concat(select_cols, ", "), entity_type, table.concat(where_parts, " OR "), tonumber(per_type_limit)
             ))
             if rows != nil then
                 for _, row in ipairs(rows) do
-                    if row.label != nil and tostring(row.label) != "" then
-                        table.insert(results, {entity_type = entity_type, id = row.id, label = tostring(row.label)})
+                    label, subtitle = search_row_label(row, display_field, identifier_fields, query_lower)
+                    if label != nil and label != "" then
+                        table.insert(results, {entity_type = entity_type, id = row.id, label = label, subtitle = subtitle})
                     end
                 end
             end

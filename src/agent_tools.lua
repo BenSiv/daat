@@ -75,12 +75,12 @@ agent_tools.AGENT_TOOLS = {
         },
         create = {
             destructive = true,
-            description = "Create a new document. " .. DOCUMENT_LINK_HELP,
+            description = "Create a new document. When the user hasn't said where in the document tree to put it (which parent document/folder, or at the top level), check candidate folders first (e.g. document.children) and ask with clarify.ask before calling this tool rather than defaulting to the top level. " .. DOCUMENT_LINK_HELP,
             parameters = {
                 type = "object",
                 properties = {
                     title = {type = "string"},
-                    parent_id = {type = "integer", description = "optional parent document id"},
+                    parent_id = {type = "integer", description = "parent document/folder id; omit only when the user asked for a top-level document"},
                     content = {type = "string", description = "markdown content; link other documents as [[Exact title]]"},
                 },
                 required = {"title"},
@@ -2130,6 +2130,13 @@ is clearly implied) -- the same judgment call a person filling out the same
 form by hand would make. If a field is genuinely ambiguous, use clarify.ask
 rather than guessing.
 
+When asked to create a new document (document.create) and the user hasn't
+said where in the document tree to file it (under which parent document or
+folder, or at the top level), don't create it at the top level by default.
+First inspect the top-level or candidate folders (with document.children)
+and use clarify.ask to ask where to place it, suggesting the relevant
+existing folders or top-level placement as options.
+
 When asked to write a Markdown table with specific rows and/or columns,
 actually include every named row as a real data row, not just a header --
 a table needs a header row, a separator row (|---|---|), and one data row
@@ -2326,7 +2333,7 @@ plain words, and the result.
 
 Replies and documents render Markdown with no math support, so LaTeX shows
 up as raw source. Write formulas in plain text -- "doubling time = ln(2) /
-0.2511 = 2.76 h" -- never $...$, \frac, \text{}, \approx or \ln.
+0.2511 = 2.76 h" -- never $...$, \\frac, \\text{}, \\approx or \\ln.
 
 Queries (entity.query/plot.from_query) run in the """ .. view.sql_dialect_name() .. """.
 Every number you present -- a count, an average, a per-group value in a

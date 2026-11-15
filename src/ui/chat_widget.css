@@ -1,0 +1,191 @@
+
+.platform-chat-widget { position: fixed; right: {{{layout.gutter}}}px; bottom: {{{layout.gutter}}}px; z-index: 1000; font-family: inherit; }
+
+.platform-chat-widget-toggle {
+    position: relative;
+    width: 56px; height: 56px; border-radius: 50%;
+    background: var(--platform-accent, #4f46e5); color: #ffffff; border: none;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.2); cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: var(--platform-transition, all 0.15s ease);
+}
+.platform-chat-widget-toggle:hover { filter: brightness(1.08); }
+/* The agent's state, on the button itself so it reads with the panel
+   closed: a ring turning while a turn runs, a heartbeat plus badge while
+   an approval waits on you, a still badge for an answer you haven't seen.
+   Set by updateToggleState() in the widget script. Only transform and
+   opacity animate (cheap, no layout shift); colours are theme tokens. */
+.platform-chat-widget-toggle::before, .platform-chat-widget-toggle::after {
+    content: ""; position: absolute; pointer-events: none; opacity: 0; border-radius: 50%;
+}
+.platform-chat-widget-toggle::before { inset: -5px; }
+.platform-chat-widget-toggle::after {
+    top: 1px; right: 1px; width: 12px; height: 12px;
+    background: #dc2626; border: 2px solid #ffffff;
+}
+.platform-chat-widget-toggle.platform-chat-state-thinking::before {
+    opacity: 1;
+    background: conic-gradient(var(--platform-accent, #4f46e5), var(--platform-accent-2, #6366f1), transparent 75%);
+    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 4px));
+    mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 4px));
+    animation: platform-chat-spin 1.2s linear infinite;
+}
+.platform-chat-widget-toggle.platform-chat-state-waiting {
+    background: var(--platform-accent-2, #6366f1);
+    animation: platform-chat-heartbeat 1.4s ease-in-out infinite;
+}
+.platform-chat-widget-toggle.platform-chat-state-waiting::after,
+.platform-chat-widget-toggle.platform-chat-state-unread::after { opacity: 1; }
+@keyframes platform-chat-spin { to { transform: rotate(1turn); } }
+@keyframes platform-chat-heartbeat {
+    0%, 45%, 100% { transform: scale(1); }
+    10% { transform: scale(1.12); }
+    20% { transform: scale(1.02); }
+    30% { transform: scale(1.1); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .platform-chat-widget-toggle.platform-chat-state-thinking::before {
+        animation: none; background: var(--platform-accent-2, #6366f1);
+    }
+    .platform-chat-widget-toggle.platform-chat-state-waiting { animation: none; }
+}
+
+.platform-chat-widget-panel {
+    position: absolute; right: 0; bottom: 64px; width: 320px; height: 440px;
+    /* min-width was 280px -- narrower than the panel's own default
+       (320px) and the input row's real min-content width (attach
+       button + text input + Send button + gaps/padding), so shrinking
+       to that minimum clipped the Send button against this panel's own
+       overflow:hidden. Never go below the default width instead --
+       that size is already known to render every row correctly. */
+    min-width: 320px; min-height: 320px;
+    /* Stretchable up to the exact same rectangle the main content area
+       occupies -- not just up to the nav rail's own edge, but to where
+       .platform-container's content actually starts, which is one more
+       PLATFORM_GUTTER past the nav rail (platform_container_css's own
+       side gutter, calc(100% - 2*gutter), applies *inside*
+       .platform-main, on top of the nav rail -- missing that here
+       let the panel stretch until it touched the nav rail with zero
+       gap, short of matching the content area's own left edge). Left
+       edge at PLATFORM_NAV_WIDTH + PLATFORM_GUTTER (the same constant
+       .platform-nav's own width uses, via platform_nav_css, plus the
+       container's own gutter -- not independently-set literals), right
+       edge at this same gutter the widget is itself offset by
+       (PLATFORM_GUTTER), top edge at that same gutter (matching
+       platform_container_css's own top margin) -- bottom edge is
+       already pinned via bottom:64px above the toggle button, hence
+       the extra 64px subtracted below. */
+    max-width: calc(100vw - {{{layout.gutter}}}px - {{{layout.nav_width}}}px - {{{layout.gutter}}}px);
+    max-height: calc(100vh - {{{layout.gutter}}}px - 64px - {{{layout.gutter}}}px);
+    background: var(--platform-bg, #ffffff); border: 1px solid var(--platform-border, #e2e8f0);
+    border-radius: var(--platform-radius-md, 12px); box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+    display: none; flex-direction: column; overflow: hidden;
+}
+
+.platform-chat-widget.platform-chat-widget-open .platform-chat-widget-panel { display: flex; }
+/* Native CSS `resize: both` always draws its drag handle at the
+   element's own bottom-right corner -- wrong here, since this panel
+   is anchored bottom-right (right:0; bottom:64px) and grows up and to
+   the left, which puts the free/grabbable corner at the TOP-left, not
+   the bottom-right (which sits jammed against the toggle button and
+   screen edge). `resize` has no way to relocate its handle to another
+   corner, so this is a small custom drag handle + JS instead. */
+.platform-chat-widget-resize-handle {
+    position: absolute; top: 0; left: 0; width: 16px; height: 16px;
+    cursor: nwse-resize; z-index: 1;
+}
+.platform-chat-widget-resize-handle::before {
+    content: ""; position: absolute; top: 5px; left: 5px; width: 7px; height: 7px;
+    border-top: 2px solid var(--platform-border-2, #cbd5e1);
+    border-left: 2px solid var(--platform-border-2, #cbd5e1);
+}
+.platform-chat-widget-header {
+    padding: 12px 14px; border-bottom: 1px solid var(--platform-border, #e2e8f0);
+    font-weight: 700; color: var(--platform-heading, #0f172a); font-size: 0.95rem;
+    display: flex; align-items: center; justify-content: space-between;
+}
+.platform-chat-widget-new {
+    background: none; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-sm, 8px);
+    color: var(--platform-accent, #4f46e5); font-size: 0.75rem; font-weight: 600; padding: 3px 8px; cursor: pointer;
+}
+.platform-chat-widget-new:hover { background: var(--platform-bg-2, #f1f5f9); }
+.platform-chat-widget-messages { flex: 1; overflow-y: auto; padding: 10px; }
+/* Base message/pending-action styling -- shared with nothing else now
+   that /chat itself is a read-only session list (html.render_chat),
+   not a transcript viewer; this is the only place a chat message or
+   pending-approval prompt ever actually renders. */
+.platform-chat-msg { margin-bottom: 10px; padding: 8px 10px; border-radius: var(--platform-radius-sm, 8px); background: #fff; border: 1px solid var(--platform-border, #e2e8f0); font-size: 0.85rem; }
+.platform-chat-msg a { color: var(--platform-accent, #4f46e5); text-decoration: none; }
+.platform-chat-msg a:hover { text-decoration: underline; }
+.platform-chat-user { background: #eef2ff; }
+.platform-chat-tool_result { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.platform-chat-compaction_summary { font-style: italic; color: var(--platform-muted, #64748b); }
+.platform-chat-self_check { font-style: italic; color: var(--platform-muted, #64748b); border-left: 3px solid #fbbf24; }
+.platform-chat-out-of-context { opacity: 0.45; }
+/* A turn's real final answer (agent.assistant_message_is_final) vs.
+   every other step in the transcript (narration alongside a tool call,
+   raw tool results, self-check) -- the bottom line should read as the
+   one thing the user actually came for, everything else as a receding
+   "how we got here" trail above it. */
+.platform-chat-final { background: #eef2ff; border: 1px solid var(--platform-accent, #4f46e5); font-size: 0.92rem; }
+.platform-chat-step { opacity: 0.65; font-size: 0.8rem; }
+.platform-chat-pending { padding: 14px; border: 1px solid #fde68a; background: #fffbeb; border-radius: var(--platform-radius-md, 12px); }
+.platform-chat-widget-input {
+    display: flex; gap: 6px; padding: 10px; border-top: 1px solid var(--platform-border, #e2e8f0);
+}
+.platform-chat-widget-input input[type=text] {
+    flex: 1; padding: 8px 10px; border: 1px solid var(--platform-border, #e2e8f0);
+    border-radius: var(--platform-radius-sm, 8px); font-size: 0.85rem;
+}
+.platform-chat-widget-attach-btn {
+    background: none; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-sm, 8px);
+    font-size: 1rem; padding: 6px 10px; cursor: pointer; line-height: 1;
+}
+.platform-chat-widget-attach-btn:hover { background: var(--platform-bg-2, #f1f5f9); }
+.platform-chat-widget-attach-btn:disabled { cursor: default; opacity: 0.5; }
+.platform-chat-widget-attachment {
+    display: none; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 6px 10px; margin: 0 10px; font-size: 0.8rem; color: var(--platform-text, #334155);
+    background: var(--platform-bg-2, #f1f5f9); border-radius: var(--platform-radius-sm, 8px);
+}
+.platform-chat-widget-attachment button {
+    background: none; border: none; cursor: pointer; color: var(--platform-muted, #64748b); font-size: 0.9rem; line-height: 1; padding: 0 2px;
+}
+.platform-chat-widget-attachment-error { color: #991b1b; background: #fef2f2; }
+.platform-chat-widget-empty { padding: 20px; text-align: center; color: var(--platform-muted, #64748b); font-size: 0.85rem; }
+/* flex + wrap, not a plain inline flow: the "Thinking..." text plus the
+   Stop button need to never clip against the panel's overflow:hidden,
+   including at the panel's own verified minimum width (320px, see
+   .platform-chat-widget-panel's own comment on why that minimum can't
+   shrink further) -- wrapping to a second line if space is ever tighter
+   than that (a custom deployment theme, a much smaller font) costs
+   nothing here, unlike the input row's own min-content-width problem
+   that comment describes, since this row isn't the last line before a
+   hard cutoff. */
+.platform-chat-widget-thinking { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 8px 10px; color: var(--platform-muted, #64748b); font-size: 0.85rem; font-style: italic; }
+.platform-chat-widget-stop {
+    font-style: normal; background: none; border: 1px solid var(--platform-border, #e2e8f0);
+    border-radius: var(--platform-radius-sm, 8px); font-size: 0.8rem; padding: 2px 8px;
+    cursor: pointer; color: #991b1b;
+}
+.platform-chat-widget-stop:hover { background: #fef2f2; }
+.platform-chat-widget-stop:disabled { cursor: default; opacity: 0.6; }
+.platform-chat-widget-error { padding: 8px 10px; color: #991b1b; background: #fef2f2; border: 1px solid #fecaca; border-radius: var(--platform-radius-sm, 8px); font-size: 0.85rem; margin: 4px 0; }
+/* Same color tokens as .platform-chat-widget-error above -- a per-message
+   role="error" row (a failed turn, agent.lua's run_turn) reuses that
+   fetch-rejection banner's palette rather than inventing a second one,
+   so "something failed" reads consistently regardless of which layer
+   caught it. */
+.platform-chat-error { color: #991b1b; background: #fef2f2; border: 1px solid #fecaca; }
+.platform-chat-feedback { display: flex; gap: 4px; margin: 2px 0 8px 0; }
+.platform-chat-feedback button {
+    background: none; border: 1px solid transparent; border-radius: var(--platform-radius-sm, 8px);
+    font-size: 0.85rem; padding: 1px 5px; cursor: pointer; line-height: 1.4; opacity: 0.6;
+}
+.platform-chat-feedback button:hover { opacity: 1; border-color: var(--platform-border, #e2e8f0); background: var(--platform-bg-2, #f1f5f9); }
+.platform-chat-feedback button.platform-feedback-pressed { opacity: 1; border-color: var(--platform-border, #e2e8f0); background: var(--platform-bg-2, #f1f5f9); }
+.platform-chat-feedback button:disabled { cursor: default; }
+.platform-chat-feedback-error { color: #991b1b; font-size: 0.85rem; }
+.platform-plot { overflow-x: auto; margin: 12px 0; max-width: 100%; }
+.platform-plot svg { display: block; max-width: 100%; height: auto; }
+.platform-plot-error { color: var(--platform-muted, #64748b); font-size: 0.85rem; font-style: italic; }

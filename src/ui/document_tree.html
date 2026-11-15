@@ -1,0 +1,20 @@
+<div class="fossil-doc" data-title="Documents">
+    <style>
+{{{ base_css }}}
+{{{ page_css }}}
+    </style>
+    <div class="platform-container">
+        {{{ header_html }}}
+        <form class="platform-document-search" method="get" action="documents" id="platform-document-search-form">
+            <input type="text" name="q" id="platform-document-search-input" value="{{ query_value }}" placeholder="Search documents..." autocomplete="off">
+            <div class="platform-document-search-results" id="platform-document-search-results"></div>
+            <div class="platform-document-search-hint">Titles appear as you type; press Enter to search the contents.</div>
+        </form>
+        {{{ search_results_html }}}
+        {{{ tree_html }}}
+    </div>
+    <script type="application/json" id="platform-document-search-boot">{{{ search_index_json }}}</script>
+    <script nonce="{{ nonce }}">
+{{{ page_js }}}
+    </script>
+</div>

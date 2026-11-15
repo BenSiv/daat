@@ -39,7 +39,7 @@ export LUA_CPATH="${LUAM_DIR}/bin/?.so;${LUAM_DIR}/lib/lfs/?.so;${LUAM_DIR}/lib/
 
 case "$PROVIDER" in
     test)
-        PLATFORM='return {agent_provider = "test", search_provider = "test", embedding_quiet_minutes = 0, tag_min_text = 0, agent_turn_mode = "inline"}'
+        PLATFORM='return {agent_provider = "test", search_provider = "test", embedding_quiet_minutes = 0, tag_min_text = 0, agent_turn_mode = "inline", reference_aliases = {{"experiment%s*(%d)", "exp%1"}}}'
         ;;
     vertex)
         if [ -z "${DAAT_EVAL_VERTEX_PROJECT:-}" ]; then
@@ -50,7 +50,7 @@ case "$PROVIDER" in
         if [ -n "${DAAT_EVAL_MODEL:-}" ]; then
             MODEL_FIELD=", agent_model = \"${DAAT_EVAL_MODEL}\""
         fi
-        PLATFORM="return {agent_provider = \"vertex\", vertex_project = \"${DAAT_EVAL_VERTEX_PROJECT}\", vertex_region = \"${DAAT_EVAL_VERTEX_REGION:-global}\"${MODEL_FIELD}, search_provider = \"test\", embedding_quiet_minutes = 0, agent_turn_mode = \"inline\"}"
+        PLATFORM="return {agent_provider = \"vertex\", vertex_project = \"${DAAT_EVAL_VERTEX_PROJECT}\", vertex_region = \"${DAAT_EVAL_VERTEX_REGION:-global}\"${MODEL_FIELD}, search_provider = \"test\", embedding_quiet_minutes = 0, agent_turn_mode = \"inline\", reference_aliases = {{\"experiment%s*(%d)\", \"exp%1\"}}}"
         ;;
     *)
         echo "Error: --provider must be test or vertex" >&2

@@ -107,9 +107,122 @@ end
 
 function tests.keep_open_is_restored(db_path)
     print("Testing SQLite's kept-open connection is closed again after a batch that opened it")
-    database_adapter.sqlite_close_all()
+    database_adapter.sqlite_keep_open(false)
     entity.create_batch(db_path, "widget", {{label = "W-401"}}, "tester")
     check(database_adapter.sqlite_connection_count() == 0, "expected no cached connection left behind")
+end
+
+function tests.keep_open_preserved_when_already_enabled(db_path)
+    print("Testing SQLite keep-open stays enabled when caller enabled it before create_batch")
+    database_adapter.sqlite_keep_open(true)
+    entity.create_batch(db_path, "widget", {{label = "W-402"}}, "tester")
+    check(database_adapter.is_sqlite_keep_open() == true, "expected keep_open to remain enabled")
+    database_adapter.sqlite_keep_open(false)
+end
+
+function tests.ctx_query_supports_in_list_and_batched_overrides(db_path)
+    print("Testing ctx.query IN-list filter and multi-row computed field overrides")
+    tagged_def = {
+        name = "tagged_item",
+        fields = {
+            {name = "code", type = "text", required = true},
+            {name = "tags", type = "multi_select", values = {"alpha", "beta", "gamma"}},
+            {name = "origin", type = "polymorphic_reference", allowed_entity_types = {"widget"}},
+        },
+    }
+    schema.register(db_path, tagged_def)
+    w_ids, _ = entity.create_batch(db_path, "widget", {{label = "Origin-A"}, {label = "Origin-B"}}, "tester")
+    id1, _ = entity.create(db_path, "tagged_item", {code = "T1", tags = {"alpha", "gamma"}, origin = {{type = "widget", id = w_ids[1]}}}, "tester")
+    id2, _ = entity.create(db_path, "tagged_item", {code = "T2", tags = {"beta"}, origin = {{type = "widget", id = w_ids[2]}}}, "tester")
+    entity.create(db_path, "tagged_item", {code = "T3", tags = {"alpha"}}, "tester")
+
+    ctx = entity.build_ctx(db_path, {name = "perf_test", capabilities = {read = {"entity"}}})
+    empty_res = ctx.query("tagged_item", {code = {}})
+    check(#empty_res == 0, "expected empty table filter to return 0 rows")
+
+    matched = ctx.query("tagged_item", {id = {id1, id2}})
+    check(#matched == 2, "expected 2 rows from IN filter, got " .. tostring(#matched))
+    by_code = {}
+    for _, r in ipairs(matched) do
+        by_code[r.code] = r
+    end
+    check(by_code["T1"] != nil and #by_code["T1"].tags == 2, "expected 2 tags on T1")
+    check(by_code["T1"].origin != nil and #by_code["T1"].origin == 1 and tonumber(by_code["T1"].origin[1].id) == tonumber(w_ids[1]), "expected polymorphic origin on T1")
+    check(by_code["T2"] != nil and #by_code["T2"].tags == 1 and by_code["T2"].tags[1] == "beta", "expected 1 tag on T2")
+end
+
+function tests.counts_by_type_and_preload_all_fields_cache_and_delta_refresh(db_path)
+    print("Testing entity.counts_by_type cold UNION ALL, warm 0-scan cache hit, and dirty-type-only delta refresh")
+    types = schema.list(db_path)
+    cold = entity.counts_by_type(db_path, types)
+    for _, t in ipairs(types) do
+        expected = entity.count(db_path, t.name)
+        check(cold[t.name] == expected, "cold count mismatch for " .. t.name .. ": " .. tostring(cold[t.name]) .. " vs " .. tostring(expected))
+    end
+
+    -- Warm hit: zero SELECT COUNT(*) table scans when MAX(event_id) is unchanged.
+    original_query = db.query
+    count_queries = 0
+    db.query = function(path, statement, ...)
+        if string.find(string.upper(statement), "COUNT%(%*%)") != nil then
+            count_queries = count_queries + 1
+        end
+        return original_query(path, statement, ...)
+    end
+    warm = entity.counts_by_type(db_path, types)
+    db.query = original_query
+    check(count_queries == 0, "expected 0 COUNT(*) queries on warm cache hit, got " .. tostring(count_queries))
+    check(warm["widget"] == cold["widget"], "warm widget count mismatch")
+
+    -- An update-only event does not change active counts -> 0 COUNT(*) scans.
+    w_rows = db.query(db_path, "SELECT id FROM widget WHERE archived_at IS NULL LIMIT 1;")
+    entity.update(db_path, "widget", tonumber(w_rows[1].id), {label = "W-Updated"}, "tester")
+    count_queries = 0
+    db.query = function(path, statement, ...)
+        if string.find(string.upper(statement), "COUNT%(%*%)") != nil then
+            count_queries = count_queries + 1
+        end
+        return original_query(path, statement, ...)
+    end
+    after_update = entity.counts_by_type(db_path, types)
+    db.query = original_query
+    check(count_queries == 0, "expected 0 COUNT(*) queries after update-only event, got " .. tostring(count_queries))
+    check(after_update["widget"] == cold["widget"], "update must not alter active count")
+
+    -- Creating and archiving a widget recounts only 'widget', never 'tagged_item'.
+    new_id, _ = entity.create(db_path, "widget", {label = "W-Delta"}, "tester")
+    scanned_tagged = false
+    db.query = function(path, statement, ...)
+        if string.find(statement, "COUNT%(%*%)") != nil and string.find(statement, "tagged_item") != nil then
+            scanned_tagged = true
+        end
+        return original_query(path, statement, ...)
+    end
+    after_create = entity.counts_by_type(db_path, types)
+    db.query = original_query
+    check(scanned_tagged == false, "delta refresh must not rescan unchanged tagged_item table")
+    check(after_create["widget"] == cold["widget"] + 1, "expected widget count + 1 after create")
+
+    entity.archive(db_path, "widget", new_id, "tester")
+    after_archive = entity.counts_by_type(db_path, types)
+    check(after_archive["widget"] == cold["widget"], "expected widget count restored after archive")
+
+    -- schema.relationships preloads all entity_field rows in 1 query.
+    schema.clear_cache(db_path)
+    field_queries = 0
+    db.query = function(path, statement, ...)
+        if string.find(statement, "FROM entity_field") != nil then
+            field_queries = field_queries + 1
+        end
+        return original_query(path, statement, ...)
+    end
+    edges = schema.relationships(db_path, types)
+    for _, t in ipairs(types) do
+        schema.fields(db_path, t.name)
+    end
+    db.query = original_query
+    check(field_queries == 1, "expected 1 entity_field preload query across all types, got " .. tostring(field_queries))
+    check(#edges >= 1, "expected at least 1 relationship edge")
 end
 
 dir = os.tmpname()
