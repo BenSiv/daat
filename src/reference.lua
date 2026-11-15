@@ -91,6 +91,15 @@ REFERENCE_INSERT_BATCH = 200
 -- Words longer than this many tokens aren't names worth a lookup.
 REFERENCE_MAX_NAME_TOKENS = 8
 
+function reference_has_column(db_path, table_name, column_name)
+    for _, column in ipairs(db.get_columns(db_path, table_name)) do
+        if column == column_name then
+            return true
+        end
+    end
+    return false
+end
+
 function reference.init_schema(db_path)
     db.exec(db_path, REFERENCE_NAME_SCHEMA)
     db.exec(db_path, DOCUMENT_REFERENCE_SCHEMA)
@@ -98,12 +107,12 @@ function reference.init_schema(db_path)
     -- An index built before #38 holds only distinctive names, so 1 is
     -- right for every row already there. The names it lacks ("YPD") are
     -- added by `daat repair references --names-only`.
-    have = {}
-    for _, column in ipairs(db.get_columns(db_path, "entity_name_index")) do
-        have[column] = true
-    end
-    if have["distinctive"] == nil then
-        db.exec(db_path, "ALTER TABLE entity_name_index ADD COLUMN distinctive INTEGER NOT NULL DEFAULT 1;")
+    if reference_has_column(db_path, "entity_name_index", "distinctive") == false then
+        ok, err = pcall(db.exec, db_path, "ALTER TABLE entity_name_index ADD COLUMN distinctive INTEGER NOT NULL DEFAULT 1;")
+        -- Concurrent first requests race to add it; only an error if it's still missing.
+        if ok == false and reference_has_column(db_path, "entity_name_index", "distinctive") == false then
+            error(err)
+        end
     end
     for _, index in ipairs(REFERENCE_INDEXES) do
         if db.index_exists(db_path, index.table, index.name) == false then
@@ -397,6 +406,9 @@ end
 -- naming columns selected, the rows inserted REFERENCE_INSERT_BATCH at a
 -- time. Returns how many index rows it wrote.
 function reference.rebuild_names(db_path)
+    -- Its own tables, idempotently: `daat repair references` from the CLI
+    -- after a deploy can run before any web request has added `distinctive`.
+    reference.init_schema(db_path)
     db.exec(db_path, "DELETE FROM entity_name_index;")
     db.exec(db_path, "DELETE FROM entity_name_prefix;")
     prefixes = {}

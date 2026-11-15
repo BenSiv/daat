@@ -172,6 +172,10 @@ end
 -- Document references then catch up on each document's next save, or on a
 -- full `repair references`.
 function repair_references(cmd_args, db_path)
+    if #cmd_args > 2 or (cmd_args[2] != nil and cmd_args[2] != "--names-only") then
+        print("Usage: daat repair references [--names-only]")
+        return
+    end
     names = reference.rebuild_names(db_path)
     if cmd_args[2] == "--names-only" then
         print(string.format("Indexed %d entity name(s); document references left as they are", names))

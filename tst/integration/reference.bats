@@ -67,6 +67,20 @@ refs_of() {
     later=$(new_entity experiment "Exp300")
     [ "$(refs_of "$d")" = "" ]
     db "DELETE FROM entity_name_index;"
+
+    # Unknown flag prints usage and neither rebuilds nor re-reads documents.
+    run "$BIN" repair references --name-only
+    [[ "$output" =~ "Usage: daat repair references [--names-only]" ]]
+    [ "$(db "SELECT COUNT(*) FROM entity_name_index;")" = "0" ]
+    [ "$(refs_of "$d")" = "" ]
+
+    # --names-only rebuilds entity_name_index without re-reading documents.
+    run "$BIN" repair references --names-only
+    [[ "$output" =~ "Indexed 2 entity name(s); document references left as they are" ]]
+    [ "$(db "SELECT COUNT(*) FROM entity_name_index;")" = "2" ]
+    [ "$(refs_of "$d")" = "" ]
+
+    db "DELETE FROM entity_name_index;"
     run "$BIN" repair references
     [[ "$output" =~ "Indexed 2 entity name(s)" ]]
     [ "$(refs_of "$d")" = "experiment:${later} " ]
