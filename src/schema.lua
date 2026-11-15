@@ -381,15 +381,17 @@ function schema.validate(def)
         end
         -- A field people name an entity by, without it being the label
         -- (lab_number, a catalog number): reference.lua indexes it, so
-        -- entity.find and document references can resolve it. Only a field
-        -- holding its own value on the row can be one; a link names
-        -- another entity, and a multivalue field isn't a column.
+        -- entity.find and document references can resolve it. Only text
+        -- and select hold a name as written. A link names another entity
+        -- and a multivalue field isn't a column; a number reads back
+        -- changed (SQLite stores 17 as REAL 17.0), and an sql_select holds
+        -- another row's id or token, not a name anyone writes.
         if field.identifier != nil and field.identifier != true and field.identifier != false then
             return string.format("schema '%s' field '%s': 'identifier' must be true or false", def.name, field.name)
         end
-        if field.identifier == true and (field.type == "reference" or field.type == "multi_reference"
-                or field.type == "multi_select" or is_polymorphic_field_type(field.type)) then
-            return string.format("schema '%s' field '%s': type '%s' can't be an identifier", def.name, field.name, field.type)
+        if field.identifier == true and field.type != "text" and field.type != "select" then
+            return string.format("schema '%s' field '%s': type '%s' can't be an identifier, only text and select can",
+                def.name, field.name, field.type)
         end
         -- Optional bounds on a "number" field -- UI-hint only for now
         -- (wired into the registration table's <input type="number">

@@ -1342,6 +1342,14 @@ function entity_find(ctx, args)
     if args.entity_type != nil and schema.is_registered(ctx.db_path, args.entity_type) == false then
         return nil, "unknown entity type: " .. tostring(args.entity_type)
     end
+    -- Documents and the tag types are never in the name index, so a miss
+    -- there would claim to have checked what it never looked at.
+    if args.entity_type != nil and reference.is_indexed_type(args.entity_type) == false then
+        if args.entity_type == "document" then
+            return nil, "entity.find doesn't look up documents: find one by title or topic with document.search"
+        end
+        return nil, "entity.find doesn't look up " .. tostring(args.entity_type) .. ": query it with entity.query"
+    end
     text = tostring(args.text)
     hits = reference.resolve(ctx.db_path, text, args.entity_type)
     if #hits == 0 then
@@ -1359,18 +1367,26 @@ function entity_find(ctx, args)
     end
     lines = {}
     for _, hit in ipairs(hits) do
-        line = string.format("%s %d \"%s\"", hit.entity_type, hit.entity_id, tostring(hit.label))
         -- A ready-made citation, as document.search gives one. Without it,
-        -- holding the id, the agent built the link itself and got the URL
-        -- wrong ("/?type=experiment&entity_id=24", "exp/24"), and put the
-        -- lab number only inside the link text, where the user reading
-        -- the reply can't see which experiment it is.
-        link_title = string.gsub(tostring(hit.label), "[%[%]]", "")
-        link = "[" .. link_title .. "](/detail?type=" .. hit.entity_type .. "&entity_id=" .. tostring(hit.entity_id) .. ")"
-        cite = link
-        if hit.value != hit.label then
-            line = line .. " (" .. hit.field .. " " .. hit.value .. ")"
-            cite = tostring(hit.value) .. " (" .. link .. ")"
+        -- holding the id, the agent built the link itself, sometimes to a
+        -- URL that doesn't exist ("/?type=experiment&entity_id=24",
+        -- "exp/24"), and linked only the title, so the reply never showed
+        -- the lab number the user asked about.
+        url = "(/detail?type=" .. hit.entity_type .. "&entity_id=" .. tostring(hit.entity_id) .. ")"
+        line = ""
+        cite = ""
+        if hit.label == nil or hit.label == "" then
+            -- No builtin name and no display field (a display-less type's
+            -- row registered in daat): the name it matched on is all it has.
+            line = string.format("%s %d (%s %s)", hit.entity_type, hit.entity_id, hit.field, hit.value)
+            cite = "[" .. string.gsub(hit.value, "[%[%]]", "") .. "]" .. url
+        else
+            line = string.format("%s %d \"%s\"", hit.entity_type, hit.entity_id, hit.label)
+            cite = "[" .. string.gsub(hit.label, "[%[%]]", "") .. "]" .. url
+            if hit.value != hit.label then
+                line = line .. " (" .. hit.field .. " " .. hit.value .. ")"
+                cite = hit.value .. " (" .. cite .. ")"
+            end
         end
         table.insert(lines, line)
         table.insert(lines, "cite as: " .. cite)

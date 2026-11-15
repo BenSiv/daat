@@ -7,25 +7,35 @@
 -- A name is an entity's builtin `name` (set by importers), else its
 -- schema's display field -- the same label /data's search uses -- plus
 -- any field its schema marks `identifier = true` (lab_number, a catalog
--- number). It's only a reference target when it's distinctive (reference.name_key)
--- and names exactly one entity: products called "A", a medium called
--- "error" or "Water" would otherwise match nearly every document
--- (measured 2026-10-04 on ~6,400 celleste-lims documents: 4,588 for
--- "A" alone). Matching ignores case, spacing and separators ("Exp 185"
--- is Exp185), and keeps every match at every position, so a sample
--- named "Exp227 Sample96" also yields its experiment Exp227. A
--- deployment adds aliases for how its people write names
+-- number). Matching ignores case, spacing and separators ("Exp 185" is
+-- Exp185). A deployment adds aliases for how its people write names
 -- (platform.lua's reference_aliases).
 --
 -- entity_name_index is the lookup index (name key -> entity), kept by the
 -- entity hooks so a save never loads every name; documents and the tag
--- types themselves are never reference targets. entity_name_prefix holds
--- the first REFERENCE_PREFIX_LENGTH characters of every key -- 207 of
--- them for 54,504 celleste-lims names -- so a save only looks up runs
--- that could start a name: ~490 keys for a 30 KB document instead of
--- ~11,300. Measured 2026-10-04 on 300 prod documents (~30 KB each)
--- against all 54,504 names: 41 ms per save, 565 ms for the largest,
--- down from 410 ms / 3.4 s without the prefixes.
+-- types themselves are never in it. It holds every name, for two readers
+-- with different needs:
+--  * entity.find (reference.resolve) asks about one name the user wrote,
+--    so any name is fair: "YPD", "Sarah Cohen", "EXP-017". One indexed
+--    lookup, found or not.
+--  * Document references (reference.find) scan running text, so only a
+--    name marked `distinctive` counts (reference.name_key), and only when
+--    it names exactly one entity: products called "A", a medium called
+--    "error" or "Water" would otherwise match nearly every document
+--    (measured 2026-10-04 on ~6,400 celleste-lims documents: 4,588 for
+--    "A" alone). Every match at every position is kept, so a sample
+--    named "Exp227 Sample96" also yields its experiment Exp227.
+-- Keeping the distinctive filter on the reader rather than at write time
+-- is what lets one index serve both: before #38 it only held distinctive
+-- names, and entity.find needed a second, SQL-side lookup (a REPLACE/LOWER
+-- scan of every table on every miss) for the rest.
+--
+-- entity_name_prefix holds the first REFERENCE_PREFIX_LENGTH characters
+-- of every distinctive key -- 207 of them for 54,504 celleste-lims names
+-- -- so a save only looks up runs that could start a name: ~490 keys for
+-- a 30 KB document instead of ~11,300. Measured 2026-10-04 on 300 prod
+-- documents (~30 KB each) against all 54,504 names: 41 ms per save,
+-- 565 ms for the largest, down from 410 ms / 3.4 s without the prefixes.
 
 db = require("database")
 entity = require("entity")
@@ -38,7 +48,8 @@ REFERENCE_NAME_SCHEMA = """
 CREATE TABLE IF NOT EXISTS entity_name_index (
     name_key VARCHAR(255) NOT NULL,
     entity_type VARCHAR(64) NOT NULL,
-    entity_id INTEGER NOT NULL
+    entity_id INTEGER NOT NULL,
+    distinctive INTEGER NOT NULL DEFAULT 1
 );
 """
 
@@ -72,10 +83,10 @@ REFERENCE_SKIPPED_TYPES = {document = true, document_tag = true, tag = true, tag
 -- reference.resolve lists every match, up to this many.
 REFERENCE_RESOLVE_LIMIT = 50
 
--- Separators a column-by-column compare strips in SQL. The Lua compare that
--- follows is the real rule (reference.tokens); this only has to let a match
--- through, on both SQLite and MariaDB.
-REFERENCE_SQL_SEPARATORS = {" ", "-", "_", ".", "/", "+", "%", ","}
+-- Rows per multi-row INSERT when rebuilding the index, as document.lua's
+-- LINK_MIGRATION_BATCH: one statement per name was ~150k round trips on
+-- celleste-lims, at 1-2 ms each over the Cloud SQL Auth Proxy.
+REFERENCE_INSERT_BATCH = 200
 
 -- Words longer than this many tokens aren't names worth a lookup.
 REFERENCE_MAX_NAME_TOKENS = 8
@@ -84,6 +95,16 @@ function reference.init_schema(db_path)
     db.exec(db_path, REFERENCE_NAME_SCHEMA)
     db.exec(db_path, DOCUMENT_REFERENCE_SCHEMA)
     db.exec(db_path, REFERENCE_PREFIX_SCHEMA)
+    -- An index built before #38 holds only distinctive names, so 1 is
+    -- right for every row already there. The names it lacks ("YPD") are
+    -- added by `daat repair references --names-only`.
+    have = {}
+    for _, column in ipairs(db.get_columns(db_path, "entity_name_index")) do
+        have[column] = true
+    end
+    if have["distinctive"] == nil then
+        db.exec(db_path, "ALTER TABLE entity_name_index ADD COLUMN distinctive INTEGER NOT NULL DEFAULT 1;")
+    end
     for _, index in ipairs(REFERENCE_INDEXES) do
         if db.index_exists(db_path, index.table, index.name) == false then
             ok, err = pcall(db.exec, db_path, string.format("CREATE INDEX %s ON %s (%s);", index.name, index.table, index.columns))
@@ -134,6 +155,38 @@ function reference.name_key(name)
         return nil
     end
     return key
+end
+
+-- Any name's lookup key, distinctive or not ("YPD" is "ypd"), or nil when
+-- nothing's left of it or it's too long to index. Same tokens and squash
+-- as reference.name_key, so a distinctive name has one key, not two.
+function reference.lookup_key(name)
+    if name == nil then
+        return nil
+    end
+    tokens = reference.tokens(tostring(name))
+    if #tokens == 0 then
+        return nil
+    end
+    key = reference_squash(tokens, 1, #tokens)
+    if key == "" or string.len(key) > 255 then
+        return nil
+    end
+    return key
+end
+
+-- The key a name is looked up by, after the deployment's aliases ("Experiment
+-- 027" is written for EXP-027), the same rewrite reference.candidate_keys
+-- gives document text.
+function reference_aliased(text)
+    text = string.lower(tostring(text))
+    aliases = config.platform_config().reference_aliases
+    if aliases != nil then
+        for _, alias in ipairs(aliases) do
+            text, _ = string.gsub(text, alias[1], alias[2])
+        end
+    end
+    return text
 end
 
 -- Every candidate key in a text, each once: the squashed form of each
@@ -190,13 +243,19 @@ function reference.candidate_keys(text, aliases, prefixes)
     return keys
 end
 
--- The entity's label: its builtin name, else its display field.
-function reference_label(db_path, entity_type, row)
-    if row.name != nil and tostring(row.name) != "" then
+function reference_filled(value)
+    return value != nil and tostring(value) != ""
+end
+
+-- The entity's label: its builtin name, else its first filled display
+-- field, else nil. `fields` is its type's schema.fields, read once by the
+-- caller rather than once per row.
+function reference_label(fields, row)
+    if reference_filled(row.name) then
         return tostring(row.name)
     end
-    for _, field in ipairs(schema.fields(db_path, entity_type)) do
-        if tonumber(field.display) == 1 and row[field.name] != nil then
+    for _, field in ipairs(fields) do
+        if tonumber(field.display) == 1 and reference_filled(row[field.name]) then
             return tostring(row[field.name])
         end
     end
@@ -204,17 +263,19 @@ function reference_label(db_path, entity_type, row)
 end
 
 -- Every name an entity goes by: {{field =, value =}, ...}, its label first,
--- then each identifier field.
-function reference_names(db_path, entity_type, row)
+-- then each identifier field. A display field that isn't the label (the row
+-- has a builtin name) isn't a name; one meant as an alternate name is
+-- marked identifier as well.
+function reference_names(fields, row)
     names = {}
     labelled = false
-    if row.name != nil and tostring(row.name) != "" then
+    if reference_filled(row.name) then
         table.insert(names, {field = "name", value = tostring(row.name)})
         labelled = true
     end
-    for _, field in ipairs(schema.fields(db_path, entity_type)) do
+    for _, field in ipairs(fields) do
         value = row[field.name]
-        if value != nil and tostring(value) != "" then
+        if reference_filled(value) then
             is_label = labelled == false and tonumber(field.display) == 1
             if is_label then
                 labelled = true
@@ -227,20 +288,42 @@ function reference_names(db_path, entity_type, row)
     return names
 end
 
--- The distinct index keys of one entity's names. Two names can share a key
--- ("EXP-017" and "Exp 017"), and a repeated row would look like two entities
--- to reference.find, which skips a key naming more than one.
-function reference_name_keys(db_path, entity_type, row)
-    keys = {}
-    seen = {}
-    for _, name in ipairs(reference_names(db_path, entity_type, row)) do
-        key = reference.name_key(name.value)
-        if key != nil and seen[key] == nil then
-            seen[key] = true
-            table.insert(keys, key)
+-- One entity's index rows, {{key =, distinctive =}, ...}, each key once. Two
+-- names can share a key ("EXP-017" and "Exp 017"), and a repeated row would
+-- look like two entities to reference.find, which skips a key naming more
+-- than one. A key is distinctive when any name giving it is.
+function reference_index_rows(fields, row)
+    out = {}
+    by_key = {}
+    for _, name in ipairs(reference_names(fields, row)) do
+        key = reference.lookup_key(name.value)
+        if key != nil then
+            distinctive = reference.name_key(name.value) != nil
+            if by_key[key] == nil then
+                by_key[key] = {key = key, distinctive = distinctive}
+                table.insert(out, by_key[key])
+            elseif distinctive then
+                by_key[key].distinctive = true
+            end
         end
     end
-    return keys
+    return out
+end
+
+-- One "(...)" VALUES tuple for entity_name_index.
+function reference_index_values(key, entity_type, entity_id, distinctive)
+    flag = 0
+    if distinctive then
+        flag = 1
+    end
+    return string.format("(%s, %s, %d, %d)", db.quote(key), db.quote(entity_type), tonumber(entity_id), flag)
+end
+
+function reference_insert_index(db_path, values)
+    if #values > 0 then
+        db.exec(db_path, "INSERT INTO entity_name_index (name_key, entity_type, entity_id, distinctive) VALUES "
+            .. table.concat(values, ", ") .. ";")
+    end
 end
 
 -- A prefix is only ever added: one no name uses any more costs a few
@@ -254,9 +337,15 @@ function reference_add_prefix(db_path, key)
     end
 end
 
+-- Whether a type's entities are in the index at all, for entity.find to
+-- say so instead of claiming it checked them.
+function reference.is_indexed_type(entity_type)
+    return REFERENCE_SKIPPED_TYPES[entity_type] == nil
+end
+
 -- Keeps entity_name_index in step with one entity (create, update,
 -- archive, unarchive all land here): its rows are replaced, one per
--- distinctive name, or dropped when it's archived or gone.
+-- name, or dropped when it's archived or gone.
 function reference.index_entity(db_path, entity_type, entity_id)
     if REFERENCE_SKIPPED_TYPES[entity_type] != nil then
         return
@@ -267,14 +356,46 @@ function reference.index_entity(db_path, entity_type, entity_id)
     if row == nil or (row.archived_at != nil and row.archived_at != "") then
         return
     end
-    for _, key in ipairs(reference_name_keys(db_path, entity_type, row)) do
-        db.exec(db_path, string.format("INSERT INTO entity_name_index (name_key, entity_type, entity_id) VALUES (%s, %s, %d);",
-            db.quote(key), db.quote(entity_type), tonumber(entity_id)))
-        reference_add_prefix(db_path, key)
+    values = {}
+    for _, name in ipairs(reference_index_rows(schema.fields(db_path, entity_type), row)) do
+        table.insert(values, reference_index_values(name.key, entity_type, entity_id, name.distinctive))
+        if name.distinctive then
+            reference_add_prefix(db_path, name.key)
+        end
     end
+    reference_insert_index(db_path, values)
 end
 
--- `daat repair references` (first half): every entity's name re-indexed.
+-- The columns rebuild_names reads from a type's table: id, the builtin
+-- name, and its display and identifier fields. `SELECT *` pulled every
+-- row's large text columns too (expression_profile's sample_values on
+-- celleste-lims) over the Auth Proxy, only to read two or three of them.
+function reference_name_columns(db_path, entity_type, fields)
+    present = {}
+    for _, column in ipairs(db.get_columns(db_path, entity_type)) do
+        present[column] = true
+    end
+    columns = {"id"}
+    if present["name"] != nil then
+        table.insert(columns, "name")
+    end
+    for _, field in ipairs(fields) do
+        if (tonumber(field.display) == 1 or tonumber(field.identifier) == 1)
+                and field.name != "name" and present[field.name] != nil then
+            table.insert(columns, field.name)
+        end
+    end
+    quoted = {}
+    for _, column in ipairs(columns) do
+        table.insert(quoted, db.quote_ident(column))
+    end
+    return table.concat(quoted, ", ")
+end
+
+-- `daat repair references` (first half, and all of --names-only): every
+-- entity's names re-indexed. Per type: its fields read once, only the
+-- naming columns selected, the rows inserted REFERENCE_INSERT_BATCH at a
+-- time. Returns how many index rows it wrote.
 function reference.rebuild_names(db_path)
     db.exec(db_path, "DELETE FROM entity_name_index;")
     db.exec(db_path, "DELETE FROM entity_name_prefix;")
@@ -283,19 +404,28 @@ function reference.rebuild_names(db_path)
     for _, type_row in ipairs(schema.list(db_path)) do
         entity_type = type_row.name
         if REFERENCE_SKIPPED_TYPES[entity_type] == nil and db.table_exists(db_path, entity_type) == true then
+            fields = schema.fields(db_path, entity_type)
             rows = db.query(db_path, string.format(
-                "SELECT * FROM %s WHERE archived_at IS NULL OR archived_at = '';", entity_type))
+                "SELECT %s FROM %s WHERE archived_at IS NULL OR archived_at = '';",
+                reference_name_columns(db_path, entity_type, fields), db.quote_ident(entity_type)))
+            values = {}
             if rows != nil then
                 for _, row in ipairs(rows) do
-                    for _, key in ipairs(reference_name_keys(db_path, entity_type, row)) do
-                        db.exec(db_path, string.format(
-                            "INSERT INTO entity_name_index (name_key, entity_type, entity_id) VALUES (%s, %s, %d);",
-                            db.quote(key), db.quote(entity_type), tonumber(row.id)))
-                        indexed = indexed + 1
-                        prefixes[string.sub(key, 1, REFERENCE_PREFIX_LENGTH)] = true
+                    for _, name in ipairs(reference_index_rows(fields, row)) do
+                        table.insert(values, reference_index_values(name.key, entity_type, row.id, name.distinctive))
+                        if name.distinctive then
+                            prefixes[string.sub(name.key, 1, REFERENCE_PREFIX_LENGTH)] = true
+                        end
+                        if #values == REFERENCE_INSERT_BATCH then
+                            reference_insert_index(db_path, values)
+                            indexed = indexed + #values
+                            values = {}
+                        end
                     end
                 end
             end
+            reference_insert_index(db_path, values)
+            indexed = indexed + #values
         end
     end
     -- IGNORE: two prefixes distinct in Lua can be one value to MariaDB's
@@ -336,7 +466,8 @@ function reference.find(db_path, text)
             table.insert(quoted, db.quote(keys[i]))
         end
         rows = db.query(db_path, string.format(
-            "SELECT name_key, entity_type, entity_id FROM entity_name_index WHERE name_key IN (%s);", table.concat(quoted, ", ")))
+            "SELECT name_key, entity_type, entity_id FROM entity_name_index WHERE name_key IN (%s) AND distinctive = 1;",
+            table.concat(quoted, ", ")))
         if rows != nil then
             for _, row in ipairs(rows) do
                 if targets[row.name_key] == nil then
@@ -359,102 +490,64 @@ function reference.find(db_path, text)
     return found
 end
 
--- Rows of one type with a name equal to `key`, for names the index doesn't
--- hold: not distinctive ("YPD", under the name_key rules), or not re-indexed
--- yet (a field newly marked identifier, before `daat repair references`).
-function reference_rows_named(db_path, entity_type, key)
-    if REFERENCE_SKIPPED_TYPES[entity_type] != nil or db.table_exists(db_path, entity_type) == false then
-        return {}
-    end
-    columns = {"name"}
-    for _, field in ipairs(schema.fields(db_path, entity_type)) do
-        if tonumber(field.display) == 1 or tonumber(field.identifier) == 1 then
-            table.insert(columns, field.name)
-        end
-    end
-    compares = {}
-    for _, column in ipairs(columns) do
-        expression = "LOWER(`" .. column .. "`)"
-        for _, separator in ipairs(REFERENCE_SQL_SEPARATORS) do
-            expression = "REPLACE(" .. expression .. ", " .. db.quote(separator) .. ", '')"
-        end
-        table.insert(compares, expression .. " = " .. db.quote(key))
-    end
-    rows = db.query(db_path, string.format(
-        "SELECT * FROM %s WHERE (archived_at IS NULL OR archived_at = '') AND (%s) LIMIT %d;",
-        entity_type, table.concat(compares, " OR "), REFERENCE_RESOLVE_LIMIT))
-    if rows == nil then
-        return {}
-    end
-    return rows
-end
-
 -- Which active entities a name refers to, for entity.find (#38): every
 -- match as {entity_type =, entity_id =, label =, field =, value =}, sorted,
--- optionally of one type. Exact on the whole name, ignoring case, spacing and
--- separators -- reference.name_key's own rules, so this and document
--- references can't disagree on what a name is. No ranking and no partial
--- match: those belong to document.search and /data's search box. Unlike
--- reference.find, a name more than one entity shares isn't dropped, since
--- here the caller is told about all of them.
+-- optionally of one type. `label` is nil for an entity with no builtin name
+-- or filled display field. Exact on the whole name, ignoring case, spacing
+-- and separators, with the deployment's aliases applied -- the same tokens,
+-- squash and aliases as document references, so the two can't disagree on
+-- what a name is. One indexed lookup, found or not. No ranking and no
+-- partial match: those belong to document.search and /data's search box.
+-- Unlike reference.find, a name more than one entity shares isn't dropped,
+-- and a name that isn't distinctive counts, since here the caller is told
+-- about every match.
 function reference.resolve(db_path, text, entity_type)
     if text == nil then
         return {}
     end
-    tokens = reference.tokens(tostring(text))
-    if #tokens == 0 then
+    keys = {}
+    wanted = {}
+    for _, written in ipairs({tostring(text), reference_aliased(text)}) do
+        key = reference.lookup_key(written)
+        if key != nil and wanted[key] == nil then
+            wanted[key] = true
+            table.insert(keys, db.quote(key))
+        end
+    end
+    if #keys == 0 then
         return {}
     end
-    key = reference_squash(tokens, 1, #tokens)
-    if key == "" then
-        return {}
-    end
-    candidates = {}
     type_filter = ""
     if entity_type != nil then
         type_filter = " AND entity_type = " .. db.quote(entity_type)
     end
     indexed = db.query(db_path, string.format(
-        "SELECT entity_type, entity_id FROM entity_name_index WHERE name_key = %s%s LIMIT %d;",
-        db.quote(key), type_filter, REFERENCE_RESOLVE_LIMIT))
-    if indexed != nil then
-        for _, hit in ipairs(indexed) do
-            row = entity.get(db_path, hit.entity_type, tonumber(hit.entity_id))
-            -- The index is kept by hooks each caller runs after archiving, so
-            -- it can lag; a name must not resolve to an archived entity.
-            if row != nil and (row.archived_at == nil or row.archived_at == "") then
-                table.insert(candidates, {entity_type = hit.entity_type, row = row})
-            end
-        end
-    end
-    if #candidates == 0 then
-        types = {}
-        if entity_type != nil then
-            types = {entity_type}
-        else
-            for _, type_row in ipairs(schema.list(db_path)) do
-                table.insert(types, type_row.name)
-            end
-        end
-        for _, name in ipairs(types) do
-            for _, row in ipairs(reference_rows_named(db_path, name, key)) do
-                table.insert(candidates, {entity_type = name, row = row})
-            end
-        end
-    end
+        "SELECT DISTINCT entity_type, entity_id FROM entity_name_index WHERE name_key IN (%s)%s LIMIT %d;",
+        table.concat(keys, ", "), type_filter, REFERENCE_RESOLVE_LIMIT))
     hits = {}
-    for _, candidate in ipairs(candidates) do
-        for _, name in ipairs(reference_names(db_path, candidate.entity_type, candidate.row)) do
-            name_tokens = reference.tokens(name.value)
-            if #hits < REFERENCE_RESOLVE_LIMIT and reference_squash(name_tokens, 1, #name_tokens) == key then
-                table.insert(hits, {
-                    entity_type = candidate.entity_type,
-                    entity_id = tonumber(candidate.row.id),
-                    label = reference_label(db_path, candidate.entity_type, candidate.row),
-                    field = name.field,
-                    value = name.value,
-                })
-                break
+    if indexed == nil then
+        return hits
+    end
+    for _, hit in ipairs(indexed) do
+        row = entity.get(db_path, hit.entity_type, tonumber(hit.entity_id))
+        -- The index is kept by hooks each caller runs after archiving, so
+        -- it can lag; a name must not resolve to an archived entity.
+        if row != nil and (row.archived_at == nil or row.archived_at == "") then
+            fields = schema.fields(db_path, hit.entity_type)
+            -- Which of its names matched, re-read from the row: a stale
+            -- index row (a field no longer an identifier) matches none.
+            for _, name in ipairs(reference_names(fields, row)) do
+                name_key = reference.lookup_key(name.value)
+                if name_key != nil and wanted[name_key] != nil then
+                    table.insert(hits, {
+                        entity_type = hit.entity_type,
+                        entity_id = tonumber(row.id),
+                        label = reference_label(fields, row),
+                        field = name.field,
+                        value = name.value,
+                    })
+                    break
+                end
             end
         end
     end

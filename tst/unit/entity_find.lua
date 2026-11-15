@@ -2,8 +2,9 @@
 -- entity.find turns a name as the user writes it into the entity it refers
 -- to (#38): exact on the label and identifier fields, ignoring case, spacing
 -- and separators, every match listed, nothing partial or ranked. The
--- `identifier` flag is what puts a field like lab_number in reach, in the
--- name index as well as in the slower compare for names the index skips.
+-- `identifier` flag is what puts a field like lab_number in reach. One name
+-- index serves it and document references: every name is in it, marked
+-- distinctive or not, and only references keep to the distinctive ones.
 
 agent_tools = require("agent_tools")
 reference = require("reference")
@@ -12,6 +13,7 @@ entity = require("entity")
 schema = require("schema")
 db = require("database")
 init = require("init")
+config = require("config")
 lfs = require("lfs")
 
 unit = require("unit")
@@ -31,6 +33,17 @@ MEDIUM = {
     name = "medium",
     fields = {
         {name = "label", type = "text", required = true, display = true},
+    },
+}
+
+-- No display field, like most celleste-lims types: a row registered in daat
+-- has no builtin name either, so its identifier is all it's known by.
+GEAR = {
+    name = "gear",
+    fields = {
+        {name = "number", type = "number", required = true},
+        {name = "asset_code", type = "text", required = true, identifier = true},
+        {name = "room", type = "text", required = false},
     },
 }
 
@@ -75,6 +88,11 @@ function tests.a_label_resolves_without_repeating_itself(db_path)
     check(contains(short, "medium " .. tonumber(id) .. " \"YPD\""), "got: " .. tostring(short))
     check(contains(short, "cite as: [YPD](/detail?type=medium&entity_id=" .. tonumber(id) .. ")"),
         "a label match cites the label as the link, got: " .. tostring(short))
+    rows = db.query(db_path, string.format(
+        "SELECT distinctive FROM entity_name_index WHERE entity_type = 'medium' AND entity_id = %d;", tonumber(id)))
+    check(#rows == 1 and tonumber(rows[1].distinctive) == 0, "YPD is indexed, as not distinctive")
+    check(#reference.find(db_path, "Plates were poured with YPD today.") == 0,
+        "a name that isn't distinctive is never a document reference")
 end
 
 function tests.only_the_whole_name_on_a_naming_field_matches(db_path)
@@ -135,6 +153,43 @@ function tests.a_wrong_type_gets_the_shared_hint(db_path)
     check(missing == nil and contains(missing_err, "find requires text"), "got: " .. tostring(missing_err))
 end
 
+function tests.a_type_outside_the_index_is_refused_not_missed(db_path)
+    print("Testing document and tag aren't claimed as checked")
+    result, err = find(db_path, {text = "Some document title", entity_type = "document"})
+    check(result == nil and contains(err, "doesn't look up documents") and contains(err, "document.search"),
+        "points to document.search, got: " .. tostring(result) .. " / " .. tostring(err))
+    result, err = find(db_path, {text = "growth", entity_type = "tag"})
+    check(result == nil and contains(err, "doesn't look up tag") and contains(err, "entity.query"),
+        "points to entity.query, got: " .. tostring(result) .. " / " .. tostring(err))
+end
+
+function tests.an_entity_with_no_label_is_shown_by_its_identifier(db_path)
+    print("Testing a display-less row with no builtin name")
+    id = entity.create(db_path, "gear", {number = 3, asset_code = "EQ-041", room = "B12"}, "tester")
+    result = find(db_path, {text = "eq 041"})
+    check(contains(result, "gear " .. tonumber(id) .. " (asset_code EQ-041)"), "shown by its identifier, got: " .. tostring(result))
+    check(contains(result, "cite as: [EQ-041](/detail?type=gear&entity_id=" .. tonumber(id) .. ")"),
+        "cited by its identifier, got: " .. tostring(result))
+    check(contains(result, "nil") == false, "never a literal nil, got: " .. tostring(result))
+    named = entity.create(db_path, "gear", {name = "SPEC-901", number = 4, asset_code = "EQ-042"}, "tester")
+    imported = find(db_path, {text = "EQ-042"})
+    check(contains(imported, "gear " .. tonumber(named) .. " \"SPEC-901\" (asset_code EQ-042)"),
+        "an imported row keeps its builtin name as the label, got: " .. tostring(imported))
+end
+
+function tests.aliases_apply_as_they_do_to_documents(db_path)
+    print("Testing reference_aliases rewrite the name before the lookup")
+    id = new_batch(db_path, "Alias trial", "EXP-027")
+    original = config.platform_config
+    config.platform_config = function()
+        return {reference_aliases = {{"experiment%s*(%d)", "exp%1"}}}
+    end
+    result = find(db_path, {text = "Experiment 027"})
+    config.platform_config = original
+    check(contains(result, "batch " .. id .. " \"Alias trial\" (lab_number EXP-027)"), "got: " .. tostring(result))
+    check(contains(find(db_path, {text = "Experiment 027"}), "No entity is named"), "without the alias it's no match")
+end
+
 function tests.the_index_holds_every_name_and_rebuild_keeps_them(db_path)
     print("Testing the name index holds an entity's label and identifier, and survives repair")
     id = new_batch(db_path, "Indexed A1", "EXP-700")
@@ -169,12 +224,54 @@ function tests.a_document_mention_of_an_identifier_is_a_reference(db_path)
     check(#found == 1 and found[1].entity_type == "batch" and found[1].entity_id == id, "expected the batch")
 end
 
-function tests.a_name_not_indexed_yet_is_still_found(db_path)
-    print("Testing the fallback finds a field marked identifier before repair runs")
+function tests.a_newly_marked_field_is_found_after_the_names_rebuild(db_path)
+    print("Testing a name missing from the index is found once rebuild_names runs, and no table is scanned")
     id = new_batch(db_path, "Before repair", "EXP-950")
     db.exec(db_path, string.format("DELETE FROM entity_name_index WHERE entity_type = 'batch' AND entity_id = %d;", id))
-    result = find(db_path, {text = "exp 950"})
-    check(contains(result, "batch " .. id .. " \"Before repair\" (lab_number EXP-950)"), "got: " .. tostring(result))
+    original_query = db.query
+    scans = 0
+    db.query = function(path, query, ...)
+        if string.find(query, "FROM batch", 1, true) != nil or string.find(query, "FROM medium", 1, true) != nil then
+            scans = scans + 1
+        end
+        return original_query(path, query, ...)
+    end
+    missed = find(db_path, {text = "exp 950"})
+    db.query = original_query
+    check(contains(missed, "No entity is named"), "only the index is read, got: " .. tostring(missed))
+    check(scans == 0, "a miss reads no entity table, read " .. tostring(scans))
+    reference.rebuild_names(db_path)
+    check(contains(find(db_path, {text = "exp 950"}), "batch " .. id .. " \"Before repair\" (lab_number EXP-950)"), "found after the rebuild")
+end
+
+function tests.the_rebuild_batches_its_inserts_and_reads_only_naming_columns(db_path)
+    print("Testing rebuild_names inserts in batches and selects only the columns it needs")
+    for i = 1, 30 do
+        new_batch(db_path, string.format("Batch run %d", i), string.format("EXP-%d", 3000 + i), "long notes nobody needs here")
+    end
+    original_exec = db.exec
+    original_query = db.query
+    inserts = 0
+    selected = {}
+    db.exec = function(path, statement, ...)
+        if string.find(statement, "INSERT INTO entity_name_index", 1, true) != nil then
+            inserts = inserts + 1
+        end
+        return original_exec(path, statement, ...)
+    end
+    db.query = function(path, query, ...)
+        if string.find(query, "FROM `batch`", 1, true) != nil then
+            table.insert(selected, query)
+        end
+        return original_query(path, query, ...)
+    end
+    count = reference.rebuild_names(db_path)
+    db.exec = original_exec
+    db.query = original_query
+    check(count >= 60, "every label and lab number indexed, got " .. tostring(count))
+    check(inserts <= #schema.list(db_path), "one insert per type here, got " .. tostring(inserts))
+    check(#selected == 1 and contains(selected[1], "`lab_number`") and contains(selected[1], "`notes`") == false,
+        "only id, name, display and identifier columns, got: " .. tostring(selected[1]))
 end
 
 function tests.the_flag_is_validated(db_path)
@@ -184,6 +281,12 @@ function tests.the_flag_is_validated(db_path)
     err = schema.validate({name = "bad", fields = {{name = "owner", type = "reference", entity_type = "batch", identifier = true}}})
     check(contains(err, "can't be an identifier"), "got: " .. tostring(err))
     check(schema.validate({name = "good", fields = {{name = "code", type = "text", identifier = true}}}) == nil, "a text field can be one")
+    check(schema.validate({name = "good", fields = {{name = "code", type = "select", values = {"A1", "B2"}, identifier = true}}}) == nil,
+        "a select field can be one")
+    for _, field_type in ipairs({"number", "date", "sql_select"}) do
+        err = schema.validate({name = "bad", fields = {{name = "code", type = field_type, identifier = true}}})
+        check(contains(err, "can't be an identifier"), field_type .. " is refused, got: " .. tostring(err))
+    end
 end
 
 dir = os.tmpname()
@@ -193,6 +296,7 @@ init.do_init({}, dir)
 db_path = dir .. "/.store/store.db"
 schema.register(db_path, BATCH)
 schema.register(db_path, MEDIUM)
+schema.register(db_path, GEAR)
 
 unit.run(tests, db_path)
 os.execute("rm -rf '" .. dir .. "'")
