@@ -215,7 +215,7 @@ A built-in assistant, not a bolted-on integration: real per-user conversation se
   |---|---|---|
   | `agent_provider` | none (chat and model calls off) | Which named backend `agent_provider.lua` loads (`"vertex"`, `"claude"`, or `"test"` for the deterministic stub) |
   | `agent_model` | the provider's own | Model for every `generate`/`converse` call: chat, distillation, link and tier judgment |
-  | `agent_thinking` | `"off"` | `"off"`, `"summary"`, or `"full"` -- translated per provider (`thinkingConfig` on Vertex, `thinking` on Claude) so reasoning blocks land in `agent_message` for conversation curation |
+  | `agent_thinking` | `"summary"` | `"off"`, `"summary"`, or `"full"` -- translated per provider (`thinkingConfig` `MEDIUM`/`HIGH` on Vertex, `thinking` on Claude) so reasoning blocks land in `agent_message` for conversation curation |
   | `embedding_model` | the provider's own | Model for every `embeddings` call; stored with each vector, and search compares only vectors from the current one (so a change needs `daat repair embeddings`) |
   | `embedding_skip` | none | Lua patterns: a content line one matches is left out of what the document's embedding is made from (a sync's header, template boilerplate); a chat transcript is embedded from its conversation only, without tool calls or results. `daat document embedding-text <id>` shows the result |
   | `embedding_quiet_minutes` | 5 | How long a saved document goes without another edit before `daat document embed-pending` embeds it (0: on save) |

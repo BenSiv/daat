@@ -303,10 +303,10 @@ function config.platform_config()
         search_provider = nil,
         -- Reasoning capture (doc/agent-data.md, "Reasoning capture",
         -- decision 5): "off" | "summary" | "full", translated per
-        -- provider (Vertex thinkingConfig; Claude thinking). Default
-        -- "off" until the live scorecard decides between "off" and
-        -- "summary".
-        agent_thinking = "off",
+        -- provider (Vertex thinkingConfig MEDIUM/HIGH; Claude thinking).
+        -- Default "summary" (2026-11-15 live scorecard: all checks
+        -- 78% -> 90%, cites and document links 89% -> 100%).
+        agent_thinking = "summary",
         agent_max_turns = 20,
         -- "detached": a chat turn runs in its own worker process, not
         -- the web request (agent.lua, "Detached turns"); "inline": in

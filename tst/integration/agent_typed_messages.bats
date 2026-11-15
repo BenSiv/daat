@@ -209,25 +209,24 @@ propose_create() {
     [ "$length" -lt 400 ]
 }
 
-@test "agent_thinking validates off/summary/full and captures thinking across chat, research, background, self-check, compaction and wrapup" {
+@test "agent_thinking defaults to summary, honors off/full, and captures thinking across chat, research, background, self-check, compaction and wrapup" {
     read session csrf < <(session_for admin secret123)
 
-    # An unrecognized agent_thinking value falls back safely to "off" (like agent_transcript_documents).
-    write_platform_config ', agent_thinking = "bogus"'
-    bogus_chat=$(start_chat "$session" "$csrf" "Bogus")
-    AGENT_TEST_THINKING="should not appear" send_message "$session" "$csrf" "$bogus_chat" "hello" "$(done_response "Plain reply.")" > /dev/null
-    run store "SELECT content FROM agent_message WHERE session_id = '${bogus_chat}';"
-    [[ ! "$output" =~ "should not appear" ]]
-
-    # With agent_thinking = "off" (default), AGENT_TEST_THINKING is ignored.
-    write_platform_config
+    # Explicit agent_thinking = "off" disables thinking capture.
+    write_platform_config ', agent_thinking = "off"'
     off_chat=$(start_chat "$session" "$csrf" "Off")
     AGENT_TEST_THINKING="should not appear" send_message "$session" "$csrf" "$off_chat" "hello" "$(done_response "Plain reply.")" > /dev/null
     run store "SELECT content FROM agent_message WHERE session_id = '${off_chat}';"
     [[ ! "$output" =~ "should not appear" ]]
 
-    # With agent_thinking = "summary", thinking is captured in agent_message across loops and never creates pool documents.
-    write_platform_config ', agent_thinking = "summary"'
+    # Unset (and unrecognized values falling back to default) uses "summary": thinking is captured in agent_message across loops and never creates pool documents.
+    write_platform_config ', agent_thinking = "bogus"'
+    bogus_chat=$(start_chat "$session" "$csrf" "Bogus")
+    AGENT_TEST_THINKING="default-summary-thought" send_message "$session" "$csrf" "$bogus_chat" "hello" "$(done_response "Plain reply.")" > /dev/null
+    run store "SELECT content FROM agent_message WHERE session_id = '${bogus_chat}';"
+    [[ "$output" =~ "default-summary-thought" ]]
+
+    write_platform_config
     chat=$(start_chat "$session" "$csrf" "Thinking")
     scripted="$(tool_call_response "research.investigate" '{"question":"what types exist"}')"$'\1'"$(done_response "Sub-agent synthesis.")"$'\1'"$(tool_call_response "background.start" '{"question":"background question"}')"$'\1'"$(done_response "Final chat answer.")"
     AGENT_TEST_THINKING="step-monologue" send_message "$session" "$csrf" "$chat" "check everything" "$scripted" > /dev/null
