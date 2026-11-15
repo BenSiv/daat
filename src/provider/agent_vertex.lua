@@ -83,6 +83,26 @@ agent_vertex = {}
 agent_vertex.default_model = "gemini-3.5-flash-lite"
 agent_vertex.default_embedding_model = "text-embedding-005"
 
+-- Translates platform.lua's agent_thinking ("off" | "summary" | "full",
+-- doc/agent-data.md, decision 5) into Vertex's generationConfig.thinkingConfig.
+-- Confirmed live on Vertex AI (celleste-elab): includeThoughts alone
+-- returns zero thought parts on models whose default thinking budget is
+-- off (gemini-3.5-flash-lite), and runs below full depth on Pro/Flash.
+-- "summary" uses MEDIUM thinkingLevel with includeThoughts; "full" uses
+-- HIGH; "off" omits thought summaries (includeThoughts = false).
+function vertex_thinking_config(thinking_mode)
+    if thinking_mode == nil then
+        thinking_mode = config.platform_config().agent_thinking
+    end
+    if thinking_mode == "summary" then
+        return {includeThoughts = true, thinkingLevel = "MEDIUM"}
+    end
+    if thinking_mode == "full" then
+        return {includeThoughts = true, thinkingLevel = "HIGH"}
+    end
+    return {includeThoughts = false}
+end
+
 -- Confirmed live: gemini-3.5-flash-lite (this provider's default
 -- model as of brex 153144598) 404s on a regional endpoint like
 -- us-central1 -- "global" is not just an option for a 3.x-family model,
@@ -527,7 +547,7 @@ end
 -- behavior, unchanged, shared with .generate()/.embeddings() below) --
 -- the network call itself couldn't be completed at all, nothing
 -- structured to return.
-function agent_vertex.converse(model, system_prompt, messages, tools)
+function vertex_converse_payload(system_prompt, messages, tools, thinking_mode)
     payload = {contents = vertex_contents_from_messages(messages)}
     if system_prompt != nil and system_prompt != "" then
         payload.systemInstruction = {parts = {{text = system_prompt}}}
@@ -535,11 +555,12 @@ function agent_vertex.converse(model, system_prompt, messages, tools)
     if tools != nil and #tools > 0 then
         payload.tools = {{functionDeclarations = vertex_tools_from_canonical(tools)}}
     end
-    -- Gemini 2.5's own thought-summary feature -- unconditional;
-    -- response content then includes real {type:"thinking",...} blocks
-    -- alongside text/toolCall ones (agent.lua's own
-    -- extract_thinking_text/display_blocks handle both).
-    payload.generationConfig = {thinkingConfig = {includeThoughts = true}}
+    payload.generationConfig = {thinkingConfig = vertex_thinking_config(thinking_mode)}
+    return payload
+end
+
+function agent_vertex.converse(model, system_prompt, messages, tools)
+    payload = vertex_converse_payload(system_prompt, messages, tools, nil)
 
     response, err = vertex_post(model .. ":generateContent", payload)
     if response == nil then
@@ -573,13 +594,46 @@ function agent_vertex.converse(model, system_prompt, messages, tools)
     return {content = blocks, stopReason = "stop"}, nil, usage
 end
 
-function agent_vertex.generate(model, system_prompt, prompt)
+-- Splits a generate() response's parts[] into the actual answer text
+-- (non-thought parts) and any thought-summary text (thought = true
+-- parts). With includeThoughts enabled, Vertex places the thought part
+-- first in parts[], so reading parts[1].text directly would return the
+-- internal monologue instead of the answer.
+function vertex_text_and_thinking_from_parts(parts)
+    blocks, _ = vertex_blocks_from_parts(parts)
+    text_parts = {}
+    thinking_parts = {}
+    for _, block in ipairs(blocks) do
+        if block.type == "text" and block.text != nil then
+            table.insert(text_parts, block.text)
+        elseif block.type == "thinking" and block.thinking != nil then
+            table.insert(thinking_parts, block.thinking)
+        end
+    end
+    text = nil
+    if #text_parts > 0 then
+        text = table.concat(text_parts, "\n")
+    end
+    thinking = nil
+    if #thinking_parts > 0 then
+        thinking = table.concat(thinking_parts, "\n\n")
+    end
+    return text, thinking
+end
+
+function vertex_generate_payload(system_prompt, prompt, thinking_mode)
     payload = {
         contents = {{role = "user", parts = {{text = prompt}}}},
+        generationConfig = {thinkingConfig = vertex_thinking_config(thinking_mode)},
     }
     if system_prompt != nil and system_prompt != "" then
         payload.systemInstruction = {parts = {{text = system_prompt}}}
     end
+    return payload
+end
+
+function agent_vertex.generate(model, system_prompt, prompt)
+    payload = vertex_generate_payload(system_prompt, prompt, nil)
 
     response, err = vertex_post(model .. ":generateContent", payload)
     if response == nil then
@@ -589,10 +643,14 @@ function agent_vertex.generate(model, system_prompt, prompt)
         return nil, "no candidates in Vertex AI response"
     end
     candidate = response.candidates[1]
-    if candidate.content == nil or candidate.content.parts == nil or candidate.content.parts[1] == nil then
+    if candidate.content == nil or candidate.content.parts == nil or #candidate.content.parts == 0 then
         return nil, "empty response (finishReason: " .. tostring(candidate.finishReason) .. ")"
     end
-    return candidate.content.parts[1].text, nil, usage_from_response(response)
+    text, thinking = vertex_text_and_thinking_from_parts(candidate.content.parts)
+    if text == nil then
+        return nil, "empty response (finishReason: " .. tostring(candidate.finishReason) .. ")"
+    end
+    return text, nil, usage_from_response(response), thinking
 end
 
 function agent_vertex.embeddings(model, text)
@@ -703,5 +761,9 @@ agent_vertex.vertex_token_cache_expired = vertex_token_cache_expired
 agent_vertex.vertex_embedding_batches = vertex_embedding_batches
 agent_vertex.vertex_embed_range = vertex_embed_range
 agent_vertex.vertex_tools_from_canonical = vertex_tools_from_canonical
+agent_vertex.vertex_thinking_config = vertex_thinking_config
+agent_vertex.vertex_converse_payload = vertex_converse_payload
+agent_vertex.vertex_generate_payload = vertex_generate_payload
+agent_vertex.vertex_text_and_thinking_from_parts = vertex_text_and_thinking_from_parts
 
 return agent_vertex

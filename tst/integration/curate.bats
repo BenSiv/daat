@@ -369,3 +369,37 @@ assistant|answer|{\"blocks\":[{\"type\":\"text\",\"text\":\"M9, per the protocol
     [ "$(db "SELECT COUNT(*) FROM document WHERE source_type = 'chat_session' AND archived_at IS NULL;")" = "3" ]
 }
 
+@test "conversation curation splits assistant thinking blocks out as non-core reasoning: included when short, trimmed before answers when over budget" {
+    old_chat s1 media "user|request|${LONG_ASK}"
+    db "INSERT INTO agent_message (session_id, role, content, data_type, loop_kind) VALUES ('s1', 'assistant', '{\"blocks\":[{\"type\":\"thinking\",\"thinking\":\"Caveat: check pH 5.7 autoclaving.\"},{\"type\":\"text\",\"text\":\"M9, per the protocol.\"}]}', 'answer', 'chat');"
+    ans_id=$(db "SELECT id FROM agent_message WHERE session_id = 's1' AND role = 'assistant' ORDER BY id DESC LIMIT 1;")
+    db "INSERT INTO agent_message (session_id, role, content, in_context, data_type, loop_kind, parent_message_id) VALUES ('s1', 'assistant', '{\"blocks\":[{\"type\":\"thinking\",\"thinking\":\"Self-check verified protocol citation.\"}]}', 0, 'reasoning', 'self_check', ${ans_id});"
+    db "UPDATE agent_session SET updated_at = '2026-01-01 00:00:00' WHERE id = 's1';"
+
+    export AGENT_TEST_CAPTURE_PROMPT="$TEST_DIR/curate-thinking-short.txt"
+    export AGENT_TEST_GENERATE_RESPONSES="${CHAT_NOTE}"$'\1'"PASS"
+    "$BIN" knowledge curate-pending >/dev/null
+    run cat "$TEST_DIR/curate-thinking-short.txt"
+    [[ "$output" =~ "Thinking: Caveat: check pH 5.7 autoclaving." ]]
+    [[ "$output" =~ "Assistant: M9, per the protocol." ]]
+    [[ "$output" =~ "Self-check: Self-check verified protocol citation." ]]
+
+    # Over the 40k input cap: huge assistant thinking blocks trim first while core user/assistant text stays whole.
+    huge_thought=$(printf 'monologue %s ' $(seq 1 3500))
+    old_chat s2 media2 "user|request|${LONG_ASK}"
+    db "INSERT INTO agent_message (session_id, role, content, data_type, loop_kind) VALUES ('s2', 'assistant', '{\"blocks\":[{\"type\":\"thinking\",\"thinking\":\"early-thought ${huge_thought}\"},{\"type\":\"text\",\"text\":\"First core answer kept.\"}]}', 'answer', 'chat');"
+    db "INSERT INTO agent_message (session_id, role, content, data_type, loop_kind) VALUES ('s2', 'user', 'Follow-up core question.', 'request', 'chat');"
+    db "INSERT INTO agent_message (session_id, role, content, data_type, loop_kind) VALUES ('s2', 'assistant', '{\"blocks\":[{\"type\":\"thinking\",\"thinking\":\"later-thought ${huge_thought}\"},{\"type\":\"text\",\"text\":\"Second core answer kept.\"}]}', 'answer', 'chat');"
+    db "UPDATE agent_session SET updated_at = '2026-01-01 00:00:00' WHERE id = 's2';"
+
+    export AGENT_TEST_CAPTURE_PROMPT="$TEST_DIR/curate-thinking-long.txt"
+    export AGENT_TEST_GENERATE_RESPONSES="${CHAT_NOTE}"$'\1'"PASS"
+    "$BIN" knowledge curate-pending >/dev/null
+    run cat "$TEST_DIR/curate-thinking-long.txt"
+    [[ "$output" =~ "Assistant: First core answer kept." ]]
+    [[ "$output" =~ "User: Follow-up core question." ]]
+    [[ "$output" =~ "Assistant: Second core answer kept." ]]
+    [[ ! "$output" =~ "early-thought" ]]
+    unset AGENT_TEST_CAPTURE_PROMPT
+}
+

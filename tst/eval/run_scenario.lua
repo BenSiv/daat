@@ -179,7 +179,14 @@ function write_transcript(path, scenario, mode, repeat_index, conv)
             table.insert(lines, "**tool result** `" .. tostring(msg.tool_name) .. "`" .. marker ..
                 ":\n\n```\n" .. msg.text .. "\n```\n")
         else
-            table.insert(lines, "**" .. msg.role .. "**: " .. msg.text)
+            label = msg.role
+            if msg.has_parent == true and msg.loop_kind != nil and msg.loop_kind != "" then
+                label = msg.role .. " (" .. tostring(msg.loop_kind) .. ")"
+            end
+            table.insert(lines, "**" .. label .. "**: " .. msg.text)
+            if msg.thinking != nil and msg.thinking != "" then
+                table.insert(lines, "\n> *thinking*: " .. string.gsub(msg.thinking, "\n", "\n> "))
+            end
             for _, call in ipairs(msg.tool_calls) do
                 table.insert(lines, "- calls `" .. tostring(call.name) .. "` " .. json.encode(call.arguments))
             end
@@ -252,7 +259,7 @@ function run_and_score(command, argv, scenario, login)
     end
 
     message_rows = db.query(db_path, string.format(
-        "SELECT id, role, content FROM agent_message WHERE session_id = %s ORDER BY id;", db.quote(session_id)))
+        "SELECT id, role, content, loop_kind, parent_message_id FROM agent_message WHERE session_id = %s ORDER BY id;", db.quote(session_id)))
     conv, results, all_pass = score(db_path, scenario, session_id, status, message_rows)
     write_transcript("transcript.md", scenario, mode, repeat_index, conv)
     cost = session_cost(db_path, session_id, message_rows)

@@ -168,12 +168,15 @@ function agent.record_model_call(db_path, session_id, message_id, prompt, model_
     if step == nil then
         step = {}
     end
+    if model_id == nil then
+        model_id = agent.default_model()
+    end
     _, call_id = db.exec(db_path, string.format(
-        "INSERT INTO agent_model_call (session_id, message_id, kind, step, parent_message_id, model_id, prompt, reasoning_document_id, prompt_tokens, completion_tokens, total_tokens) " ..
-        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);",
+        "INSERT INTO agent_model_call (session_id, message_id, kind, step, parent_message_id, provider, model_id, prompt, reasoning_document_id, prompt_tokens, completion_tokens, total_tokens) " ..
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);",
         db.quote(session_id), db.literal(tonumber(message_id)), db.literal(step.kind), db.literal(tonumber(step.number)),
         db.literal(tonumber(step.parent_message_id)),
-        db.literal(model_id), db.literal(prompt), db.literal(tonumber(reasoning_document_id)),
+        db.literal(agent_provider.name()), db.literal(model_id), db.literal(prompt), db.literal(tonumber(reasoning_document_id)),
         db.literal(tonumber(usage.prompt_tokens)), db.literal(tonumber(usage.completion_tokens)), db.literal(tonumber(usage.total_tokens))
     ))
     return call_id
@@ -273,10 +276,10 @@ AGENT_MODEL_CALL_SQL_COLUMNS = {
     {name = "kind", note = "'chat', 'research', 'background', 'compaction', 'wrapup', 'self_check' (NULL on older rows)"},
     {name = "step", note = "the call's step number within its turn, for loop steps"},
     {name = "parent_message_id", note = "on a sub-agent's steps (research, background): agent_message.id of the message holding the tool call that started it"},
-    {name = "provider", note = "model provider, on reply rows"},
+    {name = "provider", note = "model provider"},
     {name = "model_id", note = "which model served the call"},
     {name = "prompt", note = "the exact message history sent (LONGTEXT; cleared after the deployment's retention period)"},
-    {name = "reasoning_document_id", note = "FK to document.id (source_type='reasoning')"},
+    {name = "reasoning_document_id", note = "legacy FK to document.id (reasoning now lives on agent_message)"},
     {name = "prompt_tokens", note = "real token count for the prompt"},
     {name = "completion_tokens", note = "real token count for the completion"},
     {name = "total_tokens", note = "prompt_tokens + completion_tokens"},
@@ -649,12 +652,10 @@ end
 -- Renders a structured assistant reply (a decoded {blocks = [...]}
 -- content value -- see build_history_messages' own comment for the
 -- storage shape) into human-readable text: a text block reads as
--- itself, a thinking block (Gemini 2.5's own thought-summary output,
--- see extract_thinking_text below) as its own reasoning text -- shown
--- here, not just split out to a separate Knowledge Pool document (see
--- run_turn's own reasoning_document_id handling, which still happens in
--- parallel for search/tiering purposes; this is about what a human
--- reading the conversation sees inline).
+-- itself, a thinking block (see extract_thinking_text below) as its own
+-- reasoning text -- shown inline in the conversation transcript, while
+-- curate.lua splits thinking out from answers when building the
+-- knowledge-curation input.
 --
 -- `include_tool_calls` (default true when nil) controls a toolCall
 -- block: a short "-> what ran" line when true, dropped entirely when
@@ -722,14 +723,10 @@ function text_only_blocks(blocks)
     return table.concat(parts, "\n")
 end
 
--- Pulls out Gemini 2.5's own thought-summary blocks (requested via the
--- provider's own thinking config -- see agent_vertex.lua's own
--- .converse()), a real structural signal, not text-pattern matching.
--- Returns nil (not "") when there's nothing to pull, so callers can
--- tell "no thinking this turn" apart from "thinking was an empty
--- string" and fall back to the legacy text-based
--- knowledge.reply_has_visible_reasoning check for models/providers
--- that leak reasoning as plain text instead of a real block type.
+-- Structured thinking blocks from a provider reply (`agent_thinking`),
+-- preserving any provider signature needed for replay. Returns nil (not
+-- "") when there's nothing to pull, so callers can tell "no thinking
+-- this turn" apart from an empty text reply.
 function extract_thinking_text(blocks)
     if blocks == nil then
         return nil
@@ -744,6 +741,54 @@ function extract_thinking_text(blocks)
         return nil
     end
     return table.concat(parts, "\n\n")
+end
+
+function thinking_only_blocks(blocks)
+    kept = {}
+    if blocks == nil then
+        return kept
+    end
+    for _, block in ipairs(blocks) do
+        if block.type == "thinking" and block.thinking != nil then
+            table.insert(kept, block)
+        end
+    end
+    return kept
+end
+
+-- Splits an assistant row's stored content into (thinking_text,
+-- answer_text) for curate.lua and kept session transcripts, so thinking
+-- blocks inside an `answer`-typed assistant row enter curation as
+-- `reasoning` (`core = false`) while the model's visible text and any
+-- turn-ending question (`clarify.ask`) stay `core = true`.
+function agent.split_assistant_knowledge(content)
+    if content == nil then
+        return "", ""
+    end
+    decoded, _, _ = json.decode(content)
+    if decoded == nil or type(decoded.blocks) != "table" then
+        return "", agent.display_content(content, "assistant", false)
+    end
+    thinking_parts = {}
+    answer_parts = {}
+    for _, block in ipairs(decoded.blocks) do
+        if block.type == "thinking" and block.thinking != nil then
+            table.insert(thinking_parts, block.thinking)
+        elseif block.type == "text" and block.text != nil then
+            table.insert(answer_parts, block.text)
+        elseif block.type == "toolCall" and agent.turn_ending_kind(agent.builtin_record(block.name)) != nil then
+            kind = agent.turn_ending_kind(agent.builtin_record(block.name))
+            message = nil
+            if block.arguments != nil then
+                message = block.arguments[kind.message_argument]
+            end
+            if message == nil then
+                message = kind.missing_message
+            end
+            table.insert(answer_parts, message)
+        end
+    end
+    return table.concat(thinking_parts, "\n\n"), table.concat(answer_parts, "\n")
 end
 
 -- Cleans a message's content for DISPLAY only -- never called on what
@@ -1040,7 +1085,9 @@ function compaction_content(msg)
         if decoded != nil and decoded.blocks != nil then
             parts = {}
             for _, block in ipairs(decoded.blocks) do
-                if block.type == "text" and block.text != nil then
+                if block.type == "thinking" and block.thinking != nil then
+                    table.insert(parts, cap_text(block.thinking, COMPACTION_RESULT_CAP))
+                elseif block.type == "text" and block.text != nil then
                     table.insert(parts, block.text)
                 elseif block.type == "toolCall" then
                     args = ""
@@ -1463,7 +1510,7 @@ function agent.compact_if_needed(db_path, session_id, system_prompt, model)
         summary_prompt = summary_prompt .. string.upper(msg.role) .. ": " .. compaction_content(msg) .. "\n"
     end
 
-    summary, err, usage = agent_provider.generate(model, "You are a concise summarizer.", summary_prompt)
+    summary, err, usage, thinking_text = agent_provider.generate(model, "You are a concise summarizer.", summary_prompt)
     if summary == nil or err != nil then
         return false, err
     end
@@ -1479,6 +1526,11 @@ function agent.compact_if_needed(db_path, session_id, system_prompt, model)
     end
 
     summary_message_id = agent.add_message(db_path, session_id, "compaction_summary", summary, true)
+    if thinking_text != nil and string.gsub(thinking_text, "%s", "") != "" then
+        agent.add_message(db_path, session_id, "assistant",
+            json.encode({blocks = {{type = "thinking", thinking = thinking_text}}}), false,
+            {loop = "compaction", parent_message_id = summary_message_id, data_type = "reasoning"})
+    end
     -- A real model call, same audit-trail bar as any chat turn -- but
     -- not a knowledge_chat_eval candidate, since that table classifies
     -- conversational *replies* the user actually sees, and a
@@ -2139,23 +2191,41 @@ function run_turn_wrapup(db_path, session_id, login, system_prompt, model, promp
     wrapup_audit_prompt = json.encode(wrapup_history)
     wrapup_response, wrapup_err, wrapup_usage = agent_provider.converse(model, system_prompt, wrapup_history, {})
 
+    wrapup_blocks = nil
     message_text = nil
+    answer_text = nil
     if wrapup_response != nil and wrapup_response.stopReason != "error" and wrapup_response.stopReason != "aborted" then
         wrapup_blocks = wrapup_response.content
         if wrapup_blocks == nil then
             wrapup_blocks = {}
         end
         message_text = display_blocks(wrapup_blocks)
+        answer_text = text_only_blocks(wrapup_blocks)
     end
+    used_fallback = false
     if message_text == nil or string.gsub(message_text, "%s", "") == "" then
         message_text = fallback_text
+        used_fallback = true
     end
 
     message_id = nil
     if role == "progress" then
-        message_id = agent.add_message(db_path, session_id, "progress", message_text, true)
+        progress_text = answer_text
+        if progress_text == nil or string.gsub(progress_text, "%s", "") == "" then
+            progress_text = fallback_text
+        end
+        message_id = agent.add_message(db_path, session_id, "progress", progress_text, true)
+        if used_fallback == false and extract_thinking_text(wrapup_blocks) != nil then
+            agent.add_message(db_path, session_id, "assistant",
+                json.encode({blocks = thinking_only_blocks(wrapup_blocks)}), false,
+                {loop = "wrapup", parent_message_id = message_id, data_type = "reasoning"})
+        end
     else
-        message_id = agent.add_message(db_path, session_id, "assistant", json.encode({blocks = {{type = "text", text = message_text}}}), true)
+        stored_blocks = wrapup_blocks
+        if used_fallback == true then
+            stored_blocks = {{type = "text", text = message_text}}
+        end
+        message_id = agent.add_message(db_path, session_id, "assistant", json.encode({blocks = stored_blocks}), true)
     end
     context_id = agent.record_model_call(db_path, session_id, message_id, wrapup_audit_prompt, model, nil, wrapup_usage, {kind = "wrapup"})
     agent.record_reply_eval(db_path, context_id, agent_provider.name(), false, message_text)
@@ -2186,7 +2256,7 @@ end
 -- Returns true (answer confirmed, safe to return to the user) or
 -- false (a "self_check" message has been recorded with what to check
 -- next; the turn loop should continue instead of returning).
-function run_self_check(db_path, session_id, system_prompt, model, active_messages)
+function run_self_check(db_path, session_id, system_prompt, model, active_messages, parent_message_id)
     history_messages = build_history_messages(active_messages)
     table.insert(history_messages, {role = "user", content = SELF_CHECK_PROMPT})
     audit_prompt = json.encode(history_messages)
@@ -2216,16 +2286,23 @@ function run_self_check(db_path, session_id, system_prompt, model, active_messag
     trimmed = string.gsub(answer_text, "^%s+", "")
 
     if string.find(string.lower(trimmed), "^confirm") != nil then
-        -- A confirm produces no new message, so its audit row has no
-        -- message_id -- but it was a real model call and its tokens
-        -- count toward the turn's cost (doc/context-management-plan.md,
-        -- Phase 0). Its kind tells it apart from the reply it checked.
-        agent.record_model_call(db_path, session_id, nil, audit_prompt, model, nil, usage, {kind = "self_check"})
+        -- A confirm adds nothing to the model's context, though any
+        -- thinking it produced is kept under the checked answer as an
+        -- out-of-context reasoning row (doc/agent-data.md, "Storage").
+        confirm_message_id = nil
+        if parent_message_id != nil and extract_thinking_text(content_blocks) != nil then
+            confirm_message_id = agent.add_message(db_path, session_id, "assistant",
+                json.encode({blocks = thinking_only_blocks(content_blocks)}), false,
+                {loop = "self_check", parent_message_id = parent_message_id, data_type = "reasoning"})
+        end
+        agent.record_model_call(db_path, session_id, confirm_message_id, audit_prompt, model, nil, usage,
+            {kind = "self_check", parent_message_id = parent_message_id})
         return true
     end
 
     message_id = agent.add_message(db_path, session_id, "self_check", critique_text, true)
-    agent.record_model_call(db_path, session_id, message_id, audit_prompt, model, nil, usage, {kind = "self_check"})
+    agent.record_model_call(db_path, session_id, message_id, audit_prompt, model, nil, usage,
+        {kind = "self_check", parent_message_id = parent_message_id})
     return false
 end
 
@@ -2363,6 +2440,9 @@ function agent.run_research_loop(db_path, author, session_id, model, question, m
 
         tool_calls = all_tool_calls(content_blocks)
         if #tool_calls == 0 then
+            if real_text != "" then
+                return real_text
+            end
             return last_text
         end
 
@@ -2952,32 +3032,11 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
             message_id = agent.add_message(db_path, session_id, "assistant", json.encode({blocks = content_blocks}), true)
             display_text = display_blocks(content_blocks)
 
-            -- Persist the exact prompt/reasoning/tokens for this turn (see
-            -- doc/architecture.md's "Knowledge pool" section, "Full
-            -- prompt/reasoning/token persistence"). Real thinking content
-            -- (Gemini 2.5's own thought-summary blocks, see
-            -- extract_thinking_text) gets split out into its own document
-            -- (source_type='reasoning', a real document under the
-            -- Knowledge Pool folder, not a separate table) -- it then goes
-            -- through the same tiering/retrieval/decay pipeline as every
-            -- other pool document, rather than sitting in a second,
-            -- parallel log only this table can see. Falls back to the
-            -- legacy text-pattern check (knowledge.reply_has_visible_
-            -- reasoning) only when there's no real thinking block at all
-            -- -- some other provider/model might still leak reasoning as
-            -- plain text instead of a real structured block.
-            reasoning_document_id = nil
-            thinking_text = extract_thinking_text(content_blocks)
-            if thinking_text != nil then
-                reasoning_document_id = knowledge.create_document_note(db_path, login,
-                    "Chat reasoning (session " .. tostring(session_id) .. ")", thinking_text,
-                    "reasoning", message_id, tostring(session_id))
-            elseif knowledge.reply_has_visible_reasoning(display_text) then
-                reasoning_document_id = knowledge.create_document_note(db_path, login,
-                    "Chat reasoning (session " .. tostring(session_id) .. ")", display_text,
-                    "reasoning", message_id, tostring(session_id))
-            end
-            context_id = agent.record_model_call(db_path, session_id, message_id, audit_prompt, model, reasoning_document_id, usage, {kind = "chat", number = step_number})
+            -- Thinking blocks stay on the stored agent_message row
+            -- (doc/agent-data.md, "Reasoning capture"): curation reads
+            -- them directly from the conversation rather than from
+            -- separate Knowledge Pool documents.
+            context_id = agent.record_model_call(db_path, session_id, message_id, audit_prompt, model, nil, usage, {kind = "chat", number = step_number})
             agent.record_reply_eval(db_path, context_id, agent_provider.name(), false, display_text)
 
             tool_calls = all_tool_calls(content_blocks)
@@ -2995,7 +3054,7 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
                 confirmed = true
                 if turn < max_turns then
                     active_after_answer = agent.active_messages(db_path, session_id)
-                    confirmed = run_self_check(db_path, session_id, system_prompt, model, active_after_answer)
+                    confirmed = run_self_check(db_path, session_id, system_prompt, model, active_after_answer, message_id)
                 end
                 if confirmed == true then
                     agent_tools.sync_session_document(db_path, login, session_id)

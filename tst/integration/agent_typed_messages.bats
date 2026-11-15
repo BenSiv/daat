@@ -208,3 +208,82 @@ propose_create() {
     length=$(store "SELECT LENGTH(content) FROM agent_message WHERE session_id = '${chat}' AND role = 'decision';")
     [ "$length" -lt 400 ]
 }
+
+@test "agent_thinking validates off/summary/full and captures thinking across chat, research, background, self-check, compaction and wrapup" {
+    read session csrf < <(session_for admin secret123)
+
+    # An unrecognized agent_thinking value falls back safely to "off" (like agent_transcript_documents).
+    write_platform_config ', agent_thinking = "bogus"'
+    bogus_chat=$(start_chat "$session" "$csrf" "Bogus")
+    AGENT_TEST_THINKING="should not appear" send_message "$session" "$csrf" "$bogus_chat" "hello" "$(done_response "Plain reply.")" > /dev/null
+    run store "SELECT content FROM agent_message WHERE session_id = '${bogus_chat}';"
+    [[ ! "$output" =~ "should not appear" ]]
+
+    # With agent_thinking = "off" (default), AGENT_TEST_THINKING is ignored.
+    write_platform_config
+    off_chat=$(start_chat "$session" "$csrf" "Off")
+    AGENT_TEST_THINKING="should not appear" send_message "$session" "$csrf" "$off_chat" "hello" "$(done_response "Plain reply.")" > /dev/null
+    run store "SELECT content FROM agent_message WHERE session_id = '${off_chat}';"
+    [[ ! "$output" =~ "should not appear" ]]
+
+    # With agent_thinking = "summary", thinking is captured in agent_message across loops and never creates pool documents.
+    write_platform_config ', agent_thinking = "summary"'
+    chat=$(start_chat "$session" "$csrf" "Thinking")
+    scripted="$(tool_call_response "research.investigate" '{"question":"what types exist"}')"$'\1'"$(done_response "Sub-agent synthesis.")"$'\1'"$(tool_call_response "background.start" '{"question":"background question"}')"$'\1'"$(done_response "Final chat answer.")"
+    AGENT_TEST_THINKING="step-monologue" send_message "$session" "$csrf" "$chat" "check everything" "$scripted" > /dev/null
+
+    # Sub-agent tool_result gets clean finding text (not raw thinking), while child row keeps thinking.
+    research_parent=$(calling_message "$chat" "research.investigate")
+    run store "SELECT content FROM agent_message WHERE session_id = '${chat}' AND role = 'tool_result' AND parent_message_id IS NULL ORDER BY id LIMIT 1;"
+    [[ "$output" =~ "Sub-agent synthesis." ]]
+    [[ ! "$output" =~ "step-monologue" ]]
+    [[ "$(store "SELECT content FROM agent_message WHERE parent_message_id = ${research_parent} AND loop_kind = 'research';")" =~ "step-monologue" ]]
+
+    # Confirm self-check keeps its thinking as an out-of-context child reasoning row under the checked answer.
+    final_id=$(store "SELECT id FROM agent_message WHERE session_id = '${chat}' AND role = 'assistant' AND parent_message_id IS NULL ORDER BY id DESC LIMIT 1;")
+    run store "SELECT role || ':' || data_type || ':' || loop_kind || ':' || in_context FROM agent_message WHERE parent_message_id = ${final_id} AND loop_kind = 'self_check';"
+    [ "$output" = "assistant:reasoning:self_check:0" ]
+    run store "SELECT content FROM agent_message WHERE parent_message_id = ${final_id} AND loop_kind = 'self_check';"
+    [[ "$output" =~ "step-monologue" ]]
+    [[ ! "$output" =~ "CONFIRM" ]]
+
+    # Background worker captures thinking under the calling message too.
+    bg_parent=$(calling_message "$chat" "background.start")
+    AGENT_TEST_THINKING="bg-monologue" AGENT_TEST_RESPONSES="$(done_response "Background synthesis.")" run "$BIN" agent run-pending-background
+    [[ "$output" =~ "Ran 1, failed 0" ]]
+    [[ "$(store "SELECT content FROM agent_message WHERE parent_message_id = ${bg_parent} AND loop_kind = 'background';")" =~ "bg-monologue" ]]
+
+    # Compaction captures generate() thinking as a child reasoning row under the summary.
+    write_platform_config ', agent_thinking = "summary", agent_compaction_threshold = 10'
+    for i in 1 2 3; do
+        AGENT_TEST_THINKING="turn-thought-$i" AGENT_TEST_GENERATE_RESPONSES="## Established facts
+fact $i
+## Decisions
+none
+## Open questions and next step
+none" AGENT_TEST_GENERATE_THINKING="compaction-monologue" \
+            send_message "$session" "$csrf" "$chat" "follow up $i" "$(done_response "Reply $i.")" > /dev/null
+    done
+    summary_id=$(store "SELECT id FROM agent_message WHERE session_id = '${chat}' AND role = 'compaction_summary' ORDER BY id DESC LIMIT 1;")
+    [ -n "$summary_id" ]
+    run store "SELECT role || ':' || data_type || ':' || loop_kind || ':' || in_context FROM agent_message WHERE parent_message_id = ${summary_id};"
+    [ "$output" = "assistant:reasoning:compaction:0" ]
+    [[ "$(store "SELECT content FROM agent_message WHERE parent_message_id = ${summary_id};")" =~ "compaction-monologue" ]]
+
+    # Turn-limit wrapup preserves structured thinking blocks on the wrapup assistant row.
+    write_platform_config ', agent_thinking = "full", agent_max_turns = 1'
+    wrap_chat=$(start_chat "$session" "$csrf" "Wrapup")
+    printf '{"session_id":"%s","message":"keep calling tools"}' "$wrap_chat" | \
+        AGENT_TEST_THINKING="wrapup-monologue" \
+        AGENT_TEST_RESPONSES="$(tool_call_response "entity.list_types" "{}")" \
+        AGENT_TEST_SELF_CHECK_RESPONSE="$(done_response "Stopped after 1 step; reply to continue.")" \
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/chat-widget-send" QUERY_STRING="" \
+        HTTP_COOKIE="session=${session}; csrf=${csrf}" HTTP_X_CSRF_TOKEN="${csrf}" "$BIN" > /dev/null
+    wrap_content=$(store "SELECT content FROM agent_message WHERE session_id = '${wrap_chat}' AND role = 'assistant' AND parent_message_id IS NULL ORDER BY id DESC LIMIT 1;")
+    [[ "$wrap_content" =~ "wrapup-monologue" ]]
+    [[ "$wrap_content" =~ "Stopped after 1 step" ]]
+
+    # Every model call recorded provider and model_id, and zero reasoning pool documents were created.
+    [ "$(store "SELECT COUNT(*) FROM agent_model_call WHERE provider IS NULL OR model_id IS NULL;")" = "0" ]
+    [ "$(store "SELECT COUNT(*) FROM document WHERE source_type = 'reasoning';")" = "0" ]
+}
