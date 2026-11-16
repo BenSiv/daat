@@ -61,7 +61,11 @@ CREATE TABLE IF NOT EXISTS agent_message (
     id INTEGER PRIMARY KEY %s,
     session_id TEXT NOT NULL,
     role TEXT NOT NULL,
-    content TEXT NOT NULL,
+    -- LONGTEXT, not TEXT: on MariaDB plain TEXT caps at 65,535 bytes,
+    -- which Gemini 3.x assistant rows carrying `thinking` + base64
+    -- `thinking_signature` (found live on prod snapshot, #37) or large
+    -- tool_result rows exceed ("Data too long for column 'content'").
+    content LONGTEXT NOT NULL,
     in_context INTEGER DEFAULT 1,
     created_at TEXT DEFAULT (%s)
 );
@@ -75,7 +79,7 @@ CREATE TABLE IF NOT EXISTS agent_pending_action (
     session_id TEXT NOT NULL,
     tool TEXT NOT NULL,
     method TEXT NOT NULL,
-    args_json TEXT NOT NULL,
+    args_json LONGTEXT NOT NULL,
     -- VARCHAR(32), not TEXT -- see extension.lua's system_job.status
     -- for why: real MySQL 8.0 rejects a literal DEFAULT on TEXT columns.
     status VARCHAR(32) NOT NULL DEFAULT 'pending',
@@ -94,11 +98,11 @@ CREATE TABLE IF NOT EXISTS agent_pending_action (
 CREATE TABLE IF NOT EXISTS agent_background_task (
     id INTEGER PRIMARY KEY %s,
     session_id TEXT NOT NULL,
-    question TEXT NOT NULL,
+    question LONGTEXT NOT NULL,
     status VARCHAR(32) NOT NULL DEFAULT 'pending',
     attempts INTEGER NOT NULL DEFAULT 0,
-    last_error TEXT,
-    result TEXT,
+    last_error LONGTEXT,
+    result LONGTEXT,
     created_at TEXT DEFAULT (%s),
     updated_at TEXT DEFAULT (%s)
 );
@@ -431,6 +435,25 @@ function agent.backfill_message_types(db_path)
         " ELSE 'control' END WHERE data_type IS NULL;")
     db.exec(db_path, "UPDATE agent_message SET loop_kind = CASE role " .. table.concat(loop_cases, " ") ..
         " ELSE 'chat' END WHERE loop_kind IS NULL;")
+end
+
+-- Widens MariaDB agent columns that predated LONGTEXT (store migration 9).
+-- SQLite gives TEXT and LONGTEXT identical affinity with no 64 KB cap,
+-- so only MariaDB/MySQL needs MODIFY COLUMN.
+function agent.ensure_longtext_columns(db_path)
+    if not db.is_mariadb(db_path) then
+        return
+    end
+    alters = {
+        {"agent_message", "MODIFY COLUMN content LONGTEXT NOT NULL"},
+        {"agent_pending_action", "MODIFY COLUMN args_json LONGTEXT NOT NULL"},
+        {"agent_background_task", "MODIFY COLUMN question LONGTEXT NOT NULL, MODIFY COLUMN last_error LONGTEXT, MODIFY COLUMN result LONGTEXT"},
+    }
+    for _, spec in ipairs(alters) do
+        if db.table_exists(db_path, spec[1]) then
+            db.exec(db_path, "ALTER TABLE " .. spec[1] .. " " .. spec[2] .. ";")
+        end
+    end
 end
 
 function agent.init_schema(db_path)
