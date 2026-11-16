@@ -299,7 +299,7 @@ EOF
     sqlite3 .store/store.db "UPDATE agent_model_call SET created_at = '2020-01-01 00:00:00' WHERE id = (SELECT MIN(id) FROM agent_model_call);"
 
     run "$BIN" agent prune-prompts
-    [[ "$output" =~ "Cleared 1 stored prompts older than 90 days" ]]
+    [[ "$output" =~ "Cleared 1 stored prompts older than 30 days" ]]
     [ "$(sqlite3 .store/store.db "SELECT (prompt IS NULL) || '|' || (prompt_tokens IS NOT NULL) || '|' || COALESCE(reply_kind, '') FROM agent_model_call ORDER BY id LIMIT 1;")" = "1|1|final" ]
     # Newer prompts stay.
     [ "$(sqlite3 .store/store.db "SELECT COUNT(*) FROM agent_model_call WHERE prompt IS NOT NULL;")" -ge 1 ]

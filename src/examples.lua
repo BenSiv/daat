@@ -191,6 +191,8 @@ return {
   -- agent_provider = "ollama",
   -- agent_model = "qwen3:8b",
   -- agent_thinking = "summary",
+  -- agent_retention = "full",
+  -- agent_retention_override = {tool_trace_days = 30},
   -- embedding_model = "nomic-embed-text",
   -- search_provider = "google_cse",
   -- The chosen provider's own settings, read by the provider itself:
