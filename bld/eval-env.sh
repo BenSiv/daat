@@ -4,7 +4,7 @@ set -euo pipefail
 # Builds (or reuses) a demo-lab deployment for the agent scorecard --
 # see doc/agent-eval.md. Prints the deployment's directory on stdout.
 #
-#   bld/eval-env.sh [--provider test|vertex] [--seed N]
+#   bld/eval-env.sh [--provider test|ollama|vertex] [--seed N]
 #
 # The finished deployment is cached under eval-out/env/, keyed by a hash
 # of everything that shapes it (generator, schemas, loader, seed,
@@ -41,6 +41,17 @@ case "$PROVIDER" in
     test)
         PLATFORM='return {agent_provider = "test", search_provider = "test", embedding_quiet_minutes = 0, tag_min_text = 0, agent_turn_mode = "inline", reference_aliases = {{"experiment%s*(%d)", "exp%1"}}}'
         ;;
+    ollama)
+        MODEL_FIELD=""
+        if [ -n "${DAAT_EVAL_MODEL:-}" ]; then
+            MODEL_FIELD=", agent_model = \"${DAAT_EVAL_MODEL}\""
+        fi
+        URL_FIELD=""
+        if [ -n "${DAAT_EVAL_OLLAMA_URL:-}" ]; then
+            URL_FIELD=", ollama_url = \"${DAAT_EVAL_OLLAMA_URL}\""
+        fi
+        PLATFORM="return {agent_provider = \"ollama\"${URL_FIELD}${MODEL_FIELD}, search_provider = \"test\", embedding_quiet_minutes = 0, agent_turn_mode = \"inline\", reference_aliases = {{\"experiment%s*(%d)\", \"exp%1\"}}}"
+        ;;
     vertex)
         if [ -z "${DAAT_EVAL_VERTEX_PROJECT:-}" ]; then
             echo "Error: set DAAT_EVAL_VERTEX_PROJECT to the eval-only model project (doc/agent-eval.md, 'Model access')." >&2
@@ -53,7 +64,7 @@ case "$PROVIDER" in
         PLATFORM="return {agent_provider = \"vertex\", vertex_project = \"${DAAT_EVAL_VERTEX_PROJECT}\", vertex_region = \"${DAAT_EVAL_VERTEX_REGION:-global}\"${MODEL_FIELD}, search_provider = \"test\", embedding_quiet_minutes = 0, agent_turn_mode = \"inline\", reference_aliases = {{\"experiment%s*(%d)\", \"exp%1\"}}}"
         ;;
     *)
-        echo "Error: --provider must be test or vertex" >&2
+        echo "Error: --provider must be test, ollama, or vertex" >&2
         exit 2
         ;;
 esac

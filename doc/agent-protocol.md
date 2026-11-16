@@ -2,7 +2,7 @@
 
 See `doc/agent-harness-rationale.md` for why this protocol exists at all rather than adopting a provider's own managed agent SDK -- vendor neutrality, expanded on below, is one of several reasons that document covers.
 
-The chat agent's tool-calling logic (`agent.lua`'s `run_turn`, destructive-action pause/resume, history building, tool dispatch) is written against one neutral, internal protocol -- not any one model vendor's wire format. `agent_provider_<name>.lua` implementations (`vertex`, `claude`, `test`, and any added later) are equal, symmetric translators between this protocol and their own vendor's real API. None of them defines the protocol; `agent.lua` does, and no provider adapter gets to be "home" while others are guests translating into its shape.
+The chat agent's tool-calling logic (`agent.lua`'s `run_turn`, destructive-action pause/resume, history building, tool dispatch) is written against one neutral, internal protocol -- not any one model vendor's wire format. `src/provider/agent_<name>.lua` implementations (`ollama`, `vertex`, `claude`, `test`, and any added later) are equal, symmetric translators between this protocol and their own vendor's real API. None of them defines the protocol; `agent.lua` does, and no provider adapter gets to be "home" while others are guests translating into its shape.
 
 This wasn't always true. `AGENT_TOOLS`' tool-parameter schemas used to be authored directly in Vertex/Gemini's own uppercase proto-enum convention (`"OBJECT"`/`"STRING"`/`"INTEGER"`), with zero translation layer in `src/provider/agent_vertex.lua` -- Vertex was silently privileged, and adding a second provider meant either duplicating that dialect or reverse-engineering which parts of the "shared" shape were actually vendor-specific. Fixed by making the schema convention genuinely neutral (see below) and giving Vertex its own explicit translation step, the same as every other provider.
 
@@ -14,7 +14,7 @@ provider.converse(model, system_prompt, messages, tools) -> (response, err, usag
 provider.embeddings(model, text) -> (vector, err)  -- optional
 ```
 
-Loaded dynamically by name (`config.platform_config().agent_provider`, default `"vertex"`) via `agent_provider.lua`, so switching providers -- or swapping in the deterministic `test` provider for repeatable, cost-free test runs -- is a config change, not a code change.
+Loaded dynamically by name (`config.platform_config().agent_provider`, unset by default) via `agent_provider.lua`, so switching providers -- or swapping in the deterministic `test` provider for repeatable, cost-free test runs -- is a config change, not a code change.
 
 ## Messages
 
@@ -64,7 +64,7 @@ Some vendors offer tools they execute themselves (Anthropic's `web_search`, `cod
 
 ## Adding a new provider
 
-1. Write `agent_provider_<name>.lua` implementing `.generate`/`.converse` (and `.embeddings` if the vendor has one).
+1. Write `src/provider/agent_<name>.lua` implementing `.generate`/`.converse` (and `.embeddings` if the vendor has one).
 2. Translate `messages`/`tools` from the canonical shape above into the vendor's real wire format, and the vendor's response back into canonical blocks/`stopReason` -- entirely within that one file.
 3. No changes needed to `agent.lua`, `cgi.lua`, or the existing test suite (`src/provider/agent_test.lua`'s scripted fixtures already use this canonical shape directly).
 4. Set `config.platform_config().agent_provider` to `"<name>"` to switch.

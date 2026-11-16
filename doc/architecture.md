@@ -213,10 +213,10 @@ A built-in assistant, not a bolted-on integration: real per-user conversation se
 - **Turn budgets, row caps, and retry counts are configurable via platform.lua, not hardcoded** -- the right value for any of these genuinely depends on things a deployment chooses (which model `agent_model` names, that provider's own latency, how much data this deployment actually holds), not on this code. Read fresh per call via `config.platform_config()` (memoized per-process, not resolved once at load) -- see `theme.lua`'s own precedent for the file-shaped config pattern this follows. Confirmed live why this matters: a self-check loop needing several rounds to converge on a real production turn took long enough to exceed the load balancer's own (separately configurable) timeout.
   | `platform.lua` field | Default | Controls |
   |---|---|---|
-  | `agent_provider` | none (chat and model calls off) | Which named backend `agent_provider.lua` loads (`"vertex"`, `"claude"`, or `"test"` for the deterministic stub) |
-  | `agent_model` | the provider's own | Model for every `generate`/`converse` call: chat, distillation, link and tier judgment |
-  | `agent_thinking` | `"summary"` | `"off"`, `"summary"`, or `"full"` -- translated per provider (`thinkingConfig` `MEDIUM`/`HIGH` on Vertex, `thinking` on Claude) so reasoning blocks land in `agent_message` for conversation curation |
-  | `embedding_model` | the provider's own | Model for every `embeddings` call; stored with each vector, and search compares only vectors from the current one (so a change needs `daat repair embeddings`) |
+  | `agent_provider` | none (chat and model calls off) | Which named backend `agent_provider.lua` loads (`"ollama"`, `"vertex"`, `"claude"`, or `"test"` for the deterministic stub) |
+  | `agent_model` | the provider's own | Model for every `generate`/`converse` call: chat, distillation, link and tier judgment (`qwen3:8b` on `ollama`, `gemini-3.5-flash-lite` on `vertex`, `claude-sonnet-5` on `claude`) |
+  | `agent_thinking` | `"summary"` | `"off"`, `"summary"`, or `"full"` -- translated per provider (`reasoning`/`<think>` capture on Ollama/OpenAI, `thinkingConfig` `MEDIUM`/`HIGH` on Vertex, `thinking` on Claude) so reasoning blocks land in `agent_message` for conversation curation |
+  | `embedding_model` | the provider's own | Model for every `embeddings` call (`nomic-embed-text` on `ollama`, `text-embedding-005` on `vertex`); stored with each vector, and search compares only vectors from the current one (so a change needs `daat repair embeddings`) |
   | `embedding_skip` | none | Lua patterns: a content line one matches is left out of what the document's embedding is made from (a sync's header, template boilerplate); a chat transcript is embedded from its conversation only, without tool calls or results. `daat document embedding-text <id>` shows the result |
   | `embedding_quiet_minutes` | 5 | How long a saved document goes without another edit before `daat document embed-pending` embeds it (0: on save) |
   | `tag_restructure` | `false` | Split, merge and label checks by the agent after `embed-pending` embeds anything (`tag_upkeep.lua`); review `daat repair tags --restructure --dry-run --judge` first |
@@ -224,7 +224,7 @@ A built-in assistant, not a bolted-on integration: real per-user conversation se
   | `tag_min_text` | 200 | A document whose embedded text has fewer characters besides its title (a folder page, a template, a file with no text) isn't tagged -- by placement or the cold start; it stays searchable |
   | `search_provider` | none (web search off) | Which named backend `search_provider.lua` loads (`"google_cse"`, or `"test"`) |
 
-  Core names no provider and no model. Each provider owns its defaults (`default_model`, `default_embedding_model` on the provider module) and its own settings, which it reads from platform.lua through `config.setting(key)`: `vertex_project` (required) and `vertex_region` (default `"global"`) for `agent_vertex.lua`; `smtp_url`/`smtp_user` for `mail_smtp.lua`; `graph_tenant_id`/`graph_client_id` for `mail_graph.lua`.
+  Core names no provider and no model. Each provider owns its defaults (`default_model`, `default_embedding_model` on the provider module) and its own settings, which it reads from platform.lua through `config.setting(key)`: `ollama_url` (default `"http://127.0.0.1:11434/v1"`) and `ollama_reasoning_effort` (default `false`) for `agent_ollama.lua`; `vertex_project` (required) and `vertex_region` (default `"global"`) for `agent_vertex.lua`; `smtp_url`/`smtp_user` for `mail_smtp.lua`; `graph_tenant_id`/`graph_client_id` for `mail_graph.lua`.
 
   | `platform.lua` field | Default | Controls |
   |---|---|---|
