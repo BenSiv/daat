@@ -342,6 +342,15 @@ table.insert(MIGRATIONS, {version = 8, name = "typed agent messages", run = func
     agent.backfill_message_types(db_path)
 end})
 
+-- 9. Widens agent_message.content (and pending_action/background_task
+-- payload columns) from TEXT (65,535 bytes on MariaDB/MySQL) to
+-- LONGTEXT: found on the prod snapshot (#37) when Gemini 3.1 Pro
+-- assistant rows carrying thinking + base64 thinking_signature exceeded
+-- 64 KB ("Data too long for column 'content'").
+table.insert(MIGRATIONS, {version = 9, name = "agent payload columns longtext", run = function(db_path)
+    require("agent").ensure_longtext_columns(db_path)
+end})
+
 function latest_version()
     latest = 0
     for _, m in ipairs(MIGRATIONS) do
