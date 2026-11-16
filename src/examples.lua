@@ -189,6 +189,7 @@ return {
   -- default to the chosen provider's own; name one to pin it.
   -- agent_provider = "vertex",
   -- agent_model = "gemini-3.5-flash-lite",
+  -- agent_thinking = "summary",
   -- embedding_model = "text-embedding-005",
   -- search_provider = "google_cse",
   -- The chosen provider's own settings, read by the provider itself:

@@ -1,8 +1,9 @@
 -- The seam a real LLM backend plugs into:
---   generate(model, system_prompt, prompt) -> (text, err) -- a single
---     plain-text call, no tools/history (compaction summaries,
---     knowledge distillation/link-evaluation).
---   converse(model, system_prompt, messages, tools) -> (response, err)
+--   generate(model, system_prompt, prompt) -> (text, err, usage, thinking)
+--     -- a single plain-text call, no tools/history (compaction summaries,
+--     knowledge distillation/link-evaluation). `thinking` is nil unless the
+--     provider returned separate reasoning text.
+--   converse(model, system_prompt, messages, tools) -> (response, err, usage)
 --     -- the real chat-agent turn loop: `messages` is a list of
 --     {role, content} turns, `tools` a list of function declarations
 --     (agent.tool_declarations()), `response` a structured

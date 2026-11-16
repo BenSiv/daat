@@ -401,3 +401,27 @@ EOF2
     run "$BIN" repair aspects
     [[ "$output" =~ "0 document(s) (0 aspects), 1 unchanged" ]]
 }
+
+@test "store migration 9 widens MariaDB agent_message.content to LONGTEXT so >64 KB thinking payloads survive (#37)" {
+    cat > platform.lua <<EOF2
+return {db_backend = "mariadb", mariadb_host = "${PLATFORM_MARIADB_HOST}", mariadb_port = ${PLATFORM_MARIADB_PORT}, mariadb_user = "${PLATFORM_MARIADB_USER}", mariadb_database = "${PLATFORM_MARIADB_DATABASE}", agent_provider = "test", agent_thinking = "full", agent_turn_mode = "inline"}
+EOF2
+    "$BIN" init >/dev/null
+    read -r session csrf <<< "$(login_test_user alice i)"
+    cookie="session=${session}; csrf=${csrf}"
+    q() { mariadb -N -h "$PLATFORM_MARIADB_HOST" -P "$PLATFORM_MARIADB_PORT" -u "$PLATFORM_MARIADB_USER" -p"$PLATFORM_MARIADB_PASSWORD" "$PLATFORM_MARIADB_DATABASE" -e "$1" 2>/dev/null; }
+
+    # Trigger agent table creation, then rewind to the pre-migration-9 MariaDB
+    # layout (plain TEXT = 65,535-byte cap) to verify store.migrate widens it.
+    resp=$(raw_post_json "/api/chat-widget-start" '{"title":"Long thinking"}' "$cookie" "$csrf" "")
+    sid=$(json_body "$resp" | jq -r '.session_id')
+    q "ALTER TABLE agent_message MODIFY COLUMN content TEXT NOT NULL;"
+    q "UPDATE system_state SET number_value = 8 WHERE name = 'store.schema_version';"
+
+    export AGENT_TEST_THINKING="$(python3 -c "print('T' * 75000)")"
+    run raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${sid}\",\"message\":\"Hello\"}" "$cookie" "$csrf" "$(done_response "Answer after 75 KB thinking.")"
+    [[ "$output" =~ "200 OK" ]]
+    [[ "$output" =~ "Answer after 75 KB thinking." ]]
+    [ "$(q "SELECT MAX(CHAR_LENGTH(content)) > 75000 FROM agent_message;")" = "1" ]
+    [ "$(q "SELECT number_value >= 9 FROM system_state WHERE name = 'store.schema_version';")" = "1" ]
+}

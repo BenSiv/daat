@@ -471,7 +471,7 @@ KNOWLEDGE_POOL_SQL_COLUMNS = {
     {name = "tier", note = "0-3, knowledge-pool maturity tier"},
     {name = "retrieval_count", note = "direct search-hit count"},
     {name = "last_retrieved_at", note = "timestamp of last search hit"},
-    {name = "source_type", note = "'chat_session' | 'reasoning' | 'distilled' | NULL (NULL means either directly user-authored, or synced in from an external system)"},
+    {name = "source_type", note = "'curated' | 'chat_session' | 'distilled' | 'reasoning' (legacy) | NULL (NULL means either directly user-authored, or synced in from an external system)"},
     {name = "source_id", note = "meaning depends on source_type"},
     {name = "source_ref", note = "e.g. the chat session id, when source_type = 'chat_session'"},
     {name = "external_id", note = "set when this document was synced in from an external system (e.g. Benchling); NULL for anything authored directly here"},

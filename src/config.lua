@@ -301,6 +301,12 @@ function config.platform_config()
         agent_model = nil,
         embedding_model = nil,
         search_provider = nil,
+        -- Reasoning capture (doc/agent-data.md, "Reasoning capture",
+        -- decision 5): "off" | "summary" | "full", translated per
+        -- provider (Vertex thinkingConfig MEDIUM/HIGH; Claude thinking).
+        -- Default "summary" (2026-11-15 live scorecard: all checks
+        -- 78% -> 90%, cites and document links 89% -> 100%).
+        agent_thinking = "summary",
         agent_max_turns = 20,
         -- "detached": a chat turn runs in its own worker process, not
         -- the web request (agent.lua, "Detached turns"); "inline": in
@@ -517,6 +523,9 @@ function config.platform_config()
     end
     if type(parsed.search_provider) == "string" and parsed.search_provider != "" then
         conf.search_provider = parsed.search_provider
+    end
+    if parsed.agent_thinking == "off" or parsed.agent_thinking == "summary" or parsed.agent_thinking == "full" then
+        conf.agent_thinking = parsed.agent_thinking
     end
     if type(parsed.agent_max_turns) == "number" then
         conf.agent_max_turns = parsed.agent_max_turns

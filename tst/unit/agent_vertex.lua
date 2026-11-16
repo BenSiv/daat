@@ -169,4 +169,36 @@ function tests.vertex_unauthenticated_only_for_a_rejected_token()
     check(agent_vertex.vertex_unauthenticated({code = 400, status = "INVALID_ARGUMENT"}) == false, "a bad request is not a token problem")
 end
 
+function tests.vertex_thinking_config_maps_agent_thinking_levels()
+    print("Testing vertex_thinking_config maps off/summary/full to Gemini 3 thinkingConfig")
+    off = agent_vertex.vertex_thinking_config("off")
+    check(off.includeThoughts == false and off.thinkingLevel == nil, "off disables thought summaries")
+    summary = agent_vertex.vertex_thinking_config("summary")
+    check(summary.includeThoughts == true and summary.thinkingLevel == "MEDIUM", "summary requests MEDIUM with thoughts")
+    full = agent_vertex.vertex_thinking_config("full")
+    check(full.includeThoughts == true and full.thinkingLevel == "HIGH", "full requests HIGH with thoughts")
+
+    converse = agent_vertex.vertex_converse_payload("sys", {{role = "user", content = "hi"}}, {}, "summary")
+    check(converse.generationConfig.thinkingConfig.includeThoughts == true, "converse payload carries thinkingConfig")
+    check(converse.generationConfig.thinkingConfig.thinkingLevel == "MEDIUM", "converse payload carries MEDIUM")
+
+    gen = agent_vertex.vertex_generate_payload("sys", "summarize this", "full")
+    check(gen.generationConfig.thinkingConfig.includeThoughts == true, "generate payload carries thinkingConfig")
+    check(gen.generationConfig.thinkingConfig.thinkingLevel == "HIGH", "generate payload carries HIGH")
+end
+
+function tests.vertex_text_and_thinking_from_parts_separates_thoughts()
+    print("Testing vertex_text_and_thinking_from_parts splits thought parts from answer text")
+    text, thinking = agent_vertex.vertex_text_and_thinking_from_parts({
+        {thought = true, text = "first thought"},
+        {thought = true, text = "second thought"},
+        {text = "clean summary"},
+    })
+    check(text == "clean summary", "answer text excludes thought parts, got " .. tostring(text))
+    check(thinking == "first thought\n\nsecond thought", "thought parts join separately, got " .. tostring(thinking))
+
+    plain_text, plain_thinking = agent_vertex.vertex_text_and_thinking_from_parts({{text = "only text"}})
+    check(plain_text == "only text" and plain_thinking == nil, "no thought parts returns nil thinking")
+end
+
 unit.run(tests)

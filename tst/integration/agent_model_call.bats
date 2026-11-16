@@ -74,48 +74,38 @@ send_message() {
     [[ "$output" =~ "test|final|ok" ]]
 }
 
-@test "a reply leaking visible reasoning creates a linked reasoning document under the Knowledge Pool folder" {
+@test "a reply leaking visible reasoning is classified on agent_model_call without creating a Knowledge Pool reasoning document" {
     read session csrf < <(session_for admin secret123)
     chat_session=$(start_chat "$session" "$csrf" "Test")
     send_message "$session" "$csrf" "$chat_session" "hi" "$(done_response "<think>internal reasoning</think>")" > /dev/null
 
-    run sqlite3 .store/store.db "SELECT tier, source_type FROM document WHERE source_type='reasoning';"
-    [[ "$output" =~ "0|reasoning" ]]
+    run sqlite3 .store/store.db "SELECT COUNT(*) FROM document WHERE source_type='reasoning';"
+    [ "$output" = "0" ]
 
     run sqlite3 .store/store.db "SELECT reply_kind, reasoning_status FROM agent_model_call WHERE reply_kind IS NOT NULL ORDER BY id DESC LIMIT 1;"
     [[ "$output" =~ "reasoning-visible|visible" ]]
 
-    # The reply's own row (kind 'chat') -- a later self-check row is
-    # its own model call and carries no reasoning link.
-    run sqlite3 .store/store.db "SELECT context.reasoning_document_id FROM agent_model_call context WHERE context.kind = 'chat' ORDER BY context.id DESC LIMIT 1;"
-    [[ "$output" != "" ]]
-
-    # Lands under the Knowledge Pool folder, not at the top level.
-    run sqlite3 .store/store.db "SELECT d.title FROM document d JOIN document parent ON parent.id = d.parent_id WHERE d.source_type = 'reasoning' AND parent.title = 'Knowledge Pool';"
-    [[ "$output" =~ "Chat reasoning" ]]
+    run sqlite3 .store/store.db "SELECT COALESCE(context.reasoning_document_id, '') FROM agent_model_call context WHERE context.kind = 'chat' ORDER BY context.id DESC LIMIT 1;"
+    [ "$output" = "" ]
 }
 
-@test "a real Gemini thinking block creates a reasoning document, and its content is also shown inline in the chat transcript" {
+@test "a real thinking block stays on agent_message (no reasoning document) and is shown inline in the chat transcript" {
     read session csrf < <(session_for admin secret123)
     chat_session=$(start_chat "$session" "$csrf" "Test")
     send_message "$session" "$csrf" "$chat_session" "hi" \
         "$(thinking_response "the user said hi, I should greet them back" "Hello there!")" > /dev/null
 
-    run sqlite3 .store/store.db "SELECT tier, source_type FROM document WHERE source_type='reasoning';"
-    [[ "$output" =~ "0|reasoning" ]]
+    run sqlite3 .store/store.db "SELECT COUNT(*) FROM document WHERE source_type='reasoning';"
+    [ "$output" = "0" ]
 
-    # The reasoning document's own content is the real thinking text...
-    run sqlite3 .store/store.db "SELECT content FROM document WHERE source_type='reasoning';"
+    run sqlite3 .store/store.db "SELECT content FROM agent_message WHERE session_id='${chat_session}' AND role='assistant' AND parent_message_id IS NULL ORDER BY id DESC LIMIT 1;"
     [[ "$output" =~ "the user said hi" ]]
 
-    # ...and the live chat transcript (now only ever shown by the
-    # floating widget, via its own /api/chat-widget-history -- /chat
-    # itself is a read-only session-list page with no transcript of its
-    # own) shows both the reasoning and the final answer (only tool
-    # calls/raw tool results are filtered out of the human-facing view --
-    # see display_blocks' own comment; thinking is real, useful
-    # reasoning a person reading the conversation wants to see, not
-    # plumbing).
+    # ...and the live chat transcript (shown by the floating widget via
+    # /api/chat-widget-history) shows both the reasoning and the final
+    # answer (only tool calls/raw tool results are filtered out of the
+    # human-facing view; thinking is real reasoning a person reading the
+    # conversation wants to see).
     run env GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/api/chat-widget-history" \
         QUERY_STRING="session_id=${chat_session}" HTTP_COOKIE="session=${session}; csrf=${csrf}" "$BIN"
     [[ "$output" =~ "Hello there!" ]]

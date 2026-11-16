@@ -266,6 +266,6 @@ view|stock|SELECT 1|admin" ]
     [ "$output" = "1" ]
     run store "SELECT COUNT(*) FROM pragma_table_info('agent_background_task') WHERE name = 'parent_message_id';"
     [ "$output" = "1" ]
-    run store "SELECT number_value = 8 FROM system_state WHERE name = 'store.schema_version';"
+    run store "SELECT number_value >= 8 FROM system_state WHERE name = 'store.schema_version';"
     [ "$output" = "1" ]
 }

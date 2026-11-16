@@ -227,4 +227,30 @@ function tests.keeps_content_and_numbers()
     check(checks.answer(conv, {numbers = {3.1, 2.9, 4.2}}, CTX).pass == false, "a missing number should fail")
 end
 
+function tests.final_text_ignores_child_rows_and_thinking_blocks()
+    print("Testing final_text ignores child rows (research, self_check) and thinking blocks")
+    reply_with_thinking = {
+        role = "assistant",
+        content = json.encode({blocks = {
+            {type = "thinking", thinking = "maybe 999 is wrong"},
+            {type = "text", text = "The count is 42."},
+        }}),
+    }
+    child_self_check = {
+        role = "assistant",
+        parent_message_id = 2,
+        loop_kind = "self_check",
+        content = json.encode({blocks = {{type = "thinking", thinking = "verified 42"}}}),
+    }
+    child_research = {
+        role = "assistant",
+        parent_message_id = 2,
+        loop_kind = "research",
+        content = json.encode({blocks = {{type = "text", text = "sub-agent finding that came later"}}}),
+    }
+    conv = checks.conversation({user("q"), reply_with_thinking, child_self_check, child_research}, {})
+    check(conv.final_text == "The count is 42.", "expected main reply text only, got " .. tostring(conv.final_text))
+    check(checks.answer(conv, {number = 999, tolerance = 0.01}, CTX).pass == false, "numbers inside thinking blocks must not satisfy answer check")
+end
+
 unit.run(tests)
