@@ -594,6 +594,20 @@ function agent.message_data_type(role)
     return AGENT_MESSAGE_TYPES[role]
 end
 
+function agent.row_data_type(row)
+    if row == nil then
+        return nil
+    end
+    if row.data_type != nil and row.data_type != "" then
+        return row.data_type
+    end
+    dtype = agent.message_data_type(row.role)
+    if dtype == nil then
+        return "control"
+    end
+    return dtype
+end
+
 function agent.message_loop(role)
     loop_kind = AGENT_MESSAGE_ROLE_LOOPS[role]
     if loop_kind == nil then
@@ -1470,6 +1484,7 @@ function pinned_schema_block(to_compact, budget)
                 end
             end
         elseif msg.role == "assistant" then
+            calls = {}
             decoded, _, _ = json.decode(msg.content)
             if decoded != nil and type(decoded.blocks) == "table" then
                 for _, block in ipairs(decoded.blocks) do
@@ -1484,8 +1499,14 @@ function pinned_schema_block(to_compact, budget)
             end
         elseif msg.role == "tool_result" then
             decoded, _, _ = json.decode(msg.content)
-            if decoded != nil and decoded.is_error != true and decoded.pruned != true and calls[tostring(decoded.tool_call_id)] != nil and decoded.text != nil then
-                remember(calls[tostring(decoded.tool_call_id)], decoded.text)
+            call_key = nil
+            if decoded != nil and decoded.tool_call_id != nil then
+                call_key = calls[tostring(decoded.tool_call_id)]
+            end
+            is_schema_result = decoded != nil and (decoded.tool_name == nil or builtin_tool_has(decoded.tool_name, "pin_on_compaction"))
+            if decoded != nil and decoded.is_error != true and decoded.pruned != true and is_schema_result and call_key != nil and decoded.text != nil then
+                remember(call_key, decoded.text)
+                calls[tostring(decoded.tool_call_id)] = nil
             end
         end
     end
@@ -1579,6 +1600,8 @@ COMPACTION_SECTIONS = "## Established facts\n" ..
     "## Open questions and next step\n" ..
     "(what is still unanswered, and what was about to happen next)"
 COMPACTION_USER_REQUESTS_HEADER = "**Earlier user messages (verbatim, most recent last):**"
+COMPACTION_ANSWERS_HEADER = "**Earlier assistant conclusions (verbatim, most recent last):**"
+COMPACTION_ANSWERS_KEPT = 3
 
 -- One verbatim user message as a list entry. Continuation lines are
 -- indented, so a message that itself holds a "- " list still reads
@@ -1587,14 +1610,13 @@ function format_user_request(text)
     return "- " .. string.gsub(text, "\n", "\n  ")
 end
 
--- Splits a previous summary's prose from its verbatim user requests.
-function parse_user_requests(text)
-    start = string.find(text, COMPACTION_USER_REQUESTS_HEADER, 1, true)
+function parse_indented_section(text, header)
+    start = string.find(text, header, 1, true)
     if start == nil then
         return text, {}
     end
     body = string.gsub(string.sub(text, 1, start - 1), "%s+$", "")
-    rest = string.sub(text, start + string.len(COMPACTION_USER_REQUESTS_HEADER))
+    rest = string.sub(text, start + string.len(header))
     entries = {}
     for line in string.gmatch(rest .. "\n", "([^\n]*)\n") do
         if string.sub(line, 1, 2) == "- " then
@@ -1606,9 +1628,20 @@ function parse_user_requests(text)
     return body, entries
 end
 
+-- Splits a previous summary's prose from its verbatim user requests.
+function parse_user_requests(text)
+    return parse_indented_section(text, COMPACTION_USER_REQUESTS_HEADER)
+end
+
+function parse_compacted_answers(text)
+    return parse_indented_section(text, COMPACTION_ANSWERS_HEADER)
+end
+
 agent.parse_user_requests = parse_user_requests
+agent.parse_compacted_answers = parse_compacted_answers
 agent.format_user_request = format_user_request
 agent.COMPACTION_USER_REQUESTS_HEADER = COMPACTION_USER_REQUESTS_HEADER
+agent.COMPACTION_ANSWERS_HEADER = COMPACTION_ANSWERS_HEADER
 
 -- Summarizes everything except the last `keep_last` active messages
 -- into one new 'compaction_summary' message once the context's size in
@@ -1685,8 +1718,10 @@ function agent.compact_if_needed(db_path, session_id, system_prompt, model)
     -- merge, oldest first.)
     previous_summary = nil
     earlier_requests = {}
+    earlier_answers = {}
     for _, msg in ipairs(summaries) do
         prose, _ = split_pinned_schema(msg.content)
+        prose, answers_in = parse_compacted_answers(prose)
         body, requests_in = parse_user_requests(prose)
         if previous_summary == nil then
             previous_summary = body
@@ -1696,26 +1731,53 @@ function agent.compact_if_needed(db_path, session_id, system_prompt, model)
         for _, text in ipairs(requests_in) do
             table.insert(earlier_requests, text)
         end
+        for _, text in ipairs(answers_in) do
+            table.insert(earlier_answers, text)
+        end
     end
 
     -- Compaction runs right after a new user message is added, so that
     -- message is always in the kept tail -- but it's often just "yes" /
     -- "continue" / "I asked for a list", with the real request among
-    -- the compacted messages. Carry the most recent user messages being
-    -- compacted verbatim (the previous summary's first), most recent
-    -- last.
+    -- the compacted messages. Carry the most recent request and final
+    -- answer rows verbatim by data_type (#36), most recent last.
     requests = {}
     for _, text in ipairs(earlier_requests) do
         table.insert(requests, text)
     end
+    answers = {}
+    for _, text in ipairs(earlier_answers) do
+        table.insert(answers, text)
+    end
     for _, msg in ipairs(dropped) do
-        if msg.role == "user" then
-            table.insert(requests, cap_text(agent.display_content(msg.content, "user"), COMPACTION_ARGS_CAP))
+        dtype = agent.row_data_type(msg)
+        if dtype == "request" then
+            req_text = msg.content
+            if msg.role == "user" then
+                req_text = agent.display_content(msg.content, "user")
+            end
+            if req_text != nil and string.gsub(req_text, "%s", "") != "" then
+                table.insert(requests, cap_text(req_text, COMPACTION_ARGS_CAP))
+            end
+        elseif dtype == "answer" then
+            ans_text = nil
+            if msg.role == "progress" then
+                ans_text = msg.content
+            elseif msg.role == "assistant" and agent.assistant_message_is_final(msg.content) then
+                _, ans_text = agent.split_assistant_knowledge(msg.content)
+            end
+            if ans_text != nil and string.gsub(ans_text, "%s", "") != "" then
+                table.insert(answers, cap_text(ans_text, COMPACTION_RESULT_CAP))
+            end
         end
     end
     compacted_user_requests = {}
     for i = math.max(1, #requests - COMPACTION_USER_REQUESTS_KEPT + 1), #requests do
         table.insert(compacted_user_requests, format_user_request(requests[i]))
+    end
+    compacted_answers = {}
+    for i = math.max(1, #answers - COMPACTION_ANSWERS_KEPT + 1), #answers do
+        table.insert(compacted_answers, format_user_request(answers[i]))
     end
 
     rules = "Keep verbatim: the user's own requests (never reinterpret them as a different task), " ..
@@ -1748,6 +1810,9 @@ function agent.compact_if_needed(db_path, session_id, system_prompt, model)
 
     if #compacted_user_requests > 0 then
         summary = summary .. "\n\n" .. COMPACTION_USER_REQUESTS_HEADER .. "\n" .. table.concat(compacted_user_requests, "\n")
+    end
+    if #compacted_answers > 0 then
+        summary = summary .. "\n\n" .. COMPACTION_ANSWERS_HEADER .. "\n" .. table.concat(compacted_answers, "\n")
     end
     if config.platform_config().agent_pin_schema == true then
         pinned = pinned_schema_block(to_compact, config.platform_config().agent_pinned_schema_chars)
@@ -2257,8 +2322,11 @@ function build_history_messages(messages)
     result_cap = config.platform_config().agent_tool_result_cap
     result = {}
     for _, msg in ipairs(messages) do
-        if msg.role == "user" then
+        dtype = agent.row_data_type(msg)
+        if dtype == "request" and msg.role == "user" then
             table.insert(result, {role = "user", content = msg.content})
+        elseif dtype == "request" and msg.role == "decision" then
+            table.insert(result, {role = "user", content = "[User decision]: " .. tostring(msg.content)})
         elseif msg.role == "compaction_summary" then
             table.insert(result, {role = "user", content = "[COMPACTED HISTORY SUMMARY]:\n" .. msg.content})
         elseif msg.role == "assistant" then
@@ -2268,7 +2336,9 @@ function build_history_messages(messages)
             else
                 table.insert(result, {role = "assistant", content = {{type = "text", text = agent.display_content(msg.content, "assistant")}}})
             end
-        elseif msg.role == "tool_result" then
+        elseif msg.role == "progress" then
+            table.insert(result, {role = "assistant", content = {{type = "text", text = tostring(msg.content)}}})
+        elseif dtype == "tool_trace" and msg.role == "tool_result" then
             decoded, _, _ = json.decode(msg.content)
             if decoded != nil and decoded.text != nil then
                 table.insert(result, {
@@ -2278,6 +2348,8 @@ function build_history_messages(messages)
                     content = {{type = "text", text = agent.cap_tool_text(decoded.text, result_cap, msg.id)}},
                     isError = decoded.is_error == true,
                     pruned = decoded.pruned == true,
+                    resultId = tonumber(msg.id),
+                    origChars = string.len(decoded.text),
                 })
             else
                 table.insert(result, {role = "user", content = "[Prior tool result]: " .. tostring(msg.content)})
@@ -2300,6 +2372,180 @@ function build_history_messages(messages)
         end
     end
     return pair_tool_results(result)
+end
+
+-- Observation masking (doc/context-management-plan.md, Phase 4; #12, #36):
+-- render-time shaping of canonical messages before `converse`. Keeps the
+-- last `keep_last` tool results verbatim; replaces older eligible ones
+-- with a compact stub naming the tool, arguments summary, original size,
+-- and result_id for result.read. Never masks errors, pruned stubs,
+-- pin_on_compaction schema results, or results shorter than `min_chars`.
+-- Moves the masking boundary only in batches of at least `batch_tokens`
+-- tokens so provider prefix caches survive between boundary moves.
+MASK_ARGS_SUMMARY_CHARS = 160
+
+function summarize_mask_args(args)
+    if type(args) != "table" then
+        return ""
+    end
+    encoded = canonical_json(args)
+    if encoded == nil or encoded == "{}" or encoded == "[]" or encoded == "null" then
+        return ""
+    end
+    if string.len(encoded) > MASK_ARGS_SUMMARY_CHARS then
+        encoded = string.sub(encoded, 1, MASK_ARGS_SUMMARY_CHARS) .. "..."
+    end
+    return encoded
+end
+
+function format_masked_stub(tool_name, args, orig_chars, result_id)
+    call_label = tostring(tool_name)
+    arg_summary = summarize_mask_args(args)
+    if arg_summary != "" then
+        call_label = call_label .. "(" .. arg_summary .. ")"
+    end
+    reread = "re-run the tool if needed again"
+    if result_id != nil then
+        rid = tonumber(result_id)
+        reread = string.format("result_id=%d -- call result.read(result_id=%d, offset=0) if needed again", rid, rid)
+    end
+    return string.format("[earlier tool result masked: %s, %d characters, %s]", call_label, orig_chars, reread)
+end
+
+function agent.masking_policy(loop_kind)
+    conf = config.platform_config()
+    enabled = false
+    if type(conf.agent_masking) == "table" and loop_kind != nil then
+        enabled = conf.agent_masking[loop_kind] == true
+    end
+    return {
+        enabled = enabled,
+        keep_last = conf.agent_masking_keep_last,
+        min_chars = conf.agent_masking_min_chars,
+        batch_tokens = conf.agent_masking_batch_tokens,
+        chars_per_token = conf.agent_chars_per_token,
+    }
+end
+
+function agent.shape_context(messages, policy)
+    if messages == nil then
+        return {}
+    end
+    copied = {}
+    for i, msg in ipairs(messages) do
+        copied[i] = msg
+    end
+    if policy == nil or policy.enabled != true then
+        return copied
+    end
+    keep_last = policy.keep_last
+    if keep_last == nil then
+        keep_last = 5
+    end
+    min_chars = policy.min_chars
+    if min_chars == nil then
+        min_chars = 300
+    end
+    batch_tokens = policy.batch_tokens
+    if batch_tokens == nil then
+        batch_tokens = 4000
+    end
+    chars_per_token = policy.chars_per_token
+    if chars_per_token == nil or chars_per_token <= 0 then
+        chars_per_token = 2.8
+    end
+    batch_chars = math.ceil(batch_tokens * chars_per_token)
+
+    open_calls = {}
+    call_info_at = {}
+    result_positions = {}
+    for idx, msg in ipairs(copied) do
+        if msg.role == "assistant" and type(msg.content) == "table" then
+            open_calls = {}
+            for _, block in ipairs(msg.content) do
+                if type(block) == "table" and block.type == "toolCall" and block.id != nil then
+                    open_calls[tostring(block.id)] = {
+                        name = tostring(block.name),
+                        args = block.arguments,
+                        pinned = builtin_tool_has(block.name, "pin_on_compaction"),
+                    }
+                end
+            end
+        elseif msg.role == "toolResult" then
+            if msg.toolCallId != nil and open_calls[tostring(msg.toolCallId)] != nil then
+                call_info_at[idx] = open_calls[tostring(msg.toolCallId)]
+            end
+            table.insert(result_positions, idx)
+        end
+    end
+
+    cutoff_count = #result_positions - keep_last
+    if cutoff_count <= 0 then
+        return copied
+    end
+
+    mask_set = {}
+    bucket_indices = {}
+    bucket_chars = 0
+    for k = 1, cutoff_count do
+        idx = result_positions[k]
+        msg = copied[idx]
+        text = ""
+        if type(msg.content) == "table" and msg.content[1] != nil and msg.content[1].text != nil then
+            text = tostring(msg.content[1].text)
+        end
+        orig_chars = msg.origChars
+        if orig_chars == nil then
+            orig_chars = string.len(text)
+        end
+        info = call_info_at[idx]
+        is_pinned = info != nil and info.pinned == true
+        if is_pinned == false and msg.toolName != nil then
+            is_pinned = builtin_tool_has(msg.toolName, "pin_on_compaction")
+        end
+        eligible = msg.isError != true and msg.pruned != true and is_pinned == false and orig_chars >= min_chars
+        if eligible then
+            table.insert(bucket_indices, idx)
+            bucket_chars = bucket_chars + string.len(text)
+            if bucket_chars >= batch_chars then
+                for _, b_idx in ipairs(bucket_indices) do
+                    mask_set[b_idx] = true
+                end
+                bucket_indices = {}
+                bucket_chars = 0
+            end
+        end
+    end
+
+    for idx, _ in pairs(mask_set) do
+        msg = copied[idx]
+        text = ""
+        if type(msg.content) == "table" and msg.content[1] != nil and msg.content[1].text != nil then
+            text = tostring(msg.content[1].text)
+        end
+        orig_chars = msg.origChars
+        if orig_chars == nil then
+            orig_chars = string.len(text)
+        end
+        info = call_info_at[idx]
+        tool_name = msg.toolName
+        args = nil
+        if info != nil then
+            if tool_name == nil or tool_name == "" then
+                tool_name = info.name
+            end
+            args = info.args
+        end
+        stub = format_masked_stub(tool_name, args, orig_chars, msg.resultId)
+        shaped_msg = {}
+        for key, value in pairs(msg) do
+            shaped_msg[key] = value
+        end
+        shaped_msg.content = {{type = "text", text = stub}}
+        shaped_msg.masked = true
+        copied[idx] = shaped_msg
+    end
+    return copied
 end
 
 MALFORMED_CALL_NOTE = "[Automated note, not the real user: your previous reply could not be parsed (MALFORMED_FUNCTION_CALL / MALFORMED_RESPONSE). Reply again -- a tool call with valid arguments, every string (including long markdown content) properly escaped, or a plain answer.]"
@@ -2418,7 +2664,7 @@ PROGRESS_NOTE_PROMPT = """
 -- there's no budget left to retry, so a plain honest message beats
 -- silence.
 function run_turn_wrapup(db_path, session_id, login, system_prompt, model, prompt_text, fallback_text, role)
-    wrapup_history = build_history_messages(agent.active_messages(db_path, session_id))
+    wrapup_history = agent.shape_context(build_history_messages(agent.active_messages(db_path, session_id)), agent.masking_policy("chat"))
     table.insert(wrapup_history, {role = "user", content = prompt_text})
     wrapup_audit_prompt = json.encode(wrapup_history)
     wrapup_response, wrapup_err, wrapup_usage = agent_provider.converse(model, system_prompt, wrapup_history, {})
@@ -2489,7 +2735,7 @@ end
 -- false (a "self_check" message has been recorded with what to check
 -- next; the turn loop should continue instead of returning).
 function run_self_check(db_path, session_id, system_prompt, model, active_messages, parent_message_id)
-    history_messages = build_history_messages(active_messages)
+    history_messages = agent.shape_context(build_history_messages(active_messages), agent.masking_policy("chat"))
     table.insert(history_messages, {role = "user", content = SELF_CHECK_PROMPT})
     audit_prompt = json.encode(history_messages)
 
@@ -2540,28 +2786,186 @@ end
 
 RESEARCH_SYSTEM_PROMPT = """
 You are a focused research sub-agent helping answer one specific sub-question
-using this deployment's own data. You have read-only tools only. Explore from
-more than one angle before concluding something doesn't exist -- check
-entity.relationships for a join path, not just a direct field, when a value
-isn't where you first expected it; retry entity.query a different way before
-trusting an empty result. A tool call that returns an ERROR is not the same
-as an empty result -- it means the call itself was malformed (wrong field
-name, wrong entity type, bad SQL), not that the data is missing. Read the
-error message, check entity.fields/entity.list_types/entity.relationships if
-the schema is what you got wrong, and retry the same tool with corrected
-usage before ever concluding something doesn't exist; only a call that
-actually succeeded with zero rows is real evidence of absence. If the
-question is about many discrete items (a list, "every X", "across all N
-experiments/entities"), track exactly how many you actually checked and say
-so in your finding ("checked 12 of 44") -- a
-conclusion generalized from a partial sample is a different, weaker claim
-than one actually checked exhaustively, and stating the first as if it were
-the second is worse than honestly running out of turns. When you're done,
-reply with a concise, grounded finding -- the specific answer plus enough of
-what you found (counts, ids, values) that someone could verify it -- not a
-raw dump of every row. If real exploration genuinely turns up nothing, say
-that plainly along with what you tried, rather than guessing.
+using this deployment's own data. You have read-only tools only. If the prompt
+already includes a "Confirmed schema" section from the main conversation, use
+those confirmed table and column names directly instead of calling
+entity.list_types, entity.relationships, or entity.fields again for types
+already shown there. Explore from more than one angle before concluding
+something doesn't exist -- check entity.relationships for a join path, not
+just a direct field, when a value isn't where you first expected it; retry
+entity.query a different way before trusting an empty result. A tool call that
+returns an ERROR is not the same as an empty result -- it means the call
+itself was malformed (wrong field name, wrong entity type, bad SQL), not that
+the data is missing. Read the error message, check
+entity.fields/entity.list_types/entity.relationships if the schema is what you
+got wrong, and retry the same tool with corrected usage before ever concluding
+something doesn't exist; only a call that actually succeeded with zero rows is
+real evidence of absence. If the question is about many discrete items (a
+list, "every X", "across all N experiments/entities"), track exactly how many
+you actually checked and say so in your finding ("checked 12 of 44") -- a
+conclusion generalized from a partial sample is a different, weaker claim than
+one actually checked exhaustively, and stating the first as if it were the
+second is worse than honestly running out of turns.
+
+When you're done, return a concise, grounded synthesis with two short parts
+(never a raw dump of rows or tool traces):
+1. Finding: the direct answer with exact values, human-facing record
+   names/labels, and source links ([title](/document?entity_id=ID) or
+   [name](/detail?type=TYPE&entity_id=ID)) ready for verification.
+2. Method & coverage: a brief summary of how you established it -- the exact
+   SQL query or plain-text formula used (never LaTeX), what you ruled out (e.g.
+   archived rows or empty searches), and exact coverage ("checked all 8
+   matching rows" or "checked 12 of 44").
+If real exploration genuinely turns up nothing, say that plainly along with
+what you checked and ruled out, rather than guessing.
 """
+
+SUBAGENT_REQUESTS_KEPT = 5
+SUBAGENT_REQUESTS_HEADER = "**Conversation requests so far (context from the main chat):**"
+
+-- Type-based readers for context assembly (doc/agent-data.md, "Context"; #36):
+-- read `request` rows and confirmed schema from the conversation, never
+-- raw `tool_trace` rows, and scope cross-session requests strictly to the
+-- same `login` (#11).
+function agent.session_requests(db_path, session_id)
+    if db_path == nil or session_id == nil then
+        return {}
+    end
+    rows = db.query(db_path, string.format(
+        "SELECT id, role, content, data_type FROM agent_message WHERE session_id = %s AND parent_message_id IS NULL " ..
+        "AND (data_type = 'request' OR ((data_type IS NULL OR data_type = '') AND role IN ('user', 'decision'))) ORDER BY id ASC;",
+        db.quote(session_id)
+    ))
+    if rows == nil then
+        return {}
+    end
+    out = {}
+    for _, row in ipairs(rows) do
+        text = row.content
+        if row.role == "user" then
+            text = agent.display_content(row.content, "user")
+        end
+        if text != nil and string.gsub(text, "%s", "") != "" then
+            table.insert(out, {id = tonumber(row.id), role = row.role, text = text})
+        end
+    end
+    return out
+end
+
+function agent.session_confirmed_schema(db_path, session_id, budget)
+    conf = config.platform_config()
+    if db_path == nil or session_id == nil or conf.agent_pin_schema != true then
+        return nil
+    end
+    if budget == nil then
+        budget = conf.agent_pinned_schema_chars
+    end
+    if budget == nil or budget <= 0 then
+        return nil
+    end
+    rows = db.query(db_path, string.format(
+        "SELECT id, role, content, data_type FROM agent_message WHERE session_id = %s AND parent_message_id IS NULL ORDER BY id ASC;",
+        db.quote(session_id)
+    ))
+    if rows == nil or #rows == 0 then
+        return nil
+    end
+    return pinned_schema_block(rows, budget)
+end
+
+function agent.user_prior_requests(db_path, login, exclude_session_id, limit)
+    if db_path == nil or login == nil or login == "" then
+        return {}
+    end
+    if limit == nil then
+        limit = config.platform_config().agent_carry_user_requests_limit
+    end
+    if limit == nil or limit <= 0 then
+        return {}
+    end
+    exclude_clause = ""
+    if exclude_session_id != nil and exclude_session_id != "" then
+        exclude_clause = " AND s.id <> " .. db.quote(exclude_session_id)
+    end
+    rows = db.query(db_path, string.format(
+        "SELECT m.id, m.session_id, m.role, m.content FROM agent_message m " ..
+        "JOIN agent_session s ON s.id = m.session_id " ..
+        "WHERE s.login = %s%s AND m.parent_message_id IS NULL " ..
+        "AND (m.data_type = 'request' OR ((m.data_type IS NULL OR m.data_type = '') AND m.role IN ('user', 'decision'))) " ..
+        "ORDER BY m.id DESC LIMIT %d;",
+        db.quote(login), exclude_clause, tonumber(limit)
+    ))
+    if rows == nil then
+        return {}
+    end
+    ordered = {}
+    for i = #rows, 1, -1 do
+        row = rows[i]
+        text = row.content
+        if row.role == "user" then
+            text = agent.display_content(row.content, "user")
+        end
+        if text != nil and string.gsub(text, "%s", "") != "" then
+            table.insert(ordered, {
+                id = tonumber(row.id),
+                session_id = row.session_id,
+                role = row.role,
+                text = cap_text(text, COMPACTION_ARGS_CAP),
+            })
+        end
+    end
+    return ordered
+end
+
+function agent.prior_requests_prompt_block(db_path, login, session_id)
+    conf = config.platform_config()
+    if conf.agent_carry_user_requests != true then
+        return nil
+    end
+    prior = agent.user_prior_requests(db_path, login, session_id, conf.agent_carry_user_requests_limit)
+    if #prior == 0 then
+        return nil
+    end
+    lines = {"**Recent requests and decisions from this user's earlier chats (context only; verify current data with tools):**"}
+    for _, item in ipairs(prior) do
+        prefix = ""
+        if item.role == "decision" then
+            prefix = "[Decision] "
+        end
+        table.insert(lines, format_user_request(prefix .. item.text))
+    end
+    return table.concat(lines, "\n")
+end
+
+-- Sub-agent initial context (#19 option 2, #36): the conversation's
+-- `request` rows, confirmed schema from the main loop (within
+-- agent_pinned_schema_chars), and the specific sub-question -- never the
+-- main loop's `tool_trace`.
+function agent.subagent_start_messages(db_path, session_id, question)
+    conf = config.platform_config()
+    requests = agent.session_requests(db_path, session_id)
+    schema_block = agent.session_confirmed_schema(db_path, session_id, conf.agent_pinned_schema_chars)
+    if #requests == 0 and schema_block == nil then
+        return {{role = "user", content = tostring(question)}}
+    end
+    sections = {}
+    if #requests > 0 then
+        req_lines = {SUBAGENT_REQUESTS_HEADER}
+        for i = math.max(1, #requests - SUBAGENT_REQUESTS_KEPT + 1), #requests do
+            prefix = ""
+            if requests[i].role == "decision" then
+                prefix = "[Decision] "
+            end
+            table.insert(req_lines, format_user_request(prefix .. cap_text(requests[i].text, COMPACTION_ARGS_CAP)))
+        end
+        table.insert(sections, table.concat(req_lines, "\n"))
+    end
+    if schema_block != nil then
+        table.insert(sections, schema_block)
+    end
+    table.insert(sections, "**Sub-question to investigate:**\n" .. tostring(question))
+    return {{role = "user", content = table.concat(sections, "\n\n")}}
+end
 
 -- A disposable, isolated tool-calling loop for one focused sub-question
 -- -- the actual "research" tool implementation (see AGENT_TOOLS.research
@@ -2599,7 +3003,7 @@ function agent.run_research_loop(db_path, author, session_id, model, question, m
     if step_kind == nil then
         step_kind = "research"
     end
-    messages = {{role = "user", content = question}}
+    messages = agent.subagent_start_messages(db_path, session_id, question)
     tools = agent_tools.research_tool_declarations(db_path)
     last_text = nil
     -- The model's last turn is very often a bare tool call with no text
@@ -2621,8 +3025,9 @@ function agent.run_research_loop(db_path, author, session_id, model, question, m
         -- celleste-lims, "summarize the latest R&D meetings"). A no-op
         -- for a background task, whose session isn't marked running.
         agent.turn_heartbeat(db_path, session_id)
-        research_prompt = json.encode(messages)
-        response, err, usage = agent_provider.converse(model, RESEARCH_SYSTEM_PROMPT, messages, tools)
+        shaped_messages = agent.shape_context(messages, agent.masking_policy(step_kind))
+        research_prompt = json.encode(shaped_messages)
+        response, err, usage = agent_provider.converse(model, RESEARCH_SYSTEM_PROMPT, shaped_messages, tools)
         -- Every real model call is persisted (doc/architecture.md, "Full
         -- prompt/reasoning/token persistence"), sub-agent steps too,
         -- linked to the step's own message when it is kept.
@@ -2693,7 +3098,7 @@ function agent.run_research_loop(db_path, author, session_id, model, question, m
                 result_text = "ERROR: research is read-only and can't ask the user directly or hand off further -- cannot perform destructive actions, delegate further, ask a clarifying question, or start a background task; report what you've found (including any real ambiguity) instead"
                 is_error = true
             else
-                tool_result, tool_err = agent.run_tool(db_path, author, session_id, tool_name, method_name, tool_call.arguments, messages)
+                tool_result, tool_err = agent.run_tool(db_path, author, session_id, tool_name, method_name, tool_call.arguments, shaped_messages)
                 result_text = tostring(tool_result)
                 if tool_err != nil then
                     result_text = "ERROR: " .. tostring(tool_err)
@@ -2709,7 +3114,8 @@ function agent.run_research_loop(db_path, author, session_id, model, question, m
             end
             table.insert(messages, {
                 role = "toolResult", toolCallId = tool_call.id, toolName = tool_call.name,
-                content = {{type = "text", text = agent.cap_tool_text(result_text, config.platform_config().agent_tool_result_cap, result_id)}}, isError = is_error,
+                content = {{type = "text", text = agent.cap_tool_text(result_text, config.platform_config().agent_tool_result_cap, result_id)}},
+                isError = is_error, resultId = result_id, origChars = string.len(result_text),
             })
             agent.turn_heartbeat(db_path, session_id)
         end
@@ -3018,31 +3424,36 @@ function agent.find_repeat(messages, full_name, args, is_write)
         args = {}
     end
     key = canonical_json(args)
-    answered = {}
-    for _, msg in ipairs(messages) do
-        if msg.role == "toolResult" and msg.isError != true and msg.pruned != true and msg.toolCallId != nil then
-            answered[tostring(msg.toolCallId)] = true
-        end
-    end
     found = nil
+    open_matches = {}
     for _, msg in ipairs(messages) do
         if msg.role == "assistant" and type(msg.content) == "table" then
+            open_matches = {}
             for _, block in ipairs(msg.content) do
                 if type(block) == "table" and block.type == "toolCall" then
                     name = tostring(block.name)
                     if is_write(name) then
                         found = nil
-                    elseif name == full_name and answered[tostring(block.id)] == true then
+                    elseif name == full_name and block.id != nil then
                         block_args = block.arguments
                         if block_args == nil then
                             block_args = {}
                         end
                         if canonical_json(block_args) == key then
-                            found = tostring(block.id)
+                            open_matches[tostring(block.id)] = true
                         end
                     end
                 end
             end
+        elseif msg.role == "toolResult" then
+            if msg.isError != true and msg.pruned != true and msg.masked != true and msg.toolCallId != nil then
+                cid = tostring(msg.toolCallId)
+                if open_matches[cid] == true then
+                    found = cid
+                end
+            end
+        else
+            open_matches = {}
         end
     end
     return found
@@ -3140,6 +3551,10 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
     if system_prompt == nil or system_prompt == "" then
         system_prompt = agent_tools.default_system_prompt()
     end
+    prior_block = agent.prior_requests_prompt_block(db_path, login, session_id)
+    if prior_block != nil then
+        system_prompt = system_prompt .. "\n\n" .. prior_block
+    end
 
     if user_message != nil and user_message != "" then
         agent.add_message(db_path, session_id, "user", user_message, true)
@@ -3190,7 +3605,7 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
                 agent.compact_if_needed(db_path, session_id, system_prompt, model)
             end
             active = agent.active_messages(db_path, session_id)
-            history_messages = build_history_messages(active)
+            history_messages = agent.shape_context(build_history_messages(active), agent.masking_policy("chat"))
             audit_prompt = json.encode(history_messages)
 
             response, err, usage = agent_provider.converse(model, system_prompt, history_messages, agent.tool_declarations(db_path))

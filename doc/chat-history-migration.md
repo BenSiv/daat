@@ -104,5 +104,51 @@ Settled 2026-11-08, each as recommended:
 - [x] Ben: decisions 1-5 (2026-11-08).
 - [x] Piece 1: the backfill in the schema upgrade (store migration 8), with a test that a store with old rows comes out typed. MySQL check: brex 545369662.
 - [x] Piece 2: `daat repair curate-chats` and `daat repair retire-transcripts` (with `--undo`), `tst/integration/curate.bats`.
-- [ ] Piece 3: a test that the first prune keeps every token row.
-- [ ] Run on daat-test, then on production, in the order above. Record before and after numbers here.
+- [x] Piece 3: a test that the first prune keeps every token row (`tst/integration/agent_retention.bats`, SQLite + MariaDB).
+- [x] Run on daat-test, then on production, in the order above. Record before and after numbers here.
+
+## Outcome, 2026-11-16
+
+Run logs are in `~/database/analysis/datasets/chat-history-migration/`.
+
+### daat-test (`lean`)
+
+- **Curation & transcript retirement:** all 5 `chat_session` documents retired (`0` active `chat_session` documents remaining).
+- **First `daat store prune`** (second run cleared/stubbed `0`):
+  - `model_input`: cleared 201 stored prompts (`0` days under `lean`).
+  - `tool_trace`: stubbed 95 tool results older than 14 days (all 126 `tool_result` rows stayed paired).
+  - `knowledge`: removed 0 rows (`knowledge_days = 30`, curated guard active).
+  - `call_metrics`: all 201 token/metric rows (166 `chat` + 35 `self_check`) kept.
+
+| `type` | Rows (before -> after) | Characters (before -> after) |
+|---|---|---|
+| `request` | 39 -> 39 | 4,243 -> 4,243 |
+| `answer` | 159 -> 159 | 145,900 -> 145,900 |
+| `reasoning` | 1 -> 1 | 3,594 -> 3,594 |
+| `tool_trace` | 126 -> 126 | 112,745 -> 70,422 |
+| `model_input` | 201 -> 0 | 3,906,815 -> 0 |
+| `call_metrics` | 201 -> 201 | 7,137 -> 7,137 |
+| `control` | 3 -> 3 | 183 -> 183 |
+
+### Production (`standard`)
+
+- **Curation (71 total sessions: 43 admin, 28 staff):**
+  - Admin: 4 `curated`, 39 `nothing` (`--skip-login admin`).
+  - Staff: 18 `curated` (including 6 re-curated after upgrading `agent_model` to `gemini-3.1-pro-preview`, with `#532856` rewritten in place), 8 `nothing`, 2 `rejected` (`df7ccd7e0852e69daff1f93009a6010b` and `5dd0dd0eaa0aeb827402fc20922d9389`, where the curation note included Benchling authorship deployment context from `theme.lua` that the conversation-only grounding check rejected).
+- **Transcript retirement:** 50 of 52 `chat_session` documents archived; 2 kept active (the 2 `rejected` staff sessions, per step 2).
+- **Backup before prune:** on-demand Cloud SQL backup `1794861277593` on `platform-db-prod-v2` (`SUCCESSFUL`, `2026-11-16T20:34:37Z`).
+- **First `platform store prune`** (second run cleared/stubbed `0`):
+  - `model_input`: cleared 1,302 stored prompts older than 30 days (19.46 M characters freed; 343 recent prompts kept).
+  - `tool_trace`: stubbed 0 tool results (`tool_trace_days = 90`; first stubs arrive 2026-12-02).
+  - `knowledge`: kept forever under `standard`.
+  - `call_metrics`: all 1,645 token/metric rows kept.
+
+| `type` | Rows (before -> after) | Characters (before -> after) |
+|---|---|---|
+| `request` | 252 -> 252 | 54,379 -> 54,379 |
+| `answer` | 1,460 -> 1,460 | 790,239 -> 790,239 |
+| `reasoning` | 123 -> 123 | 146,351 -> 146,351 |
+| `tool_trace` | 1,231 -> 1,231 | 3,014,665 -> 3,014,665 |
+| `model_input` | 1,645 -> 343 | 31,461,269 -> 11,997,798 |
+| `call_metrics` | 1,645 -> 1,645 | 64,384 -> 64,384 |
+| `control` | 6 -> 6 | 574 -> 574 |
