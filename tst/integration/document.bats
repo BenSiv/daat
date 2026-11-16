@@ -604,3 +604,29 @@ EOF
     [[ "$output" =~ "api/entity-search" ]]
     [[ "$output" =~ "platform-mention-results" ]]
 }
+
+@test "/detail for a document entity links to the rendered /document view page, while non-document entities do not" {
+    save_document "csrf_token=${CSRF}&title=Media+recipe&parent_id=&content=Mix+well." >/dev/null
+    doc_id=$(sqlite3 "$TEST_DIR/.store/store.db" "SELECT id FROM document WHERE title = 'Media recipe' LIMIT 1;")
+
+    run get_route "/detail" "type=document&entity_id=${doc_id}"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "200 OK" ]]
+    [[ "$output" =~ "href=\"document?entity_id=${doc_id}\">View document</a>" ]]
+
+    mkdir -p schemas
+    cat > schemas/sample.lua <<'EOF'
+return {
+    name = "sample",
+    fields = {{name = "label", type = "text", required = true}},
+}
+EOF
+    "$BIN" schema add schemas/sample.lua >/dev/null
+    "$BIN" entity create sample label=S-1 >/dev/null
+    sample_id=$(sqlite3 "$TEST_DIR/.store/store.db" "SELECT id FROM sample LIMIT 1;")
+
+    run get_route "/detail" "type=sample&entity_id=${sample_id}"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "200 OK" ]]
+    [[ ! "$output" =~ "View document" ]]
+}

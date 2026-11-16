@@ -133,6 +133,11 @@
 .platform-chat-widget-input {
     display: flex; gap: 6px; padding: 10px; border-top: 1px solid var(--platform-border, #e2e8f0);
 }
+.platform-chat-widget-readonly {
+    display: none; padding: 10px 12px; border-top: 1px solid var(--platform-border, #e2e8f0);
+    background: var(--platform-bg-2, #f1f5f9); color: var(--platform-muted, #64748b);
+    font-size: 0.8rem; text-align: center;
+}
 .platform-chat-widget-input input[type=text] {
     flex: 1; padding: 8px 10px; border: 1px solid var(--platform-border, #e2e8f0);
     border-radius: var(--platform-radius-sm, 8px); font-size: 0.85rem;
