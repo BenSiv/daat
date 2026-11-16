@@ -64,7 +64,9 @@ end
 -- by every /api/chat-widget-* route (start/send/approve/deny/history)
 -- below, all of which end by returning "here's the state now" so the
 -- floating widget (see html.page_shell) never has to separately poll.
-function chat_widget_state(db_path, session_id)
+function chat_widget_state(db_path, session_id, viewer_login)
+    owner = agent.session_login(db_path, session_id)
+    read_only = viewer_login != nil and owner != nil and owner != viewer_login
     -- Read before the messages, so a turn settled as stalled right now
     -- (agent.turn_status records an error row) shows that row too.
     running = agent.turn_status(db_path, session_id) == "running"
@@ -82,26 +84,37 @@ function chat_widget_state(db_path, session_id)
             msg.content = document.render_markdown(msg.content)
         end
     end
-    pending = agent.latest_pending(db_path, session_id)
     pending_out = nil
-    if pending != nil then
-        args, _, _ = json.decode(pending.args_json)
-        if args == nil then
-            args = {}
+    last_query_sql = nil
+    if read_only == false then
+        pending = agent.latest_pending(db_path, session_id)
+        if pending != nil then
+            args, _, _ = json.decode(pending.args_json)
+            if args == nil then
+                args = {}
+            end
+            pending_out = {id = pending.id, tool = pending.tool, method = pending.method, args = args}
         end
-        pending_out = {id = pending.id, tool = pending.tool, method = pending.method, args = args}
+        -- The most recent SQL the model constructed this session -- whether
+        -- via an actual entity.query tool call, or written out as plain
+        -- final-answer text (e.g. "write me a query" answered as a fenced
+        -- code block instead of a real tool call) -- for the /sql console's
+        -- client-side prefill (see html.lua's chat widget JS); nil if
+        -- neither has happened yet. This is the one deliberate, narrow
+        -- exception to the "widget only sees human-facing content" rule
+        -- just above: real SQL text, not a generic exposure of every tool
+        -- call's raw arguments.
+        last_query_sql = agent.last_console_query_sql(db_path, session_id)
     end
-    -- The most recent SQL the model constructed this session -- whether
-    -- via an actual entity.query tool call, or written out as plain
-    -- final-answer text (e.g. "write me a query" answered as a fenced
-    -- code block instead of a real tool call) -- for the /sql console's
-    -- client-side prefill (see html.lua's chat widget JS); nil if
-    -- neither has happened yet. This is the one deliberate, narrow
-    -- exception to the "widget only sees human-facing content" rule
-    -- just above: real SQL text, not a generic exposure of every tool
-    -- call's raw arguments.
-    last_query_sql = agent.last_console_query_sql(db_path, session_id)
-    return {session_id = session_id, messages = messages, pending = pending_out, last_query_sql = last_query_sql, running = running}
+    return {
+        session_id = session_id,
+        owner = owner,
+        read_only = read_only,
+        messages = messages,
+        pending = pending_out,
+        last_query_sql = last_query_sql,
+        running = running,
+    }
 end
 
 -- Hands a session's turn to a worker (agent_turn_mode "detached") or
@@ -1750,15 +1763,27 @@ function cgi.handle_request()
         session_id = params.session_id
         sessions = agent.list_sessions(db_path, author)
         current_session_id = nil
+        viewed_foreign_session = nil
+        open_read_only = false
         if session_id != nil and session_id != "" then
-            session = agent.get_session(db_path, session_id, author)
+            session, access = agent.get_session_for_reader(db_path, session_id, author, show_admin_nav)
             if session == nil then
-                return print_response("404 Not Found", "text/html", "<h3>Error: no such chat session</h3>")
+                unavailable_body = html.render_chat_unavailable()
+                return print_response("404 Not Found", "text/html",
+                    html.page_shell("Chat", "chat", unavailable_body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author))
             end
             current_session_id = session_id
+            if access == "admin" then
+                viewed_foreign_session = session
+                open_read_only = true
+            end
         end
-        body = html.render_chat(sessions, current_session_id, nonce)
-        page_context = {page_type = "chat", open_chat_session_id = current_session_id}
+        body = html.render_chat(sessions, current_session_id, nonce, viewed_foreign_session)
+        page_context = {
+            page_type = "chat",
+            open_chat_session_id = current_session_id,
+            open_chat_read_only = open_read_only,
+        }
         return print_response("200 OK", "text/html",
             html.page_shell("Chat", "chat", body, nonce, show_sql_nav, show_admin_nav, has_tasks_view, nav_extensions, theme, author, page_context))
     end
@@ -1880,13 +1905,16 @@ function cgi.handle_request()
         if body_data == nil then
             return print_response("400 Bad Request", "application/json", json.encode({error = "Invalid JSON: " .. tostring(err)}))
         end
+        if agent.get_session(db_path, body_data.session_id, author) == nil then
+            return print_response("404 Not Found", "application/json", json.encode({error = "no such chat session"}))
+        end
         model = agent.default_model()
         inline = config.platform_config().agent_turn_mode == "inline"
         result = agent.approve_pending(db_path, tonumber(body_data.pending_id), author, nil, model, inline)
         if inline == false and result != nil then
             agent.start_detached_turn(db_path, root, result.session_id)
         end
-        return print_response("200 OK", "application/json", json.encode(chat_widget_state(db_path, body_data.session_id)))
+        return print_response("200 OK", "application/json", json.encode(chat_widget_state(db_path, body_data.session_id, author)))
     end
 
     -- The user-feedback half of knowledge_chat_eval. Ownership-
@@ -1921,13 +1949,16 @@ function cgi.handle_request()
         if body_data == nil then
             return print_response("400 Bad Request", "application/json", json.encode({error = "Invalid JSON: " .. tostring(err)}))
         end
+        if agent.get_session(db_path, body_data.session_id, author) == nil then
+            return print_response("404 Not Found", "application/json", json.encode({error = "no such chat session"}))
+        end
         model = agent.default_model()
         inline = config.platform_config().agent_turn_mode == "inline"
         result = agent.deny_pending(db_path, tonumber(body_data.pending_id), author, nil, model, inline, body_data.reason)
         if inline == false and result != nil then
             agent.start_detached_turn(db_path, root, result.session_id)
         end
-        return print_response("200 OK", "application/json", json.encode(chat_widget_state(db_path, body_data.session_id)))
+        return print_response("200 OK", "application/json", json.encode(chat_widget_state(db_path, body_data.session_id, author)))
     end
 
     -- GET, not POST -- just reads back state, no CSRF needed (matches
@@ -1936,11 +1967,11 @@ function cgi.handle_request()
     -- navigation, since its own session_id lives in localStorage
     -- (see html.page_shell's script), not anything server-rendered.
     if path_info == "/api/chat-widget-history" then
-        session = agent.get_session(db_path, params.session_id, author)
+        session, _ = agent.get_session_for_reader(db_path, params.session_id, author, show_admin_nav)
         if session == nil then
             return print_response("404 Not Found", "application/json", json.encode({error = "no such chat session"}))
         end
-        return print_response("200 OK", "application/json", json.encode(chat_widget_state(db_path, params.session_id)))
+        return print_response("200 OK", "application/json", json.encode(chat_widget_state(db_path, params.session_id, author)))
     end
 
     if path_info == "/templates" then

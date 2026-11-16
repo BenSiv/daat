@@ -1412,6 +1412,10 @@ function html.render_detail(db_path, entity_type, layout, row, history, nonce, h
         title_id_part = html.html_escape(own_label) .. " (#" .. id_str .. ")"
     end
 
+    view_document_link = ""
+    if entity_type == "document" then
+        view_document_link = "<a class=\"btn btn-secondary\" href=\"document?entity_id=" .. id_str .. "\">View document</a>"
+    end
     edit_link = "<a class=\"btn btn-secondary\" href=\"entity-edit?type=" .. escaped_type .. "&entity_id=" .. id_str .. "\">Edit</a>"
 
     print_label_html = ""
@@ -1467,7 +1471,7 @@ function html.render_detail(db_path, entity_type, layout, row, history, nonce, h
 
     detail_header = render_page_header(escaped_type .. " " .. title_id_part,
         "<a class=\"btn btn-secondary\" href=\"browse?type=" .. escaped_type .. "\">&larr; Back to browse</a>",
-        "<div class=\"platform-header-actions\">" .. edit_link .. print_label_html .. "</div>")
+        "<div class=\"platform-header-actions\">" .. view_document_link .. edit_link .. print_label_html .. "</div>")
     return string.format("""
 <div class="fossil-doc" data-title="%s %s">
     <style>
@@ -3809,7 +3813,27 @@ end
 -- open_chat_session_id) and pops the widget open right onto it, so
 -- there's exactly one place a conversation is ever previewed or
 -- continued, never two.
-function html.render_chat(sessions, current_session_id, nonce)
+function html.render_chat(sessions, current_session_id, nonce, viewed_foreign_session)
+    foreign_banner = ""
+    if viewed_foreign_session != nil then
+        foreign_title = viewed_foreign_session.title
+        if foreign_title == nil or foreign_title == "" then
+            foreign_title = "Untitled chat"
+        end
+        foreign_owner = viewed_foreign_session.login
+        if foreign_owner == nil or foreign_owner == "" then
+            foreign_owner = "another user"
+        end
+        foreign_started = ""
+        if viewed_foreign_session.created_at != nil then
+            foreign_started = "<span class=\"platform-chat-session-started\">" .. html.html_escape(viewed_foreign_session.created_at) .. "</span>"
+        end
+        foreign_banner = "<div class=\"platform-chat-foreign-banner\">" ..
+            "<div class=\"platform-chat-foreign-meta\">Viewing conversation by <strong>" .. html.html_escape(foreign_owner) .. "</strong> (read-only)</div>" ..
+            "<div class=\"platform-chat-session-row platform-chat-session-active\">" ..
+            "<span class=\"platform-chat-session-title\">" .. html.html_escape(foreign_title) .. "</span>" ..
+            foreign_started .. "</div></div>"
+    end
     sessions_html = render_chat_sessions_list(sessions, current_session_id)
 
     return string.format("""
@@ -3824,15 +3848,41 @@ function html.render_chat(sessions, current_session_id, nonce)
         .platform-chat-session-active { border-color: var(--platform-accent, #4f46e5); }
         .platform-chat-session-active .platform-chat-session-title { color: var(--platform-accent, #4f46e5); }
         .platform-chat-session-started { font-size: 0.8rem; color: var(--platform-muted, #64748b); flex-shrink: 0; }
+        .platform-chat-foreign-banner { margin-bottom: 24px; }
+        .platform-chat-foreign-meta { font-size: 0.85rem; color: var(--platform-muted, #64748b); margin-bottom: 8px; }
     </style>
     <div class="platform-container">
+        %s
         %s
         %s
     </div>
 </div>
 """, platform_container_css(), platform_page_header_css(),
      render_page_header("Chat", "<p>Pick a conversation to continue it in the chat widget.</p>", nil),
+     foreign_banner,
      sessions_html)
+end
+
+function html.render_chat_unavailable()
+    return string.format("""
+<div class="fossil-doc" data-title="Chat">
+    <style>
+%s
+%s
+%s
+        .platform-chat-unavailable { padding: 20px; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); background: var(--platform-bg, #f8fafc); color: var(--platform-text, #334155); }
+        .platform-chat-unavailable p { margin: 0 0 14px 0; }
+    </style>
+    <div class="platform-container">
+        %s
+        <div class="platform-chat-unavailable">
+            <p>Raw chat conversations are private — only the conversation's owner and administrators can open them (or this session does not exist).</p>
+            <a class="btn btn-secondary" href="chat">Back to your chats</a>
+        </div>
+    </div>
+</div>
+""", platform_container_css(), platform_page_header_css(), platform_button_css(),
+     render_page_header("Conversation unavailable", nil, nil))
 end
 
 --------------------------------------------------------------------------

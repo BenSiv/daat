@@ -847,7 +847,7 @@ function conversation_source_line(session)
         title = "Untitled chat"
     end
     title = string.gsub(title, "[%[%]\n]", " ")
-    return "Source: [Chat: " .. title .. "](chat?session_id=" .. tostring(session.id) .. ") (open to its owner)"
+    return "Source: [Chat: " .. title .. "](chat?session_id=" .. tostring(session.id) .. ") (open to its owner and admins)"
 end
 
 -- Curates one conversation now. Returns the status written (as

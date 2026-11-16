@@ -739,6 +739,31 @@ function agent.get_session(db_path, session_id, login)
     return rows[1]
 end
 
+-- Read-only lookup for /chat and /api/chat-widget-history (doc/agent-data.md
+-- decision 4, brex 326591764): the owner can read and continue; an admin
+-- (`is_admin == true`) can read another user's raw conversation without
+-- mutating it. Every mutating route keeps calling `agent.get_session`.
+function agent.get_session_for_reader(db_path, session_id, login, is_admin)
+    if session_id == nil or session_id == "" then
+        return nil, "not_found"
+    end
+    rows = db.query(db_path, string.format(
+        "SELECT * FROM agent_session WHERE id = %s;",
+        db.quote(session_id)
+    ))
+    if rows == nil or rows[1] == nil then
+        return nil, "not_found"
+    end
+    row = rows[1]
+    if row.login == login then
+        return row, "owner"
+    end
+    if is_admin == true then
+        return row, "admin"
+    end
+    return nil, "forbidden"
+end
+
 -- Lets a human interrupt an in-progress turn loop between steps, not
 -- mid-model-call -- there's no way to abort an in-flight provider
 -- request from a separate process, so agent.run_turn's own loop (below)
