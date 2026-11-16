@@ -10,10 +10,8 @@ Needs a built luam (`LUAM_DIR`, as for `./bld/test.sh`) and `jq`.
 ./bld/eval.sh --mode test                    # scripted replies: free, deterministic, also run by ./bld/test.sh
 ./bld/eval.sh --mode test --only denied-write   # one scenario
 
-# live: a real model, in the eval-only project (see "Model access for live runs")
-gcloud auth login                            # or a service account with the Vertex AI user role
-export DAAT_EVAL_VERTEX_PROJECT=celleste-daat-eval
-export DAAT_EVAL_VERTEX_REGION=global        # optional, the default
+# live: a local open model via Ollama, or Vertex in an eval-only project
+export DAAT_EVAL_PROVIDER=ollama             # or vertex (default; requires DAAT_EVAL_VERTEX_PROJECT)
 export DAAT_EVAL_MODEL=...                   # optional; default: the provider's own default model
 ./bld/eval.sh --mode live                    # every scenario, 3 repeats each
 ./bld/eval.sh --mode live --compare /path/to/baseline/results.json
@@ -61,6 +59,7 @@ The agent also changes continuously: new tools, prompt changes, loop behaviour. 
   `tst/integration/test_helper.bash` already builds a fresh temp deployment per test on these.
 - **Model-call logging:** every real model call already persists its exact prompt, model id and token counts (`agent_model_call`), and every reply gets a classification row. The scorecard reads these and adds no tables of its own.
 - **Live providers:**
+  - Ollama / OpenAI-compatible (`agent_ollama.lua`): chat and embeddings (`qwen3:8b`, `nomic-embed-text` by default over localhost), no cloud credentials needed.
   - Vertex (`agent_vertex.lua`): chat and embeddings, gcloud auth.
   - Claude (`agent_claude.lua`): chat only. With no embeddings, semantic search is off, so on its own it is not a faithful environment for retrieval questions.
 

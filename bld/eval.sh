@@ -46,7 +46,7 @@ done
 
 case "$MODE" in
     test) PROVIDER=test; [ -n "$REPEAT" ] || REPEAT=1 ;;
-    live) PROVIDER=vertex; [ -n "$REPEAT" ] || REPEAT=3 ;;
+    live) PROVIDER="${DAAT_EVAL_PROVIDER:-vertex}"; [ -n "$REPEAT" ] || REPEAT=3 ;;
     *) echo "Error: --mode must be test or live" >&2; exit 2 ;;
 esac
 

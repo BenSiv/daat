@@ -15,15 +15,15 @@
 -- appears in core: platform.lua's agent_model/embedding_model choose
 -- one, and when unset the provider's own default applies.
 -- Loaded dynamically by name (config.platform_config().agent_provider,
--- no default: a deployment names its backend, e.g. "vertex" for
--- src/provider/agent_vertex.lua) rather than required directly, so swapping providers -- or,
+-- no default: a deployment names its backend, e.g. "ollama" for
+-- src/provider/agent_ollama.lua) rather than required directly, so swapping providers -- or,
 -- just as importantly, swapping in the deterministic test provider for
 -- repeatable, cost-free test runs -- is a config change, not a code
--- change. Implementations live under src/provider/ (agent_claude.lua,
--- agent_vertex.lua, agent_test.lua) -- this facade file itself stays
--- one level up, since it's the seam every implementation plugs into,
--- not an implementation itself (see doc/architecture.md's "Providers"
--- section).
+-- change. Implementations live under src/provider/ (agent_ollama.lua,
+-- agent_claude.lua, agent_vertex.lua, agent_test.lua) -- this facade
+-- file itself stays one level up, since it's the seam every
+-- implementation plugs into, not an implementation itself (see
+-- doc/architecture.md's "Providers" section).
 
 config = require("config")
 
