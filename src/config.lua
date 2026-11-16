@@ -398,6 +398,26 @@ function apply_retention(conf, policy)
     conf.agent_transcript_documents = policy.transcript_documents
 end
 
+-- Per-loop observation masking (doc/context-management-plan.md, Phase 4;
+-- #12, #36): enabled by default for long sub-agent loops, off for chat.
+-- Accepts either a table {research = ..., background = ..., chat = ...}
+-- or a single boolean enabling/disabling every loop.
+function config.resolve_masking(value)
+    policy = {research = true, background = true, chat = false}
+    if value == true or value == false then
+        policy.research = value
+        policy.background = value
+        policy.chat = value
+    elseif type(value) == "table" then
+        for _, loop_name in ipairs({"research", "background", "chat"}) do
+            if value[loop_name] == true or value[loop_name] == false then
+                policy[loop_name] = value[loop_name]
+            end
+        end
+    end
+    return policy
+end
+
 function config.platform_config()
     if PLATFORM_CONFIG_CACHE != nil then
         return PLATFORM_CONFIG_CACHE
@@ -521,6 +541,20 @@ function config.platform_config()
         agent_pin_schema = true,
         agent_pinned_schema_chars = 6000,
         agent_dedupe_repeat_calls = true,
+        -- Observation masking (doc/context-management-plan.md, Phase 4;
+        -- #12, #36): older tool results in long loops become compact
+        -- stubs once at least agent_masking_batch_tokens have piled up
+        -- before the last agent_masking_keep_last tool results.
+        agent_masking = config.resolve_masking(nil),
+        agent_masking_keep_last = 5,
+        agent_masking_min_chars = 300,
+        agent_masking_batch_tokens = 4000,
+        -- Cross-session user requests/corrections (#11, #36): off by
+        -- default; when true, a person's recent prior-session request
+        -- rows carry into their own later sessions (never another
+        -- user's, never tool traces).
+        agent_carry_user_requests = false,
+        agent_carry_user_requests_limit = 5,
         platform_adhoc_row_cap = 1000,
         extension_max_job_attempts = 5,
         -- Tag upkeep (tag.lua): vectors are the cached embeddings cut to
@@ -731,6 +765,18 @@ function config.platform_config()
     end
     if parsed.agent_dedupe_repeat_calls == true or parsed.agent_dedupe_repeat_calls == false then
         conf.agent_dedupe_repeat_calls = parsed.agent_dedupe_repeat_calls
+    end
+    conf.agent_masking = config.resolve_masking(parsed.agent_masking)
+    for _, key in ipairs({"agent_masking_keep_last", "agent_masking_min_chars", "agent_masking_batch_tokens"}) do
+        if type(parsed[key]) == "number" and parsed[key] >= 0 then
+            conf[key] = math.floor(parsed[key])
+        end
+    end
+    if parsed.agent_carry_user_requests == true or parsed.agent_carry_user_requests == false then
+        conf.agent_carry_user_requests = parsed.agent_carry_user_requests
+    end
+    if type(parsed.agent_carry_user_requests_limit) == "number" and parsed.agent_carry_user_requests_limit >= 1 then
+        conf.agent_carry_user_requests_limit = math.floor(parsed.agent_carry_user_requests_limit)
     end
     if type(parsed.platform_adhoc_row_cap) == "number" then
         conf.platform_adhoc_row_cap = parsed.platform_adhoc_row_cap
