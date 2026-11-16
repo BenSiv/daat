@@ -419,6 +419,111 @@ function history_sections(db_path, since, out)
     table.insert(out, "")
 end
 
+STORED_DATA_TYPES = {"request", "answer", "reasoning", "tool_trace", "model_input", "call_metrics", "control"}
+
+-- context_report.stored_by_type(db_path, since) -> {type = {rows = N, chars = M}}
+-- Stored characters across every loop by data type (doc/agent-data.md,
+-- "Data types"; #35). Uses SQL LENGTH/CHAR_LENGTH so large model_input
+-- columns aren't pulled over the wire on production.
+function context_report.stored_by_type(db_path, since)
+    agent_mod = require("agent")
+    totals = {}
+    for _, dtype in ipairs(STORED_DATA_TYPES) do
+        totals[dtype] = {rows = 0, chars = 0}
+    end
+    length_fn = "LENGTH"
+    if db.is_mariadb(db_path) then
+        length_fn = "CHAR_LENGTH"
+    end
+    if db.table_exists(db_path, "agent_message") then
+        has_data_type = false
+        for _, name in ipairs(db.get_columns(db_path, "agent_message")) do
+            if name == "data_type" then
+                has_data_type = true
+            end
+        end
+        dtype_expr = "NULL AS data_type"
+        group_expr = "role"
+        if has_data_type then
+            dtype_expr = "data_type"
+            group_expr = "data_type, role"
+        end
+        msg_rows = rows_or_empty(db.query(db_path,
+            "SELECT " .. dtype_expr .. ", role, COUNT(*) AS n, COALESCE(SUM(" .. length_fn .. "(content)), 0) AS chars " ..
+            "FROM agent_message WHERE 1 = 1" .. since_clause("created_at", since) .. " GROUP BY " .. group_expr .. ";"))
+        for _, row in ipairs(msg_rows) do
+            dtype = row.data_type
+            if dtype == nil or dtype == "" then
+                dtype = agent_mod.message_data_type(row.role)
+            end
+            if dtype == nil or totals[dtype] == nil then
+                dtype = "control"
+            end
+            n = tonumber(row.n)
+            if n == nil then
+                n = 0
+            end
+            chars = tonumber(row.chars)
+            if chars == nil then
+                chars = 0
+            end
+            totals[dtype].rows = totals[dtype].rows + n
+            totals[dtype].chars = totals[dtype].chars + chars
+        end
+    end
+
+    call_source = nil
+    if db.table_exists(db_path, "agent_model_call") then
+        call_source = "agent_model_call"
+    elseif db.table_exists(db_path, "knowledge_context") then
+        call_source = "knowledge_context"
+    end
+    if call_source != nil then
+        call_rows = rows_or_empty(db.query(db_path,
+            "SELECT COUNT(*) AS call_n, " ..
+            "COALESCE(SUM(CASE WHEN prompt IS NOT NULL THEN 1 ELSE 0 END), 0) AS prompt_n, " ..
+            "COALESCE(SUM(" .. length_fn .. "(prompt)), 0) AS prompt_chars, " ..
+            "COALESCE(SUM(" .. length_fn .. "(action_summary)), 0) AS summary_chars " ..
+            "FROM " .. call_source .. " WHERE 1 = 1" .. since_clause("created_at", since) .. ";"))
+        if call_rows[1] != nil then
+            c = call_rows[1]
+            prompt_n = tonumber(c.prompt_n)
+            if prompt_n == nil then
+                prompt_n = 0
+            end
+            prompt_chars = tonumber(c.prompt_chars)
+            if prompt_chars == nil then
+                prompt_chars = 0
+            end
+            call_n = tonumber(c.call_n)
+            if call_n == nil then
+                call_n = 0
+            end
+            summary_chars = tonumber(c.summary_chars)
+            if summary_chars == nil then
+                summary_chars = 0
+            end
+            totals.model_input.rows = prompt_n
+            totals.model_input.chars = prompt_chars
+            totals.call_metrics.rows = call_n
+            totals.call_metrics.chars = summary_chars
+        end
+    end
+    return totals
+end
+
+function stored_by_type_section(db_path, since, out)
+    totals = context_report.stored_by_type(db_path, since)
+    table.insert(out, "## Stored characters by type")
+    table.insert(out, "")
+    table.insert(out, "type\trows\tchars")
+    for _, dtype in ipairs(STORED_DATA_TYPES) do
+        t = totals[dtype]
+        table.insert(out, string.format("%s\t%d\t%d", dtype, t.rows, t.chars))
+    end
+    table.insert(out, "")
+end
+
 -- context_report.build(db_path, since) -> report text
 function context_report.build(db_path, since)
     out = {"# Agent context report"}
@@ -429,6 +534,7 @@ function context_report.build(db_path, since)
     table.insert(out, "")
     call_sections(db_path, since, out)
     history_sections(db_path, since, out)
+    stored_by_type_section(db_path, since, out)
     return table.concat(out, "\n")
 end
 

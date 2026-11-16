@@ -115,7 +115,7 @@ CREATE TABLE IF NOT EXISTS agent_background_task (
 -- ('chat', 'research', 'background', 'compaction', 'wrapup',
 -- 'self_check'; NULL on rows from before it was recorded) and `step`
 -- its number within the turn. `prompt` is cleared after the
--- deployment's prompt_retention_days; the rest is kept.
+-- deployment's model_input_days (or never stored when 0); the rest is kept.
 CREATE TABLE IF NOT EXISTS agent_model_call (
     id INTEGER PRIMARY KEY %s,
     session_id VARCHAR(255) NOT NULL,
@@ -175,6 +175,9 @@ function agent.record_model_call(db_path, session_id, message_id, prompt, model_
     if model_id == nil then
         model_id = agent.default_model()
     end
+    if config.platform_config().model_input_days == 0 then
+        prompt = nil
+    end
     _, call_id = db.exec(db_path, string.format(
         "INSERT INTO agent_model_call (session_id, message_id, kind, step, parent_message_id, provider, model_id, prompt, reasoning_document_id, prompt_tokens, completion_tokens, total_tokens) " ..
         "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);",
@@ -186,27 +189,232 @@ function agent.record_model_call(db_path, session_id, message_id, prompt, model_
     return call_id
 end
 
--- agent.prune_prompts(db_path, days) -> rows cleared
--- Clears the stored prompt of model calls older than `days` days
--- (prompt_retention_days); tokens, evaluation and feedback stay. Times
--- are compared as UTC 'YYYY-MM-DD HH:MM:SS' text, the form both
--- backends' now() writes. `days` <= 0 keeps everything.
-function agent.prune_prompts(db_path, days)
-    if days == nil or days <= 0 then
+function retention_cutoff(days)
+    if days == 0 then
+        return os.date("!%Y-%m-%d %H:%M:%S", os.time() + 1)
+    end
+    return os.date("!%Y-%m-%d %H:%M:%S", os.time() - math.floor(days * 86400))
+end
+
+function count_rows(db_path, sql)
+    rows = db.query(db_path, sql)
+    if rows != nil and rows[1] != nil and tonumber(rows[1].n) != nil then
+        return tonumber(rows[1].n)
+    end
+    return 0
+end
+
+-- agent.prune_model_input(db_path, days) -> rows cleared
+-- Clears the stored model input (agent_model_call.prompt) older than
+-- `days` days (model_input_days); tokens, evaluation and feedback stay.
+-- Times are compared as UTC 'YYYY-MM-DD HH:MM:SS' text, the form both
+-- backends' now() writes. "forever" keeps everything; 0 clears every
+-- stored prompt (lean).
+function agent.prune_model_input(db_path, days)
+    if days == nil or days == "forever" or type(days) != "number" or days < 0 then
         return 0
     end
-    cutoff = os.date("!%Y-%m-%d %H:%M:%S", os.time() - math.floor(days * 86400))
-    rows = db.query(db_path, string.format(
-        "SELECT COUNT(*) AS n FROM agent_model_call WHERE prompt IS NOT NULL AND created_at < %s;", db.quote(cutoff)))
-    count = 0
-    if rows != nil and rows[1] != nil then
-        count = tonumber(rows[1].n)
+    if not db.table_exists(db_path, "agent_model_call") then
+        return 0
     end
+    if days == 0 then
+        count = count_rows(db_path, "SELECT COUNT(*) AS n FROM agent_model_call WHERE prompt IS NOT NULL;")
+        if count > 0 then
+            db.exec(db_path, "UPDATE agent_model_call SET prompt = NULL WHERE prompt IS NOT NULL;")
+        end
+        return count
+    end
+    cutoff = retention_cutoff(days)
+    count = count_rows(db_path, string.format(
+        "SELECT COUNT(*) AS n FROM agent_model_call WHERE prompt IS NOT NULL AND created_at < %s;", db.quote(cutoff)))
     if count > 0 then
         db.exec(db_path, string.format(
             "UPDATE agent_model_call SET prompt = NULL WHERE prompt IS NOT NULL AND created_at < %s;", db.quote(cutoff)))
     end
     return count
+end
+
+-- Legacy alias kept for callers still passing prompt_retention_days
+-- semantics (<= 0 meant keep forever).
+function agent.prune_prompts(db_path, days)
+    if days == nil or days == "forever" or (type(days) == "number" and days <= 0) then
+        return 0
+    end
+    return agent.prune_model_input(db_path, days)
+end
+
+-- The stub text replacing a pruned tool_trace result (#35): keeps the
+-- row and toolCallId pairing intact while releasing the raw tool output.
+function agent.tool_trace_stub(tool_name, orig_chars, days)
+    name = tool_name
+    if name == nil or name == "" then
+        name = "unknown"
+    end
+    return string.format("[result pruned after %d days: %s, %d characters]",
+        math.floor(days), tostring(name), tonumber(orig_chars))
+end
+
+-- agent.prune_tool_traces(db_path, days) -> rows stubbed
+-- Replaces the result text of tool_trace rows older than `days` days
+-- with a one-line stub, marking the JSON payload `pruned = true` so a
+-- second run skips it and repeat-call / pinned-schema checks ignore it.
+function agent.prune_tool_traces(db_path, days)
+    if days == nil or days == "forever" or type(days) != "number" or days < 0 then
+        return 0
+    end
+    if not db.table_exists(db_path, "agent_message") then
+        return 0
+    end
+    cutoff = retention_cutoff(days)
+    rows = db.query(db_path, string.format(
+        "SELECT id, content FROM agent_message WHERE (data_type = 'tool_trace' OR (data_type IS NULL AND role = 'tool_result')) AND created_at < %s ORDER BY id;",
+        db.quote(cutoff)))
+    if rows == nil then
+        return 0
+    end
+    stubbed = 0
+    for _, row in ipairs(rows) do
+        raw = tostring(row.content)
+        decoded, _, _ = json.decode(raw)
+        new_content = nil
+        if type(decoded) == "table" and decoded.text != nil then
+            if decoded.pruned != true then
+                stub = agent.tool_trace_stub(decoded.tool_name, string.len(tostring(decoded.text)), days)
+                new_content = json.encode({
+                    tool_call_id = decoded.tool_call_id,
+                    tool_name = decoded.tool_name,
+                    text = stub,
+                    is_error = decoded.is_error == true,
+                    pruned = true,
+                })
+            end
+        elseif string.sub(raw, 1, 21) != "[result pruned after " then
+            new_content = agent.tool_trace_stub("unknown", string.len(raw), days)
+        end
+        if new_content != nil then
+            db.exec(db_path, string.format(
+                "UPDATE agent_message SET content = %s WHERE id = %d;",
+                db.quote(new_content), tonumber(row.id)))
+            stubbed = stubbed + 1
+        end
+    end
+    return stubbed
+end
+
+-- agent.prune_knowledge(db_path, days) -> rows removed
+-- Under `lean`, removes raw request/answer/reasoning rows once the
+-- conversation's curation settled (`curated` with an active note, or
+-- `nothing`) at least `days` days ago and no uncurated message has been
+-- added since (`source_hash` matches). Updates `source_hash` afterward
+-- so the curation worker does not re-queue the emptied conversation.
+function agent.prune_knowledge(db_path, days)
+    if days == nil or days == "forever" or type(days) != "number" or days < 0 then
+        return 0
+    end
+    if not db.table_exists(db_path, "agent_message") or not db.table_exists(db_path, "knowledge_conversation_curation") then
+        return 0
+    end
+    cutoff = retention_cutoff(days)
+    candidates = db.query(db_path, string.format(
+        "SELECT c.session_id, c.source_hash, c.status, c.note_id FROM knowledge_conversation_curation c " ..
+        "LEFT JOIN document d ON d.id = c.note_id " ..
+        "WHERE c.checked_at IS NOT NULL AND c.checked_at < %s " ..
+        "AND (c.status = 'nothing' OR (c.status = 'curated' AND c.note_id IS NOT NULL AND d.id IS NOT NULL AND (d.archived_at IS NULL OR d.archived_at = ''))) " ..
+        "ORDER BY c.session_id;",
+        db.quote(cutoff)))
+    if candidates == nil then
+        return 0
+    end
+    curate = require("curate")
+    removed = 0
+    for _, c in ipairs(candidates) do
+        sid = tostring(c.session_id)
+        n = count_rows(db_path, string.format(
+            "SELECT COUNT(*) AS n FROM agent_message WHERE session_id = %s AND data_type IN ('request', 'answer', 'reasoning');",
+            db.quote(sid)))
+        if n > 0 then
+            _, current_hash = curate.conversation_text(db_path, sid)
+            if c.source_hash != nil and current_hash == c.source_hash then
+                db.exec(db_path, string.format(
+                    "DELETE FROM agent_message WHERE session_id = %s AND data_type IN ('request', 'answer', 'reasoning');",
+                    db.quote(sid)))
+                _, post_hash = curate.conversation_text(db_path, sid)
+                db.exec(db_path, string.format(
+                    "UPDATE knowledge_conversation_curation SET source_hash = %s WHERE session_id = %s;",
+                    db.quote(post_hash), db.quote(sid)))
+                removed = removed + n
+            end
+        end
+    end
+    return removed
+end
+
+-- agent.prune_metrics(db_path, days) -> rows removed
+-- Prunes call_metrics (agent_model_call) and settled control rows
+-- older than `days` days when metrics_days is overridden from "forever".
+function agent.prune_metrics(db_path, days)
+    if days == nil or days == "forever" or type(days) != "number" or days < 0 then
+        return 0
+    end
+    cutoff = retention_cutoff(days)
+    removed = 0
+    if db.table_exists(db_path, "agent_model_call") then
+        n = count_rows(db_path, string.format(
+            "SELECT COUNT(*) AS n FROM agent_model_call WHERE created_at < %s;", db.quote(cutoff)))
+        if n > 0 then
+            db.exec(db_path, string.format(
+                "DELETE FROM agent_model_call WHERE created_at < %s;", db.quote(cutoff)))
+            removed = removed + n
+        end
+    end
+    if db.table_exists(db_path, "agent_message") then
+        n = count_rows(db_path, string.format(
+            "SELECT COUNT(*) AS n FROM agent_message WHERE data_type = 'control' AND created_at < %s;", db.quote(cutoff)))
+        if n > 0 then
+            db.exec(db_path, string.format(
+                "DELETE FROM agent_message WHERE data_type = 'control' AND created_at < %s;", db.quote(cutoff)))
+            removed = removed + n
+        end
+    end
+    if db.table_exists(db_path, "agent_pending_action") then
+        n = count_rows(db_path, string.format(
+            "SELECT COUNT(*) AS n FROM agent_pending_action WHERE status != 'pending' AND created_at < %s;", db.quote(cutoff)))
+        if n > 0 then
+            db.exec(db_path, string.format(
+                "DELETE FROM agent_pending_action WHERE status != 'pending' AND created_at < %s;", db.quote(cutoff)))
+            removed = removed + n
+        end
+    end
+    if db.table_exists(db_path, "agent_background_task") then
+        n = count_rows(db_path, string.format(
+            "SELECT COUNT(*) AS n FROM agent_background_task WHERE status IN ('completed', 'failed') AND created_at < %s;", db.quote(cutoff)))
+        if n > 0 then
+            db.exec(db_path, string.format(
+                "DELETE FROM agent_background_task WHERE status IN ('completed', 'failed') AND created_at < %s;", db.quote(cutoff)))
+            removed = removed + n
+        end
+    end
+    return removed
+end
+
+-- agent.prune_retention(db_path, conf) -> summary table
+-- Runs every agent retention rule for `conf` (or config.platform_config()).
+function agent.prune_retention(db_path, conf)
+    if conf == nil then
+        conf = config.platform_config()
+    end
+    policy = conf.retention
+    if policy == nil then
+        policy = config.resolve_retention(conf)
+    end
+    return {
+        strategy = policy.strategy,
+        policy = policy,
+        model_input = agent.prune_model_input(db_path, policy.model_input_days),
+        tool_trace = agent.prune_tool_traces(db_path, policy.tool_trace_days),
+        knowledge = agent.prune_knowledge(db_path, policy.knowledge_days),
+        metrics = agent.prune_metrics(db_path, policy.metrics_days),
+    }
 end
 
 -- agent.record_reply_eval(db_path, call_id, provider, is_error, reply_text)
@@ -1276,7 +1484,7 @@ function pinned_schema_block(to_compact, budget)
             end
         elseif msg.role == "tool_result" then
             decoded, _, _ = json.decode(msg.content)
-            if decoded != nil and decoded.is_error != true and calls[tostring(decoded.tool_call_id)] != nil and decoded.text != nil then
+            if decoded != nil and decoded.is_error != true and decoded.pruned != true and calls[tostring(decoded.tool_call_id)] != nil and decoded.text != nil then
                 remember(calls[tostring(decoded.tool_call_id)], decoded.text)
             end
         end
@@ -2069,6 +2277,7 @@ function build_history_messages(messages)
                     toolName = decoded.tool_name,
                     content = {{type = "text", text = agent.cap_tool_text(decoded.text, result_cap, msg.id)}},
                     isError = decoded.is_error == true,
+                    pruned = decoded.pruned == true,
                 })
             else
                 table.insert(result, {role = "user", content = "[Prior tool result]: " .. tostring(msg.content)})
@@ -2811,7 +3020,7 @@ function agent.find_repeat(messages, full_name, args, is_write)
     key = canonical_json(args)
     answered = {}
     for _, msg in ipairs(messages) do
-        if msg.role == "toolResult" and msg.isError != true and msg.toolCallId != nil then
+        if msg.role == "toolResult" and msg.isError != true and msg.pruned != true and msg.toolCallId != nil then
             answered[tostring(msg.toolCallId)] = true
         end
     end

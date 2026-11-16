@@ -283,6 +283,121 @@ function validate_patterns(list)
     return out
 end
 
+-- Retention per data type (doc/agent-data.md, "Retention", decisions 7
+-- and 8; #35). A deployment picks a strategy ("full" | "standard" |
+-- "lean") and can override single values with agent_retention_override.
+-- "forever" keeps rows indefinitely; 0 on model_input_days means model
+-- inputs are not stored at all (lean). The legacy prompt_retention_days
+-- key is still read as an alias for model_input_days, with <= 0 mapped
+-- to "forever" to preserve its old meaning.
+RETENTION_STRATEGIES = {
+    full = {
+        knowledge_days = "forever",
+        tool_trace_days = "forever",
+        model_input_days = "forever",
+        metrics_days = "forever",
+        transcript_documents = "whole",
+    },
+    standard = {
+        knowledge_days = "forever",
+        tool_trace_days = 90,
+        model_input_days = 30,
+        metrics_days = "forever",
+        transcript_documents = "off",
+    },
+    lean = {
+        knowledge_days = 30,
+        tool_trace_days = 14,
+        model_input_days = 0,
+        metrics_days = "forever",
+        transcript_documents = "off",
+    },
+}
+config.RETENTION_STRATEGIES = RETENTION_STRATEGIES
+
+function valid_retention_days(value)
+    if value == "forever" then
+        return "forever"
+    end
+    if type(value) == "number" and value >= 0 then
+        return value
+    end
+    return nil
+end
+
+function valid_legacy_prompt_days(value)
+    if value == "forever" then
+        return "forever"
+    end
+    if type(value) == "number" then
+        if value <= 0 then
+            return "forever"
+        end
+        return value
+    end
+    return nil
+end
+
+function config.resolve_retention(parsed)
+    strategy = "standard"
+    if type(parsed) == "table" and RETENTION_STRATEGIES[parsed.agent_retention] != nil then
+        strategy = parsed.agent_retention
+    end
+    base = RETENTION_STRATEGIES[strategy]
+    policy = {
+        strategy = strategy,
+        knowledge_days = base.knowledge_days,
+        tool_trace_days = base.tool_trace_days,
+        model_input_days = base.model_input_days,
+        metrics_days = base.metrics_days,
+        transcript_documents = base.transcript_documents,
+    }
+    if type(parsed) != "table" then
+        return policy
+    end
+    legacy_days = valid_legacy_prompt_days(parsed.prompt_retention_days)
+    if legacy_days != nil then
+        policy.model_input_days = legacy_days
+    end
+    mi_days = valid_retention_days(parsed.model_input_days)
+    if mi_days != nil then
+        policy.model_input_days = mi_days
+    end
+    if parsed.agent_transcript_documents == "off" or parsed.agent_transcript_documents == "whole" then
+        policy.transcript_documents = parsed.agent_transcript_documents
+    end
+    if type(parsed.agent_retention_override) == "table" then
+        overrides = parsed.agent_retention_override
+        if overrides.prompt_retention_days != nil and overrides.model_input_days == nil then
+            ov_legacy = valid_legacy_prompt_days(overrides.prompt_retention_days)
+            if ov_legacy != nil then
+                policy.model_input_days = ov_legacy
+            end
+        end
+        for _, key in ipairs({"knowledge_days", "tool_trace_days", "model_input_days", "metrics_days"}) do
+            ov = valid_retention_days(overrides[key])
+            if ov != nil then
+                policy[key] = ov
+            end
+        end
+        if overrides.transcript_documents == "off" or overrides.transcript_documents == "whole" then
+            policy.transcript_documents = overrides.transcript_documents
+        end
+    end
+    return policy
+end
+
+function apply_retention(conf, policy)
+    conf.agent_retention = policy.strategy
+    conf.retention = policy
+    conf.knowledge_days = policy.knowledge_days
+    conf.tool_trace_days = policy.tool_trace_days
+    conf.model_input_days = policy.model_input_days
+    conf.prompt_retention_days = policy.model_input_days
+    conf.metrics_days = policy.metrics_days
+    conf.agent_transcript_documents = policy.transcript_documents
+end
+
 function config.platform_config()
     if PLATFORM_CONFIG_CACHE != nil then
         return PLATFORM_CONFIG_CACHE
@@ -335,11 +450,13 @@ function config.platform_config()
         agent_context_fixed_tokens = 3900,
         agent_chars_per_token = 2.8,
         agent_compaction_mid_turn = true,
-        -- agent_model_call.prompt (the exact history sent on each model
-        -- call) is operational audit data: cleared after this many days
-        -- by `daat agent prune-prompts` (0: keep forever). Chat history
-        -- itself (agent_message, transcript documents) is never pruned.
-        prompt_retention_days = 90,
+        -- Retention per data type (doc/agent-data.md, "Retention"; #35):
+        -- populated from RETENTION_STRATEGIES[agent_retention] below.
+        -- model_input_days replaces prompt_retention_days (still kept as
+        -- an alias).
+        agent_retention = "standard",
+        model_input_days = 30,
+        prompt_retention_days = 30,
         -- Keep what's already known (doc/context-management-plan.md,
         -- Phase 1): schema lookups carried verbatim through compaction
         -- (within this many characters), and an exact repeat of a
@@ -495,6 +612,7 @@ function config.platform_config()
         mail_from = nil,
         public_url = nil,
     }
+    apply_retention(conf, config.resolve_retention(nil))
 
     path = config.platform_config_path()
     file = io.open(path, "r")
@@ -569,9 +687,7 @@ function config.platform_config()
     if parsed.agent_compaction_mid_turn == true or parsed.agent_compaction_mid_turn == false then
         conf.agent_compaction_mid_turn = parsed.agent_compaction_mid_turn
     end
-    if type(parsed.prompt_retention_days) == "number" then
-        conf.prompt_retention_days = parsed.prompt_retention_days
-    end
+    apply_retention(conf, config.resolve_retention(parsed))
     if parsed.search_passages == true or parsed.search_passages == false then
         conf.search_passages = parsed.search_passages
     end
@@ -632,9 +748,6 @@ function config.platform_config()
     end
     if type(parsed.agent_curate_quiet_minutes) == "number" and parsed.agent_curate_quiet_minutes >= 0 then
         conf.agent_curate_quiet_minutes = parsed.agent_curate_quiet_minutes
-    end
-    if parsed.agent_transcript_documents == "off" or parsed.agent_transcript_documents == "whole" then
-        conf.agent_transcript_documents = parsed.agent_transcript_documents
     end
     if type(parsed.embedding_skip) == "table" then
         conf.embedding_skip = validate_patterns(parsed.embedding_skip)

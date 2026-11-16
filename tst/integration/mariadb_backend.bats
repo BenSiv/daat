@@ -139,14 +139,16 @@ return {
 EOF
     "$BIN" schema add schemas/paper.lua
 
-    big_content=$(python3 -c "print('x' * 200000)")
+    # 100 KB exceeds MariaDB's 65,535-byte TEXT cap while staying below
+    # Linux's 131,072-byte per-argument MAX_ARG_STRLEN execve limit.
+    big_content=$(python3 -c "print('x' * 100000)")
     run "$BIN" entity create paper "body=${big_content}"
     [ "$status" -eq 0 ]
     [[ "$output" =~ "Created paper #1" ]]
 
     run "$BIN" entity show paper 1
     stored_len=$(printf '%s' "$output" | grep -o 'x*' | awk '{ if (length($0) > max) max = length($0) } END { print max }')
-    [ "$stored_len" -eq 200000 ]
+    [ "$stored_len" -eq 100000 ]
 
     run "$BIN" ledger history 1
     [[ "$output" =~ "create" ]]
@@ -424,4 +426,39 @@ EOF2
     [[ "$output" =~ "Answer after 75 KB thinking." ]]
     [ "$(q "SELECT MAX(CHAR_LENGTH(content)) > 75000 FROM agent_message;")" = "1" ]
     [ "$(q "SELECT number_value >= 9 FROM system_state WHERE name = 'store.schema_version';")" = "1" ]
+}
+
+@test "store prune stubs tool_trace rows, clears model_input, reports stored chars by type, and is idempotent on MariaDB (#35)" {
+    cat > platform.lua <<EOF2
+return {db_backend = "mariadb", mariadb_host = "${PLATFORM_MARIADB_HOST}", mariadb_port = ${PLATFORM_MARIADB_PORT}, mariadb_user = "${PLATFORM_MARIADB_USER}", mariadb_database = "${PLATFORM_MARIADB_DATABASE}", agent_provider = "test", agent_turn_mode = "inline", agent_retention = "standard"}
+EOF2
+    "$BIN" init >/dev/null
+    read -r session csrf <<< "$(login_test_user alice i)"
+    cookie="session=${session}; csrf=${csrf}"
+    q() { mariadb -N -h "$PLATFORM_MARIADB_HOST" -P "$PLATFORM_MARIADB_PORT" -u "$PLATFORM_MARIADB_USER" -p"$PLATFORM_MARIADB_PASSWORD" "$PLATFORM_MARIADB_DATABASE" -e "$1" 2>/dev/null; }
+
+    resp=$(raw_post_json "/api/chat-widget-start" '{"title":"MariaDB prune"}' "$cookie" "$csrf" "")
+    sid=$(json_body "$resp" | jq -r '.session_id')
+    scripted="$(tool_call_response "entity.list_types" "{}")"$'\1'"$(done_response "Done on MariaDB.")"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${sid}\",\"message\":\"Check types\"}" "$cookie" "$csrf" "$scripted" >/dev/null
+
+    q "UPDATE agent_message SET created_at = '2020-01-01 00:00:00' WHERE session_id = '${sid}';"
+    q "UPDATE agent_model_call SET created_at = '2020-01-01 00:00:00' WHERE session_id = '${sid}';"
+
+    run "$BIN" store prune
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "tool_trace: Stubbed 1 tool results older than 90 days" ]]
+    [ "$(q "SELECT COUNT(*) FROM agent_model_call WHERE session_id = '${sid}' AND prompt IS NOT NULL;")" = "0" ]
+    [[ "$(q "SELECT content FROM agent_message WHERE session_id = '${sid}' AND role = 'tool_result';")" =~ "result pruned after 90 days: entity.list_types," ]]
+
+    # Second run is a complete no-op on MariaDB.
+    run "$BIN" store prune
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "model_input: Cleared 0 stored prompts" ]]
+    [[ "$output" =~ "tool_trace: Stubbed 0 tool results" ]]
+
+    run "$BIN" agent context-report
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "## Stored characters by type" ]]
+    [[ "$output" =~ "model_input	0	0" ]]
 }
