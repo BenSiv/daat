@@ -98,7 +98,7 @@ end
 function tests.hand_rolled_sql_columns_text_covers_every_event_log_table()
     print("Testing hand_rolled_sql_columns_text names the real columns for each knowledge event-log table")
     cases = {
-        knowledge_retrieval = {"id", "session_id", "query_text", "hit_count", "created_at"},
+        knowledge_retrieval = {"id", "session_id", "author", "query_text", "hit_count", "status", "reviewed_at", "created_at"},
         knowledge_retrieval_hit = {"retrieval_id", "document_id", "rank", "score", "tier_weight", "reinforcement_delta",
             "atomicity_status", "connectivity_status", "duplication_status", "title_status", "reviewed_at"},
     }
@@ -110,6 +110,13 @@ function tests.hand_rolled_sql_columns_text_covers_every_event_log_table()
         end
     end
     check(knowledge.hand_rolled_sql_columns_text("not_a_real_table") == nil, "expected nil for an unrecognized table name")
+end
+
+function tests.search_review_mode_defaults_to_deferred()
+    print("Testing config.platform_config().search_review_mode defaults to deferred")
+    conf = require("config").platform_config()
+    check(conf.search_review_mode == "deferred",
+        "expected default search_review_mode == 'deferred', got " .. tostring(conf.search_review_mode))
 end
 
 function tests.link_reason_too_thin()

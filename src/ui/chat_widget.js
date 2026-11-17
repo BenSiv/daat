@@ -8,6 +8,7 @@
     var attachBtn = document.getElementById('platform-chat-widget-attach-btn');
     var fileInput = document.getElementById('platform-chat-widget-file');
     var attachmentEl = document.getElementById('platform-chat-widget-attachment');
+    var readonlyEl = document.getElementById('platform-chat-widget-readonly');
 
     // Builds a short, readable description from whatever page_shell
     // (see its own header comment) put in window.PLATFORM_PAGE_CONTEXT
@@ -36,10 +37,13 @@
     // Markdown rendering client-side.
     var MARKDOWN_ROLES = {assistant: true, self_check: true, compaction_summary: true, progress: true};
     function render(state) {
-        awaitingApproval = !!(state && state.pending);
+        var isReadOnly = !!(state && state.read_only);
+        awaitingApproval = !isReadOnly && !!(state && state.pending);
         updateToggleState();
         if (!state || !state.messages || state.messages.length === 0) {
-            messagesEl.innerHTML = '<p class="platform-chat-widget-empty">Ask something, or ask the assistant to search or create a document...</p>';
+            messagesEl.innerHTML = '<p class="platform-chat-widget-empty">' +
+                (isReadOnly ? 'No messages in this conversation.' : 'Ask something, or ask the assistant to search or create a document...') +
+                '</p>';
         } else {
             var html = '';
             state.messages.forEach(function(msg){
@@ -50,7 +54,8 @@
                 // are role "assistant" with non-empty text, so without
                 // this flag they'd render identically.
                 var isFinal = msg.role === 'assistant' && msg.is_final === true;
-                var label = isFinal ? 'Answer' : (ROLE_LABELS[msg.role] || msg.role);
+                var userLabel = (isReadOnly && state.owner) ? state.owner : ROLE_LABELS.user;
+                var label = isFinal ? 'Answer' : (msg.role === 'user' ? userLabel : (ROLE_LABELS[msg.role] || msg.role));
                 var body = MARKDOWN_ROLES[msg.role] ? msg.content : PlatformJS.escapeHtml(msg.content);
                 var extraClass = '';
                 if (isFinal) {
@@ -63,7 +68,7 @@
                 // answer -- not on the user's own message, a tool
                 // result, in-turn narration, or a compaction summary
                 // the user never actually sees as a "reply".
-                if (isFinal) {
+                if (isFinal && !isReadOnly) {
                     html += '<div class="platform-chat-feedback" data-feedback-for="' + msg.id + '">' +
                         '<button type="button" data-feedback-message="' + msg.id + '" data-feedback="up" title="Helpful">👍</button>' +
                         '<button type="button" data-feedback-message="' + msg.id + '" data-feedback="down" title="Not helpful">👎</button>' +
@@ -72,19 +77,34 @@
             });
             messagesEl.innerHTML = html;
         }
-        if (state && state.pending) {
-            var argsLines = '';
-            for (var k in state.pending.args) { argsLines += '<div>' + PlatformJS.escapeHtml(k) + ' = ' + PlatformJS.escapeHtml(state.pending.args[k]) + '</div>'; }
-            messagesEl.innerHTML += '<div class="platform-chat-pending"><p><strong>Run:</strong> ' + PlatformJS.escapeHtml(state.pending.tool) + '.' + PlatformJS.escapeHtml(state.pending.method) + '</p>' + argsLines +
-                '<button type="button" class="btn btn-primary" data-approve="' + state.pending.id + '">Approve</button> ' +
-                '<button type="button" class="btn btn-danger" data-deny="' + state.pending.id + '">Deny</button> ' +
-                '<input type="text" class="platform-chat-deny-reason" maxlength="1000" placeholder="Why not? (optional)" aria-label="Reason for denying"></div>';
+        if (isReadOnly) {
             form.style.display = 'none';
+            if (readonlyEl) {
+                var ownerText = state.owner ? (' by ' + state.owner) : '';
+                readonlyEl.textContent = 'Viewing conversation' + ownerText + ' (read-only)';
+                readonlyEl.style.display = 'block';
+            }
         } else {
-            form.style.display = 'flex';
+            if (readonlyEl) {
+                readonlyEl.style.display = 'none';
+                readonlyEl.textContent = '';
+            }
+            if (state && state.pending) {
+                var argsLines = '';
+                for (var k in state.pending.args) { argsLines += '<div>' + PlatformJS.escapeHtml(k) + ' = ' + PlatformJS.escapeHtml(state.pending.args[k]) + '</div>'; }
+                messagesEl.innerHTML += '<div class="platform-chat-pending"><p><strong>Run:</strong> ' + PlatformJS.escapeHtml(state.pending.tool) + '.' + PlatformJS.escapeHtml(state.pending.method) + '</p>' + argsLines +
+                    '<button type="button" class="btn btn-primary" data-approve="' + state.pending.id + '">Approve</button> ' +
+                    '<button type="button" class="btn btn-danger" data-deny="' + state.pending.id + '">Deny</button> ' +
+                    '<input type="text" class="platform-chat-deny-reason" maxlength="1000" placeholder="Why not? (optional)" aria-label="Reason for denying"></div>';
+                form.style.display = 'none';
+            } else {
+                form.style.display = 'flex';
+            }
         }
         messagesEl.scrollTop = messagesEl.scrollHeight;
-        syncSqlConsole(state);
+        if (!isReadOnly) {
+            syncSqlConsole(state);
+        }
     }
 
     // Prefills the /sql console's own query textarea from the agent's
@@ -570,23 +590,37 @@
     // /chat's history browser does this, via cgi.lua's page_context.
     // open_chat_session_id -- clicking a past session there should pop
     // the widget open onto that exact conversation, not leave it
-    // closed or on whatever it had cached). Wins over an existing
-    // cached session id, since the user just explicitly picked this one.
+    // closed or on whatever it had cached). When an admin opens another
+    // user's session (`open_chat_read_only`), load that session in the
+    // widget without overwriting the admin's own cached STORAGE_KEY.
+    var initialSessionId = null;
+    var initialReadOnly = false;
     if (window.PLATFORM_PAGE_CONTEXT && window.PLATFORM_PAGE_CONTEXT.open_chat_session_id) {
-        localStorage.setItem(STORAGE_KEY, window.PLATFORM_PAGE_CONTEXT.open_chat_session_id);
+        initialSessionId = window.PLATFORM_PAGE_CONTEXT.open_chat_session_id;
+        initialReadOnly = !!(window.PLATFORM_PAGE_CONTEXT.open_chat_read_only);
+        if (!initialReadOnly) {
+            localStorage.setItem(STORAGE_KEY, initialSessionId);
+        }
         root.classList.add('platform-chat-widget-open');
         localStorage.setItem(OPEN_KEY, '1');
+    } else {
+        initialSessionId = localStorage.getItem(STORAGE_KEY);
     }
 
     updateToggleState();
-    var existingSessionId = localStorage.getItem(STORAGE_KEY);
-    if (existingSessionId) {
-        fetch('api/chat-widget-history?session_id=' + encodeURIComponent(existingSessionId))
+    if (initialSessionId) {
+        fetch('api/chat-widget-history?session_id=' + encodeURIComponent(initialSessionId))
             .then(function(res){ if (!res.ok) { throw new Error('no session'); } return res.json(); })
             .then(function(state){
                 render(state);
-                resumePollIfPending(existingSessionId, state);
+                if (!state.read_only) {
+                    resumePollIfPending(initialSessionId, state);
+                }
             })
-            .catch(function(){ localStorage.removeItem(STORAGE_KEY); });
+            .catch(function(){
+                if (!initialReadOnly) {
+                    localStorage.removeItem(STORAGE_KEY);
+                }
+            });
     }
 })();

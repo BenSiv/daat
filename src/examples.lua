@@ -175,23 +175,28 @@ return {
 -- Every field commented out on purpose -- unlike theme.lua (no
 -- sensible default exists for a color palette), platform.lua's fields
 -- already have documented defaults (see doc/architecture.md's own
--- table) and vertex_project has no safe placeholder at all: a real,
--- potentially billed GCP project name a deployer forgot to edit would
--- fail confusingly instead of config.platform_config()'s own clear
--- "not set" behavior. A commented-out file changes nothing (sandbox.run
--- on an all-comments file returns nil, same as no file at all) -- it's
--- reference documentation of what's available, not a behavior change.
+-- table). The example leads with the local open-weights provider
+-- (`ollama`: qwen3:8b + nomic-embed-text over localhost) rather than a
+-- cloud vendor whose project id has no safe placeholder. A commented-out
+-- file changes nothing (sandbox.run on an all-comments file returns nil,
+-- same as no file at all) -- it's reference documentation of what's
+-- available, not a behavior change.
 EXAMPLE_PLATFORM_LUA = """-- Every field here is optional; see doc/architecture.md's own table
 -- for the full list and current defaults. Uncomment and edit only what
 -- this deployment actually needs to override.
 return {
   -- Which backends to call (unset: that feature is off). The models
-  -- default to the chosen provider's own; name one to pin it.
-  -- agent_provider = "vertex",
-  -- agent_model = "gemini-3.5-flash-lite",
-  -- embedding_model = "text-embedding-005",
+  -- default to the chosen provider's own ("ollama", "vertex", "claude");
+  -- name one to pin it.
+  -- agent_provider = "ollama",
+  -- agent_model = "qwen3:8b",
+  -- agent_thinking = "summary",
+  -- agent_retention = "full",
+  -- agent_retention_override = {tool_trace_days = 30},
+  -- embedding_model = "nomic-embed-text",
   -- search_provider = "google_cse",
   -- The chosen provider's own settings, read by the provider itself:
+  -- ollama_url = "http://127.0.0.1:11434/v1",
   -- vertex_project = "your-gcp-project",
   -- vertex_region = "global",
   -- agent_max_turns = 20,

@@ -92,19 +92,24 @@ function checks.conversation(message_rows, pending_rows)
     end
     last_user = 0
     for i, row in ipairs(message_rows) do
-        msg = {role = row.role, text = "", tool_calls = {}}
+        has_parent = row.parent_message_id != nil and row.parent_message_id != ""
+        msg = {role = row.role, text = "", thinking = "", tool_calls = {}, has_parent = has_parent, loop_kind = row.loop_kind}
         if row.role == "assistant" then
             decoded = decode_or_text(row.content)
             if decoded != nil and decoded.blocks != nil then
                 parts = {}
+                thinking_parts = {}
                 for _, block in ipairs(decoded.blocks) do
-                    if block.type == "text" and block.text != nil then
+                    if block.type == "thinking" and block.thinking != nil then
+                        table.insert(thinking_parts, block.thinking)
+                    elseif block.type == "text" and block.text != nil then
                         table.insert(parts, block.text)
                     elseif block.type == "toolCall" then
                         table.insert(msg.tool_calls, {id = block.id, name = block.name, arguments = block.arguments})
                     end
                 end
                 msg.text = table.concat(parts, "\n")
+                msg.thinking = table.concat(thinking_parts, "\n\n")
             else
                 msg.text = tostring(row.content)
             end
@@ -124,11 +129,11 @@ function checks.conversation(message_rows, pending_rows)
             last_user = i
         end
     end
-    -- The final answer: the last assistant reply with text and no tool
-    -- call, after the last user message.
+    -- The final answer: the last main-conversation assistant reply with
+    -- text and no tool call, after the last user message.
     for i = #conv.messages, last_user + 1, -1 do
         msg = conv.messages[i]
-        if msg.role == "assistant" and #msg.tool_calls == 0 and msg.text != "" then
+        if msg.role == "assistant" and msg.has_parent == false and #msg.tool_calls == 0 and msg.text != "" then
             conv.final_text = msg.text
             break
         end

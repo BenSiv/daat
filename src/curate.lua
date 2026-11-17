@@ -590,6 +590,14 @@ function or_empty(rows)
     return rows
 end
 
+function row_is_subagent_step(row)
+    has_parent = row.parent_message_id != nil and row.parent_message_id != ""
+    if has_parent == false then
+        return false
+    end
+    return row.loop_kind != "self_check" and row.loop_kind != "compaction" and row.loop_kind != "wrapup"
+end
+
 function conversation_label(row)
     if row.role == "user" then
         return "User"
@@ -597,26 +605,47 @@ function conversation_label(row)
         return "Decision"
     elseif row.role == "compaction_summary" then
         return "Summary of earlier conversation"
-    elseif row.role == "self_check" then
+    elseif row.role == "self_check" or row.loop_kind == "self_check" then
         return "Self-check"
-    elseif row.parent_message_id != nil and row.parent_message_id != "" then
+    elseif row_is_subagent_step(row) then
         if row.data_type == "answer" then
             return "Research finding"
         end
         return "Research step"
+    elseif row.data_type == "reasoning" then
+        return "Thinking"
     end
     return "Assistant"
 end
 
+function thinking_label(row)
+    if row.loop_kind == "self_check" then
+        return "Self-check"
+    elseif row_is_subagent_step(row) then
+        return "Research step"
+    end
+    return "Thinking"
+end
+
+function trim_entry_text(text)
+    if text == nil then
+        return ""
+    end
+    return string.gsub(string.gsub(text, "^%s+", ""), "%s+$", "")
+end
+
 -- The conversation's entries, in order: {label, text, core}. `core`
 -- entries (requests, answers) are kept whole first when the input is
--- too long; reasoning fills what's left. A session from before decision
--- rows were written gets its decided actions from agent_pending_action
--- instead, at the end (doc/approval-request-rows.md).
+-- too long; reasoning fills what's left. Thinking blocks stored inside
+-- an `answer`-typed assistant row are split out into their own
+-- `core = false` entry so long monologues trim before requests and
+-- answers. A session from before decision rows were written gets its
+-- decided actions from agent_pending_action instead, at the end
+-- (doc/approval-request-rows.md).
 function conversation_entries(db_path, session_id)
     agent = require("agent")
     rows = db.query(db_path, string.format(
-        "SELECT id, role, content, data_type, parent_message_id FROM agent_message WHERE session_id = %s " ..
+        "SELECT id, role, content, data_type, loop_kind, parent_message_id FROM agent_message WHERE session_id = %s " ..
         "AND data_type IN ('request', 'answer', 'reasoning') ORDER BY id;", db.quote(session_id)))
     entries = {}
     has_decisions = false
@@ -624,12 +653,21 @@ function conversation_entries(db_path, session_id)
         if row.role == "decision" then
             has_decisions = true
         end
-        text = agent.display_content(row.content, row.role, false)
-        if text != nil then
-            text = string.gsub(string.gsub(text, "^%s+", ""), "%s+$", "")
-        end
-        if text != nil and text != "" then
-            table.insert(entries, {label = conversation_label(row), text = text, core = row.data_type != "reasoning"})
+        if row.role == "assistant" and row.data_type != "reasoning" then
+            thinking_text, answer_text = agent.split_assistant_knowledge(row.content)
+            thinking_text = trim_entry_text(thinking_text)
+            answer_text = trim_entry_text(answer_text)
+            if thinking_text != "" then
+                table.insert(entries, {label = thinking_label(row), text = thinking_text, core = false})
+            end
+            if answer_text != "" then
+                table.insert(entries, {label = conversation_label(row), text = answer_text, core = true})
+            end
+        else
+            text = trim_entry_text(agent.display_content(row.content, row.role, false))
+            if text != "" then
+                table.insert(entries, {label = conversation_label(row), text = text, core = row.data_type != "reasoning"})
+            end
         end
     end
     if has_decisions == false then
@@ -809,7 +847,7 @@ function conversation_source_line(session)
         title = "Untitled chat"
     end
     title = string.gsub(title, "[%[%]\n]", " ")
-    return "Source: [Chat: " .. title .. "](chat?session_id=" .. tostring(session.id) .. ") (open to its owner)"
+    return "Source: [Chat: " .. title .. "](chat?session_id=" .. tostring(session.id) .. ") (open to its owner and admins)"
 end
 
 -- Curates one conversation now. Returns the status written (as

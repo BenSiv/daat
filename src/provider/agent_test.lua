@@ -31,6 +31,7 @@
 -- call still completes cleanly.
 
 json = require("dkjson")
+config = require("config")
 
 agent_test = {}
 
@@ -39,6 +40,45 @@ agent_test.default_embedding_model = "test-embedding"
 
 TEST_RESPONSE_INDEX = 0
 TEST_GENERATE_INDEX = 0
+
+function test_thinking_for_generate()
+    explicit = os.getenv("AGENT_TEST_GENERATE_THINKING")
+    if explicit != nil and explicit != "" then
+        return explicit
+    end
+    if config.platform_config().agent_thinking == "off" then
+        return nil
+    end
+    shared = os.getenv("AGENT_TEST_THINKING")
+    if shared != nil and shared != "" then
+        return shared
+    end
+    return nil
+end
+
+function maybe_prepend_test_thinking(response)
+    if response == nil or response.content == nil then
+        return response
+    end
+    if config.platform_config().agent_thinking == "off" then
+        return response
+    end
+    thinking = os.getenv("AGENT_TEST_THINKING")
+    if thinking == nil or thinking == "" then
+        return response
+    end
+    for _, block in ipairs(response.content) do
+        if block.type == "thinking" then
+            return response
+        end
+    end
+    content = {{type = "thinking", thinking = thinking}}
+    for _, block in ipairs(response.content) do
+        table.insert(content, block)
+    end
+    response.content = content
+    return response
+end
 
 -- Same char/4 heuristic as agent.estimate_tokens (not cross-required
 -- here to avoid coupling this standalone test provider to agent.lua's
@@ -93,12 +133,13 @@ function agent_test.generate(model, system_prompt, prompt)
         if own[TEST_GENERATE_INDEX] != nil then
             result = own[TEST_GENERATE_INDEX]
         end
+        thinking = test_thinking_for_generate()
         usage = {
             prompt_tokens = estimate_tokens_for_test(system_prompt) + estimate_tokens_for_test(prompt),
-            completion_tokens = estimate_tokens_for_test(result),
+            completion_tokens = estimate_tokens_for_test(result) + estimate_tokens_for_test(thinking),
         }
         usage.total_tokens = usage.prompt_tokens + usage.completion_tokens
-        return result, nil, usage
+        return result, nil, usage, thinking
     end
 
     TEST_RESPONSE_INDEX = TEST_RESPONSE_INDEX + 1
@@ -115,12 +156,13 @@ function agent_test.generate(model, system_prompt, prompt)
             result = responses[#responses]
         end
     end
+    thinking = test_thinking_for_generate()
     usage = {
         prompt_tokens = estimate_tokens_for_test(system_prompt) + estimate_tokens_for_test(prompt),
-        completion_tokens = estimate_tokens_for_test(result),
+        completion_tokens = estimate_tokens_for_test(result) + estimate_tokens_for_test(thinking),
     }
     usage.total_tokens = usage.prompt_tokens + usage.completion_tokens
-    return result, nil, usage
+    return result, nil, usage, thinking
 end
 
 -- Same scripted-response mechanism as generate() (see this file's own
@@ -178,9 +220,10 @@ function agent_test.converse(model, system_prompt, messages, tools)
             if override_response == nil then
                 return nil, "AGENT_TEST_SELF_CHECK_RESPONSE is not valid JSON: " .. tostring(decode_err)
             end
-            return override_response, nil, {prompt_tokens = 0, completion_tokens = 0, total_tokens = 0}
+            return maybe_prepend_test_thinking(override_response), nil, {prompt_tokens = 0, completion_tokens = 0, total_tokens = 0}
         end
-        return {content = {{type = "text", text = "CONFIRM"}}, stopReason = "stop"}, nil, {prompt_tokens = 0, completion_tokens = 0, total_tokens = 0}
+        return maybe_prepend_test_thinking({content = {{type = "text", text = "CONFIRM"}}, stopReason = "stop"}), nil,
+            {prompt_tokens = 0, completion_tokens = 0, total_tokens = 0}
     end
 
     TEST_RESPONSE_INDEX = TEST_RESPONSE_INDEX + 1
@@ -207,6 +250,7 @@ function agent_test.converse(model, system_prompt, messages, tools)
     else
         response = {content = {{type = "text", text = "Test response."}}, stopReason = "stop"}
     end
+    response = maybe_prepend_test_thinking(response)
 
     prompt_text_length = string.len(tostring(system_prompt))
     if messages == nil then

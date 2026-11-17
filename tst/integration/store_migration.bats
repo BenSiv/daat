@@ -266,6 +266,24 @@ view|stock|SELECT 1|admin" ]
     [ "$output" = "1" ]
     run store "SELECT COUNT(*) FROM pragma_table_info('agent_background_task') WHERE name = 'parent_message_id';"
     [ "$output" = "1" ]
-    run store "SELECT number_value = 8 FROM system_state WHERE name = 'store.schema_version';"
+    run store "SELECT number_value >= 8 FROM system_state WHERE name = 'store.schema_version';"
     [ "$output" = "1" ]
+}
+
+@test "migration 10 adds deferred review columns on knowledge_retrieval and marks pre-existing retrievals reviewed" {
+    "$BIN" entity create document title="Legacy hit" content="legacy bioreactor note" >/dev/null
+    store "UPDATE document SET retrieval_count = 1 WHERE id = 1;"
+    store "DROP TABLE knowledge_retrieval;"
+    store "CREATE TABLE knowledge_retrieval (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, query_text TEXT, hit_count INTEGER NOT NULL DEFAULT 0, created_at TEXT);"
+    store "INSERT INTO knowledge_retrieval (id, session_id, query_text, hit_count, created_at) VALUES (1, 's1', 'bioreactor', 1, '2026-10-01 12:00:00');"
+    store "INSERT INTO knowledge_retrieval_hit (retrieval_id, document_id, \`rank\`, score, tier_weight, reinforcement_delta, reviewed_at) VALUES (1, 1, 1, 1.0, 1.0, 0.2, '2026-10-01 12:00:00');"
+    rewind_to 9
+
+    run "$BIN" knowledge review-pending
+    [ "$status" -eq 0 ]
+    [ "$output" = "" ]
+    [ "$(store "SELECT status FROM knowledge_retrieval WHERE id = 1;")" = "reviewed" ]
+    [ "$(store "SELECT retrieval_count FROM document WHERE id = 1;")" = "1" ]
+    [ "$(store "SELECT COUNT(*) FROM pragma_index_list('knowledge_retrieval') WHERE name = 'knowledge_retrieval_status_id_idx';")" = "1" ]
+    [ "$(store "SELECT number_value >= 10 FROM system_state WHERE name = 'store.schema_version';")" = "1" ]
 }

@@ -1,6 +1,6 @@
 # Context management: implementation plan
 
-Plan for the recommendations in `doc/context-management-research.md`, ordered by expected impact per unit of work, using the 2026-10-23 prod baseline in that doc. Each phase is its own branch, ships behind a config flag, and is measured before the next starts. Phases 0-3 are built and on `main`; each ends with what was built, which is the design as it stands. Open work is in the issues named under each phase.
+Plan for the recommendations in `doc/context-management-research.md`, ordered by expected impact per unit of work, using the 2026-10-23 prod baseline in that doc. Each phase is its own branch, ships behind a config flag, and is measured before the next starts. Phases 0-4 are built and on `main`; each ends with what was built, which is the design as it stands. Open work is in the issues named under each phase.
 
 ## Where the changes go
 
@@ -134,7 +134,12 @@ Item 1 became passage retrieval (`doc/passage-retrieval.md`, plan in `doc/passag
 
 **Measure:** on the scorecard's research-heavy scenarios and prod research/background runs: tokens per task, steps per task (watch for elongation), correctness, `cachedContentTokenCount` hit rate.
 
-Not built yet; tracked in #12, which also covers compaction probes for Phase 3.
+**As built** (`feature/context-by-type`, #36 / #12):
+- `agent.shape_context(messages, policy)` and `agent.masking_policy(loop_kind)` in `src/agent.lua`, configured by `agent_masking` (`{research = true, background = true, chat = false}` by default), `agent_masking_keep_last` (5), `agent_masking_min_chars` (300), and `agent_masking_batch_tokens` (4000).
+- Render-time only: keeps the last `K` tool results verbatim, leaves errors, pruned stubs, `pin_on_compaction` schema results and short results untouched, advances the masking boundary in `>= 4k`-token batches so prefix caches hold between moves, and points stubs with a `result_id` at `result.read`.
+- `agent.find_repeat` ignores masked results (`masked == true`) and scopes per-step `toolCall` IDs (`call_1`, ...) to their own assistant turn so reused IDs across steps never cross-match.
+- Live scorecard vs `main` (`20261116-233402-live` vs `20261115-224623-live`, 27 scenarios × 3 repeats on `gemini-3.5-flash-lite`): scenarios solved on every repeat 81% (+7 pts), consistency 90% (+5 pts), shows method 93% (+7 pts), correct answers 94% (-2 pts, 1/81 run within Flash-Lite variance), failed lookups 0.01/run (-0.00), tokens/run 96,882 (-7,422), tokens/passed run 82,150 (-19,454).
+- Tests: `tst/unit/agent_context_by_type.lua`, `tst/integration/agent_context_by_type.bats`.
 
 ## Phase 5: summarize and split transcripts at save time
 

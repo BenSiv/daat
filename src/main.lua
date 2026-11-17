@@ -115,10 +115,10 @@ function run_main()
         return
     end
 
-    -- Every retention rule, for the jobs timer: stored prompts past
-    -- prompt_retention_days, passage embeddings unused for
-    -- passage_cache_days. `agent prune-prompts` is the old name (kept for
-    -- one release, while the startup script switches over).
+    -- Every retention rule, for the retention timer (doc/agent-data.md,
+    -- "Retention"; #35): model_input, tool_trace, raw knowledge,
+    -- call_metrics/control, and passage embeddings unused past
+    -- passage_cache_days. `agent prune-prompts` is kept as an alias.
     if (command == "store" and arg[2] == "prune") or (command == "agent" and arg[2] == "prune-prompts") then
         if config.is_initialized(".") == false then
             print("Not initialized. Run 'daat init' first.")
@@ -129,10 +129,33 @@ function run_main()
         passage = require("passage")
         passage.init_schema(db_path)
         conf = config.platform_config()
-        cleared = agent.prune_prompts(db_path, conf.prompt_retention_days)
-        print(string.format("Cleared %d stored prompts older than %s days", cleared, tostring(conf.prompt_retention_days)))
+        pruned = agent.prune_retention(db_path, conf)
+        policy = pruned.policy
+        mi_label = "(kept forever)"
+        if policy.model_input_days == 0 then
+            mi_label = "(not stored, 0 days)"
+        elseif type(policy.model_input_days) == "number" then
+            mi_label = string.format("older than %s days", tostring(policy.model_input_days))
+        end
+        tt_label = "(kept forever)"
+        if type(policy.tool_trace_days) == "number" then
+            tt_label = string.format("older than %s days", tostring(policy.tool_trace_days))
+        end
+        kn_label = "(kept forever)"
+        if type(policy.knowledge_days) == "number" then
+            kn_label = string.format("older than %s days after curation", tostring(policy.knowledge_days))
+        end
+        mt_label = "(kept forever)"
+        if type(policy.metrics_days) == "number" then
+            mt_label = string.format("older than %s days", tostring(policy.metrics_days))
+        end
+        print(string.format("Retention strategy: %s", tostring(pruned.strategy)))
+        print(string.format("model_input: Cleared %d stored prompts %s", pruned.model_input, mi_label))
+        print(string.format("tool_trace: Stubbed %d tool results %s", pruned.tool_trace, tt_label))
+        print(string.format("knowledge: Removed %d raw knowledge rows %s", pruned.knowledge, kn_label))
+        print(string.format("metrics: Removed %d metrics and control rows %s", pruned.metrics, mt_label))
         deleted = passage.prune_cache(db_path, conf.passage_cache_days)
-        print(string.format("Deleted %d passage embeddings unused for %s days", deleted, tostring(conf.passage_cache_days)))
+        print(string.format("passage_cache: Deleted %d passage embeddings unused for %s days", deleted, tostring(conf.passage_cache_days)))
         return
     end
 

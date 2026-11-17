@@ -342,6 +342,31 @@ table.insert(MIGRATIONS, {version = 8, name = "typed agent messages", run = func
     agent.backfill_message_types(db_path)
 end})
 
+-- 9. Widens agent_message.content (and pending_action/background_task
+-- payload columns) from TEXT (65,535 bytes on MariaDB/MySQL) to
+-- LONGTEXT: found on the prod snapshot (#37) when Gemini 3.1 Pro
+-- assistant rows carrying thinking + base64 thinking_signature exceeded
+-- 64 KB ("Data too long for column 'content'").
+table.insert(MIGRATIONS, {version = 9, name = "agent payload columns longtext", run = function(db_path)
+    require("agent").ensure_longtext_columns(db_path)
+end})
+
+-- 10. Deferred retrieval review (doc/tier-curation-ladder.md, Phase 2;
+-- doc/performance.md, Option 1.1): adds author/status/claim_token/
+-- claimed_at/reviewed_at + (status, id) index to knowledge_retrieval.
+-- Pre-existing rows get DEFAULT 'reviewed' so historical inline searches
+-- are never re-applied by `daat knowledge review-pending`.
+table.insert(MIGRATIONS, {version = 10, name = "deferred retrieval review queue", run = function(db_path)
+    if not exists(db_path, "knowledge_retrieval") then
+        return
+    end
+    k = require("knowledge")
+    k.ensure_retrieval_review_columns(db_path)
+    if db.index_exists(db_path, "knowledge_retrieval", "knowledge_retrieval_status_id_idx") == false then
+        db.exec(db_path, "CREATE INDEX knowledge_retrieval_status_id_idx ON knowledge_retrieval(status, id);")
+    end
+end})
+
 function latest_version()
     latest = 0
     for _, m in ipairs(MIGRATIONS) do

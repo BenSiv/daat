@@ -2378,3 +2378,46 @@ EOF
     run "$BIN" entity list secret_report
     [[ "$output" != "" ]]
 }
+
+@test "admin can open another user's chat session read-only (#23, brex 326591764); non-admins see a styled private-conversation page" {
+    write_task_schema
+    resp=$(start_chat "$COOKIE" "$CSRF" "Alice growth curve")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    # Alice runs a turn and leaves a pending destructive action so we can
+    # verify read-only mode hides pending approvals and blocks mutations.
+    scripted="$(tool_call_response "entity.create" '{"entity_type":"task","title":"T1"}')"
+    send_resp=$(raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"create task T1\"}" "$COOKIE" "$CSRF" "$scripted")
+    pending_id=$(json_body "$send_resp" | jq -r '.pending.id')
+
+    # Non-admin Bob gets a styled 404 page_shell notice, never raw 'Error: no such chat session'.
+    run raw_get "/chat" "session_id=${session_id}" "$BOB_COOKIE"
+    [[ "$output" =~ "404 Not Found" ]]
+    [[ "$output" =~ "Conversation unavailable" ]]
+    [[ ! "$output" =~ "Error: no such chat session" ]]
+
+    # Grant Bob Admin capability: Bob can now read Alice's chat on /chat and /api/chat-widget-history.
+    "$BIN" user capabilities bob ia >/dev/null
+
+    run raw_get "/chat" "session_id=${session_id}" "$BOB_COOKIE"
+    [[ "$output" =~ "200 OK" ]]
+    [[ "$output" =~ "Viewing conversation by" ]]
+    [[ "$output" =~ "alice" ]]
+    [[ "$output" =~ "Alice growth curve" ]]
+    [[ "$output" =~ '"open_chat_read_only":true' ]]
+
+    hist_resp=$(raw_get "/api/chat-widget-history" "session_id=${session_id}" "$BOB_COOKIE")
+    [[ "$hist_resp" =~ "200 OK" ]]
+    [[ "$(json_body "$hist_resp" | jq -r '.read_only')" = "true" ]]
+    [[ "$(json_body "$hist_resp" | jq -r '.owner')" = "alice" ]]
+    [[ "$(json_body "$hist_resp" | jq -r '.pending')" = "null" ]]
+    [[ "$(json_body "$hist_resp" | jq -r '.messages[0].content')" =~ "create task T1" ]]
+
+    # Admin still cannot send messages or approve/deny/stop another user's session.
+    run raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"hijack\"}" "$BOB_COOKIE" "$BOB_CSRF" ""
+    [[ "$output" =~ "404 Not Found" ]]
+    run raw_post_json "/api/chat-widget-approve" "{\"pending_id\":${pending_id},\"session_id\":\"${session_id}\"}" "$BOB_COOKIE" "$BOB_CSRF" ""
+    [[ "$output" =~ "404 Not Found" ]]
+    run raw_post_json "/api/chat-widget-stop" "{\"session_id\":\"${session_id}\"}" "$BOB_COOKIE" "$BOB_CSRF" ""
+    [[ "$output" =~ "404 Not Found" ]]
+}

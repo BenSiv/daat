@@ -1,8 +1,9 @@
 -- The seam a real LLM backend plugs into:
---   generate(model, system_prompt, prompt) -> (text, err) -- a single
---     plain-text call, no tools/history (compaction summaries,
---     knowledge distillation/link-evaluation).
---   converse(model, system_prompt, messages, tools) -> (response, err)
+--   generate(model, system_prompt, prompt) -> (text, err, usage, thinking)
+--     -- a single plain-text call, no tools/history (compaction summaries,
+--     knowledge distillation/link-evaluation). `thinking` is nil unless the
+--     provider returned separate reasoning text.
+--   converse(model, system_prompt, messages, tools) -> (response, err, usage)
 --     -- the real chat-agent turn loop: `messages` is a list of
 --     {role, content} turns, `tools` a list of function declarations
 --     (agent.tool_declarations()), `response` a structured
@@ -14,15 +15,15 @@
 -- appears in core: platform.lua's agent_model/embedding_model choose
 -- one, and when unset the provider's own default applies.
 -- Loaded dynamically by name (config.platform_config().agent_provider,
--- no default: a deployment names its backend, e.g. "vertex" for
--- src/provider/agent_vertex.lua) rather than required directly, so swapping providers -- or,
+-- no default: a deployment names its backend, e.g. "ollama" for
+-- src/provider/agent_ollama.lua) rather than required directly, so swapping providers -- or,
 -- just as importantly, swapping in the deterministic test provider for
 -- repeatable, cost-free test runs -- is a config change, not a code
--- change. Implementations live under src/provider/ (agent_claude.lua,
--- agent_vertex.lua, agent_test.lua) -- this facade file itself stays
--- one level up, since it's the seam every implementation plugs into,
--- not an implementation itself (see doc/architecture.md's "Providers"
--- section).
+-- change. Implementations live under src/provider/ (agent_ollama.lua,
+-- agent_claude.lua, agent_vertex.lua, agent_test.lua) -- this facade
+-- file itself stays one level up, since it's the seam every
+-- implementation plugs into, not an implementation itself (see
+-- doc/architecture.md's "Providers" section).
 
 config = require("config")
 

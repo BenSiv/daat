@@ -40,6 +40,7 @@
 -- way PLATFORM_MARIADB_PASSWORD already is -- see apache-platform.conf).
 
 json = require("dkjson")
+config = require("config")
 external_tool = require("external_tool")
 
 agent_claude = {}
@@ -280,18 +281,62 @@ function claude_stop_reason_to_canonical(stop_reason)
     return "error"
 end
 
--- `nil, err` is reserved for a genuine connectivity/auth-level failure
--- (claude_post's own behavior) -- the call itself couldn't be
--- completed, nothing structured to return.
-function agent_claude.converse(model, system_prompt, messages, tools)
+-- Translates platform.lua's agent_thinking ("off" | "summary" | "full",
+-- doc/agent-data.md, decision 5) into Claude's `thinking` parameter and
+-- an adjusted `max_tokens` (Anthropic requires max_tokens > budget_tokens).
+CLAUDE_SUMMARY_THINKING_BUDGET = 2048
+CLAUDE_FULL_THINKING_BUDGET = 8192
+
+function claude_thinking_config(thinking_mode, base_max_tokens)
+    if thinking_mode == nil then
+        thinking_mode = config.platform_config().agent_thinking
+    end
+    if thinking_mode == "summary" then
+        return {type = "enabled", budget_tokens = CLAUDE_SUMMARY_THINKING_BUDGET},
+            math.max(base_max_tokens, CLAUDE_SUMMARY_THINKING_BUDGET + 4096)
+    end
+    if thinking_mode == "full" then
+        return {type = "enabled", budget_tokens = CLAUDE_FULL_THINKING_BUDGET},
+            math.max(base_max_tokens, CLAUDE_FULL_THINKING_BUDGET + 8192)
+    end
+    return nil, base_max_tokens
+end
+
+function claude_text_and_thinking_from_content(content)
+    blocks = claude_blocks_from_content(content)
+    text_parts = {}
+    thinking_parts = {}
+    for _, block in ipairs(blocks) do
+        if block.type == "text" and block.text != nil then
+            table.insert(text_parts, block.text)
+        elseif block.type == "thinking" and block.thinking != nil then
+            table.insert(thinking_parts, block.thinking)
+        end
+    end
+    text = nil
+    if #text_parts > 0 then
+        text = table.concat(text_parts, "\n")
+    end
+    thinking = nil
+    if #thinking_parts > 0 then
+        thinking = table.concat(thinking_parts, "\n\n")
+    end
+    return text, thinking
+end
+
+function claude_converse_payload(model, system_prompt, messages, tools, thinking_mode)
     if model == nil or model == "" then
         model = agent_claude.default_model
     end
+    thinking_param, max_tokens = claude_thinking_config(thinking_mode, 8192)
     payload = {
         model = model,
-        max_tokens = 8192,
+        max_tokens = max_tokens,
         messages = claude_messages_from_canonical(messages),
     }
+    if thinking_param != nil then
+        payload.thinking = thinking_param
+    end
     if system_prompt != nil and system_prompt != "" then
         payload.system = system_prompt
     end
@@ -301,6 +346,17 @@ function agent_claude.converse(model, system_prompt, messages, tools)
             return nil, tools_err
         end
         payload.tools = claude_tools
+    end
+    return payload, nil
+end
+
+-- `nil, err` is reserved for a genuine connectivity/auth-level failure
+-- (claude_post's own behavior) -- the call itself couldn't be
+-- completed, nothing structured to return.
+function agent_claude.converse(model, system_prompt, messages, tools)
+    payload, payload_err = claude_converse_payload(model, system_prompt, messages, tools, nil)
+    if payload == nil then
+        return nil, payload_err
     end
 
     response, err = claude_post(payload)
@@ -324,27 +380,40 @@ function agent_claude.converse(model, system_prompt, messages, tools)
     return {content = blocks, stopReason = canonical_stop_reason}, nil, usage
 end
 
-function agent_claude.generate(model, system_prompt, prompt)
+function claude_generate_payload(model, system_prompt, prompt, thinking_mode)
     if model == nil or model == "" then
         model = agent_claude.default_model
     end
+    thinking_param, max_tokens = claude_thinking_config(thinking_mode, 4096)
     payload = {
         model = model,
-        max_tokens = 4096,
+        max_tokens = max_tokens,
         messages = {{role = "user", content = tostring(prompt)}},
     }
+    if thinking_param != nil then
+        payload.thinking = thinking_param
+    end
     if system_prompt != nil and system_prompt != "" then
         payload.system = system_prompt
     end
+    return payload
+end
+
+function agent_claude.generate(model, system_prompt, prompt)
+    payload = claude_generate_payload(model, system_prompt, prompt, nil)
 
     response, err = claude_post(payload)
     if response == nil then
         return nil, err
     end
-    if response.content == nil or response.content[1] == nil or response.content[1].text == nil then
+    if response.content == nil or #response.content == 0 then
         return nil, "empty response (stop_reason: " .. tostring(response.stop_reason) .. ")"
     end
-    return response.content[1].text, nil, usage_from_response(response)
+    text, thinking = claude_text_and_thinking_from_content(response.content)
+    if text == nil then
+        return nil, "empty response (stop_reason: " .. tostring(response.stop_reason) .. ")"
+    end
+    return text, nil, usage_from_response(response), thinking
 end
 
 -- No .embeddings -- Claude has no embeddings API. agent_provider.lua's
@@ -363,5 +432,9 @@ agent_claude.claude_canonical_tool_name = claude_canonical_tool_name
 agent_claude.claude_messages_from_canonical = claude_messages_from_canonical
 agent_claude.claude_blocks_from_content = claude_blocks_from_content
 agent_claude.claude_stop_reason_to_canonical = claude_stop_reason_to_canonical
+agent_claude.claude_thinking_config = claude_thinking_config
+agent_claude.claude_text_and_thinking_from_content = claude_text_and_thinking_from_content
+agent_claude.claude_converse_payload = claude_converse_payload
+agent_claude.claude_generate_payload = claude_generate_payload
 
 return agent_claude

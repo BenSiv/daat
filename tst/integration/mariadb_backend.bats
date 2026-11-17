@@ -139,14 +139,16 @@ return {
 EOF
     "$BIN" schema add schemas/paper.lua
 
-    big_content=$(python3 -c "print('x' * 200000)")
+    # 100 KB exceeds MariaDB's 65,535-byte TEXT cap while staying below
+    # Linux's 131,072-byte per-argument MAX_ARG_STRLEN execve limit.
+    big_content=$(python3 -c "print('x' * 100000)")
     run "$BIN" entity create paper "body=${big_content}"
     [ "$status" -eq 0 ]
     [[ "$output" =~ "Created paper #1" ]]
 
     run "$BIN" entity show paper 1
     stored_len=$(printf '%s' "$output" | grep -o 'x*' | awk '{ if (length($0) > max) max = length($0) } END { print max }')
-    [ "$stored_len" -eq 200000 ]
+    [ "$stored_len" -eq 100000 ]
 
     run "$BIN" ledger history 1
     [[ "$output" =~ "create" ]]
@@ -400,4 +402,99 @@ EOF2
     [ "$(q "SELECT COUNT(*) FROM knowledge_retrieval_hit WHERE aspect IS NOT NULL;")" -eq 1 ]
     run "$BIN" repair aspects
     [[ "$output" =~ "0 document(s) (0 aspects), 1 unchanged" ]]
+}
+
+@test "store migration 9 widens MariaDB agent_message.content to LONGTEXT so >64 KB thinking payloads survive (#37)" {
+    cat > platform.lua <<EOF2
+return {db_backend = "mariadb", mariadb_host = "${PLATFORM_MARIADB_HOST}", mariadb_port = ${PLATFORM_MARIADB_PORT}, mariadb_user = "${PLATFORM_MARIADB_USER}", mariadb_database = "${PLATFORM_MARIADB_DATABASE}", agent_provider = "test", agent_thinking = "full", agent_turn_mode = "inline"}
+EOF2
+    "$BIN" init >/dev/null
+    read -r session csrf <<< "$(login_test_user alice i)"
+    cookie="session=${session}; csrf=${csrf}"
+    q() { mariadb -N -h "$PLATFORM_MARIADB_HOST" -P "$PLATFORM_MARIADB_PORT" -u "$PLATFORM_MARIADB_USER" -p"$PLATFORM_MARIADB_PASSWORD" "$PLATFORM_MARIADB_DATABASE" -e "$1" 2>/dev/null; }
+
+    # Trigger agent table creation, then rewind to the pre-migration-9 MariaDB
+    # layout (plain TEXT = 65,535-byte cap) to verify store.migrate widens it.
+    resp=$(raw_post_json "/api/chat-widget-start" '{"title":"Long thinking"}' "$cookie" "$csrf" "")
+    sid=$(json_body "$resp" | jq -r '.session_id')
+    q "ALTER TABLE agent_message MODIFY COLUMN content TEXT NOT NULL;"
+    q "UPDATE system_state SET number_value = 8 WHERE name = 'store.schema_version';"
+
+    export AGENT_TEST_THINKING="$(python3 -c "print('T' * 75000)")"
+    run raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${sid}\",\"message\":\"Hello\"}" "$cookie" "$csrf" "$(done_response "Answer after 75 KB thinking.")"
+    [[ "$output" =~ "200 OK" ]]
+    [[ "$output" =~ "Answer after 75 KB thinking." ]]
+    [ "$(q "SELECT MAX(CHAR_LENGTH(content)) > 75000 FROM agent_message;")" = "1" ]
+    [ "$(q "SELECT number_value >= 9 FROM system_state WHERE name = 'store.schema_version';")" = "1" ]
+}
+
+@test "store prune stubs tool_trace rows, clears model_input, reports stored chars by type, and is idempotent on MariaDB (#35)" {
+    cat > platform.lua <<EOF2
+return {db_backend = "mariadb", mariadb_host = "${PLATFORM_MARIADB_HOST}", mariadb_port = ${PLATFORM_MARIADB_PORT}, mariadb_user = "${PLATFORM_MARIADB_USER}", mariadb_database = "${PLATFORM_MARIADB_DATABASE}", agent_provider = "test", agent_turn_mode = "inline", agent_retention = "standard"}
+EOF2
+    "$BIN" init >/dev/null
+    read -r session csrf <<< "$(login_test_user alice i)"
+    cookie="session=${session}; csrf=${csrf}"
+    q() { mariadb -N -h "$PLATFORM_MARIADB_HOST" -P "$PLATFORM_MARIADB_PORT" -u "$PLATFORM_MARIADB_USER" -p"$PLATFORM_MARIADB_PASSWORD" "$PLATFORM_MARIADB_DATABASE" -e "$1" 2>/dev/null; }
+
+    resp=$(raw_post_json "/api/chat-widget-start" '{"title":"MariaDB prune"}' "$cookie" "$csrf" "")
+    sid=$(json_body "$resp" | jq -r '.session_id')
+    scripted="$(tool_call_response "entity.list_types" "{}")"$'\1'"$(done_response "Done on MariaDB.")"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${sid}\",\"message\":\"Check types\"}" "$cookie" "$csrf" "$scripted" >/dev/null
+
+    q "UPDATE agent_message SET created_at = '2020-01-01 00:00:00' WHERE session_id = '${sid}';"
+    q "UPDATE agent_model_call SET created_at = '2020-01-01 00:00:00' WHERE session_id = '${sid}';"
+
+    run "$BIN" store prune
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "tool_trace: Stubbed 1 tool results older than 90 days" ]]
+    [ "$(q "SELECT COUNT(*) FROM agent_model_call WHERE session_id = '${sid}' AND prompt IS NOT NULL;")" = "0" ]
+    [[ "$(q "SELECT content FROM agent_message WHERE session_id = '${sid}' AND role = 'tool_result';")" =~ "result pruned after 90 days: entity.list_types," ]]
+
+    # Second run is a complete no-op on MariaDB.
+    run "$BIN" store prune
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "model_input: Cleared 0 stored prompts" ]]
+    [[ "$output" =~ "tool_trace: Stubbed 0 tool results" ]]
+
+    run "$BIN" agent context-report
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "## Stored characters by type" ]]
+    [[ "$output" =~ "model_input	0	0" ]]
+}
+
+@test "deferred search_review_mode queues retrieval review on MariaDB and review-pending drains it idempotently" {
+    cat > platform.lua <<EOF2
+return {db_backend = "mariadb", mariadb_host = "${PLATFORM_MARIADB_HOST}", mariadb_port = ${PLATFORM_MARIADB_PORT}, mariadb_user = "${PLATFORM_MARIADB_USER}", mariadb_database = "${PLATFORM_MARIADB_DATABASE}", agent_provider = "test", search_provider = "test", embedding_quiet_minutes = 0}
+EOF2
+    "$BIN" init >/dev/null
+    read -r session csrf <<< "$(login_test_user alice i)"
+    cookie="session=${session}; csrf=${csrf}"
+    q() { mariadb -N -h "$PLATFORM_MARIADB_HOST" -P "$PLATFORM_MARIADB_PORT" -u "$PLATFORM_MARIADB_USER" -p"$PLATFORM_MARIADB_PASSWORD" "$PLATFORM_MARIADB_DATABASE" -e "$1" 2>/dev/null; }
+
+    "$BIN" entity create document title="Bioreactor Protocol" content="Careful bioreactor pH and dissolved oxygen control." >/dev/null
+    doc_id=$(q "SELECT id FROM document WHERE title = 'Bioreactor Protocol';")
+
+    run raw_get "/documents" "q=bioreactor" "$cookie"
+    [[ "$output" =~ "200 OK" ]]
+    [[ "$output" =~ "Bioreactor Protocol" ]]
+
+    # Search request recorded only the pending retrieval and raw hit; zero document writes ran synchronously.
+    [ "$(q "SELECT status FROM knowledge_retrieval ORDER BY id DESC LIMIT 1;")" = "pending" ]
+    [ "$(q "SELECT author FROM knowledge_retrieval ORDER BY id DESC LIMIT 1;")" = "alice" ]
+    [ "$(q "SELECT retrieval_count FROM document WHERE id = ${doc_id};")" = "0" ]
+    [ "$(q "SELECT COUNT(*) FROM knowledge_retrieval_hit WHERE document_id = ${doc_id} AND reinforcement_delta IS NULL AND reviewed_at IS NULL;")" = "1" ]
+
+    run "$BIN" knowledge review-pending
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "reviewed (1 hits)" ]]
+    [ "$(q "SELECT status FROM knowledge_retrieval ORDER BY id DESC LIMIT 1;")" = "reviewed" ]
+    [ "$(q "SELECT retrieval_count FROM document WHERE id = ${doc_id};")" = "1" ]
+    [ "$(q "SELECT COUNT(*) FROM knowledge_retrieval_hit WHERE document_id = ${doc_id} AND reinforcement_delta IS NOT NULL AND reviewed_at IS NOT NULL;")" = "1" ]
+
+    # Second run is a complete no-op.
+    run "$BIN" knowledge review-pending
+    [ "$status" -eq 0 ]
+    [ "$output" = "" ]
+    [ "$(q "SELECT retrieval_count FROM document WHERE id = ${doc_id};")" = "1" ]
 }

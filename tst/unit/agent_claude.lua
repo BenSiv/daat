@@ -111,4 +111,30 @@ function tests.tool_names_round_trip_and_bad_ones_are_refused()
     check(out == nil and err != nil and string.find(err, "view.list", 1, true) != nil, "a tool without parameters should be refused by name")
 end
 
+function tests.claude_thinking_config_and_payloads()
+    print("Testing claude_thinking_config and payload builders map off/summary/full and scale max_tokens")
+    thinking, max_tokens = agent_claude.claude_thinking_config("off", 8192)
+    check(thinking == nil and max_tokens == 8192, "off leaves thinking unset and max_tokens unchanged")
+
+    thinking, max_tokens = agent_claude.claude_thinking_config("summary", 4096)
+    check(thinking.type == "enabled" and thinking.budget_tokens == 2048, "summary enables 2048 budget_tokens")
+    check(max_tokens == 6144, "summary raises generate max_tokens above budget_tokens, got " .. tostring(max_tokens))
+
+    thinking, max_tokens = agent_claude.claude_thinking_config("full", 8192)
+    check(thinking.type == "enabled" and thinking.budget_tokens == 8192, "full enables 8192 budget_tokens")
+    check(max_tokens == 16384, "full raises converse max_tokens above budget_tokens, got " .. tostring(max_tokens))
+
+    converse, err = agent_claude.claude_converse_payload("claude-sonnet-4-6", "sys", {{role = "user", content = "hi"}}, nil, "summary")
+    check(err == nil and converse.thinking.budget_tokens == 2048 and converse.max_tokens == 8192, "converse payload carries summary thinking")
+
+    gen = agent_claude.claude_generate_payload("claude-sonnet-4-6", "sys", "summarize", "full")
+    check(gen.thinking.budget_tokens == 8192 and gen.max_tokens == 16384, "generate payload carries full thinking")
+
+    text, gen_thinking = agent_claude.claude_text_and_thinking_from_content({
+        {type = "thinking", thinking = "weighing options", signature = "s1"},
+        {type = "text", text = "final summary"},
+    })
+    check(text == "final summary" and gen_thinking == "weighing options", "generate content splits thinking from text")
+end
+
 unit.run(tests)
