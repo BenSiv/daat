@@ -536,6 +536,14 @@ function ensure_agent_pending_action_columns(db_path)
     if have["claim_token"] == nil then
         db.exec(db_path, "ALTER TABLE agent_pending_action ADD COLUMN claim_token VARCHAR(32);")
     end
+    -- The assistant message holding the proposed call, so an action left
+    -- 'running' by a crash is matched to that exact call (#22). The call's
+    -- own id isn't enough: Vertex numbers every response's calls from
+    -- call_1, so one chat holds many call_1s. Rows from before this column
+    -- have none and are matched by id and tool name instead.
+    if have["message_id"] == nil then
+        db.exec(db_path, "ALTER TABLE agent_pending_action ADD COLUMN message_id INTEGER;")
+    end
 end
 
 -- Lets a human interrupt an in-progress turn loop between steps -- see
@@ -2155,10 +2163,11 @@ function agent.tool_declarations(db_path)
     return declarations
 end
 
-function agent.create_pending_action(db_path, session_id, tool_name, method_name, args, tool_call_id)
+function agent.create_pending_action(db_path, session_id, tool_name, method_name, args, tool_call_id, message_id)
     db.exec(db_path, string.format(
-        "INSERT INTO agent_pending_action (session_id, tool, method, args_json, tool_call_id) VALUES (%s, %s, %s, %s, %s);",
-        db.quote(session_id), db.quote(tool_name), db.quote(method_name), db.quote(json.encode(args)), db.literal(tool_call_id)
+        "INSERT INTO agent_pending_action (session_id, tool, method, args_json, tool_call_id, message_id) VALUES (%s, %s, %s, %s, %s, %s);",
+        db.quote(session_id), db.quote(tool_name), db.quote(method_name), db.quote(json.encode(args)), db.literal(tool_call_id),
+        db.literal(tonumber(message_id))
     ))
     rows = db.query(db_path, "SELECT MAX(id) AS id FROM agent_pending_action;")
     return tonumber(rows[1].id)
@@ -2248,7 +2257,20 @@ end
 -- call order, an unanswered call gets an explicit error result, and a
 -- result with no open call to answer becomes a plain user-role note --
 -- same degrade-don't-drop rule as a legacy tool_result row below.
-function pair_tool_results(history)
+--
+-- `interrupted` (optional) is a set of toolCall blocks, keyed by the block
+-- itself, whose approved write was left 'running' (#22). "Run it again"
+-- is right for a read that was cut off; for a write that may already
+-- have happened it led the model to propose the same entity.create again
+-- on a plain "continue" (reproduced on a local demo lab, 2026-11-16), and
+-- one more Approve would have made a duplicate.
+INTERRUPTED_CALL_TEXT = "ERROR: no result was recorded for this call -- the turn was interrupted before it finished. Run it again if you still need it."
+INTERRUPTED_WRITE_TEXT = "ERROR: this action was approved, but the turn was interrupted while it ran, so it may or may not have been done. Check whether it took effect (for example, look the record up) before proposing it again."
+
+function pair_tool_results(history, interrupted)
+    if interrupted == nil then
+        interrupted = {}
+    end
     paired = {}
     open_calls = {}
     answers = {}
@@ -2257,11 +2279,15 @@ function pair_tool_results(history)
         for _, call in ipairs(open_calls) do
             answer = answers[call.id]
             if answer == nil then
+                text = INTERRUPTED_CALL_TEXT
+                if interrupted[call] == true then
+                    text = INTERRUPTED_WRITE_TEXT
+                end
                 answer = {
                     role = "toolResult",
                     toolCallId = call.id,
                     toolName = call.name,
-                    content = {{type = "text", text = "ERROR: no result was recorded for this call -- the turn was interrupted before it finished. Run it again if you still need it."}},
+                    content = {{type = "text", text = text}},
                     isError = true,
                 }
             end
@@ -2303,6 +2329,8 @@ function pair_tool_results(history)
     flush_open_calls()
     return paired
 end
+-- For tst/unit/interrupted_write.lua: the function is pure, so it's tested directly.
+agent.pair_tool_results = pair_tool_results
 
 -- Builds the real, structured message list agent_provider.converse
 -- sends to the model (this codebase's own canonical shape -- see
@@ -2343,9 +2371,39 @@ function agent.cap_tool_text(text, cap, result_id)
     return string.sub(text, 1, cap) .. note
 end
 
-function build_history_messages(messages)
+-- The approved writes in a session left 'running' with no result (#22),
+-- for build_history_messages: {by_message = {["<message id>:<call id>"] =
+-- true}, by_call = {["<call id> <tool.method>"] = true}}. by_call holds
+-- only rows from before agent_pending_action.message_id, matched by the
+-- call's id and tool instead of its message.
+function agent.interrupted_writes(db_path, session_id)
+    found = {by_message = {}, by_call = {}}
+    rows = db.query(db_path, string.format(
+        "SELECT tool, method, tool_call_id, message_id FROM agent_pending_action WHERE session_id = %s AND status = 'running';",
+        db.quote(session_id)))
+    if rows == nil then
+        return found
+    end
+    for _, row in ipairs(rows) do
+        if row.tool_call_id != nil then
+            if row.message_id != nil and tostring(row.message_id) != "" then
+                found.by_message[tostring(tonumber(row.message_id)) .. ":" .. tostring(row.tool_call_id)] = true
+            else
+                found.by_call[tostring(row.tool_call_id) .. " " .. tostring(row.tool) .. "." .. tostring(row.method)] = true
+            end
+        end
+    end
+    return found
+end
+
+-- `writes` (optional): agent.interrupted_writes for the session, so an
+-- approved write a crash cut off is told apart from any other call left
+-- without a result. Without it (a token estimate), every unanswered call
+-- gets the plain text.
+function build_history_messages(messages, writes)
     result_cap = config.platform_config().agent_tool_result_cap
     result = {}
+    interrupted = {}
     for _, msg in ipairs(messages) do
         dtype = agent.row_data_type(msg)
         if dtype == "request" and msg.role == "user" then
@@ -2357,6 +2415,14 @@ function build_history_messages(messages)
         elseif msg.role == "assistant" then
             decoded, _, _ = json.decode(msg.content)
             if decoded != nil and decoded.blocks != nil then
+                if writes != nil then
+                    for _, block in ipairs(decoded.blocks) do
+                        if block.type == "toolCall" and (writes.by_message[tostring(tonumber(msg.id)) .. ":" .. tostring(block.id)] == true
+                                or writes.by_call[tostring(block.id) .. " " .. tostring(block.name)] == true) then
+                            interrupted[block] = true
+                        end
+                    end
+                end
                 table.insert(result, {role = "assistant", content = decoded.blocks})
             else
                 table.insert(result, {role = "assistant", content = {{type = "text", text = agent.display_content(msg.content, "assistant")}}})
@@ -2396,7 +2462,7 @@ function build_history_messages(messages)
             table.insert(result, {role = "user", content = "[Automated self-check, not the real user -- your own prior reply was just reviewed against the conversation and found lacking. The note below is that review, not new information from the person you're talking to; read it as your own continued investigation, then act on it.]\n\n" .. msg.content})
         end
     end
-    return pair_tool_results(result)
+    return pair_tool_results(result, interrupted)
 end
 
 -- Observation masking (doc/context-management-plan.md, Phase 4; #12, #36):
@@ -2689,7 +2755,8 @@ PROGRESS_NOTE_PROMPT = """
 -- there's no budget left to retry, so a plain honest message beats
 -- silence.
 function run_turn_wrapup(db_path, session_id, login, system_prompt, model, prompt_text, fallback_text, role)
-    wrapup_history = agent.shape_context(build_history_messages(agent.active_messages(db_path, session_id)), agent.masking_policy("chat"))
+    wrapup_history = agent.shape_context(build_history_messages(agent.active_messages(db_path, session_id),
+        agent.interrupted_writes(db_path, session_id)), agent.masking_policy("chat"))
     table.insert(wrapup_history, {role = "user", content = prompt_text})
     wrapup_audit_prompt = json.encode(wrapup_history)
     wrapup_response, wrapup_err, wrapup_usage = agent_provider.converse(model, system_prompt, wrapup_history, {})
@@ -2760,7 +2827,8 @@ end
 -- false (a "self_check" message has been recorded with what to check
 -- next; the turn loop should continue instead of returning).
 function run_self_check(db_path, session_id, system_prompt, model, active_messages, parent_message_id)
-    history_messages = agent.shape_context(build_history_messages(active_messages), agent.masking_policy("chat"))
+    history_messages = agent.shape_context(build_history_messages(active_messages, agent.interrupted_writes(db_path, session_id)),
+        agent.masking_policy("chat"))
     table.insert(history_messages, {role = "user", content = SELF_CHECK_PROMPT})
     audit_prompt = json.encode(history_messages)
 
@@ -3630,7 +3698,8 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
                 agent.compact_if_needed(db_path, session_id, system_prompt, model)
             end
             active = agent.active_messages(db_path, session_id)
-            history_messages = agent.shape_context(build_history_messages(active), agent.masking_policy("chat"))
+            history_messages = agent.shape_context(build_history_messages(active, agent.interrupted_writes(db_path, session_id)),
+                agent.masking_policy("chat"))
             audit_prompt = json.encode(history_messages)
 
             response, err, usage = agent_provider.converse(model, system_prompt, history_messages, agent.tool_declarations(db_path))
@@ -3826,7 +3895,7 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
 
                 if pending_call != nil then
                     pending_id = agent.create_pending_action(db_path, session_id, pending_call.tool_name, pending_call.method_name,
-                        pending_call.tool_call.arguments, pending_call.tool_call.id)
+                        pending_call.tool_call.arguments, pending_call.tool_call.id, message_id)
                     agent_tools.sync_session_document(db_path, login, session_id)
                     return {status = "pending_approval", pending_id = pending_id, tool = pending_call.tool_name,
                         method = pending_call.method_name, args = pending_call.tool_call.arguments}
