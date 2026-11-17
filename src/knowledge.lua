@@ -649,9 +649,12 @@ function knowledge.review_retrieval(db_path, retrieval_id, author)
                 end
             end
 
+            if new_title != doc.title then
+                entity.update(db_path, "document", doc.id, {title = new_title}, "system")
+            end
             db.exec(db_path, string.format(
-                "UPDATE document SET tier = %d, title = %s, updated_at = %s WHERE id = %d;",
-                target_tier, db.literal(new_title), db.now_expr(db_path), doc.id
+                "UPDATE document SET tier = %d, updated_at = %s WHERE id = %d;",
+                target_tier, db.now_expr(db_path), doc.id
             ))
             db.exec(db_path, string.format(
                 "UPDATE knowledge_retrieval_hit SET atomicity_status = %s, connectivity_status = %s, duplication_status = %s, title_status = %s, reviewed_at = %s " ..

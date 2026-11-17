@@ -605,4 +605,8 @@ function reference.resync_all_documents(db_path)
     return count
 end
 
+-- Exposed so verify.lua can compare entity_name_index against the exact
+-- expected per-entity index rows without duplicating reference_names.
+reference.expected_index_rows = reference_index_rows
+
 return reference
