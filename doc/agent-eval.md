@@ -38,7 +38,7 @@ Each run writes `eval-out/runs/<timestamp>-<mode>/`: `report.md` (the scores, an
 
 A score from one run is not a measurement of a change. Most conversation checks apply to a few scenarios only, so one run moves them by a lot: `no_latex` runs on 6 scenarios x 3 repeats, 18 checks a run, so one reply with LaTeX is 5.6 points. The 3 repeats of a scenario share its question, so they tend to fail together: `calculation-doubling-time` alone took `no_latex` from 94% to 72% on one run (#45). Read a drop of one scenario's repeats as noise until a second run shows it again.
 
-`no_latex` across live runs, 2026-11-08 to 2026-11-10 (`gemini-3.5-flash-lite`, 18 checks each):
+`no_latex` across live runs, 2026-11-08 to 2026-11-17 (`gemini-3.5-flash-lite`, 18 checks each):
 
 | Run | Code | `no_latex` |
 |---|---|---|
@@ -48,6 +48,10 @@ A score from one run is not a measurement of a change. Most conversation checks 
 | `20261110-100540` | #38 branch | 94% |
 | `20261110-105351` | `main` @ 8e8d90e | 100% |
 | `20261110-111632` | #38 branch | 94% |
+| `20261117-092904` | `main` @ deb3be2 | 100% |
+| `20261117-102156` | `main` @ deb3be2 (the first committed baseline) | 100% |
+
+So the 72% didn't hold: every later run with #44's code scored 89% or more, and current `main` scored 100% twice.
 
 ## Problem
 
