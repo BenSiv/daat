@@ -26,9 +26,13 @@ setup() {
     PLATFORM_MARIADB_PORT="${MARIADB_TEST_PORT:-3306}"
     PLATFORM_MARIADB_USER="${MARIADB_TEST_USER:-platform_test}"
     export PLATFORM_MARIADB_PASSWORD="${MARIADB_TEST_PASSWORD:-platform_test_pw}"
-    PLATFORM_MARIADB_DATABASE="${MARIADB_TEST_DATABASE:-platform_bats_test}"
+    PLATFORM_MARIADB_DATABASE="${MARIADB_TEST_DATABASE:-platform_bats_test_$$}"
 
     if ! command -v mariadb >/dev/null 2>&1; then
+        if [ "${DAAT_REQUIRE_MARIADB:-0}" = "1" ]; then
+            echo "mariadb CLI missing despite DAAT_REQUIRE_MARIADB=1" >&2
+            return 1
+        fi
         skip "mariadb CLI not available -- skipping MariaDB backend coverage"
     fi
 
@@ -40,6 +44,10 @@ setup() {
             -u "$PLATFORM_MARIADB_USER" -p"$PLATFORM_MARIADB_PASSWORD" \
             -e "DROP DATABASE IF EXISTS $PLATFORM_MARIADB_DATABASE; CREATE DATABASE $PLATFORM_MARIADB_DATABASE;" \
             2>/dev/null; then
+        if [ "${DAAT_REQUIRE_MARIADB:-0}" = "1" ]; then
+            echo "MariaDB test server unreachable at ${PLATFORM_MARIADB_HOST}:${PLATFORM_MARIADB_PORT} despite DAAT_REQUIRE_MARIADB=1" >&2
+            return 1
+        fi
         skip "no reachable MariaDB test server at ${PLATFORM_MARIADB_HOST}:${PLATFORM_MARIADB_PORT} -- skipping"
     fi
 
@@ -497,4 +505,33 @@ EOF2
     [ "$status" -eq 0 ]
     [ "$output" = "" ]
     [ "$(q "SELECT retrieval_count FROM document WHERE id = ${doc_id};")" = "1" ]
+}
+
+@test "store migration 11 and daat store verify succeed end-to-end on MariaDB" {
+    cat > platform.lua <<EOF2
+return {db_backend = "mariadb", mariadb_host = "${PLATFORM_MARIADB_HOST}", mariadb_port = ${PLATFORM_MARIADB_PORT}, mariadb_user = "${PLATFORM_MARIADB_USER}", mariadb_database = "${PLATFORM_MARIADB_DATABASE}", agent_provider = "test", search_provider = "test", embedding_quiet_minutes = 0}
+EOF2
+    "$BIN" init >/dev/null
+    q() { mariadb -N -h "$PLATFORM_MARIADB_HOST" -P "$PLATFORM_MARIADB_PORT" -u "$PLATFORM_MARIADB_USER" -p"$PLATFORM_MARIADB_PASSWORD" "$PLATFORM_MARIADB_DATABASE" -e "$1" 2>/dev/null; }
+
+    d1=$("$BIN" entity create document title="MariaDB Doc A" content="Links to [[MariaDB Doc B]]." | grep -o '[0-9]\+')
+    d2=$("$BIN" entity create document title="MariaDB Doc B" content="Second note." | grep -o '[0-9]\+')
+
+    # Simulate pre-migration-11 MariaDB store and verify migration 11 backfills LN(scale_at_write) + pool_active + document_count
+    q "ALTER TABLE document DROP COLUMN log_scale_at_write, DROP COLUMN pool_active;"
+    q "UPDATE document SET raw_heat = 1.5, scale_at_write = 0.5 WHERE id = ${d1};"
+    q "UPDATE knowledge_pool_state SET log_pool_scale = LN(0.5), document_count = 77 WHERE id = 1;"
+    q "UPDATE system_state SET number_value = 10 WHERE name = 'store.schema_version';"
+
+    run "$BIN" store verify
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "Store verification passed (0 violations)." ]]
+    [ "$(q "SELECT document_count FROM knowledge_pool_state WHERE id = 1;")" = "2" ]
+}
+
+@test "Law L6: dual-backend SQLite vs. MariaDB observational equivalence across seeded command traces" {
+    run_luam "$PROJECT_ROOT/tst/integration/lua/dual_backend_laws.lua" \
+        "$PLATFORM_MARIADB_HOST" "$PLATFORM_MARIADB_PORT" "$PLATFORM_MARIADB_USER" "$PLATFORM_MARIADB_DATABASE"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "Law L6 dual-backend SQLite == MariaDB observational equivalence passed" ]]
 }

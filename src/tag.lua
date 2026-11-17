@@ -317,7 +317,7 @@ end
 function tag.place_untagged(db_path)
     rows = db.query(db_path, """
         SELECT d.id FROM document d JOIN document_embedding e ON e.document_id = d.id
-        WHERE (d.archived_at IS NULL OR d.archived_at = '') AND (d.merged_into IS NULL OR d.merged_into = '')
+        WHERE (d.archived_at IS NULL OR d.archived_at = '') AND d.merged_into IS NULL
           AND NOT EXISTS (SELECT 1 FROM document_tag dt JOIN tag t ON t.id = dt.tag
                           AND (t.archived_at IS NULL OR t.archived_at = '')
                           WHERE dt.document = d.id AND (dt.archived_at IS NULL OR dt.archived_at = '')

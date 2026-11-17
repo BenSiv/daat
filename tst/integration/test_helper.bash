@@ -31,7 +31,7 @@ run_luam() {
         luam_dir=$(cd "${PROJECT_ROOT}/../luam" && pwd)
     fi
     run env LUA_PATH="${PROJECT_ROOT}/src/?.lua;${PROJECT_ROOT}/tst/lib/?.lua;${luam_dir}/lib/?.lua;${luam_dir}/lib/?/init.lua;;" \
-        LUA_CPATH="${luam_dir}/bin/?.so;${luam_dir}/lib/lfs/?.so;${luam_dir}/lib/hmac/?.so;${luam_dir}/lib/bcrypt/?.so;;" \
+        LUA_CPATH="${luam_dir}/bin/?.so;${luam_dir}/lib/lfs/?.so;${luam_dir}/lib/hmac/?.so;${luam_dir}/lib/bcrypt/?.so;${luam_dir}/lib/mariadb/?.so;;" \
         "${luam_dir}/bin/luam" "$@"
 }
 

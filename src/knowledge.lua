@@ -531,7 +531,7 @@ function knowledge.duplication_status(db_path, document_id, content_hash, source
         return "unique"
     end
     rows = db.query(db_path, string.format(
-        "SELECT id FROM document WHERE content_hash = %s AND id != %d AND (archived_at IS NULL OR archived_at = '') AND (merged_into IS NULL OR merged_into = '') ORDER BY id ASC LIMIT 1;",
+        "SELECT id FROM document WHERE content_hash = %s AND id != %d AND (archived_at IS NULL OR archived_at = '') AND merged_into IS NULL ORDER BY id ASC LIMIT 1;",
         db.quote(content_hash), tonumber(document_id)
     ))
     if rows == nil or rows[1] == nil then
@@ -1949,7 +1949,7 @@ end
 function knowledge.graph_nodes(db_path)
     rows = db.query(db_path, """
         SELECT id, title, tier, raw_heat, log_scale_at_write FROM document
-        WHERE (archived_at IS NULL OR archived_at = '') AND (merged_into IS NULL OR merged_into = '');
+        WHERE (archived_at IS NULL OR archived_at = '') AND merged_into IS NULL;
     """)
     if rows == nil then
         return {}

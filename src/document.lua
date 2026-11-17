@@ -446,7 +446,7 @@ function ensure_document_knowledge_columns(db_path)
     document.ensure_document_pool_columns(db_path, have)
 end
 
-ACTIVE_POOL_DOCUMENT_WHERE = "(archived_at IS NULL OR archived_at = '') AND (merged_into IS NULL OR merged_into = '')"
+ACTIVE_POOL_DOCUMENT_WHERE = "(archived_at IS NULL OR archived_at = '') AND merged_into IS NULL"
 
 -- Full log-space per-document scale (`log_scale_at_write`) plus explicit
 -- active-pool membership (`pool_active` = 1 iff in the conserved pool).
@@ -1311,8 +1311,8 @@ function document.graph_edges(db_path)
         JOIN document d2 ON d2.id = dl.to_document_id
         WHERE dl.to_document_id IS NOT NULL
           AND (dl.archived_at IS NULL OR dl.archived_at = '')
-          AND (d1.archived_at IS NULL OR d1.archived_at = '') AND (d1.merged_into IS NULL OR d1.merged_into = '')
-          AND (d2.archived_at IS NULL OR d2.archived_at = '') AND (d2.merged_into IS NULL OR d2.merged_into = '');
+          AND (d1.archived_at IS NULL OR d1.archived_at = '') AND d1.merged_into IS NULL
+          AND (d2.archived_at IS NULL OR d2.archived_at = '') AND d2.merged_into IS NULL;
     """)
     if rows == nil then
         return {}
@@ -2722,7 +2722,7 @@ end
 -- and usage (heat, tier) alone.
 SEARCHABLE_DOCUMENT_WHERE = """
 (d.archived_at IS NULL OR d.archived_at = '')
-AND (d.merged_into IS NULL OR d.merged_into = '')
+AND d.merged_into IS NULL
 """
 
 SEARCH_RESULT_COLUMNS = """

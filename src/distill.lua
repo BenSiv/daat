@@ -176,7 +176,7 @@ function distill_pool(db_path, model)
                CASE WHEN e.vector_packed IS NULL THEN e.vector_json END AS vector_json
         FROM document d JOIN document_embedding e ON e.document_id = d.id AND e.model = %s
         WHERE d.source_type IN ('record', 'distilled') AND (d.archived_at IS NULL OR d.archived_at = '')
-          AND (d.merged_into IS NULL OR d.merged_into = '');""", db.quote(model)))
+          AND d.merged_into IS NULL;""", db.quote(model)))
     pool = {}
     if rows == nil then
         return pool

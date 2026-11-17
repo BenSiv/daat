@@ -159,7 +159,7 @@ function duplicate_candidates(db_path)
     return duplicate_rows(db_path, """
         SELECT id, title FROM document
         WHERE (archived_at IS NULL OR archived_at = '')
-          AND (merged_into IS NULL OR merged_into = '')
+          AND merged_into IS NULL
           AND external_id LIKE 'sharepoint:%'
         ORDER BY id;""")
 end
