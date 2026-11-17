@@ -462,3 +462,39 @@ EOF2
     [[ "$output" =~ "## Stored characters by type" ]]
     [[ "$output" =~ "model_input	0	0" ]]
 }
+
+@test "deferred search_review_mode queues retrieval review on MariaDB and review-pending drains it idempotently" {
+    cat > platform.lua <<EOF2
+return {db_backend = "mariadb", mariadb_host = "${PLATFORM_MARIADB_HOST}", mariadb_port = ${PLATFORM_MARIADB_PORT}, mariadb_user = "${PLATFORM_MARIADB_USER}", mariadb_database = "${PLATFORM_MARIADB_DATABASE}", agent_provider = "test", search_provider = "test", embedding_quiet_minutes = 0}
+EOF2
+    "$BIN" init >/dev/null
+    read -r session csrf <<< "$(login_test_user alice i)"
+    cookie="session=${session}; csrf=${csrf}"
+    q() { mariadb -N -h "$PLATFORM_MARIADB_HOST" -P "$PLATFORM_MARIADB_PORT" -u "$PLATFORM_MARIADB_USER" -p"$PLATFORM_MARIADB_PASSWORD" "$PLATFORM_MARIADB_DATABASE" -e "$1" 2>/dev/null; }
+
+    "$BIN" entity create document title="Bioreactor Protocol" content="Careful bioreactor pH and dissolved oxygen control." >/dev/null
+    doc_id=$(q "SELECT id FROM document WHERE title = 'Bioreactor Protocol';")
+
+    run raw_get "/documents" "q=bioreactor" "$cookie"
+    [[ "$output" =~ "200 OK" ]]
+    [[ "$output" =~ "Bioreactor Protocol" ]]
+
+    # Search request recorded only the pending retrieval and raw hit; zero document writes ran synchronously.
+    [ "$(q "SELECT status FROM knowledge_retrieval ORDER BY id DESC LIMIT 1;")" = "pending" ]
+    [ "$(q "SELECT author FROM knowledge_retrieval ORDER BY id DESC LIMIT 1;")" = "alice" ]
+    [ "$(q "SELECT retrieval_count FROM document WHERE id = ${doc_id};")" = "0" ]
+    [ "$(q "SELECT COUNT(*) FROM knowledge_retrieval_hit WHERE document_id = ${doc_id} AND reinforcement_delta IS NULL AND reviewed_at IS NULL;")" = "1" ]
+
+    run "$BIN" knowledge review-pending
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "reviewed (1 hits)" ]]
+    [ "$(q "SELECT status FROM knowledge_retrieval ORDER BY id DESC LIMIT 1;")" = "reviewed" ]
+    [ "$(q "SELECT retrieval_count FROM document WHERE id = ${doc_id};")" = "1" ]
+    [ "$(q "SELECT COUNT(*) FROM knowledge_retrieval_hit WHERE document_id = ${doc_id} AND reinforcement_delta IS NOT NULL AND reviewed_at IS NOT NULL;")" = "1" ]
+
+    # Second run is a complete no-op.
+    run "$BIN" knowledge review-pending
+    [ "$status" -eq 0 ]
+    [ "$output" = "" ]
+    [ "$(q "SELECT retrieval_count FROM document WHERE id = ${doc_id};")" = "1" ]
+}

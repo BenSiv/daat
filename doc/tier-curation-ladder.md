@@ -71,7 +71,7 @@ Each step is one generation call plus one check call. With the use gate, the fir
 
 Status:
 - **Phase 1** is done (2026-10-28): `knowledge.can_hold_tier`, the judge sees title and kind, and store migration 7 reset every tier.
-- **Phase 2's curate step** is built (`src/curate.lua`):
+- **Phase 2** is done (`src/curate.lua`, `src/knowledge.lua`):
   - Review queues a source once it's due (`knowledge_curation`, one row per source and content version).
   - The jobs worker runs `daat knowledge curate-pending 3` every 2 minutes (software `startup-platform.sh.tpl`).
   - `daat repair curate [--limit N] [--dry-run] [--recheck]` backfills the sources already in use, most used first. `--recheck` tries again the sources that came to nothing, were rejected or failed (after a prompt change).
@@ -80,7 +80,7 @@ Status:
   - A long source is also curated in parts (`doc/aspect-retrieval-plan.md`, with `search_aspects` on): when searches find it twice through the same aspect, that aspect's passages are curated into a note of their own (`knowledge_aspect_curation`, one row per source and aspect), next to the whole-source note. That's how the text past the 40,000-character cut reaches a note, one subject at a time.
   - A runner claims a queued source (pending -> running, with its own token) before curating it, so a `repair curate` batch and the jobs worker never curate the same source twice. A row left running by a process that died is retried by `--recheck`.
   - A note that passes the check is created at tier 1 with a `Source: [[...]]` link. A source edited later gets its note rewritten in place.
-  - Moving the rest of review out of the search request is still to do.
+  - Retrieval heat reinforcement, spreading activation, and `knowledge.review_retrieval` (`maybe_link_co_retrieved` + curation queueing) are decoupled from the search request (2026-11-17, store migration 10, `search_review_mode = "deferred"` by default): `GET /documents?q=...` and `document.search` write only the `knowledge_retrieval` row and one batched `knowledge_retrieval_hit` insert, while `daat knowledge review-pending 25` drains pending retrievals in causal order ahead of `curate-pending 3` on the jobs worker.
   - Review no longer judges the tier of a document the curation wrote: it keeps the tier its step gave it. Found 2026-10-29 before it happened in production: the old judge path would have reset a fresh tier-1 note to 0 on its second retrieval (never "revised"), or moved a revised one to any tier.
 - **Phase 3's synthesize step** is built (`src/synthesize.lua`, 2026-10-29), on the tags rebuilt that day (`daat tag build --name --replace`: 50 tags).
   - A tag is due once it holds 3 or more curated notes and has no reference, or its notes changed since (`knowledge_reference`, one row per tag, with the notes' hash).

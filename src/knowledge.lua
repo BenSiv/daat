@@ -35,8 +35,13 @@ KNOWLEDGE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS knowledge_retrieval (
     id INTEGER PRIMARY KEY %s,
     session_id TEXT,
+    author VARCHAR(255),
     query_text TEXT,
     hit_count INTEGER NOT NULL DEFAULT 0,
+    status VARCHAR(32) NOT NULL DEFAULT 'reviewed',
+    claim_token VARCHAR(64),
+    claimed_at TEXT,
+    reviewed_at TEXT,
     created_at TEXT DEFAULT (%s)
 );
 
@@ -200,11 +205,41 @@ function ensure_knowledge_indexes(db_path)
     indexes = {
         {name = "knowledge_retrieval_document_document_idx", table = "knowledge_retrieval_hit",
          sql = "CREATE INDEX knowledge_retrieval_document_document_idx ON knowledge_retrieval_hit(document_id);"},
+        {name = "knowledge_retrieval_status_id_idx", table = "knowledge_retrieval",
+         sql = "CREATE INDEX knowledge_retrieval_status_id_idx ON knowledge_retrieval(status, id);"},
     }
     for _, idx in ipairs(indexes) do
         if db.index_exists(db_path, idx.table, idx.name) == false then
             db.exec(db_path, idx.sql)
         end
+    end
+end
+
+-- Deferred retrieval review columns on knowledge_retrieval (store
+-- migration 10; doc/tier-curation-ladder.md, Phase 2). Pre-existing rows
+-- get DEFAULT 'reviewed' so past inline searches are never re-applied.
+function knowledge.ensure_retrieval_review_columns(db_path)
+    if not db.table_exists(db_path, "knowledge_retrieval") then
+        return
+    end
+    have = {}
+    for _, name in ipairs(db.get_columns(db_path, "knowledge_retrieval")) do
+        have[name] = true
+    end
+    if have["author"] == nil then
+        db.exec(db_path, "ALTER TABLE knowledge_retrieval ADD COLUMN author VARCHAR(255) DEFAULT NULL;")
+    end
+    if have["status"] == nil then
+        db.exec(db_path, "ALTER TABLE knowledge_retrieval ADD COLUMN status VARCHAR(32) NOT NULL DEFAULT 'reviewed';")
+    end
+    if have["claim_token"] == nil then
+        db.exec(db_path, "ALTER TABLE knowledge_retrieval ADD COLUMN claim_token VARCHAR(64) DEFAULT NULL;")
+    end
+    if have["claimed_at"] == nil then
+        db.exec(db_path, "ALTER TABLE knowledge_retrieval ADD COLUMN claimed_at TEXT DEFAULT NULL;")
+    end
+    if have["reviewed_at"] == nil then
+        db.exec(db_path, "ALTER TABLE knowledge_retrieval ADD COLUMN reviewed_at TEXT DEFAULT NULL;")
     end
 end
 
@@ -237,9 +272,10 @@ end
 
 function knowledge.init_schema(db_path)
     db.exec(db_path, knowledge_schema_sql(db_path))
-    ensure_knowledge_indexes(db_path)
+    knowledge.ensure_retrieval_review_columns(db_path)
     ensure_link_review_reason_column(db_path)
     ensure_retrieval_hit_aspect_column(db_path)
+    ensure_knowledge_indexes(db_path)
 end
 
 -- Same treatment as document.lua's KNOWLEDGE_POOL_SQL_COLUMNS: these are
@@ -252,8 +288,11 @@ HAND_ROLLED_TABLE_COLUMNS = {
     knowledge_retrieval = {
         {name = "id", note = "primary key"},
         {name = "session_id", note = "agent_session.id this retrieval happened within"},
+        {name = "author", note = "login whose search triggered this retrieval"},
         {name = "query_text", note = "the search query text"},
         {name = "hit_count", note = "number of documents this retrieval matched"},
+        {name = "status", note = "deferred review state: pending, running, or reviewed"},
+        {name = "reviewed_at", note = "when reinforcement and review finished (NULL while pending)"},
         {name = "created_at", note = "timestamp of the retrieval event"},
     },
     knowledge_retrieval_hit = {
@@ -405,12 +444,47 @@ end
 -- add_message (see their own comments) -- SELECT MAX(id) can collide
 -- with another connection's own insert; db.exec's own connection-scoped
 -- second return value can't.
-function knowledge.begin_retrieval(db_path, session_id, query_text, hit_count)
+function knowledge.begin_retrieval(db_path, session_id, query_text, hit_count, author, status)
+    if status == nil then
+        status = "reviewed"
+    end
+    reviewed_expr = "NULL"
+    if status == "reviewed" then
+        reviewed_expr = db.now_expr(db_path)
+    end
     _, retrieval_id = db.exec(db_path, string.format(
-        "INSERT INTO knowledge_retrieval (session_id, query_text, hit_count) VALUES (%s, %s, %d);",
-        db.literal(session_id), db.literal(query_text), tonumber(hit_count)
+        "INSERT INTO knowledge_retrieval (session_id, author, query_text, hit_count, status, reviewed_at) VALUES (%s, %s, %s, %d, %s, %s);",
+        db.literal(session_id), db.literal(author), db.literal(query_text), tonumber(hit_count), db.quote(status), reviewed_expr
     ))
     return tonumber(retrieval_id)
+end
+
+-- Single multi-row INSERT of raw search hits for deferred review
+-- (`search_review_mode = "deferred"`): records rank, score and aspect
+-- immediately while leaving tier_weight, reinforcement_delta and
+-- reviewed_at NULL until `daat knowledge review-pending` drains the
+-- retrieval in the background worker.
+function knowledge.queue_retrieval_hits(db_path, retrieval_id, results)
+    if results == nil or #results == 0 then
+        return
+    end
+    values = {}
+    for rank, r in ipairs(results) do
+        aspect_literal = "NULL"
+        if tonumber(r.aspect) != nil then
+            aspect_literal = tostring(tonumber(r.aspect))
+        end
+        score = tonumber(r.score)
+        if score == nil then
+            score = 0
+        end
+        table.insert(values, string.format("(%d, %d, %d, %.17g, %s)",
+            tonumber(retrieval_id), tonumber(r.id), tonumber(rank), score, aspect_literal))
+    end
+    db.exec(db_path, string.format(
+        "%s knowledge_retrieval_hit (retrieval_id, document_id, `rank`, score, aspect) VALUES %s;",
+        db.replace_into(db_path), table.concat(values, ", ")
+    ))
 end
 
 -- Bumps the document's heat/retrieval_count by the reinforcement
@@ -431,7 +505,7 @@ function knowledge.record_retrieval_hit(db_path, retrieval_id, document_id, tier
     -- `last_retrieved_at` wall-clock columns are no longer written.
     document.reinforce_pool_heat(db_path, document_id, delta)
     aspect_literal = "NULL"
-    if aspect != nil then
+    if tonumber(aspect) != nil then
         aspect_literal = tostring(tonumber(aspect))
     end
     db.exec(db_path, string.format(
@@ -492,7 +566,7 @@ end
 -- -- reactive, tied to real usage, not a synthetic actor.
 function knowledge.review_retrieval(db_path, retrieval_id, author)
     rows = db.query(db_path, string.format(
-        "SELECT document_id, aspect FROM knowledge_retrieval_hit WHERE retrieval_id = %d;", tonumber(retrieval_id)
+        "SELECT document_id, aspect, reviewed_at FROM knowledge_retrieval_hit WHERE retrieval_id = %d;", tonumber(retrieval_id)
     ))
     if rows == nil then
         return
@@ -504,7 +578,11 @@ function knowledge.review_retrieval(db_path, retrieval_id, author)
     end
 
     for _, row in ipairs(rows) do
-        doc = knowledge.get_document(db_path, row.document_id)
+        already_reviewed = row.reviewed_at != nil and row.reviewed_at != ""
+        doc = nil
+        if not already_reviewed then
+            doc = knowledge.get_document(db_path, row.document_id)
+        end
         if doc != nil then
             is_system = doc.source_type != nil and doc.source_type != ""
             body = doc.content
@@ -564,7 +642,7 @@ function knowledge.review_retrieval(db_path, retrieval_id, author)
             hit_aspect = tonumber(row.aspect)
             if curate_aspects and hit_aspect != nil and not knowledge.can_hold_tier(doc.source_type) then
                 aspect_hits = db.query(db_path, string.format(
-                    "SELECT COUNT(*) AS n FROM knowledge_retrieval_hit WHERE document_id = %d AND aspect = %d;",
+                    "SELECT COUNT(*) AS n FROM knowledge_retrieval_hit WHERE document_id = %d AND aspect = %d AND reinforcement_delta IS NOT NULL;",
                     tonumber(doc.id), hit_aspect))
                 if aspect_hits != nil and aspect_hits[1] != nil and knowledge.due_for_review(tonumber(aspect_hits[1].n), 0) then
                     require("curate").queue_aspect(db_path, doc, hit_aspect)
@@ -834,6 +912,7 @@ function knowledge.co_retrieval_pairs(db_path, document_ids)
         FROM knowledge_retrieval_hit a
         JOIN knowledge_retrieval_hit b ON a.retrieval_id = b.retrieval_id AND a.document_id < b.document_id
         WHERE a.document_id IN (%s) AND b.document_id IN (%s)
+          AND a.reinforcement_delta IS NOT NULL AND b.reinforcement_delta IS NOT NULL
         GROUP BY a.document_id, b.document_id;
     """, id_list_sql, id_list_sql))
     if rows == nil then
@@ -1668,13 +1747,27 @@ end
 
 -- Wraps document.search rather than modifying it -- document.search
 -- stays pure/reusable, knowledge.lua depends on document.lua, never
--- the reverse. Every result IS already the record that accrues
--- heat/tier -- no separate note to create or look up first. `author`
--- is threaded through to review_retrieval, purely for attributing any
--- reactive distillation it triggers.
+-- the reverse. With search_review_mode = "deferred" (the default;
+-- doc/tier-curation-ladder.md Phase 2, doc/performance.md Option 1.1),
+-- interactive search records only the retrieval row and raw hits (at
+-- most two SQL INSERTs, zero document writes or model calls), and
+-- `daat knowledge review-pending` applies heat reinforcement, spreading
+-- activation, curation queueing, and co-retrieval link review in the
+-- background jobs worker. With search_review_mode = "inline", they run
+-- immediately before returning.
 function knowledge.search_and_log(db_path, query_text, limit, use_semantic, session_id, author)
     results, query_vector, query_model = document.search(db_path, query_text, limit, use_semantic)
-    retrieval_id = knowledge.begin_retrieval(db_path, session_id, query_text, #results)
+    mode = config.platform_config().search_review_mode
+    if mode != "inline" then
+        if #results == 0 then
+            retrieval_id = knowledge.begin_retrieval(db_path, session_id, query_text, 0, author, "reviewed")
+            return results, retrieval_id, query_vector, query_model
+        end
+        retrieval_id = knowledge.begin_retrieval(db_path, session_id, query_text, #results, author, "pending")
+        knowledge.queue_retrieval_hits(db_path, retrieval_id, results)
+        return results, retrieval_id, query_vector, query_model
+    end
+    retrieval_id = knowledge.begin_retrieval(db_path, session_id, query_text, #results, author, "running")
     hit_ids = {}
     for _, r in ipairs(results) do
         hit_ids[tonumber(r.id)] = true
@@ -1690,7 +1783,149 @@ function knowledge.search_and_log(db_path, query_text, limit, use_semantic, sess
     if #results > 0 then
         knowledge.review_retrieval(db_path, retrieval_id, author)
     end
+    db.exec(db_path, string.format(
+        "UPDATE knowledge_retrieval SET status = 'reviewed', reviewed_at = %s WHERE id = %d;",
+        db.now_expr(db_path), tonumber(retrieval_id)
+    ))
     return results, retrieval_id, query_vector, query_model
+end
+
+RETRIEVAL_REVIEW_STALE_SECONDS = 900
+
+function new_retrieval_claim_token()
+    urandom = io.open("/dev/urandom", "rb")
+    if urandom == nil then
+        return nil
+    end
+    raw = io.read(urandom, 8)
+    io.close(urandom)
+    return (string.gsub(raw, ".", function(c) return string.format("%02x", string.byte(c)) end))
+end
+
+function claim_retrieval_review(db_path, retrieval_id, stale_cutoff)
+    token = new_retrieval_claim_token()
+    if token == nil then
+        return false, nil
+    end
+    now_utc = os.date("!%Y-%m-%d %H:%M:%S")
+    db.exec(db_path, string.format("""
+        UPDATE knowledge_retrieval
+        SET status = 'running', claim_token = %s, claimed_at = %s
+        WHERE id = %d AND (status = 'pending' OR (status = 'running' AND claimed_at IS NOT NULL AND claimed_at < %s));
+    """, db.quote(token), db.quote(now_utc), tonumber(retrieval_id), db.quote(stale_cutoff)))
+    rows = db.query(db_path, string.format(
+        "SELECT status, claim_token, author FROM knowledge_retrieval WHERE id = %d;",
+        tonumber(retrieval_id)
+    ))
+    if rows == nil or rows[1] == nil or rows[1].status != "running" or rows[1].claim_token != token then
+        return false, nil
+    end
+    return true, rows[1].author
+end
+
+-- Applies heat reinforcement, spreading activation, and review_retrieval
+-- to one queued retrieval. Per-hit reinforcement_delta and reviewed_at
+-- checks keep retries after a worker crash idempotent without double-
+-- incrementing retrieval_count or conserved pool heat.
+function knowledge.apply_retrieval(db_path, retrieval_id, author)
+    hits = db.query(db_path, string.format("""
+        SELECT document_id, `rank`, score, aspect, reinforcement_delta
+        FROM knowledge_retrieval_hit
+        WHERE retrieval_id = %d AND `rank` IS NOT NULL
+        ORDER BY `rank` ASC;
+    """, tonumber(retrieval_id)))
+    if hits == nil then
+        hits = {}
+    end
+    if #hits > 0 then
+        hit_ids = {}
+        id_literals = {}
+        for _, h in ipairs(hits) do
+            doc_id = tonumber(h.document_id)
+            if doc_id != nil and hit_ids[doc_id] == nil then
+                hit_ids[doc_id] = true
+                table.insert(id_literals, tostring(doc_id))
+            end
+        end
+        docs_by_id = {}
+        if #id_literals > 0 then
+            doc_rows = db.query(db_path, string.format(
+                "SELECT id, tier, content, archived_at FROM document WHERE id IN (%s);",
+                table.concat(id_literals, ", ")
+            ))
+            if doc_rows != nil then
+                for _, d in ipairs(doc_rows) do
+                    docs_by_id[tonumber(d.id)] = d
+                end
+            end
+        end
+        for _, h in ipairs(hits) do
+            if tonumber(h.reinforcement_delta) == nil then
+                doc_id = tonumber(h.document_id)
+                doc = docs_by_id[doc_id]
+                if doc != nil and (doc.archived_at == nil or doc.archived_at == "") then
+                    tier = tonumber(doc.tier)
+                    if tier == nil then
+                        tier = 0
+                    end
+                    score = tonumber(h.score)
+                    if score == nil then
+                        score = 0
+                    end
+                    delta = knowledge.record_retrieval_hit(
+                        db_path, retrieval_id, doc_id, tier, h.rank, score, document.content_hash(doc.content), h.aspect)
+                    knowledge.spread_activation(db_path, retrieval_id, doc_id, delta, hit_ids)
+                else
+                    db.exec(db_path, string.format(
+                        "UPDATE knowledge_retrieval_hit SET tier_weight = 0, reinforcement_delta = 0, reviewed_at = %s WHERE retrieval_id = %d AND document_id = %d;",
+                        db.now_expr(db_path), tonumber(retrieval_id), doc_id
+                    ))
+                end
+            end
+        end
+        effective_author = author
+        if effective_author == nil or effective_author == "" then
+            effective_author = "system"
+        end
+        knowledge.review_retrieval(db_path, retrieval_id, effective_author)
+    end
+    db.exec(db_path, string.format(
+        "UPDATE knowledge_retrieval SET status = 'reviewed', claim_token = NULL, claimed_at = NULL, reviewed_at = %s WHERE id = %d;",
+        db.now_expr(db_path), tonumber(retrieval_id)
+    ))
+    return #hits
+end
+
+-- Drains up to `limit` (default 25) pending retrievals in causal id
+-- order, claiming each with a per-runner token so concurrent workers
+-- never double-apply a retrieval. Also reclaims 'running' rows whose
+-- worker has gone quiet past `stale_seconds` (default 900s).
+function knowledge.run_pending_reviews(db_path, limit, stale_seconds)
+    if limit == nil then
+        limit = 25
+    end
+    if stale_seconds == nil then
+        stale_seconds = RETRIEVAL_REVIEW_STALE_SECONDS
+    end
+    stale_cutoff = os.date("!%Y-%m-%d %H:%M:%S", os.time() - math.floor(tonumber(stale_seconds)))
+    rows = db.query(db_path, string.format("""
+        SELECT id FROM knowledge_retrieval
+        WHERE status = 'pending' OR (status = 'running' AND claimed_at IS NOT NULL AND claimed_at < %s)
+        ORDER BY id ASC LIMIT %d;
+    """, db.quote(stale_cutoff), tonumber(limit)))
+    lines = {}
+    if rows == nil then
+        return lines
+    end
+    for _, row in ipairs(rows) do
+        rid = tonumber(row.id)
+        claimed, claimed_author = claim_retrieval_review(db_path, rid, stale_cutoff)
+        if claimed == true then
+            hit_count = knowledge.apply_retrieval(db_path, rid, claimed_author)
+            table.insert(lines, string.format("retrieval #%d reviewed (%d hits)", rid, hit_count))
+        end
+    end
+    return lines
 end
 
 -- knowledge.search_for_display(db_path, query_text, limit, session_id, author, full)
@@ -1991,6 +2226,17 @@ function knowledge.do_knowledge(cmd_args, db_path)
         return
     end
 
+    -- Deferred retrieval reinforcement + review queue, run by the jobs
+    -- worker ahead of curate-pending so newly due sources are curated
+    -- in the same cycle.
+    if action == "review-pending" then
+        limit = tonumber(cmd_args[2])
+        for _, line in ipairs(knowledge.run_pending_reviews(db_path, limit)) do
+            print(line)
+        end
+        return
+    end
+
     -- The curate step's queue (src/curate.lua), run by the jobs worker.
     if action == "curate-pending" then
         limit = tonumber(cmd_args[2])
@@ -2105,7 +2351,7 @@ function knowledge.do_knowledge(cmd_args, db_path)
         return
     end
 
-    print("Usage: daat knowledge <stats|list [tier]|show <document_id>|promote <document_id> <tier>|curate-pending [N]|synthesize-due [N]|distill-due [N]|link-score <id> <id>|distill>")
+    print("Usage: daat knowledge <stats|list [tier]|show <document_id>|promote <document_id> <tier>|review-pending [N]|curate-pending [N]|synthesize-due [N]|distill-due [N]|link-score <id> <id>|distill>")
 end
 
 return knowledge
