@@ -342,11 +342,11 @@ function knowledge.get_document(db_path, document_id)
     -- is now the conserved-pool view, not the old wall-clock decay.
     document.ensure_pool_state(db_path)
     state_rows = db.query(db_path, "SELECT log_pool_scale FROM knowledge_pool_state WHERE id = 1;")
-    pool_scale = 1.0
+    log_pool_scale = 0.0
     if state_rows != nil and state_rows[1] != nil then
-        pool_scale = math.exp(tonumber(state_rows[1].log_pool_scale))
+        log_pool_scale = tonumber(state_rows[1].log_pool_scale)
     end
-    doc.effective_heat = document.pool_effective_heat(doc.raw_heat, doc.scale_at_write, pool_scale)
+    doc.effective_heat = document.pool_effective_heat(doc.raw_heat, doc.log_scale_at_write, log_pool_scale)
     return doc
 end
 
@@ -531,7 +531,7 @@ function knowledge.duplication_status(db_path, document_id, content_hash, source
         return "unique"
     end
     rows = db.query(db_path, string.format(
-        "SELECT id FROM document WHERE content_hash = %s AND id != %d AND (archived_at IS NULL OR archived_at = '') ORDER BY id ASC LIMIT 1;",
+        "SELECT id FROM document WHERE content_hash = %s AND id != %d AND (archived_at IS NULL OR archived_at = '') AND (merged_into IS NULL OR merged_into = '') ORDER BY id ASC LIMIT 1;",
         db.quote(content_hash), tonumber(document_id)
     ))
     if rows == nil or rows[1] == nil then
@@ -769,55 +769,6 @@ end
 -- "I prefer the atomic record to be more like hypothesis or
 -- definition and not a subject title" -- encoded below the same way
 -- the reminder/action-item case already is.
-DISTILL_SYSTEM_PROMPT = """
-Extract the single core idea from the following document into a new, concise, self-contained note in your own words -- not a verbatim copy. Remove anything not essential to that one idea. The core idea is a fact, conclusion, or concept, not an instruction to do something -- if the most prominent content is a to-do, a reminder, or an assignment of who must do what, that is not itself a distillable idea; only extract if there's a genuine underlying fact or concept beneath it worth stating in its own right, otherwise treat it as nothing meaningful to extract. Write it as a real claim -- a hypothesis, finding, or definition that asserts something -- never as a subject/topic label that just names an area (e.g. "media optimization considerations" or "cryopreservation vs. genetic fidelity" asserts nothing; state the actual finding instead). Reply with the distilled note text only: no title, no preamble, no commentary. If the document already covers exactly one focused idea and there is nothing meaningful to extract, reply with exactly: NONE
-"""
-
-function knowledge.already_distilled_from(db_path, source_document_id)
-    rows = db.query(db_path, string.format(
-        "SELECT id FROM document WHERE source_type = 'distilled' AND source_id = %d LIMIT 1;",
-        tonumber(source_document_id)
-    ))
-    return rows != nil and rows[1] != nil
-end
-
--- Called from review_retrieval whenever a document's content_shape comes
--- back "developed" (long, multi-section -- see document.content_shape).
--- Never distills a document that's itself already a distilled note
--- (source_type == 'distilled'), never redistills the same source twice,
--- and only ever fires for "developed" content -- an already-"atomic" or
--- "thin"/"simple" source has nothing worth extracting that isn't already
--- there as-is.
-function knowledge.maybe_distill(db_path, author, doc, content_shape)
-    if doc.source_type == "distilled" then
-        return nil
-    end
-    if content_shape != "developed" then
-        return nil
-    end
-    if knowledge.already_distilled_from(db_path, doc.id) then
-        return nil
-    end
-
-    agent_provider = require("agent_provider")
-    body = doc.content
-    if body == nil then
-        body = ""
-    end
-    distilled, err = agent_provider.generate(nil, DISTILL_SYSTEM_PROMPT, body)
-    if distilled == nil then
-        return nil
-    end
-    distilled = (string.gsub(distilled, "^%s*(.-)%s*$", "%1"))
-    if distilled == "" or distilled == "NONE" then
-        return nil
-    end
-
-    title = document.guess_title_from_body(distilled)
-    document_id, err = knowledge.distill_document(db_path, author, doc.id, title, distilled)
-    return document_id
-end
-
 --------------------------------------------------------------------------
 -- Co-retrieval -> agent-evaluated explicit link
 --------------------------------------------------------------------------
@@ -1392,10 +1343,7 @@ end
 -- Archived like any document a person archives: the archive hook
 -- takes its links (and its heat, vector, tag places) with it.
 function revoke_connection(db_path, connection_id, why)
-    archived_id, _ = entity.archive(db_path, "document", tonumber(connection_id), "system", nil, "repair connections: " .. why)
-    if archived_id != nil then
-        document.on_entity_archived(db_path, "document", archived_id)
-    end
+    entity.archive(db_path, "document", tonumber(connection_id), "system", nil, "repair connections: " .. why)
 end
 
 -- `daat repair connections`: every connection document ("A ↔ B") goes
@@ -1573,117 +1521,14 @@ end
 -- is always the lowest layer, however long, until someone actually
 -- works it" and Wikipedia's own content-assessment scale, where a long
 -- dump doesn't clear Start-class without real editorial organization.
-TIER_JUDGMENT_SYSTEM_PROMPT = """
-You are judging how far a document in a knowledge pool has matured through real editing, not how often it's been looked up. Tiers: 1 = Curated Draft (revised, but not yet a complete reference or a tight standalone definition -- includes a raw source document, however long or well-structured, that hasn't actually been reworked into this platform's own reference material yet), 2 = Developed Reference (a genuinely complete, multi-section article that someone here organized or synthesized as a reference -- e.g. an experiment write-up or a synthesized explainer -- not simply a long external document, like a full academic paper or an OCR'd report, that only reads like an article because that's the shape of its original source), 3 = Atomic Record (a short, self-contained idea stated in prose, like a glossary or flashcard definition -- someone actually distilled a single conclusion or concept down into its own words). Tier 3 requires real synthesis, not just brevity: a short table of raw data (measurements, calibration values, a data grid), a bare list of links or references, a reminder or action item (an instruction to do something, a to-do, an assignment of who must do what), a bare subject/topic label or heading-like phrase that names an area without asserting anything about it (e.g. "Cryopreservation vs. Genetic Fidelity Thresholds", "Bioreactor Scale-Up Considerations"), or a terse note that's mostly structure rather than a written statement of one idea all stay Curated Draft even when they're short and single-topic -- there's no distilled idea being expressed there, just short, listed, directive, or labeled content. Likewise, Tier 2 requires real editorial work, not just length or a multi-section shape: a verbatim imported document (an academic paper's own author/abstract/keywords block, a scraped report, raw extraction artifacts still visible in the text) stays at Curated Draft no matter how long or structured it is, until someone on this platform actually reworks it into a reference. A definition or finding states what something IS or was found to be true; a reminder states what someone should DO; a title just NAMES a subject; a long untouched import is just a big source, not a written reference -- only genuine synthesis earns Tier 2 or 3. If a source document is shown below for comparison, the note under judgment was distilled from it -- check fidelity, not just shape: a distillation that drops, overgeneralizes, or misstates a qualifier, exception, or key detail the source clearly states is not a genuinely distilled idea, however clean and definition-shaped it reads on its own, and should be judged Curated Draft rather than Atomic Record until it's fixed. Read the document below and decide which of these three tiers its CURRENT content genuinely earns -- judge the real editorial maturity and nature of the writing, not just its length. Reply with exactly one character: 1, 2, or 3.
-"""
-
-function knowledge.get_tier_review(db_path, document_id)
-    rows = db.query(db_path, string.format(
-        "SELECT * FROM document_tier_judgment WHERE document_id = %d;", tonumber(document_id)
-    ))
-    if rows == nil or rows[1] == nil then
-        return nil
-    end
-    return rows[1]
-end
-
-function knowledge.record_tier_review(db_path, document_id, content_hash, tier)
-    db.exec(db_path, string.format(
-        "%s document_tier_judgment (document_id, judged_hash, judged_tier, evaluated_at) VALUES (%d, %s, %d, %s);",
-        db.replace_into(db_path), tonumber(document_id), db.quote(content_hash), tonumber(tier), db.now_expr(db_path)
-    ))
-end
-
--- Whether this document is due a fresh tier judgment -- no prior
--- judgment at all (first time it's eligible), or its content_hash has
--- changed since the last one. Mirrors due_for_link_review's own shape
--- (pure, kept separate from the DB fetch, so it's directly
--- unit-testable) and its "don't re-ask about something that hasn't
--- changed" reasoning, just keyed on content instead of a
--- re-evaluation step count -- an unedited document doesn't get a fresh
--- model call just for coming due for review again.
-function knowledge.due_for_tier_judgment(review, content_hash)
-    if review == nil then
-        return true
-    end
-    return review.judged_hash != content_hash
-end
-
--- Cap on how much of a distillation's source gets fed alongside it for
--- the fidelity comparison below -- same truncate-with-marker
--- convention as document.lua's ATTACHMENT_TEXT_MAX_CHARS, bounding the
--- cost of a judgment call that would otherwise run against a raw,
--- 200K+ character paper import every time a distilled note comes due
--- for review.
-TIER_JUDGMENT_SOURCE_MAX_CHARS = 20000
-
--- current_tier/content_shape are passed as context/fallback, never the
--- decision itself. Falls back to document.promotion_target_tier's
--- existing deterministic mapping on a model error or an unparseable
--- reply, so a provider outage degrades to today's behavior instead of
--- silently leaving the document's tier stuck.
---
--- Mitigates the single-shot-distillation risk raised alongside
--- Progressive Summarization (task: staged bold/highlight/summary
--- layers would be a bigger structural addition; demotion on the tier
--- ladder daat already has is the cheaper fix): when a document is
--- itself a distillation (source_type == "distilled") its source is
--- fetched and shown alongside it here, so the model can judge fidelity
--- to that source, not just the note's own shape -- a document's tier
--- was already recomputed bidirectionally on every review (task #87);
--- this just gives that recompute something to demote AGAINST besides
--- the note's own drifting content.
 -- Tiers 1-3 are earned by curation (doc/tier-curation-ladder.md): only a
 -- document the curation wrote can hold one. A source -- a synced file, a
 -- page someone wrote, a chat transcript, reasoning, a connection note, a
 -- legacy distilled fact -- stays at tier 0 however it's edited or used.
--- Found in production 2026-10-28: a 151k-character chat transcript with
--- raw tool results judged tier 3 on its first look.
 CURATED_SOURCE_TYPES = {curated = true, reference = true, record = true}
 
 function knowledge.can_hold_tier(source_type)
     return source_type != nil and CURATED_SOURCE_TYPES[source_type] == true
-end
-
-function knowledge.judge_promotion_target(db_path, doc, current_tier, content_shape)
-    agent_provider = require("agent_provider")
-    body = doc.content
-    if body == nil then
-        body = ""
-    end
-    kind = doc.source_type
-    if kind == nil or kind == "" then
-        kind = "page"
-    end
-    header = string.format("Title: %s\nKind: %s\n", tostring(doc.title), kind)
-    prompt = string.format("%sCurrent tier: %d\n\n%s", header, tonumber(current_tier), body)
-    if doc.source_type == "distilled" and doc.source_id != nil then
-        source_doc = knowledge.get_document(db_path, tonumber(doc.source_id))
-        if source_doc != nil and source_doc.content != nil then
-            source_body = source_doc.content
-            if string.len(source_body) > TIER_JUDGMENT_SOURCE_MAX_CHARS then
-                source_body = string.sub(source_body, 1, TIER_JUDGMENT_SOURCE_MAX_CHARS) ..
-                    "\n\n[...source truncated, showing the first " .. tostring(TIER_JUDGMENT_SOURCE_MAX_CHARS) .. " characters...]"
-            end
-            prompt = header .. string.format(
-                "Current tier: %d\n\nDistilled note (judge THIS one):\n%s\n\nSource it was distilled from (shown only for fidelity comparison -- do not judge the source's own maturity):\n%s",
-                tonumber(current_tier), body, source_body
-            )
-        end
-    end
-    answer, err = agent_provider.generate(nil, TIER_JUDGMENT_SYSTEM_PROMPT, prompt)
-    tier = nil
-    if answer != nil then
-        trimmed = string.gsub(answer, "^%s*(.-)%s*$", "%1")
-        if trimmed == "1" or trimmed == "2" or trimmed == "3" then
-            tier = tonumber(trimmed)
-        end
-    end
-    if tier == nil then
-        tier = document.promotion_target_tier(tonumber(current_tier), false, true, content_shape)
-    end
-    knowledge.record_tier_review(db_path, doc.id, doc.content_hash, tier)
-    return tier
 end
 
 --------------------------------------------------------------------------
@@ -2039,12 +1884,12 @@ end
 function attach_and_sort_by_pool_heat(db_path, rows)
     document.ensure_pool_state(db_path)
     state_rows = db.query(db_path, "SELECT log_pool_scale FROM knowledge_pool_state WHERE id = 1;")
-    pool_scale = 1.0
+    log_pool_scale = 0.0
     if state_rows != nil and state_rows[1] != nil then
-        pool_scale = math.exp(tonumber(state_rows[1].log_pool_scale))
+        log_pool_scale = tonumber(state_rows[1].log_pool_scale)
     end
     for _, row in ipairs(rows) do
-        row.effective_heat = document.pool_effective_heat(row.raw_heat, row.scale_at_write, pool_scale)
+        row.effective_heat = document.pool_effective_heat(row.raw_heat, row.log_scale_at_write, log_pool_scale)
     end
     table.sort(rows, function(a, b)
         return a.effective_heat > b.effective_heat
@@ -2100,8 +1945,8 @@ end
 -- note, not just ones some usage threshold happens to select.
 function knowledge.graph_nodes(db_path)
     rows = db.query(db_path, """
-        SELECT id, title, tier, raw_heat, scale_at_write FROM document
-        WHERE (archived_at IS NULL OR archived_at = '') AND merged_into IS NULL;
+        SELECT id, title, tier, raw_heat, log_scale_at_write FROM document
+        WHERE (archived_at IS NULL OR archived_at = '') AND (merged_into IS NULL OR merged_into = '');
     """)
     if rows == nil then
         return {}

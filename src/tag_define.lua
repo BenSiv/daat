@@ -237,7 +237,6 @@ function tag_define.repair(db_path, limit, dry_run, author, recheck)
             if define_text(g.document_id) != nil then
                 archived_id = entity.archive(db_path, "document", tonumber(g.document_id), author, nil, "its tag was archived")
                 if archived_id != nil then
-                    document.on_entity_archived(db_path, "document", archived_id)
                     archived = archived + 1
                 end
             end

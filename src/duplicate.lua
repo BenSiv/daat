@@ -318,7 +318,6 @@ function duplicate.fold(db_path, copy_id, keep_id)
     if archived_id == nil then
         return nil, issues
     end
-    document.on_entity_archived(db_path, "document", archived_id)
     return moved
 end
 
@@ -373,7 +372,6 @@ function duplicate.repair(db_path, dry_run)
         for _, connection in ipairs(duplicate_self_connections(db_path, keep_ids)) do
             archived_id = entity.archive(db_path, "document", connection.id, "system", nil, "connects a paper to its own copy")
             if archived_id != nil then
-                document.on_entity_archived(db_path, "document", archived_id)
                 revoked = revoked + 1
                 table.insert(lines, string.format("archived #%d %s (connects a paper to its own copy)", connection.id, tostring(connection.title)))
             end

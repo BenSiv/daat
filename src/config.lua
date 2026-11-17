@@ -169,11 +169,10 @@ end
 -- that cycle from the other direction either.
 function config.is_initialized(root)
     if config.db_backend() == "mariadb" then
-        database = require("database_adapter")
+        db_mod = require("database")
         descriptor = config.mariadb_descriptor()
-        ok, rows = pcall(database.mariadb_query, descriptor,
-            "SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'entity_event';")
-        return ok == true and rows != nil
+        ok_init, exists_init = pcall(db_mod.table_exists, descriptor, "entity_event")
+        return ok_init == true and exists_init == true
     end
     return paths.file_exists(config.db_path(root))
 end

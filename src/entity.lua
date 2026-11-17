@@ -7,7 +7,6 @@
 -- doc/extensibility.md) plug into the same contract, run after.
 
 db = require("database")
-database_adapter = require("database_adapter")
 ledger = require("ledger")
 schema = require("schema")
 config = require("config")
@@ -580,6 +579,13 @@ function entity.archive(db_path, entity_type, entity_id, author, source, reason)
     extension.enqueue_after_hooks(db_path, config.extensions_dir(),
         "entity.after_archive", entity_type, entity_id, current, current)
 
+    -- Single choke point after the idempotent early return above, matching
+    -- entity.create / entity.update: an already-archived entity returns
+    -- early before reaching here so pool heat, tag centres, and reference
+    -- indexes are updated once per real state transition, for every caller.
+    document_archive_hook = require("document")
+    document_archive_hook.on_entity_archived(db_path, entity_type, entity_id)
+
     return entity_id, {}
 end
 
@@ -603,6 +609,9 @@ function entity.unarchive(db_path, entity_type, entity_id, author, source)
         entity_type, db.literal(author), event_id, entity_id
     ))
 
+    document_unarchive_hook = require("document")
+    document_unarchive_hook.on_entity_unarchived(db_path, entity_type, entity_id)
+
     return entity_id, {}
 end
 
@@ -623,20 +632,6 @@ function entity.validate_batch(db_path, entity_type, rows_values)
     return batch_issues
 end
 
--- The server-side connection id on MariaDB (nil on SQLite): luam
--- reconnects silently when a cached connection drops, which would end
--- an open transaction and let the rest of a batch autocommit.
-function batch_connection_id(db_path)
-    if db.is_mariadb(db_path) == false then
-        return nil
-    end
-    rows = db.query(db_path, "SELECT CONNECTION_ID() AS id;")
-    if rows == nil or rows[1] == nil then
-        return nil
-    end
-    return tostring(rows[1].id)
-end
-
 -- Creates a batch of entities atomically. `source.notebook_entry_id`
 -- (if given) is shared by every row in the batch -- one embedded
 -- registration table submission is one notebook-entry context -- but
@@ -652,57 +647,29 @@ function entity.create_batch(db_path, entity_type, rows_values, author, source)
         source = {}
     end
 
-    -- One transaction for the whole batch: every row's projected row,
-    -- ledger event, field changes and name-index rows commit together.
-    -- Measured 2026-11-06 on 500 11-field rows: 77 s with each insert
-    -- autocommitting, 1 s in one transaction. A failed row, a raised
-    -- error or a dropped MariaDB connection rolls the whole batch back.
-    --
-    -- SQLite needs one kept-open connection for a transaction to span
-    -- statements (by default each statement opens its own). Turned on
-    -- here only if nothing else already has it on -- a cached connection
-    -- means someone did -- and turned back off afterwards.
-    created_ids = {}
-    opened_sqlite = false
-    already_keep_open = (database_adapter.is_sqlite_keep_open != nil and database_adapter.is_sqlite_keep_open() == true)
-        or database_adapter.sqlite_connection_count() > 0
-    if db.is_mariadb(db_path) == false and already_keep_open == false then
-        database_adapter.sqlite_keep_open(true)
-        opened_sqlite = true
-    end
-    -- DDL commits implicitly on MariaDB: settle the schema before BEGIN.
+    -- DDL commits implicitly on MariaDB: settle the schema before the transaction.
     extension.init_schema(db_path)
-    connection_before = batch_connection_id(db_path)
-    db.exec(db_path, "BEGIN;")
-    ok, failure = pcall(function()
+
+    created_ids = {}
+    committed, failure = db.transaction(db_path, function(check_alive)
         for i, values in ipairs(rows_values) do
             row_source = {notebook_entry_id = source.notebook_entry_id, row_id = tostring(i)}
             id, issues = entity.create(db_path, entity_type, values, author, row_source)
             if id == nil then
-                return issues
+                return false, issues
             end
             table.insert(created_ids, id)
-            -- Checked per row, so a reconnect costs at most the one row
-            -- written on the new connection (autocommitted, not rolled back).
-            if batch_connection_id(db_path) != connection_before then
+            -- Checked per row, so a dropped MariaDB connection costs at
+            -- most the one row written on the new connection.
+            if check_alive() == false then
                 error(string.format("the database connection dropped during the batch: rows before row %d were " ..
                     "rolled back, row %d (%s id %s) may have been saved -- check before retrying", i, i, entity_type, tostring(id)))
             end
         end
-        return nil
+        return true, nil
     end)
-    if ok and failure == nil then
-        db.exec(db_path, "COMMIT;")
-    else
-        pcall(db.exec, db_path, "ROLLBACK;")
-    end
-    if opened_sqlite then
-        database_adapter.sqlite_keep_open(false)
-    end
-    if ok == false then
-        error(failure, 0)
-    end
-    if failure != nil then
+
+    if committed == false then
         return nil, failure
     end
     return created_ids, batch_issues
@@ -1008,7 +975,7 @@ function entity.counts_by_type(db_path, entity_types)
         end
         if current_max_id > cached_max then
             dirty_ok, dirty_rows = pcall(db.query, db_path, string.format(
-                "SELECT DISTINCT entity_type FROM entity_event WHERE event_id > %d AND event_type IN ('create', 'archive', 'unarchive');",
+                "SELECT DISTINCT entity_type FROM entity_event WHERE event_id > %d AND (event_type IN ('create', 'archive', 'unarchive') OR (event_type = 'update' AND field_changes LIKE '%%\"archived_at\"%%'));",
                 cached_max
             ))
             if dirty_ok == true then
@@ -1400,13 +1367,6 @@ function entity.do_entity(cmd_args, db_path)
             print_issues(issues)
             return
         end
-        -- Lazy require, not a module-top-level one: entity.lua must
-        -- never require document.lua (document.lua already requires
-        -- entity.lua; the reverse would be circular). Safe here since
-        -- this only runs during real CLI dispatch, long after every
-        -- module has already loaded once.
-        document_pool_hook = require("document")
-        document_pool_hook.on_entity_archived(db_path, entity_type, archived_id)
         print(string.format("Archived %s #%d", entity_type, archived_id))
         return
     end
@@ -1424,8 +1384,6 @@ function entity.do_entity(cmd_args, db_path)
             print_issues(issues)
             return
         end
-        document_pool_hook = require("document")
-        document_pool_hook.on_entity_unarchived(db_path, entity_type, unarchived_id)
         print(string.format("Unarchived %s #%d", entity_type, unarchived_id))
         return
     end

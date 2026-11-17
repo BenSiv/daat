@@ -268,11 +268,7 @@ function migrate_document_link_layout(db_path)
     if document_link_needs_migration(db_path) == false then
         return
     end
-    locked = db.is_mariadb(db_path)
-    if locked then
-        db.query(db_path, "SELECT GET_LOCK('daat_document_link_layout', 120) AS got;")
-    end
-    ok, err = pcall(function()
+    db.with_lock(db_path, "daat_document_link_layout", 120, function()
         if document_link_needs_migration(db_path) == false then
             return
         end
@@ -282,12 +278,6 @@ function migrate_document_link_layout(db_path)
         end
         copy_document_links_to_new_layout(db_path)
     end)
-    if locked then
-        db.query(db_path, "SELECT RELEASE_LOCK('daat_document_link_layout') AS released;")
-    end
-    if ok == false then
-        error(err)
-    end
 end
 
 function copy_document_links_to_new_layout(db_path)
@@ -453,6 +443,36 @@ function ensure_document_knowledge_columns(db_path)
     if have["scale_at_write"] == nil then
         db.exec(db_path, "ALTER TABLE document ADD COLUMN scale_at_write REAL DEFAULT 1.0;")
     end
+    document.ensure_document_pool_columns(db_path, have)
+end
+
+ACTIVE_POOL_DOCUMENT_WHERE = "(archived_at IS NULL OR archived_at = '') AND (merged_into IS NULL OR merged_into = '')"
+
+-- Full log-space per-document scale (`log_scale_at_write`) plus explicit
+-- active-pool membership (`pool_active` = 1 iff in the conserved pool).
+-- Kept callable standalone so minimal test tables (tst/unit/document_pool.lua)
+-- and store migration 11 both pick up the exact same schema and backfill.
+function document.ensure_document_pool_columns(db_path, existing_map)
+    have = existing_map
+    if have == nil then
+        if not db.table_exists(db_path, "document") then
+            return
+        end
+        have = {}
+        for _, name in ipairs(db.get_columns(db_path, "document")) do
+            have[name] = true
+        end
+    end
+    if have["log_scale_at_write"] == nil then
+        db.exec(db_path, "ALTER TABLE document ADD COLUMN log_scale_at_write REAL NOT NULL DEFAULT 0.0;")
+        if have["scale_at_write"] != nil then
+            db.exec(db_path, "UPDATE document SET log_scale_at_write = LN(scale_at_write) WHERE scale_at_write IS NOT NULL AND scale_at_write > 0 AND scale_at_write != 1.0;")
+        end
+    end
+    if have["pool_active"] == nil then
+        db.exec(db_path, "ALTER TABLE document ADD COLUMN pool_active INTEGER NOT NULL DEFAULT 0;")
+        db.exec(db_path, "UPDATE document SET pool_active = 1 WHERE " .. ACTIVE_POOL_DOCUMENT_WHERE .. ";")
+    end
 end
 
 -- Ground truth for the chat agent when it's asked to write ad-hoc SQL
@@ -478,8 +498,10 @@ KNOWLEDGE_POOL_SQL_COLUMNS = {
     {name = "content_hash", note = "used for duplicate detection"},
     {name = "duplicate_of", note = "FK to document.id, set once this row is folded into a canonical duplicate"},
     {name = "merged_into", note = "same as duplicate_of -- rows with this set are excluded from search"},
-    {name = "raw_heat", note = "conserved-pool raw heat -- do not average this column alone, see scale_at_write"},
-    {name = "scale_at_write", note = "combine as raw_heat * (EXP(knowledge_pool_state.log_pool_scale) / scale_at_write) for the real effective_heat; the separate 'heat' column is legacy and never updated -- ignore it"},
+    {name = "raw_heat", note = "conserved-pool raw heat -- do not average this column alone, see log_scale_at_write"},
+    {name = "log_scale_at_write", note = "combine as raw_heat * EXP(knowledge_pool_state.log_pool_scale - log_scale_at_write) for the real effective_heat (portable across SQLite and MariaDB); legacy 'heat' is unused -- ignore it"},
+    {name = "scale_at_write", note = "legacy linear scale column kept for rollback -- ignore it and read log_scale_at_write instead"},
+    {name = "pool_active", note = "1 while this document participates in the active conserved heat pool (neither archived nor merged_into), else 0"},
 }
 KNOWLEDGE_POOL_SQL_NOTE = "Related tables, hand-rolled rather than schema.register()'d so entity.list_types never mentions them: knowledge_pool_state (one row, id=1: pool_scale/log_pool_scale/document_count) and document_link (queryable via entity.query; entity.fields('document_link') lists its columns) -- a derived index of [[links]] in document content; why two documents are connected is in content, not here."
 
@@ -629,31 +651,22 @@ end
 
 _pool_state_ready = {}
 
-function pool_state_cache_key(db_path)
-    if db.is_mariadb(db_path) then
-        return "mariadb:" .. tostring(db_path.host) .. ":" .. tostring(db_path.port) .. ":" .. tostring(db_path.database)
-    end
-    attr = lfs.attributes(tostring(db_path))
-    if attr != nil then
-        return "sqlite:" .. tostring(db_path) .. ":" .. tostring(attr.ino)
-    end
-    return "sqlite:" .. tostring(db_path)
-end
-
 -- Seeds the single state row exactly once, from a one-time COUNT(*) --
 -- the only place this design scans the whole pool (see "Migration of
 -- existing values" in doc/heat-decay-redesign.md). A no-op every call
 -- after the first.
 function document.ensure_pool_state(db_path)
-    cache_key = pool_state_cache_key(db_path)
+    cache_key = db.cache_key(db_path)
     if _pool_state_ready[cache_key] == true then
         return
     end
     ok_fast, fast_rows = pcall(db.query, db_path, "SELECT log_pool_scale FROM knowledge_pool_state WHERE id = 1;")
-    if ok_fast == true and fast_rows != nil and fast_rows[1] != nil then
+    ok_cols, _ = pcall(db.query, db_path, "SELECT log_scale_at_write, pool_active FROM document LIMIT 1;")
+    if ok_fast == true and fast_rows != nil and fast_rows[1] != nil and ok_cols == true then
         _pool_state_ready[cache_key] = true
         return
     end
+    document.ensure_document_pool_columns(db_path, nil)
     db.exec(db_path, KNOWLEDGE_POOL_STATE_SCHEMA)
     ensure_knowledge_pool_state_log_scale_column(db_path)
     rows = db.query(db_path, "SELECT id FROM knowledge_pool_state WHERE id = 1;")
@@ -661,8 +674,8 @@ function document.ensure_pool_state(db_path)
         _pool_state_ready[cache_key] = true
         return
     end
-    count_rows = db.query(db_path,
-        "SELECT COUNT(*) AS n FROM document WHERE (archived_at IS NULL OR archived_at = '') AND merged_into IS NULL;")
+    db.exec(db_path, "UPDATE document SET pool_active = CASE WHEN " .. ACTIVE_POOL_DOCUMENT_WHERE .. " THEN 1 ELSE 0 END;")
+    count_rows = db.query(db_path, "SELECT COUNT(*) AS n FROM document WHERE pool_active = 1;")
     count = 0
     if count_rows != nil and count_rows[1] != nil then
         count = tonumber(count_rows[1].n)
@@ -679,18 +692,12 @@ end
 -- raw SQL insert, a restored backup, a bulk load run before this hook
 -- existed) -- `daat repair pool-count`, the same class of command as
 -- `daat repair links`/`embeddings`.
--- Recomputes document_count from a real COUNT(*) over active documents
--- -- the same one-time scan ensure_pool_state's own initial seed uses
--- -- and overwrites the stored value with it. Doesn't (can't) recover
--- any individual document's own raw_heat/scale_at_write for whatever
--- window it went unregistered; realigns the aggregate invariant
--- (`total = document_count * BASE_HEAT`) for every reinforcement from
--- this point on, which is what the conservation guarantee actually
--- depends on going forward.
+-- Realigns `pool_active` with `(archived_at IS NULL) AND (merged_into IS NULL)`
+-- and recomputes `document_count` from a live COUNT(*) over active documents.
 function document.resync_pool_count(db_path)
     document.ensure_pool_state(db_path)
-    count_rows = db.query(db_path,
-        "SELECT COUNT(*) AS n FROM document WHERE (archived_at IS NULL OR archived_at = '') AND merged_into IS NULL;")
+    db.exec(db_path, "UPDATE document SET pool_active = CASE WHEN " .. ACTIVE_POOL_DOCUMENT_WHERE .. " THEN 1 ELSE 0 END;")
+    count_rows = db.query(db_path, "SELECT COUNT(*) AS n FROM document WHERE pool_active = 1;")
     count = 0
     if count_rows != nil and count_rows[1] != nil then
         count = tonumber(count_rows[1].n)
@@ -703,27 +710,25 @@ end
 
 -- Registers a document with the pool -- either genuinely new, or
 -- rejoining after an unarchive (see document.on_entity_unarchived
--- below). Grows the total by exactly BASE_HEAT (see "Document
--- creation" in doc/heat-decay-redesign.md) and pins the row's
--- raw_heat/scale_at_write so it reads back as exactly BASE_HEAT right
--- away, regardless of how far the shared multiplier has already
--- drifted from 1.0 by this point. raw_heat is set explicitly rather
--- than relied on from the column's own DEFAULT, since a rejoining row
--- already has some stale value sitting in it from before it was
--- archived -- its old heat was already returned to the pool at
--- archive time (return_pool_heat), so reusing it here would double it.
+-- below). Atomically transitions `pool_active` 0 -> 1 only when the
+-- document is actually active (neither archived nor merged_into), so
+-- repeated unarchive calls or unarchiving a still-merged duplicate can
+-- never double-increment `document_count` or wipe an active row's heat.
 function document.register_pool_document(db_path, document_id)
     document.ensure_pool_state(db_path)
     state_rows = db.query(db_path, "SELECT log_pool_scale FROM knowledge_pool_state WHERE id = 1;")
     if state_rows == nil or state_rows[1] == nil then
         return
     end
-    pool_scale = math.exp(tonumber(state_rows[1].log_pool_scale))
-    db.exec(db_path, string.format(
-        "UPDATE document SET raw_heat = %.17g, scale_at_write = %.17g WHERE id = %d;",
-        BASE_HEAT, pool_scale, tonumber(document_id)
+    log_pool_scale = tonumber(state_rows[1].log_pool_scale)
+    _, _, changed = db.exec(db_path, string.format(
+        "UPDATE document SET raw_heat = %.17g, log_scale_at_write = %.17g, pool_active = 1 " ..
+        "WHERE id = %d AND pool_active = 0 AND %s;",
+        BASE_HEAT, log_pool_scale, tonumber(document_id), ACTIVE_POOL_DOCUMENT_WHERE
     ))
-    db.exec(db_path, "UPDATE knowledge_pool_state SET document_count = document_count + 1 WHERE id = 1;")
+    if changed != nil and changed > 0 then
+        db.exec(db_path, "UPDATE knowledge_pool_state SET document_count = document_count + 1 WHERE id = 1;")
+    end
 end
 
 function document.init_schema(db_path)
@@ -1306,8 +1311,8 @@ function document.graph_edges(db_path)
         JOIN document d2 ON d2.id = dl.to_document_id
         WHERE dl.to_document_id IS NOT NULL
           AND (dl.archived_at IS NULL OR dl.archived_at = '')
-          AND (d1.archived_at IS NULL OR d1.archived_at = '') AND d1.merged_into IS NULL
-          AND (d2.archived_at IS NULL OR d2.archived_at = '') AND d2.merged_into IS NULL;
+          AND (d1.archived_at IS NULL OR d1.archived_at = '') AND (d1.merged_into IS NULL OR d1.merged_into = '')
+          AND (d2.archived_at IS NULL OR d2.archived_at = '') AND (d2.merged_into IS NULL OR d2.merged_into = '');
     """)
     if rows == nil then
         return {}
@@ -1825,19 +1830,19 @@ function document.base_heat()
     return BASE_HEAT
 end
 
--- The read-time view of a document's true current heat: however much
--- proportional shrink every *other* reinforcement/departure event has
--- applied to the shared pool_scale since this document's own row was
--- last written, captured in one multiplication. See "Avoiding an O(N)
--- write per retrieval" in doc/heat-decay-redesign.md for the derivation.
-function document.pool_effective_heat(raw_heat, scale_at_write, pool_scale)
+-- The read-time view of a document's true current heat in full log-space:
+-- subtracting `log_pool_scale - log_scale_at_write` BEFORE calling
+-- `math.exp` keeps relative differences bounded even after billions of
+-- retrieval events (where `math.exp(log_pool_scale)` alone would
+-- underflow IEEE-754 binary64 to 0.0 past log_pool_scale <= -745.13).
+function document.pool_effective_heat(raw_heat, log_scale_at_write, log_pool_scale)
     raw_heat = tonumber(raw_heat)
-    scale_at_write = tonumber(scale_at_write)
-    pool_scale = tonumber(pool_scale)
-    if raw_heat == nil or scale_at_write == nil or scale_at_write == 0 or pool_scale == nil then
+    log_scale_at_write = tonumber(log_scale_at_write)
+    log_pool_scale = tonumber(log_pool_scale)
+    if raw_heat == nil or log_scale_at_write == nil or log_pool_scale == nil then
         return BASE_HEAT
     end
-    return raw_heat * (pool_scale / scale_at_write)
+    return raw_heat * math.exp(log_pool_scale - log_scale_at_write)
 end
 
 -- Reinforces `document_id` by `delta`, funded by a proportional shrink
@@ -1845,26 +1850,11 @@ end
 -- O(1): touches only this document's row and the single shared state
 -- row, never a scan across the rest of the pool.
 --
--- Same-row concurrency: the final UPDATE below writes `raw_heat` as a
--- pure expression over the row's own *live* raw_heat/scale_at_write
--- (read by the UPDATE itself, at lock time), never as a value computed
--- once in Lua and written back absolute. Two concurrent reinforcements
--- of the same document_id therefore serialize on that row exactly like
--- any other `col = col + 1` update elsewhere in this codebase -- the
--- second one to commit sees the first one's already-applied delta and
--- adds its own on top, so neither delta is ever silently lost. The
--- shared pool_scale update further below has the identical shape for
--- the same reason (see "Concurrency" in doc/heat-decay-redesign.md).
---
--- What this does NOT make perfectly exact: `pool_scale` (the
--- multiplicative correction applied to the row's stale raw_heat before
--- adding delta) is still a snapshot read moments earlier, so under two
--- truly concurrent reinforcements of the same document, the second one
--- to commit may correct against a pool_scale that's a step behind the
--- first one's own contribution. That's a small, bounded, self-correcting
--- approximation (the next event against this row corrects it further),
--- the same tolerance already accepted for the shared row -- not a lost
--- reinforcement, which is the failure mode this fixes.
+-- Same-row concurrency & full log-space safety: `EXP()` is available
+-- uniformly across SQLite (via luam/lib/database_adapter.lua's native
+-- Luam UDF) and MariaDB, so the final UPDATE writes `raw_heat` as a
+-- lock-serialized SQL expression `raw_heat * EXP(log_pool_scale - log_scale_at_write) + extracted`
+-- with no linear `pool_scale` underflow horizon and no CAS retry loop.
 function document.reinforce_pool_heat(db_path, document_id, delta)
     document.ensure_pool_state(db_path)
     delta = tonumber(delta)
@@ -1878,73 +1868,57 @@ function document.reinforce_pool_heat(db_path, document_id, delta)
     end
     log_pool_scale = tonumber(state_rows[1].log_pool_scale)
     document_count = tonumber(state_rows[1].document_count)
-    pool_scale = math.exp(log_pool_scale)
 
     doc_rows = db.query(db_path, string.format(
-        "SELECT raw_heat, scale_at_write FROM document WHERE id = %d;", tonumber(document_id)
+        "SELECT raw_heat, log_scale_at_write, pool_active FROM document WHERE id = %d;", tonumber(document_id)
     ))
     if doc_rows == nil or doc_rows[1] == nil then
         return nil
     end
-    x_eff = document.pool_effective_heat(doc_rows[1].raw_heat, doc_rows[1].scale_at_write, pool_scale)
+    if tonumber(doc_rows[1].pool_active) != 1 then
+        return nil
+    end
+    x_eff = document.pool_effective_heat(doc_rows[1].raw_heat, doc_rows[1].log_scale_at_write, log_pool_scale)
 
     total = document_count * BASE_HEAT
     denominator = total - x_eff
 
-    -- Exponential redistribution (doc/heat-decay-redesign.md, Phase 4):
-    -- f = exp(-delta/denominator) stays in (0, 1) for ANY delta >= 0,
-    -- by construction -- unlike the old f = 1 - delta/denominator,
-    -- there is no delta that drives this negative or past zero, so no
-    -- floor/clamp is needed. `extracted` (not the raw `delta`) is what
-    -- X actually receives -- exact conservation falls out of the same
-    -- substitution that makes f safe, not a separate clamp on both
-    -- sides of the transfer.
     log_f = 0.0
     extracted = 0.0
     if denominator > 0 then
         log_f = -(delta / denominator)
         extracted = denominator * (1 - math.exp(log_f))
     end
-    -- denominator <= 0: degenerate pool (one document, or a badly
-    -- drifted total) -- nothing left to redistribute from. log_f/
-    -- extracted stay 0: no shrink applied, X gets nothing extra
-    -- either, matching "a single-document pool must hold x_eff
-    -- exactly at BASE_HEAT forever."
 
     new_log_pool_scale = log_pool_scale + log_f
-    new_pool_scale = math.exp(new_log_pool_scale)
 
     db.exec(db_path, string.format(
         "UPDATE knowledge_pool_state SET log_pool_scale = log_pool_scale + %.17g WHERE id = 1;", log_f
     ))
 
-    -- raw_heat is written as an expression over the row's own live
-    -- columns (read by this UPDATE at lock time), not as a value
-    -- computed once above and written back absolute -- see the
-    -- function comment above for why that's what actually closes the
-    -- same-row concurrency gap. Pure arithmetic (*, /, +) only -- the
-    -- log-space value was already linearized above, so this needs no
-    -- EXP()/LN() SQL function from either SQLite or MariaDB.
     db.exec(db_path, string.format(
-        "UPDATE document SET raw_heat = (raw_heat * (%.17g / scale_at_write)) + %.17g, scale_at_write = %.17g WHERE id = %d;",
-        pool_scale, extracted, new_pool_scale, tonumber(document_id)
+        "UPDATE document SET raw_heat = (raw_heat * EXP(%.17g - log_scale_at_write)) + %.17g, log_scale_at_write = %.17g WHERE id = %d AND pool_active = 1;",
+        log_pool_scale, extracted, new_log_pool_scale, tonumber(document_id)
     ))
 
-    -- Best-effort return value for callers/logging -- reflects this
-    -- call's own read, which is exactly right in the common
-    -- uncontended case, but nothing in this codebase reads it for a
-    -- decision that depends on it being exact under a genuine race.
     return x_eff + extracted
 end
 
 -- The reverse of reinforce_pool_heat, for a document leaving the pool
--- (the merge/duplicate path, and plain archival via
--- on_entity_archived below). Returns the departing document's current
--- heat to the survivors, proportionally, and decrements document_count
--- -- both computed from the pre-departure state, per "Order matters
--- here" in doc/heat-decay-redesign.md.
+-- (merge/duplicate via duplication_status, and archival via
+-- on_entity_archived). Atomically claims `pool_active` 1 -> 0 first so
+-- a document leaving via `merged_into` and later archived (or reviewed
+-- twice in deferred mode) returns its heat and decrements document_count
+-- at most once.
 function document.return_pool_heat(db_path, document_id)
     document.ensure_pool_state(db_path)
+
+    _, _, changed = db.exec(db_path, string.format(
+        "UPDATE document SET pool_active = 0 WHERE id = %d AND pool_active = 1;", tonumber(document_id)
+    ))
+    if changed == nil or changed == 0 then
+        return
+    end
 
     state_rows = db.query(db_path, "SELECT log_pool_scale, document_count FROM knowledge_pool_state WHERE id = 1;")
     if state_rows == nil or state_rows[1] == nil then
@@ -1952,31 +1926,22 @@ function document.return_pool_heat(db_path, document_id)
     end
     log_pool_scale = tonumber(state_rows[1].log_pool_scale)
     document_count = tonumber(state_rows[1].document_count)
-    pool_scale = math.exp(log_pool_scale)
 
     doc_rows = db.query(db_path, string.format(
-        "SELECT raw_heat, scale_at_write FROM document WHERE id = %d;", tonumber(document_id)
+        "SELECT raw_heat, log_scale_at_write FROM document WHERE id = %d;", tonumber(document_id)
     ))
     if doc_rows == nil or doc_rows[1] == nil then
         return
     end
-    x_eff = document.pool_effective_heat(doc_rows[1].raw_heat, doc_rows[1].scale_at_write, pool_scale)
+    x_eff = document.pool_effective_heat(doc_rows[1].raw_heat, doc_rows[1].log_scale_at_write, log_pool_scale)
 
     total = document_count * BASE_HEAT
     denominator = total - x_eff
     if document_count <= 1 or denominator <= 0 then
-        -- Last document leaving, or a degenerate pool -- nothing left
-        -- to redistribute onto. Just shrink the count.
         db.exec(db_path, "UPDATE knowledge_pool_state SET document_count = document_count - 1 WHERE id = 1;")
         return
     end
 
-    -- This f (a departing document returning its heat to survivors,
-    -- the reverse of reinforce_pool_heat above) is always strictly
-    -- positive for document_count >= 2 -- guarded just above -- so
-    -- math.log(f) is always safe here; it's the growth-side analogue
-    -- of the shrink-side bug Phase 4 fixed, and doesn't share that bug
-    -- (see doc/heat-decay-redesign.md, Phase 4).
     f = 1 + ((x_eff - BASE_HEAT) / denominator)
     db.exec(db_path, string.format(
         "UPDATE knowledge_pool_state SET log_pool_scale = log_pool_scale + %.17g, document_count = document_count - 1 WHERE id = 1;",
@@ -1985,12 +1950,11 @@ function document.return_pool_heat(db_path, document_id)
 end
 
 -- Plain archival returns heat to the pool / re-registers on unarchive,
--- the same as the merge path above. entity.archive/unarchive are
--- generic (any entity_type), so these are type-checking dispatchers,
--- called from each call site right after a *successful* archive/
--- unarchive -- never from inside entity.lua itself, which must never
--- require document.lua (document.lua already requires entity.lua; the
--- reverse would be circular).
+-- the same as the merge path above. Called from entity.archive and
+-- entity.unarchive's own single choke points (via lazy require("document")
+-- after no-op early returns), matching on_entity_created and
+-- on_entity_updated below so no caller can omit or double-fire them.
+--
 -- Called from entity.create's own single choke point (see the comment
 -- there), for every entity_type, not just "document" -- filters here
 -- the same way on_entity_archived/on_entity_unarchived do, so
@@ -2762,7 +2726,7 @@ AND (d.merged_into IS NULL OR d.merged_into = '')
 """
 
 SEARCH_RESULT_COLUMNS = """
-d.id, d.title, d.tier, d.retrieval_count, d.raw_heat, d.scale_at_write,
+d.id, d.title, d.tier, d.retrieval_count, d.raw_heat, d.log_scale_at_write,
 d.source_type, d.source_id, d.content_hash, d.created_at, d.external_id
 """
 
@@ -3132,20 +3096,19 @@ function document.search(db_path, query_text, limit, use_semantic)
         end
     end
 
-    -- Phase 3 cutover (see doc/heat-decay-redesign.md): one shared
-    -- pool_scale read, reused for every row's effective_heat.
+    -- One shared log_pool_scale read, reused for every row's effective_heat.
     document.ensure_pool_state(db_path)
     pool_state_rows = db.query(db_path, "SELECT log_pool_scale FROM knowledge_pool_state WHERE id = 1;")
-    pool_scale = 1.0
+    log_pool_scale = 0.0
     if pool_state_rows != nil and pool_state_rows[1] != nil then
-        pool_scale = math.exp(tonumber(pool_state_rows[1].log_pool_scale))
+        log_pool_scale = tonumber(pool_state_rows[1].log_pool_scale)
     end
 
     scored = {}
     for _, entry in ipairs(fused) do
         row = entry.row
         if row != nil then
-            effective_heat = document.pool_effective_heat(row.raw_heat, row.scale_at_write, pool_scale)
+            effective_heat = document.pool_effective_heat(row.raw_heat, row.log_scale_at_write, log_pool_scale)
             heat_boost = 0.1 * math.log(math.max(effective_heat, 0.01) / BASE_HEAT)
             heat_boost = math.max(-0.1, math.min(heat_boost, 0.15))
             reinforcement = 1.0 + document.tier_weight(row.tier) + heat_boost

@@ -45,7 +45,7 @@ agent_tools = require("agent_tools")
 
 cgi = require("cgi")
 web = require("web")
-database_adapter = require("database_adapter")
+db = require("database")
 
 function run_main()
     if cgi.is_cgi() then
@@ -251,9 +251,9 @@ function run_main()
 end
 
 function main()
-    database_adapter.sqlite_keep_open(true)
+    db.sqlite_keep_open(true)
     ok_run, run_err = pcall(run_main)
-    database_adapter.sqlite_close_all()
+    db.sqlite_close_all()
     if not ok_run then
         error(run_err, 0)
     end

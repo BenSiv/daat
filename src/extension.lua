@@ -62,10 +62,7 @@ end
 extension_schema_ready = {}
 
 function extension_schema_key(db_path)
-    if type(db_path) == "table" then
-        return "mariadb:" .. tostring(db_path.host) .. ":" .. tostring(db_path.port) .. "/" .. tostring(db_path.database)
-    end
-    return "sqlite:" .. tostring(db_path)
+    return db.cache_key(db_path)
 end
 
 function extension.init_schema(db_path)

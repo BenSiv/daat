@@ -435,21 +435,14 @@ end
 
 -- agent.record_reply_feedback(db_path, message_id, feedback) -> true | false
 -- The user's thumbs up/down, found by the reply's message_id (what the
--- chat widget has rendered). Checks with a SELECT first, not db.exec's
--- return value: sqlite_update and mariadb_update disagree on what it
--- means.
+-- chat widget has rendered). Uses `db.exec`'s normalized 3rd return
+-- value (`affected_rows` across both SQLite and MariaDB) in one round-trip.
 function agent.record_reply_feedback(db_path, message_id, feedback)
-    rows = db.query(db_path, string.format(
-        "SELECT id FROM agent_model_call WHERE message_id = %d AND reply_kind IS NOT NULL;", tonumber(message_id)
-    ))
-    if rows == nil or rows[1] == nil then
-        return false
-    end
-    db.exec(db_path, string.format(
+    _, _, affected = db.exec(db_path, string.format(
         "UPDATE agent_model_call SET user_feedback = %s, feedback_at = %s WHERE message_id = %d AND reply_kind IS NOT NULL;",
         db.quote(feedback), db.now_expr(db_path), tonumber(message_id)
     ))
-    return true
+    return affected != nil and affected > 0
 end
 
 -- Same treatment as document.lua's KNOWLEDGE_POOL_SQL_COLUMNS:

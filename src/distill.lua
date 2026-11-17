@@ -374,7 +374,6 @@ function distill.run(db_path, reference_id, author)
                             absorbed[w.match.id] = true
                             archived_id = entity.archive(db_path, "document", w.match.id, author, nil, "covered by record #" .. tostring(record_id))
                             if archived_id != nil then
-                                document.on_entity_archived(db_path, "document", archived_id)
                                 db.exec(db_path, string.format("UPDATE document SET merged_into = %d WHERE id = %d;", record_id, w.match.id))
                                 counts.absorbed = counts.absorbed + 1
                             end

@@ -421,11 +421,54 @@ function handle_autocomplete(db_path, params)
         return print_response("200 OK", "application/json", "[]")
     end
 
-    search_cols = {}
+    col_set = {}
     for _, col in ipairs(cols) do
-        if col == "id" or col == "name" or col == "title" or col == "label" or col == "lot_number" then
-            table.insert(search_cols, col)
+        col_set[col] = true
+    end
+
+    -- Derive searchable/display columns from schema metadata first (no
+    -- domain-specific field names in core -- see doc/architecture.md),
+    -- falling back to the first declared schema field and generic
+    -- structural columns (name/title/label/id).
+    display_field = nil
+    first_identifier_field = nil
+    first_user_field = nil
+    identifier_fields = {}
+    for _, f in ipairs(schema.fields(db_path, ref_type)) do
+        if col_set[f.name] == true then
+            if first_user_field == nil then
+                first_user_field = f.name
+            end
+            if display_field == nil and tonumber(f.display) == 1 then
+                display_field = f.name
+            end
+            if tonumber(f.identifier) == 1 then
+                if first_identifier_field == nil then
+                    first_identifier_field = f.name
+                end
+                table.insert(identifier_fields, f.name)
+            end
         end
+    end
+
+    search_cols = {}
+    seen_search = {}
+    function add_search_col(c)
+        if c != nil and col_set[c] == true and seen_search[c] == nil then
+            seen_search[c] = true
+            table.insert(search_cols, c)
+        end
+    end
+    add_search_col("id")
+    add_search_col("name")
+    add_search_col(display_field)
+    for _, id_col in ipairs(identifier_fields) do
+        add_search_col(id_col)
+    end
+    add_search_col("title")
+    add_search_col("label")
+    if display_field == nil and first_identifier_field == nil then
+        add_search_col(first_user_field)
     end
     if #search_cols == 0 then
         table.insert(search_cols, cols[1])
@@ -433,30 +476,52 @@ function handle_autocomplete(db_path, params)
 
     where = {}
     for _, col in ipairs(search_cols) do
-        table.insert(where, col .. " LIKE " .. db.quote("%" .. query_str .. "%"))
+        table.insert(where, db.quote_ident(col) .. " LIKE " .. db.quote("%" .. query_str .. "%"))
     end
 
-    has_name = false
-    for _, col in ipairs(cols) do
-        if col == "name" then has_name = true end
-    end
-
-    q = nil
-    if has_name then
-        q = "SELECT id, name FROM " .. ref_type
+    text_col = nil
+    if display_field != nil then
+        text_col = display_field
+    elseif first_identifier_field != nil then
+        text_col = first_identifier_field
+    elseif col_set["title"] == true then
+        text_col = "title"
+    elseif col_set["label"] == true then
+        text_col = "label"
+    elseif first_user_field != nil then
+        text_col = first_user_field
+    elseif col_set["name"] == true then
+        text_col = "name"
     else
-        text_col = "id"
         for _, col in ipairs(cols) do
-            if col != "id" and col != "created_at" and col != "created_by" and col != "updated_at" and col != "updated_by" and col != "last_event_id" then
+            if schema.is_reserved_field_name(col) == false then
                 text_col = col
                 break
             end
         end
-        q = "SELECT id, " .. text_col .. " AS name FROM " .. ref_type
+    end
+    if text_col == nil then
+        text_col = "id"
     end
 
+    q = nil
+    if text_col == "name" then
+        q = "SELECT id, name FROM " .. db.quote_ident(ref_type)
+    elseif col_set["name"] == true then
+        q = "SELECT id, COALESCE(NULLIF(name, ''), " .. db.quote_ident(text_col) .. ") AS name FROM " .. db.quote_ident(ref_type)
+    else
+        q = "SELECT id, " .. db.quote_ident(text_col) .. " AS name FROM " .. db.quote_ident(ref_type)
+    end
+
+    clauses = {}
+    if col_set["archived_at"] == true then
+        table.insert(clauses, "(archived_at IS NULL OR archived_at = '')")
+    end
     if #where > 0 then
-        q = q .. " WHERE " .. table.concat(where, " OR ")
+        table.insert(clauses, "(" .. table.concat(where, " OR ") .. ")")
+    end
+    if #clauses > 0 then
+        q = q .. " WHERE " .. table.concat(clauses, " AND ")
     end
     q = q .. " LIMIT 15;"
 
@@ -2153,7 +2218,6 @@ function cgi.handle_request()
         if archived_id != nil then
             response.archived_id = archived_id
             response.success = true
-            document.on_entity_archived(db_path, entity_type, archived_id)
         else
             response.success = false
         end
@@ -2181,7 +2245,6 @@ function cgi.handle_request()
         if unarchived_id != nil then
             response.unarchived_id = unarchived_id
             response.success = true
-            document.on_entity_unarchived(db_path, entity_type, unarchived_id)
         else
             response.success = false
         end
@@ -2339,7 +2402,6 @@ function cgi.handle_request()
             if archived_id != nil then
                 response.archived_id = archived_id
                 response.success = true
-                document.on_entity_archived(db_path, v1_type, archived_id)
             else
                 response.success = false
             end
@@ -2365,7 +2427,6 @@ function cgi.handle_request()
             if unarchived_id != nil then
                 response.unarchived_id = unarchived_id
                 response.success = true
-                document.on_entity_unarchived(db_path, v1_type, unarchived_id)
             else
                 response.success = false
             end

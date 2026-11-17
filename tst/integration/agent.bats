@@ -847,8 +847,8 @@ EOF
     resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
     session_id=$(extract_query_param "$resp" "session_id")
 
-    scripted="$(tool_call_response "entity.query" '{"sql":"SELECT DATEDIFF(created_at, updated_at) FROM task"}')"
-    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"how long did tasks take\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+    scripted="$(tool_call_response "entity.query" '{"sql":"SELECT DATE_FORMAT(created_at, '\''%Y-%m'\'') FROM task"}')"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"group tasks by month\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
     run latest_tool_result "$session_id"
     [[ "$output" =~ "SQLite dialect" ]]

@@ -756,7 +756,6 @@ function tag_upkeep.merge(db_path, into, from, author, reason)
     for _, m in ipairs(upkeep_members(db_path, from)) do
         if on_keep[m.document] == true then
             entity.archive(db_path, "document_tag", m.membership, author, nil, reason)
-            tag.on_membership_archived(db_path, m.membership, true)
             deduplicated = deduplicated + 1
         else
             entity.update(db_path, "document_tag", m.membership, {tag = tostring(into)}, author, nil, reason)

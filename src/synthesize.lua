@@ -298,7 +298,6 @@ function synthesize.archive_orphans(db_path, author, dry_run)
             if doc != nil and (doc.archived_at == nil or doc.archived_at == "") then
                 archived_id = entity.archive(db_path, "document", tonumber(row.document_id), author, nil, "its tag was archived")
                 if archived_id != nil then
-                    document.on_entity_archived(db_path, "document", archived_id)
                     archived = archived + 1
                 end
             end

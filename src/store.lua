@@ -367,6 +367,22 @@ table.insert(MIGRATIONS, {version = 10, name = "deferred retrieval review queue"
     end
 end})
 
+-- 11. Full log-space per-document heat scale (`log_scale_at_write`,
+-- backfilled from `LN(scale_at_write)`) plus atomic active-pool
+-- membership flag (`pool_active`), and resyncing `document_count`
+-- against `(archived_at IS NULL) AND (merged_into IS NULL)` so prior
+-- double-archive or unarchived-active drift is repaired on upgrade.
+table.insert(MIGRATIONS, {version = 11, name = "log_scale_at_write and pool_active conservation columns", run = function(db_path)
+    if not exists(db_path, "document") then
+        return
+    end
+    doc = require("document")
+    doc.ensure_document_pool_columns(db_path, nil)
+    if exists(db_path, "knowledge_pool_state") then
+        doc.resync_pool_count(db_path)
+    end
+end})
+
 function latest_version()
     latest = 0
     for _, m in ipairs(MIGRATIONS) do
@@ -397,26 +413,21 @@ function store.migrate(db_path)
     if current_version(db_path) >= target then
         return
     end
-    locked = db.is_mariadb(db_path)
-    if locked then
-        db.query(db_path, "SELECT GET_LOCK('daat_store_migrate', 600) AS got;")
-    end
     ok, err = pcall(function()
-        ran_migration = false
-        for _, m in ipairs(MIGRATIONS) do
-            if current_version(db_path) < m.version then
-                m.run(db_path)
-                store.set_number(db_path, "store.schema_version", m.version)
-                ran_migration = true
+        db.with_lock(db_path, "daat_store_migrate", 600, function()
+            ran_migration = false
+            for _, m in ipairs(MIGRATIONS) do
+                if current_version(db_path) < m.version then
+                    m.run(db_path)
+                    store.set_number(db_path, "store.schema_version", m.version)
+                    ran_migration = true
+                end
             end
-        end
-        if ran_migration then
-            store.set_text(db_path, "web.builtin_schema_signature", nil)
-        end
+            if ran_migration then
+                store.set_text(db_path, "web.builtin_schema_signature", nil)
+            end
+        end)
     end)
-    if locked then
-        db.query(db_path, "SELECT RELEASE_LOCK('daat_store_migrate') AS released;")
-    end
     if ok == false then
         error("store migration failed: " .. tostring(err))
     end

@@ -350,9 +350,7 @@ function tag.place_document(db_path, document_id)
     if tag_too_short(db_path, document_id) then
         for _, row in ipairs(tag_memberships(db_path, document_id)) do
             if row.decision == "computed" then
-                if entity.archive(db_path, "document_tag", tonumber(row.id), "system", nil, "tag upkeep: too little text") != nil then
-                    tag.on_membership_archived(db_path, tonumber(row.id), true)
-                end
+                entity.archive(db_path, "document_tag", tonumber(row.id), "system", nil, "tag upkeep: too little text")
             end
         end
         return chosen
@@ -395,10 +393,7 @@ function tag.place_document(db_path, document_id)
     end
     for tag_id, membership_id in pairs(computed) do
         if wanted[tag_id] == nil then
-            archived_id, _ = entity.archive(db_path, "document_tag", membership_id, "system", nil, "tag upkeep: a nearer tag")
-            if archived_id != nil then
-                tag.on_membership_archived(db_path, membership_id, true)
-            end
+            entity.archive(db_path, "document_tag", membership_id, "system", nil, "tag upkeep: a nearer tag")
         end
     end
     for tag_id, score in pairs(wanted) do
@@ -986,10 +981,7 @@ function tag.sync_text_tags(db_path, document_id, content, author, old_content)
         tag_id = tonumber(row.tag)
         if row.via == "text" then
             if wanted[tag_id] == nil then
-                archived_id, _ = entity.archive(db_path, "document_tag", tonumber(row.id), "system", nil, "#tag removed from the text")
-                if archived_id != nil then
-                    tag.on_membership_archived(db_path, tonumber(row.id), true)
-                end
+                entity.archive(db_path, "document_tag", tonumber(row.id), "system", nil, "#tag removed from the text")
             else
                 have[tag_id] = true
             end
