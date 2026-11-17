@@ -447,6 +447,13 @@ function config.platform_config()
         -- the web request (agent.lua, "Detached turns"); "inline": in
         -- the request, as before.
         agent_turn_mode = "detached",
+        -- "deferred": search records only the retrieval row and raw hits
+        -- on the request path, leaving pool-heat reinforcement, spreading
+        -- activation, curation queueing, and co-retrieval link review to
+        -- `daat knowledge review-pending` in the jobs worker
+        -- (doc/tier-curation-ladder.md, Phase 2; doc/performance.md,
+        -- Option 1.1); "inline": runs them inside search_and_log.
+        search_review_mode = "deferred",
         -- A detached turn with no progress for this long is reported as
         -- stopped.
         agent_turn_stale_seconds = 180,
@@ -684,6 +691,9 @@ function config.platform_config()
     end
     if parsed.agent_turn_mode == "detached" or parsed.agent_turn_mode == "inline" then
         conf.agent_turn_mode = parsed.agent_turn_mode
+    end
+    if parsed.search_review_mode == "deferred" or parsed.search_review_mode == "inline" then
+        conf.search_review_mode = parsed.search_review_mode
     end
     if type(parsed.agent_turn_stale_seconds) == "number" then
         conf.agent_turn_stale_seconds = parsed.agent_turn_stale_seconds
