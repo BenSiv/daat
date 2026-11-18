@@ -796,12 +796,12 @@ function curate.due_conversations(db_path, quiet_minutes)
     if quiet_minutes == nil then
         quiet_minutes = require("config").platform_config().agent_curate_quiet_minutes
     end
-    cutoff = os.date("!%Y-%m-%d %H:%M:%S", os.time() - math.floor(quiet_minutes * 60))
+    cutoff_expr = require("store").ago_expr(db_path, math.floor(quiet_minutes * 60))
     rows = db.query(db_path, string.format(
         "SELECT s.id, s.login, s.title, c.source_hash, c.status FROM agent_session s " ..
         "LEFT JOIN knowledge_conversation_curation c ON c.session_id = s.id " ..
         "WHERE s.updated_at <= %s AND (c.session_id IS NULL OR c.checked_at IS NULL OR s.updated_at >= c.checked_at) " ..
-        "AND (c.status IS NULL OR c.status NOT IN ('pending', 'running')) ORDER BY s.updated_at, s.id;", db.quote(cutoff)))
+        "AND (c.status IS NULL OR c.status NOT IN ('pending', 'running')) ORDER BY s.updated_at, s.id;", cutoff_expr))
     due = {}
     for _, row in ipairs(or_empty(rows)) do
         text, hash = curate.conversation_text(db_path, row.id)

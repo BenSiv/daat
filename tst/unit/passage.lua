@@ -115,4 +115,53 @@ function tests.select()
     check(chosen[1].offset == 1, "ties go to the earlier passage")
 end
 
+function tests.non_utc_timezone_alignment_for_prune_and_due_conversations()
+    print("Testing passage.prune_cache and curate.due_conversations match db.now_expr under non-UTC TZ")
+    lfs = require("lfs")
+    dir = os.tmpname()
+    os.remove(dir)
+    lfs.mkdir(dir)
+    probe_script = dir .. "/tz_probe.lua"
+    pf = io.open(probe_script, "w")
+    io.write(pf, string.format("""
+package.path = %q
+package.cpath = %q
+init = require("init")
+db = require("database")
+passage = require("passage")
+curate = require("curate")
+dir = arg[1]
+init.do_init({}, dir)
+db_path = dir .. "/.store/store.db"
+
+-- Session updated 20 minutes ago vs Session updated 5 minutes ago (quiet_minutes = 15)
+db.exec(db_path, "INSERT INTO agent_session (id, login, title, updated_at) VALUES ('s_due', 'alice', 'Due', datetime('now', 'localtime', '-1200 seconds'));")
+db.exec(db_path, "INSERT INTO agent_session (id, login, title, updated_at) VALUES ('s_fresh', 'alice', 'Fresh', datetime('now', 'localtime', '-300 seconds'));")
+db.exec(db_path, "INSERT INTO agent_message (session_id, role, content, data_type, loop_kind, in_context) VALUES ('s_due', 'user', 'hello world', 'request', 'chat', 1);")
+db.exec(db_path, "INSERT INTO agent_message (session_id, role, content, data_type, loop_kind, in_context) VALUES ('s_fresh', 'user', 'hello fresh', 'request', 'chat', 1);")
+
+due = curate.due_conversations(db_path, 15)
+assert(#due == 1 and due[1].session_id == "s_due", "expected only s_due, got count=" .. tostring(#due))
+
+-- Passage cache: 1.5 days old vs 0.5 days old (prune days = 1)
+db.exec(db_path, "INSERT INTO document_passage_cache (text_hash, model, vector_packed, created_at, last_used_at) VALUES ('old_h', 'm', X'00000000', datetime('now', 'localtime', '-129600 seconds'), datetime('now', 'localtime', '-129600 seconds'));")
+db.exec(db_path, "INSERT INTO document_passage_cache (text_hash, model, vector_packed, created_at, last_used_at) VALUES ('new_h', 'm', X'00000000', datetime('now', 'localtime', '-43200 seconds'), datetime('now', 'localtime', '-43200 seconds'));")
+
+deleted = passage.prune_cache(db_path, 1)
+assert(deleted == 1, "expected 1 stale passage cache entry deleted, got " .. tostring(deleted))
+rem = db.query(db_path, "SELECT text_hash FROM document_passage_cache;")
+assert(rem != nil and #rem == 1 and rem[1].text_hash == "new_h", "expected new_h retained")
+""", package.path, package.cpath))
+    io.close(pf)
+
+    luam_bin = os.getenv("LUAM_DIR") .. "/bin/luam"
+    for idx, tz in ipairs({"UTC-5", "UTC+5"}) do
+        sub_dir = dir .. "/tz_" .. tostring(idx)
+        lfs.mkdir(sub_dir)
+        rc = os.execute(string.format("TZ=%q %q %q %q", tz, luam_bin, probe_script, sub_dir))
+        check(rc == 0, "expected TZ=" .. tz .. " cutoff probe to pass, got rc=" .. tostring(rc))
+    end
+    os.execute("rm -rf '" .. dir .. "'")
+end
+
 unit.run(tests)

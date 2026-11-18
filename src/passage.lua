@@ -106,21 +106,21 @@ end
 
 -- passage.prune_cache(db_path, days) -> rows deleted
 -- Entries unused for longer than `days` (passage_cache_days); <= 0
--- keeps everything. Times compare as UTC 'YYYY-MM-DD HH:MM:SS' text,
--- the form both backends' now() writes.
+-- keeps everything. Evaluated against store.ago_expr so the cutoff uses
+-- the exact same timezone and clock basis as db.now_expr.
 function passage.prune_cache(db_path, days)
     if days == nil or days <= 0 then
         return 0
     end
-    cutoff = os.date("!%Y-%m-%d %H:%M:%S", os.time() - math.floor(days * 86400))
+    cutoff_expr = require("store").ago_expr(db_path, math.floor(days * 86400))
     rows = db.query(db_path, string.format(
-        "SELECT COUNT(*) AS n FROM document_passage_cache WHERE last_used_at < %s;", db.quote(cutoff)))
+        "SELECT COUNT(*) AS n FROM document_passage_cache WHERE last_used_at < %s;", cutoff_expr))
     count = 0
     if rows != nil and rows[1] != nil then
         count = tonumber(rows[1].n)
     end
     if count > 0 then
-        db.exec(db_path, string.format("DELETE FROM document_passage_cache WHERE last_used_at < %s;", db.quote(cutoff)))
+        db.exec(db_path, string.format("DELETE FROM document_passage_cache WHERE last_used_at < %s;", cutoff_expr))
     end
     return count
 end

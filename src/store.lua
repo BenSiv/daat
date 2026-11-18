@@ -25,6 +25,18 @@ db = require("database")
 
 store = {}
 
+-- SQL expression evaluating to 'YYYY-MM-DD HH:MM:SS' `seconds` in the
+-- past, on the exact same clock and timezone basis as `db.now_expr`
+-- (`datetime('now', 'localtime')` on SQLite, `NOW()` on MariaDB/MySQL) --
+-- avoids both localtime-vs-UTC drift and client-vs-database clock skew.
+function store.ago_expr(db_path, seconds)
+    secs = math.max(0, math.floor(tonumber(seconds)))
+    if db.is_mariadb(db_path) then
+        return string.format("DATE_FORMAT(DATE_SUB(NOW(), INTERVAL %d SECOND), '%%Y-%%m-%%d %%H:%%i:%%S')", secs)
+    end
+    return string.format("datetime('now', 'localtime', '-%d seconds')", secs)
+end
+
 SYSTEM_STATE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS system_state (
     name VARCHAR(64) PRIMARY KEY,
