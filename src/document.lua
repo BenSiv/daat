@@ -688,6 +688,26 @@ function document.ensure_pool_state(db_path)
     _pool_state_ready[cache_key] = true
 end
 
+function lock_pool_document_row(db_path, document_id)
+    if db.is_mariadb(db_path) then
+        return db.query(db_path, string.format(
+            "SELECT raw_heat, log_scale_at_write, pool_active FROM document WHERE id = %d FOR UPDATE;",
+            tonumber(document_id)
+        ))
+    end
+    return db.query(db_path, string.format(
+        "SELECT raw_heat, log_scale_at_write, pool_active FROM document WHERE id = %d;",
+        tonumber(document_id)
+    ))
+end
+
+function lock_pool_state_row(db_path)
+    if db.is_mariadb(db_path) then
+        return db.query(db_path, "SELECT log_pool_scale, document_count FROM knowledge_pool_state WHERE id = 1 FOR UPDATE;")
+    end
+    return db.query(db_path, "SELECT log_pool_scale, document_count FROM knowledge_pool_state WHERE id = 1;")
+end
+
 -- Backfill for document_count drift -- the manual correction for
 -- whatever entity.create's own on_entity_created hook can't reach (a
 -- raw SQL insert, a restored backup, a bulk load run before this hook
@@ -697,16 +717,20 @@ end
 -- and recomputes `document_count` from a live COUNT(*) over active documents.
 function document.resync_pool_count(db_path)
     document.ensure_pool_state(db_path)
-    db.exec(db_path, "UPDATE document SET pool_active = CASE WHEN " .. ACTIVE_POOL_DOCUMENT_WHERE .. " THEN 1 ELSE 0 END;")
-    count_rows = db.query(db_path, "SELECT COUNT(*) AS n FROM document WHERE pool_active = 1;")
-    count = 0
-    if count_rows != nil and count_rows[1] != nil then
-        count = tonumber(count_rows[1].n)
+    function run_resync_tx()
+        lock_pool_state_row(db_path)
+        db.exec(db_path, "UPDATE document SET pool_active = CASE WHEN " .. ACTIVE_POOL_DOCUMENT_WHERE .. " THEN 1 ELSE 0 END;")
+        count_rows = db.query(db_path, "SELECT COUNT(*) AS n FROM document WHERE pool_active = 1;")
+        count = 0
+        if count_rows != nil and count_rows[1] != nil then
+            count = tonumber(count_rows[1].n)
+        end
+        db.exec(db_path, string.format(
+            "UPDATE knowledge_pool_state SET document_count = %d WHERE id = 1;", count
+        ))
+        return count
     end
-    db.exec(db_path, string.format(
-        "UPDATE knowledge_pool_state SET document_count = %d WHERE id = 1;", count
-    ))
-    return count
+    return db.transaction(db_path, run_resync_tx)
 end
 
 -- Registers a document with the pool -- either genuinely new, or
@@ -717,19 +741,23 @@ end
 -- never double-increment `document_count` or wipe an active row's heat.
 function document.register_pool_document(db_path, document_id)
     document.ensure_pool_state(db_path)
-    state_rows = db.query(db_path, "SELECT log_pool_scale FROM knowledge_pool_state WHERE id = 1;")
-    if state_rows == nil or state_rows[1] == nil then
-        return
+    function run_register_pool_tx()
+        lock_pool_document_row(db_path, document_id)
+        state_rows = lock_pool_state_row(db_path)
+        if state_rows == nil or state_rows[1] == nil then
+            return
+        end
+        log_pool_scale = tonumber(state_rows[1].log_pool_scale)
+        _, _, changed = db.exec(db_path, string.format(
+            "UPDATE document SET raw_heat = %.17g, log_scale_at_write = %.17g, pool_active = 1 " ..
+            "WHERE id = %d AND pool_active = 0 AND %s;",
+            BASE_HEAT, log_pool_scale, tonumber(document_id), ACTIVE_POOL_DOCUMENT_WHERE
+        ))
+        if changed != nil and changed > 0 then
+            db.exec(db_path, "UPDATE knowledge_pool_state SET document_count = document_count + 1 WHERE id = 1;")
+        end
     end
-    log_pool_scale = tonumber(state_rows[1].log_pool_scale)
-    _, _, changed = db.exec(db_path, string.format(
-        "UPDATE document SET raw_heat = %.17g, log_scale_at_write = %.17g, pool_active = 1 " ..
-        "WHERE id = %d AND pool_active = 0 AND %s;",
-        BASE_HEAT, log_pool_scale, tonumber(document_id), ACTIVE_POOL_DOCUMENT_WHERE
-    ))
-    if changed != nil and changed > 0 then
-        db.exec(db_path, "UPDATE knowledge_pool_state SET document_count = document_count + 1 WHERE id = 1;")
-    end
+    db.transaction(db_path, run_register_pool_tx)
 end
 
 function document.init_schema(db_path)
@@ -1888,46 +1916,51 @@ function document.reinforce_pool_heat(db_path, document_id, delta)
         return nil
     end
 
-    state_rows = db.query(db_path, "SELECT log_pool_scale, document_count FROM knowledge_pool_state WHERE id = 1;")
-    if state_rows == nil or state_rows[1] == nil then
-        return nil
+    function run_reinforce_pool_tx()
+        -- Lock document row before knowledge_pool_state (matching entity.archive /
+        -- entity.create lock order) so MariaDB row locks form a strict DAG.
+        doc_rows = lock_pool_document_row(db_path, document_id)
+        if doc_rows == nil or doc_rows[1] == nil then
+            return nil
+        end
+        if tonumber(doc_rows[1].pool_active) != 1 then
+            return nil
+        end
+
+        state_rows = lock_pool_state_row(db_path)
+        if state_rows == nil or state_rows[1] == nil then
+            return nil
+        end
+        log_pool_scale = tonumber(state_rows[1].log_pool_scale)
+        document_count = tonumber(state_rows[1].document_count)
+
+        x_eff = document.pool_effective_heat(doc_rows[1].raw_heat, doc_rows[1].log_scale_at_write, log_pool_scale)
+
+        total = document_count * BASE_HEAT
+        denominator = total - x_eff
+
+        log_f = 0.0
+        extracted = 0.0
+        if denominator > 0 then
+            log_f = -(delta / denominator)
+            extracted = denominator * (1 - math.exp(log_f))
+        end
+
+        new_log_pool_scale = log_pool_scale + log_f
+
+        db.exec(db_path, string.format(
+            "UPDATE knowledge_pool_state SET log_pool_scale = log_pool_scale + %.17g WHERE id = 1;", log_f
+        ))
+
+        db.exec(db_path, string.format(
+            "UPDATE document SET raw_heat = (raw_heat * EXP(%.17g - log_scale_at_write)) + %.17g, log_scale_at_write = %.17g WHERE id = %d AND pool_active = 1;",
+            log_pool_scale, extracted, new_log_pool_scale, tonumber(document_id)
+        ))
+
+        return x_eff + extracted
     end
-    log_pool_scale = tonumber(state_rows[1].log_pool_scale)
-    document_count = tonumber(state_rows[1].document_count)
 
-    doc_rows = db.query(db_path, string.format(
-        "SELECT raw_heat, log_scale_at_write, pool_active FROM document WHERE id = %d;", tonumber(document_id)
-    ))
-    if doc_rows == nil or doc_rows[1] == nil then
-        return nil
-    end
-    if tonumber(doc_rows[1].pool_active) != 1 then
-        return nil
-    end
-    x_eff = document.pool_effective_heat(doc_rows[1].raw_heat, doc_rows[1].log_scale_at_write, log_pool_scale)
-
-    total = document_count * BASE_HEAT
-    denominator = total - x_eff
-
-    log_f = 0.0
-    extracted = 0.0
-    if denominator > 0 then
-        log_f = -(delta / denominator)
-        extracted = denominator * (1 - math.exp(log_f))
-    end
-
-    new_log_pool_scale = log_pool_scale + log_f
-
-    db.exec(db_path, string.format(
-        "UPDATE knowledge_pool_state SET log_pool_scale = log_pool_scale + %.17g WHERE id = 1;", log_f
-    ))
-
-    db.exec(db_path, string.format(
-        "UPDATE document SET raw_heat = (raw_heat * EXP(%.17g - log_scale_at_write)) + %.17g, log_scale_at_write = %.17g WHERE id = %d AND pool_active = 1;",
-        log_pool_scale, extracted, new_log_pool_scale, tonumber(document_id)
-    ))
-
-    return x_eff + extracted
+    return db.transaction(db_path, run_reinforce_pool_tx)
 end
 
 -- The reverse of reinforce_pool_heat, for a document leaving the pool
@@ -1939,40 +1972,42 @@ end
 function document.return_pool_heat(db_path, document_id)
     document.ensure_pool_state(db_path)
 
-    _, _, changed = db.exec(db_path, string.format(
-        "UPDATE document SET pool_active = 0 WHERE id = %d AND pool_active = 1;", tonumber(document_id)
-    ))
-    if changed == nil or changed == 0 then
-        return
+    function run_return_pool_tx()
+        doc_rows = lock_pool_document_row(db_path, document_id)
+        if doc_rows == nil or doc_rows[1] == nil then
+            return
+        end
+        state_rows = lock_pool_state_row(db_path)
+        if state_rows == nil or state_rows[1] == nil then
+            return
+        end
+
+        _, _, changed = db.exec(db_path, string.format(
+            "UPDATE document SET pool_active = 0 WHERE id = %d AND pool_active = 1;", tonumber(document_id)
+        ))
+        if changed == nil or changed == 0 then
+            return
+        end
+
+        log_pool_scale = tonumber(state_rows[1].log_pool_scale)
+        document_count = tonumber(state_rows[1].document_count)
+        x_eff = document.pool_effective_heat(doc_rows[1].raw_heat, doc_rows[1].log_scale_at_write, log_pool_scale)
+
+        total = document_count * BASE_HEAT
+        denominator = total - x_eff
+        if document_count <= 1 or denominator <= 0 then
+            db.exec(db_path, "UPDATE knowledge_pool_state SET document_count = document_count - 1 WHERE id = 1;")
+            return
+        end
+
+        f = 1 + ((x_eff - BASE_HEAT) / denominator)
+        db.exec(db_path, string.format(
+            "UPDATE knowledge_pool_state SET log_pool_scale = log_pool_scale + %.17g, document_count = document_count - 1 WHERE id = 1;",
+            math.log(f)
+        ))
     end
 
-    state_rows = db.query(db_path, "SELECT log_pool_scale, document_count FROM knowledge_pool_state WHERE id = 1;")
-    if state_rows == nil or state_rows[1] == nil then
-        return
-    end
-    log_pool_scale = tonumber(state_rows[1].log_pool_scale)
-    document_count = tonumber(state_rows[1].document_count)
-
-    doc_rows = db.query(db_path, string.format(
-        "SELECT raw_heat, log_scale_at_write FROM document WHERE id = %d;", tonumber(document_id)
-    ))
-    if doc_rows == nil or doc_rows[1] == nil then
-        return
-    end
-    x_eff = document.pool_effective_heat(doc_rows[1].raw_heat, doc_rows[1].log_scale_at_write, log_pool_scale)
-
-    total = document_count * BASE_HEAT
-    denominator = total - x_eff
-    if document_count <= 1 or denominator <= 0 then
-        db.exec(db_path, "UPDATE knowledge_pool_state SET document_count = document_count - 1 WHERE id = 1;")
-        return
-    end
-
-    f = 1 + ((x_eff - BASE_HEAT) / denominator)
-    db.exec(db_path, string.format(
-        "UPDATE knowledge_pool_state SET log_pool_scale = log_pool_scale + %.17g, document_count = document_count - 1 WHERE id = 1;",
-        math.log(f)
-    ))
+    db.transaction(db_path, run_return_pool_tx)
 end
 
 -- Plain archival returns heat to the pool / re-registers on unarchive,

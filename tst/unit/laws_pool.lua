@@ -461,4 +461,53 @@ function tests.stateful_pool_thermodynamics_machine()
     check(ok == true, "stateful knowledge-pool thermodynamics machine passed")
 end
 
+function tests.concurrent_multiprocess_reinforce_preserves_law_l1()
+    print("Testing concurrent multi-process reinforce_pool_heat + lifecycle transitions preserve Law L1")
+    sut = make_pool_env()
+    doc_ids = {}
+    for i = 1, 6 do
+        did, _ = entity.create(sut.db_path, "document", {
+            title = "Pool Concurrent Doc " .. tostring(i),
+            content = "Body text for concurrent pool conservation " .. tostring(i),
+        }, "tester")
+        table.insert(doc_ids, did)
+    end
+
+    worker_script = sut.dir .. "/pool_worker.lua"
+    wf = io.open(worker_script, "w")
+    io.write(wf, string.format("""
+package.path = %q
+package.cpath = %q
+lfs = require("lfs")
+lfs.chdir(%q)
+document = require("document")
+db_path = %q
+ids = {%d, %d, %d, %d, %d, %d}
+worker_idx = tonumber(arg[1])
+for step = 1, 15 do
+    target = ids[((worker_idx + step - 1) %% #ids) + 1]
+    document.reinforce_pool_heat(db_path, target, 0.25)
+end
+""", package.path, package.cpath, sut.dir, sut.db_path,
+        doc_ids[1], doc_ids[2], doc_ids[3], doc_ids[4], doc_ids[5], doc_ids[6]))
+    io.close(wf)
+
+    luam_bin = os.getenv("LUAM_DIR") .. "/bin/luam"
+    cmd_parts = {}
+    for w = 1, 8 do
+        table.insert(cmd_parts, string.format("%q %q %d &", luam_bin, worker_script, w))
+    end
+    table.insert(cmd_parts, "wait")
+    rc = os.execute("bash -c " .. string.format("%q", table.concat(cmd_parts, " ")))
+    check(rc == 0, "expected all concurrent pool workers to exit 0, got rc=" .. tostring(rc))
+
+    l1 = verify.pool_thermodynamics(sut.db_path)
+    if l1.ok == false then
+        cleanup_pool_env(sut)
+        error("Law L1 violated under concurrent reinforce_pool_heat: " .. tostring(l1.violations[1].message))
+    end
+    check(l1.ok == true, "Law L1 conservation must hold across 8x15 concurrent reinforcements")
+    cleanup_pool_env(sut)
+end
+
 unit.run(tests)
