@@ -190,6 +190,14 @@ function tests.run_agent_query_blocks_all_allowlist_bypass_shapes()
     )
     check(cte_err == nil and cte_cols != nil, "valid column-listed CTE over document must succeed, got: " .. tostring(cte_err))
 
+    -- view.load blocks ../ traversal before touching the filesystem
+    f = io.open(dir .. "/secret.lua", "w")
+    io.write(f, "return {name = \"secret\", sql = \"SELECT 1;\", columns = {{name = \"x\"}}}\n")
+    io.close(f)
+    loaded, load_err = view.load(db_path, "../secret", dir)
+    check(loaded == nil and load_err != nil and string.find(load_err, "invalid view name", 1, true) != nil,
+        "view.load must reject ../secret traversal, got: " .. tostring(load_err))
+
     os.execute("rm -rf '" .. dir .. "'")
 end
 

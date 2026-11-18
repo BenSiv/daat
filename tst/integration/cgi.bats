@@ -702,3 +702,30 @@ EOF
     [[ "$output" =~ "200 OK" ]]
     [[ ! "$output" =~ "LOT-42" ]]
 }
+
+@test "/view, /template, and /document-edit reject ../ traversal and HTML-escape error responses" {
+    cat > secret_outside.lua <<'EOF'
+error("<img src=x onerror=alert(1)>")
+EOF
+
+    run_cgi "/view" "view_name=../secret_outside"
+    [[ "$output" =~ "400 Bad Request" ]]
+    [[ "$output" =~ "Invalid &#39;view_name&#39; parameter" ]]
+
+    run_cgi "/template" "template_name=../secret_outside"
+    [[ "$output" =~ "400 Bad Request" ]]
+    [[ "$output" =~ "Invalid &#39;template_name&#39; parameter" ]]
+
+    run_cgi "/document-edit" "from_template=../secret_outside"
+    [[ "$output" =~ "400 Bad Request" ]]
+    [[ "$output" =~ "Invalid &#39;from_template&#39; parameter" ]]
+
+    # A broken template whose error text contains raw HTML tags must be HTML-escaped in the 404/error response.
+    cat > templates/broken_xss.lua <<'EOF'
+error("<script>alert('xss')</script>")
+EOF
+    run_cgi "/template" "template_name=broken_xss"
+    [[ "$output" =~ "404 Not Found" ]]
+    [[ "$output" =~ "&lt;script&gt;alert(" ]]
+    [[ ! "$output" =~ "<script>alert(" ]]
+}

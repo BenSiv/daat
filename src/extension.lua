@@ -13,6 +13,7 @@ paths = require("paths")
 lfs = require("lfs")
 sandbox = require("sandbox")
 config = require("config")
+schema = require("schema")
 
 extension = {}
 
@@ -123,6 +124,9 @@ OWNED_NAME_PATTERNS = {
 function extension.validate_manifest(manifest)
     if type(manifest.name) != "string" or manifest.name == "" then
         return "manifest must have a non-empty string 'name'"
+    end
+    if not schema.valid_resource_name(manifest.name) then
+        return "manifest '" .. tostring(manifest.name) .. "' has an invalid extension name"
     end
     if type(manifest.events) != "table" then
         return "manifest '" .. tostring(manifest.name) .. "' must have an 'events' list"
@@ -236,6 +240,9 @@ end
 -- Loads a manifest from extensions/<name>/manifest.lua, sandboxed the
 -- same data-only way a schema file is (see doc/schema.md).
 function extension.load_manifest(ext_dir, name)
+    if not schema.valid_resource_name(name) then
+        return nil, "invalid extension name: " .. tostring(name)
+    end
     manifest_path = paths.joinpath(ext_dir, name, "manifest.lua")
     source = paths.read_file(manifest_path)
     if source == nil then
@@ -253,6 +260,9 @@ function extension.load_manifest(ext_dir, name)
 end
 
 function extension.load_main_source(ext_dir, name)
+    if not schema.valid_resource_name(name) then
+        return nil, "invalid extension name: " .. tostring(name)
+    end
     main_path = paths.joinpath(ext_dir, name, "main.lua")
     source = paths.read_file(main_path)
     if source == nil then
@@ -644,6 +654,13 @@ function extension.load_hooks(ext_dir, name, manifest)
     return hooks, nil
 end
 
+function extension.call_bounded(fn, ...)
+    if sandbox.pcall_bounded != nil then
+        return sandbox.pcall_bounded(nil, fn, ...)
+    end
+    return pcall(fn, ...)
+end
+
 -- Calls hook_name (e.g. "on_before"/"on_after") from an extension's
 -- hooks table. `ctx` is built by the caller (entity.lua owns
 -- ctx.query/create_entity/update_entity, since it owns entity CRUD).
@@ -661,10 +678,7 @@ function extension.invoke(ext_dir, name, manifest, hook_name, new_values, old_va
     if type(hook_fn) != "function" then
         return true, nil
     end
-    if sandbox.pcall_bounded != nil then
-        return sandbox.pcall_bounded(nil, hook_fn, new_values, old_values, ctx)
-    end
-    return pcall(hook_fn, new_values, old_values, ctx)
+    return extension.call_bounded(hook_fn, new_values, old_values, ctx)
 end
 
 -- ---- After-hook job queue ----

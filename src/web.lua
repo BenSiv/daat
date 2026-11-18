@@ -357,6 +357,10 @@ function print_response(status, content_type, body, extra_headers)
     })
 end
 
+function print_error_html(status, message)
+    return print_response(status, "text/html", "<h3>Error: " .. html.html_escape(tostring(message)) .. "</h3>")
+end
+
 parse_cookies = cgi_lib.parse_cookies
 set_cookie_header = cgi_lib.set_cookie_header
 clear_cookie_header = cgi_lib.clear_cookie_header
@@ -636,11 +640,11 @@ function handle_login(root, db_path, method, nonce, theme, params)
 
         session_cookie, cookie_err = auth.issue_session_cookie(root, db_path, form.login)
         if session_cookie == nil then
-            return print_response("500 Internal Server Error", "text/html", "<h3>Error: " .. tostring(cookie_err) .. "</h3>")
+            return print_error_html("500 Internal Server Error", cookie_err)
         end
         csrf_token, csrf_err = auth.generate_csrf_token()
         if csrf_token == nil then
-            return print_response("500 Internal Server Error", "text/html", "<h3>Error: " .. tostring(csrf_err) .. "</h3>")
+            return print_error_html("500 Internal Server Error", csrf_err)
         end
 
         return print_response("302 Found", "text/plain", "", {
@@ -881,7 +885,7 @@ function cgi.handle_request()
     ensure_builtin_schemas(db_path)
     secret_ok, secret_err = auth.ensure_session_secret(root)
     if secret_ok == nil then
-        return print_response("500 Internal Server Error", "text/html", "<h3>Error: " .. tostring(secret_err) .. "</h3>")
+        return print_error_html("500 Internal Server Error", secret_err)
     end
     schema.sync_all(db_path, root)
 
@@ -1024,15 +1028,15 @@ function cgi.handle_request()
     if path_info == "/register" then
         entity_type = params.type
         if entity_type == nil or entity_type == "" then
-            return print_response("400 Bad Request", "text/html", "<h3>Error: Missing 'type' parameter</h3>")
+            return print_error_html("400 Bad Request", "Missing 'type' parameter")
         end
         if not schema.valid_name_syntax(entity_type) then
-            return print_response("400 Bad Request", "text/html", "<h3>Error: Invalid 'type' parameter</h3>")
+            return print_error_html("400 Bad Request", "Invalid 'type' parameter")
         end
 
         layout, err = schema.layout(db_path, entity_type)
         if layout == nil then
-            return print_response("404 Not Found", "text/html", "<h3>Error: " .. tostring(err) .. "</h3>")
+            return print_error_html("404 Not Found", err)
         end
         layout = filter_layout_columns(layout, params.columns)
         layout_json = json.encode(layout)
@@ -1047,15 +1051,15 @@ function cgi.handle_request()
     if path_info == "/browse" then
         entity_type = params.type
         if entity_type == nil or entity_type == "" then
-            return print_response("400 Bad Request", "text/html", "<h3>Error: Missing 'type' parameter</h3>")
+            return print_error_html("400 Bad Request", "Missing 'type' parameter")
         end
         if not schema.valid_name_syntax(entity_type) then
-            return print_response("400 Bad Request", "text/html", "<h3>Error: Invalid 'type' parameter</h3>")
+            return print_error_html("400 Bad Request", "Invalid 'type' parameter")
         end
 
         layout, err = schema.layout(db_path, entity_type)
         if layout == nil then
-            return print_response("404 Not Found", "text/html", "<h3>Error: " .. tostring(err) .. "</h3>")
+            return print_error_html("404 Not Found", err)
         end
 
         -- Optional generic filter, e.g.
@@ -1228,20 +1232,20 @@ function cgi.handle_request()
         entity_type = params.type
         entity_id = tonumber(params.entity_id)
         if entity_type == nil or entity_type == "" or entity_id == nil then
-            return print_response("400 Bad Request", "text/html", "<h3>Error: Missing 'type' or 'entity_id' parameter</h3>")
+            return print_error_html("400 Bad Request", "Missing 'type' or 'entity_id' parameter")
         end
         if not schema.valid_name_syntax(entity_type) then
-            return print_response("400 Bad Request", "text/html", "<h3>Error: Invalid 'type' parameter</h3>")
+            return print_error_html("400 Bad Request", "Invalid 'type' parameter")
         end
 
         layout, err = schema.layout(db_path, entity_type)
         if layout == nil then
-            return print_response("404 Not Found", "text/html", "<h3>Error: " .. tostring(err) .. "</h3>")
+            return print_error_html("404 Not Found", err)
         end
 
         row = entity.get(db_path, entity_type, entity_id)
         if row == nil then
-            return print_response("404 Not Found", "text/html", "<h3>Error: no such " .. html.html_escape(entity_type) .. " #" .. tostring(entity_id) .. "</h3>")
+            return print_error_html("404 Not Found", "no such " .. entity_type .. " #" .. tostring(entity_id))
         end
 
         history = ledger.history(db_path, entity_id)
@@ -1263,21 +1267,21 @@ function cgi.handle_request()
         entity_type = params.type
         entity_id = tonumber(params.entity_id)
         if entity_type == nil or entity_type == "" or entity_id == nil then
-            return print_response("400 Bad Request", "text/html", "<h3>Error: Missing 'type' or 'entity_id' parameter</h3>")
+            return print_error_html("400 Bad Request", "Missing 'type' or 'entity_id' parameter")
         end
         if not schema.valid_name_syntax(entity_type) then
-            return print_response("400 Bad Request", "text/html", "<h3>Error: Invalid 'type' parameter</h3>")
+            return print_error_html("400 Bad Request", "Invalid 'type' parameter")
         end
 
         layout, err = schema.layout(db_path, entity_type)
         if layout == nil then
-            return print_response("404 Not Found", "text/html", "<h3>Error: " .. tostring(err) .. "</h3>")
+            return print_error_html("404 Not Found", err)
         end
         layout_json = json.encode(layout)
 
         row = entity.get(db_path, entity_type, entity_id)
         if row == nil then
-            return print_response("404 Not Found", "text/html", "<h3>Error: no such " .. html.html_escape(entity_type) .. " #" .. tostring(entity_id) .. "</h3>")
+            return print_error_html("404 Not Found", "no such " .. entity_type .. " #" .. tostring(entity_id))
         end
         row_json = json.encode(row)
 
@@ -1314,15 +1318,18 @@ function cgi.handle_request()
     if path_info == "/view" then
         view_name = params.view_name
         if view_name == nil or view_name == "" then
-            return print_response("400 Bad Request", "text/html", "<h3>Error: Missing 'view_name' parameter</h3>")
+            return print_error_html("400 Bad Request", "Missing 'view_name' parameter")
+        end
+        if not schema.valid_resource_name(view_name) then
+            return print_error_html("400 Bad Request", "Invalid 'view_name' parameter")
         end
 
         view_def, err = view.load(db_path, view_name, root)
         if view_def == nil then
-            return print_response("404 Not Found", "text/html", "<h3>Error: " .. tostring(err) .. "</h3>")
+            return print_error_html("404 Not Found", err)
         end
         if view.is_approved(db_path, view_def) == false then
-            return print_response("403 Forbidden", "text/html", "<h3>Error: view '" .. html.html_escape(view_name) .. "' is not approved</h3>")
+            return print_error_html("403 Forbidden", "view '" .. view_name .. "' is not approved")
         end
 
         param_value = nil
@@ -1332,7 +1339,7 @@ function cgi.handle_request()
 
         rows, err = view.run(db_path, view_def, param_value)
         if rows == nil then
-            return print_response("500 Internal Server Error", "text/html", "<h3>Error: " .. tostring(err) .. "</h3>")
+            return print_error_html("500 Internal Server Error", err)
         end
         body = html.render_view(view_def, rows, param_value)
         page_context = {page_type = "view", view_name = view_name, title = view_name}
@@ -1375,11 +1382,11 @@ function cgi.handle_request()
     if path_info == "/document" then
         entity_id = tonumber(params.entity_id)
         if entity_id == nil then
-            return print_response("400 Bad Request", "text/html", "<h3>Error: Missing 'entity_id' parameter</h3>")
+            return print_error_html("400 Bad Request", "Missing 'entity_id' parameter")
         end
         doc = entity.get(db_path, "document", entity_id)
         if doc == nil then
-            return print_response("404 Not Found", "text/html", "<h3>Error: no such document #" .. tostring(entity_id) .. "</h3>")
+            return print_error_html("404 Not Found", "no such document #" .. tostring(entity_id))
         end
         rendered_html = document.render_html(db_path, doc.content)
         rendered_html = html.expand_inline_views(db_path, rendered_html)
@@ -1399,7 +1406,7 @@ function cgi.handle_request()
         if entity_id != nil then
             doc = entity.get(db_path, "document", entity_id)
             if doc == nil then
-                return print_response("404 Not Found", "text/html", "<h3>Error: no such document #" .. tostring(entity_id) .. "</h3>")
+                return print_error_html("404 Not Found", "no such document #" .. tostring(entity_id))
             end
         end
 
@@ -1412,10 +1419,13 @@ function cgi.handle_request()
         -- document's edit URL would silently clobber real content otherwise.
         prefill = nil
         if doc == nil and params.from_template != nil and params.from_template != "" then
+            if not schema.valid_resource_name(params.from_template) then
+                return print_error_html("400 Bad Request", "Invalid 'from_template' parameter")
+            end
             templates_dir = config.templates_dir(root)
             template_def, template_err = template.load(templates_dir, params.from_template)
             if template_def == nil then
-                return print_response("404 Not Found", "text/html", "<h3>Error: " .. tostring(template_err) .. "</h3>")
+                return print_error_html("404 Not Found", template_err)
             end
             default_path = template_def.default_path
             if default_path == nil then
@@ -2049,13 +2059,16 @@ function cgi.handle_request()
     if path_info == "/template" then
         template_name = params.template_name
         if template_name == nil or template_name == "" then
-            return print_response("400 Bad Request", "text/html", "<h3>Error: Missing 'template_name' parameter</h3>")
+            return print_error_html("400 Bad Request", "Missing 'template_name' parameter")
+        end
+        if not schema.valid_resource_name(template_name) then
+            return print_error_html("400 Bad Request", "Invalid 'template_name' parameter")
         end
 
         templates_dir = config.templates_dir(root)
         template_def, err = template.load(templates_dir, template_name)
         if template_def == nil then
-            return print_response("404 Not Found", "text/html", "<h3>Error: " .. tostring(err) .. "</h3>")
+            return print_error_html("404 Not Found", err)
         end
 
         rendered = template.render(template_def)
@@ -2494,7 +2507,7 @@ function cgi.handle_request()
         end
 
         ctx = entity.build_ctx(db_path, manifest)
-        trigger_ok, trigger_result = pcall(trigger_fn, ctx, {triggered_by = author})
+        trigger_ok, trigger_result = extension.call_bounded(trigger_fn, ctx, {triggered_by = author})
         if trigger_ok == false then
             return print_response("500 Internal Server Error", "application/json", json.encode({error = tostring(trigger_result)}))
         end
@@ -2552,7 +2565,7 @@ function cgi.handle_request()
             -- fixed set of "known" plugin parameters. (brex 462301011 --
             -- the concrete need was an experiment_view extension reading
             -- ?experiment_id=, but nothing here is specific to that.)
-            render_ok, render_result = pcall(hooks.render, ctx, params)
+            render_ok, render_result = extension.call_bounded(hooks.render, ctx, params)
             elements = nil
             if render_ok == true and type(render_result) == "table" then
                 elements = render_result.elements
@@ -2600,7 +2613,7 @@ function cgi.handle_request()
                 action_args = {}
             end
             ctx = entity.build_ctx(db_path, manifest)
-            action_ok, action_result = pcall(action_fn, ctx, action_args)
+            action_ok, action_result = extension.call_bounded(action_fn, ctx, action_args)
             if action_ok == false then
                 return print_response("500 Internal Server Error", "application/json", json.encode({error = tostring(action_result)}))
             end

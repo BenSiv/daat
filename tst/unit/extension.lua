@@ -262,4 +262,24 @@ function tests.capabilities_equal_accepts_identical_manual_triggers()
         "expected an unchanged manual_triggers list to still compare equal")
 end
 
+function tests.load_manifest_and_call_bounded_guards()
+    print("Testing extension.load_manifest rejects traversal names and call_bounded stops infinite loops")
+    for _, bad in ipairs({"../platform", "..", ".hidden", "a/b", "<script>"}) do
+        manifest, err = extension.load_manifest("/tmp", bad)
+        check(manifest == nil and err != nil and string.find(err, "invalid extension name", 1, true) != nil,
+            "expected extension.load_manifest to reject '" .. bad .. "': " .. tostring(err))
+    end
+
+    bad_manifest_err = extension.validate_manifest({name = "../escape", events = {}, entity_types = {}})
+    check(bad_manifest_err != nil and string.find(bad_manifest_err, "invalid extension name", 1, true) != nil,
+        "expected validate_manifest to reject traversal name: " .. tostring(bad_manifest_err))
+
+    function runaway_fn()
+        while true do end
+    end
+    ok, call_err = extension.call_bounded(runaway_fn)
+    check(ok == false and string.find(tostring(call_err), "instruction limit", 1, true) != nil,
+        "expected call_bounded to abort runaway extension function, got: " .. tostring(call_err))
+end
+
 unit.run(tests)

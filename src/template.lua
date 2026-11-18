@@ -41,6 +41,7 @@
 paths = require("paths")
 lfs = require("lfs")
 sandbox = require("sandbox")
+schema = require("schema")
 
 template = {}
 
@@ -89,6 +90,9 @@ function template.validate(def)
 end
 
 function template.load(templates_dir, name)
+    if not schema.valid_resource_name(name) then
+        return nil, "invalid template name: " .. tostring(name)
+    end
     path = paths.joinpath(templates_dir, name .. ".lua")
     source = paths.read_file(path)
     if source == nil then

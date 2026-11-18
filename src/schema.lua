@@ -1286,6 +1286,15 @@ function schema.valid_name_syntax(name)
     return type(name) == "string" and string.match(name, "^[a-z_][a-z0-9_]*$") != nil
 end
 
+-- Resource filename guard for views, templates, and extensions, which
+-- may carry hyphens (e.g. "widgets-in-stock", "widget-intake") unlike SQL
+-- entity-type names, while still rejecting path separators, "..", leading
+-- dots/hyphens, whitespace, quotes, and HTML metacharacters before any
+-- paths.joinpath or sandbox.run call.
+function schema.valid_resource_name(name)
+    return type(name) == "string" and string.match(name, "^[A-Za-z0-9_][A-Za-z0-9_%-]*$") != nil
+end
+
 -- Whether `entity_type` has been registered at all. A registered type
 -- can legitimately have zero custom fields (e.g. a schema whose only
 -- data is its name plus the system-managed created/updated columns),

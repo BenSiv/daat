@@ -356,6 +356,9 @@ end
 -- views/<name>.lua first, without touching extensions at all -- the
 -- nav rail checks for prioritized_tasks on every request.
 function view.load(db_path, name, root)
+    if not schema.valid_resource_name(name) then
+        return nil, "invalid view name: " .. tostring(name)
+    end
     config = require("config")
     path = paths.joinpath(config.views_dir(root), name .. ".lua")
     if paths.file_exists(path) then
