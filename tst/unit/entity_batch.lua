@@ -225,6 +225,93 @@ function tests.counts_by_type_and_preload_all_fields_cache_and_delta_refresh(db_
     check(#edges >= 1, "expected at least 1 relationship edge")
 end
 
+function tests.single_row_crud_is_transactional_and_ddl_free(db_path)
+    print("Testing single-row create/update/archive/unarchive roll back ledger + projection atomically and run zero DDL in-tx")
+    verify = require("verify")
+    extension_mod = require("extension")
+
+    fresh_def = {
+        name = "fresh_multi",
+        fields = {
+            {name = "code", type = "text", required = true},
+            {name = "flags", type = "multi_select", values = {"x", "y", "z"}},
+            {name = "source_ref", type = "polymorphic_reference", allowed_entity_types = {"widget"}},
+        },
+    }
+    schema.register(db_path, fresh_def)
+    schema.sync_table(db_path, fresh_def)
+
+    w_id, _ = entity.create(db_path, "widget", {label = "W-Ref"}, "tester")
+
+    -- Verify zero DDL inside BEGIN...COMMIT even on first-ever write to fresh_multi's companion tables
+    original_exec = db.exec
+    in_tx = false
+    tx_ddl = {}
+    db.exec = function(path, stmt, ...)
+        up = string.upper(stmt)
+        if string.find(up, "^%s*BEGIN") != nil or string.find(up, "^%s*START%s+TRANSACTION") != nil then
+            in_tx = true
+        elseif string.find(up, "^%s*COMMIT") != nil or string.find(up, "^%s*ROLLBACK") != nil then
+            in_tx = false
+        elseif in_tx and (string.find(up, "^%s*CREATE") != nil or string.find(up, "^%s*ALTER") != nil) then
+            table.insert(tx_ddl, stmt)
+        end
+        return original_exec(path, stmt, ...)
+    end
+    fm_id, _ = entity.create(db_path, "fresh_multi", {
+        code = "FM-1",
+        flags = {"x", "y"},
+        source_ref = {{type = "widget", id = w_id}},
+    }, "tester")
+    db.exec = original_exec
+    check(fm_id != nil, "expected fresh_multi create to succeed")
+    check(#tx_ddl == 0, "expected 0 DDL statements inside single-row create tx, got: " .. tostring(tx_ddl[1]))
+
+    -- Mid-flight failure inside enqueue_after_hooks rolls back ledger + projection on create, update, and archive
+    events_before = count_events(db_path)
+    orig_enqueue = extension_mod.enqueue_after_hooks
+    extension_mod.enqueue_after_hooks = function(...)
+        error("simulated mid-crud crash")
+    end
+
+    ok_c, _ = pcall(entity.create, db_path, "fresh_multi", {code = "FM-CRASH", flags = {"z"}}, "tester")
+    check(ok_c == false, "create crash should propagate")
+    check(count_events(db_path) == events_before, "create crash must roll back entity_event")
+
+    ok_u, _ = pcall(entity.update, db_path, "fresh_multi", fm_id, {code = "FM-UPD-CRASH", flags = {"z"}}, "tester")
+    check(ok_u == false, "update crash should propagate")
+    check(count_events(db_path) == events_before, "update crash must roll back entity_event")
+    after_u = entity.get(db_path, "fresh_multi", fm_id)
+    check(after_u.code == "FM-1" and #after_u.flags == 2, "update crash must preserve projected row and multivalue table")
+
+    ok_a, _ = pcall(entity.archive, db_path, "fresh_multi", fm_id, "tester")
+    extension_mod.enqueue_after_hooks = orig_enqueue
+    check(ok_a == false, "archive crash should propagate")
+    check(count_events(db_path) == events_before, "archive crash must roll back entity_event")
+    after_a = entity.get(db_path, "fresh_multi", fm_id)
+    check(after_a.archived_at == nil or after_a.archived_at == "", "archive crash must leave row active")
+
+    l2 = verify.ledger_projection(db_path)
+    check(l2.ok == true, "Law L2 must hold after rolled-back CRUD failures")
+end
+
+function tests.build_ctx_read_only_blocks_writes_during_validate(db_path)
+    print("Testing entity.build_ctx read_only mode omits write methods during entity.validate")
+    ro_ctx = entity.build_ctx(db_path, {
+        name = "ro_ext",
+        capabilities = {read = {"entity"}, write = {"entity"}},
+    }, true)
+    check(type(ro_ctx.query) == "function", "read_only ctx must keep query")
+    check(ro_ctx.create_entity == nil and ro_ctx.update_entity == nil, "read_only ctx must omit create_entity and update_entity")
+
+    rw_ctx = entity.build_ctx(db_path, {
+        name = "rw_ext",
+        capabilities = {read = {"entity"}, write = {"entity"}},
+    })
+    check(type(rw_ctx.create_entity) == "function" and type(rw_ctx.update_entity) == "function",
+        "default build_ctx must still expose write methods for on_after/UI/tools")
+end
+
 dir = os.tmpname()
 os.remove(dir)
 lfs.mkdir(dir)

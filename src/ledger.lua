@@ -105,11 +105,16 @@ function ledger.append_create(db_path, entity_type, values, author, source)
     -- connection-scoped, so two concurrent creates can never collide on
     -- the same entity_id (see doc/mariadb-migration.md's "Bug found
     -- during this investigation" for the race this replaced).
-    _, entity_id = db.exec(db_path, statement)
-    db.exec(db_path, string.format(
-        "UPDATE entity_event SET entity_id = %d WHERE event_id = %d;", entity_id, entity_id
-    ))
-    return entity_id
+    -- Wrapped in db.transaction (re-entrant when already inside entity.create)
+    -- so entity_id = NULL is never observed or stranded on failure.
+    function write_create_event()
+        _, new_entity_id = db.exec(db_path, statement)
+        db.exec(db_path, string.format(
+            "UPDATE entity_event SET entity_id = %d WHERE event_id = %d;", new_entity_id, new_entity_id
+        ))
+        return new_entity_id
+    end
+    return db.transaction(db_path, write_create_event)
 end
 
 -- Appends an 'update' event for an existing entity_id. `field_changes`

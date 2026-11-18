@@ -12,6 +12,8 @@ schema = {}
 
 _fields_cache = {}
 _registered_cache = {}
+_multi_table_ready = {}
+_entity_source_ready = {}
 
 function schema_cache_key(db_path)
     return db.cache_key(db_path)
@@ -21,11 +23,15 @@ function invalidate_schema_cache(db_path)
     if db_path == nil then
         _fields_cache = {}
         _registered_cache = {}
+        _multi_table_ready = {}
+        _entity_source_ready = {}
         return
     end
     key = schema_cache_key(db_path)
     _fields_cache[key] = nil
     _registered_cache[key] = nil
+    _multi_table_ready[key] = nil
+    _entity_source_ready[key] = nil
 end
 
 schema.clear_cache = invalidate_schema_cache
@@ -620,11 +626,22 @@ end
 -- existed still picks it up without a separate migration step.
 function schema.ensure_multi_field_table(db_path, entity_type, field)
     table_name = schema.multi_field_table_name(entity_type, field.name)
+    cache_key = schema_cache_key(db_path)
+    bucket = _multi_table_ready[cache_key]
+    if bucket != nil and bucket[table_name] == true then
+        return
+    end
     if db.table_exists(db_path, table_name) then
+        if bucket == nil then
+            bucket = {}
+            _multi_table_ready[cache_key] = bucket
+        end
+        bucket[table_name] = true
         return
     end
     parent_col = entity_type .. "_id"
     value_col = multi_field_value_column(field)
+    ddl_sql = nil
     if field.type == "multi_reference" then
         -- `field` arrives in two different shapes depending on caller:
         -- a raw schemas/*.lua field definition (schema.sync_table,
@@ -639,8 +656,8 @@ function schema.ensure_multi_field_table(db_path, entity_type, field)
         elseif field.entity_type != nil and field.entity_type != "" then
             ref_type = field.entity_type
         end
-        db.exec(db_path, string.format("""
-            CREATE TABLE %s (
+        ddl_sql = string.format("""
+            CREATE TABLE IF NOT EXISTS %s (
                 %s INTEGER NOT NULL,
                 %s INTEGER NOT NULL,
                 PRIMARY KEY (%s, %s),
@@ -648,20 +665,29 @@ function schema.ensure_multi_field_table(db_path, entity_type, field)
                 FOREIGN KEY (%s) REFERENCES %s(id)
             );
         """, table_name, parent_col, value_col, parent_col, value_col,
-             parent_col, entity_type, value_col, ref_type))
+             parent_col, entity_type, value_col, ref_type)
     else
         -- VARCHAR(255), not TEXT -- same MariaDB/InnoDB key-length
         -- reasoning as ledger.lua/document_link (a bare TEXT/BLOB
         -- column can't be part of a key without a bounded length).
-        db.exec(db_path, string.format("""
-            CREATE TABLE %s (
+        ddl_sql = string.format("""
+            CREATE TABLE IF NOT EXISTS %s (
                 %s INTEGER NOT NULL,
                 %s VARCHAR(255) NOT NULL,
                 PRIMARY KEY (%s, %s),
                 FOREIGN KEY (%s) REFERENCES %s(id)
             );
-        """, table_name, parent_col, value_col, parent_col, value_col, parent_col, entity_type))
+        """, table_name, parent_col, value_col, parent_col, value_col, parent_col, entity_type)
     end
+    ok_ddl, ddl_err = pcall(db.exec, db_path, ddl_sql)
+    if ok_ddl == false and db.table_exists(db_path, table_name) == false then
+        error(ddl_err)
+    end
+    if bucket == nil then
+        bucket = {}
+        _multi_table_ready[cache_key] = bucket
+    end
+    bucket[table_name] = true
 end
 
 -- Accepts either a real Lua array (already-parsed JSON, or a
@@ -776,10 +802,21 @@ end
 -- boundary reference/multi_reference already put on entity.lua rather
 -- than the database for their own existence checks.
 function schema.ensure_entity_source_table(db_path)
-    if db.table_exists(db_path, "entity_ref") then
+    cache_key = schema_cache_key(db_path)
+    if _entity_source_ready[cache_key] == true then
         return
     end
-    db.exec(db_path, "CREATE TABLE entity_ref (" ..
+    if db.table_exists(db_path, "entity_ref") then
+        if db.index_exists(db_path, "entity_ref", "idx_entity_source_from") == false then
+            ok_idx, idx_err = pcall(db.exec, db_path, "CREATE INDEX idx_entity_source_from ON entity_ref (from_type, from_id, field_name);")
+            if ok_idx == false and db.index_exists(db_path, "entity_ref", "idx_entity_source_from") == false then
+                error(idx_err)
+            end
+        end
+        _entity_source_ready[cache_key] = true
+        return
+    end
+    ok_tbl, tbl_err = pcall(db.exec, db_path, "CREATE TABLE IF NOT EXISTS entity_ref (" ..
         "id INTEGER PRIMARY KEY " .. db.autoincrement_keyword(db_path) .. ", " ..
         "from_type VARCHAR(255) NOT NULL, " ..
         "from_id INTEGER NOT NULL, " ..
@@ -788,7 +825,16 @@ function schema.ensure_entity_source_table(db_path)
         "to_id INTEGER NOT NULL, " ..
         "created_at TEXT DEFAULT (" .. db.now_expr(db_path) .. ")" ..
         ");")
-    db.exec(db_path, "CREATE INDEX idx_entity_source_from ON entity_ref (from_type, from_id, field_name);")
+    if ok_tbl == false and db.table_exists(db_path, "entity_ref") == false then
+        error(tbl_err)
+    end
+    if db.index_exists(db_path, "entity_ref", "idx_entity_source_from") == false then
+        ok_idx, idx_err = pcall(db.exec, db_path, "CREATE INDEX idx_entity_source_from ON entity_ref (from_type, from_id, field_name);")
+        if ok_idx == false and db.index_exists(db_path, "entity_ref", "idx_entity_source_from") == false then
+            error(idx_err)
+        end
+    end
+    _entity_source_ready[cache_key] = true
 end
 
 -- A single polymorphic item, in whichever shape the caller handed it:

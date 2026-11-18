@@ -235,3 +235,18 @@ teardown() {
     # Total effective heat across active documents equals 2 * 1.0 within floating tolerance.
     [ "$(python3 -c "import math, sqlite3; c = sqlite3.connect('.store/store.db'); L = c.execute('SELECT log_pool_scale FROM knowledge_pool_state WHERE id = 1').fetchone()[0]; rows = c.execute('SELECT raw_heat, log_scale_at_write FROM document WHERE pool_active = 1').fetchall(); print(int(abs(sum(r * math.exp(L - l) for r, l in rows) - 2.0) < 1e-9))")" = "1" ]
 }
+
+@test "concurrent entity updates on the same row preserve Law L2 ledger projection" {
+    rid=$("$BIN" entity create reagent lot_number="LOT-CONC-0" concentration=1 | grep -o '[0-9]\+')
+    pids=()
+    for i in $(seq 1 8); do
+        "$BIN" entity update reagent "$rid" lot_number="LOT-CONC-$i" concentration="$i" &
+        pids+=($!)
+    done
+    for pid in "${pids[@]}"; do
+        wait "$pid" || true
+    done
+
+    run "$BIN" store verify
+    [ "$status" -eq 0 ]
+}
