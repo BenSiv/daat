@@ -651,7 +651,7 @@ function entity.create_batch(db_path, entity_type, rows_values, author, source)
     extension.init_schema(db_path)
 
     created_ids = {}
-    committed, failure = db.transaction(db_path, function(check_alive)
+    function insert_batch_rows(check_alive)
         for i, values in ipairs(rows_values) do
             row_source = {notebook_entry_id = source.notebook_entry_id, row_id = tostring(i)}
             id, issues = entity.create(db_path, entity_type, values, author, row_source)
@@ -667,7 +667,8 @@ function entity.create_batch(db_path, entity_type, rows_values, author, source)
             end
         end
         return true, nil
-    end)
+    end
+    committed, failure = db.transaction(db_path, insert_batch_rows)
 
     if committed == false then
         return nil, failure

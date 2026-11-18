@@ -159,6 +159,10 @@ function sorted_set_str(items)
     return table.concat(vals, ",")
 end
 
+function compare_rows_by_id(a, b)
+    return tonumber(a.id) < tonumber(b.id)
+end
+
 function compare_dual_state(s_db, m_db)
     -- 1. All 4 formal store laws hold on both backends independently
     s_ver = verify.check_all(s_db)
@@ -193,8 +197,8 @@ function compare_dual_state(s_db, m_db)
     for _, et in ipairs({"project", "sample", "document"}) do
         s_rows = entity.list(s_db, et, nil, nil, true)
         m_rows = entity.list(m_db, et, nil, nil, true)
-        table.sort(s_rows, function(a, b) return tonumber(a.id) < tonumber(b.id) end)
-        table.sort(m_rows, function(a, b) return tonumber(a.id) < tonumber(b.id) end)
+        table.sort(s_rows, compare_rows_by_id)
+        table.sort(m_rows, compare_rows_by_id)
         if #s_rows != #m_rows then
             return false, string.format("%s row count mismatch: sqlite=%d vs mariadb=%d", et, #s_rows, #m_rows)
         end
@@ -427,52 +431,56 @@ end
 
 TRACE_GEN = laws.list(OP_GEN, {min_len = 12, max_len = 18})
 
-ok = laws.forall("Law L6: SQLite vs. MariaDB observational equivalence", TRACE_GEN, function(trace)
-    pair = create_dual_stores()
-    run_ok, err_or_res, fail_reason = pcall(function()
-        state = {projects = {}, samples = {}, docs = {}}
-        for step_idx, step in ipairs(trace) do
-            res_s = apply_step_on_target(pair.sqlite_db, step, state, step_idx)
-            res_m = apply_step_on_target(pair.mariadb_db, step, state, step_idx)
-            if res_s != nil then
-                if res_s.kind == "project" then
-                    if res_s.id != res_m.id then
-                        return false, "project id diverged"
-                    end
-                    table.insert(state.projects, res_s.id)
-                elseif res_s.kind == "sample" then
-                    if res_s.id != res_m.id then
-                        return false, "sample id diverged"
-                    end
-                    table.insert(state.samples, res_s.id)
-                elseif res_s.kind == "samples" then
-                    for i, id in ipairs(res_s.ids) do
-                        if id != res_m.ids[i] then
-                            return false, "batch sample id diverged"
-                        end
-                        table.insert(state.samples, id)
-                    end
-                elseif res_s.kind == "doc" then
-                    if res_s.id != res_m.id then
-                        return false, "doc id diverged"
-                    end
-                    table.insert(state.docs, {id = res_s.id, title = res_s.title})
+function execute_dual_trace_steps(pair, trace)
+    state = {projects = {}, samples = {}, docs = {}}
+    for step_idx, step in ipairs(trace) do
+        res_s = apply_step_on_target(pair.sqlite_db, step, state, step_idx)
+        res_m = apply_step_on_target(pair.mariadb_db, step, state, step_idx)
+        if res_s != nil then
+            if res_s.kind == "project" then
+                if res_s.id != res_m.id then
+                    return false, "project id diverged"
                 end
-            end
-
-            eq_ok, eq_msg = compare_dual_state(pair.sqlite_db, pair.mariadb_db)
-            if not eq_ok then
-                return false, string.format("after step %d (%s): %s", step_idx, step.op, tostring(eq_msg))
+                table.insert(state.projects, res_s.id)
+            elseif res_s.kind == "sample" then
+                if res_s.id != res_m.id then
+                    return false, "sample id diverged"
+                end
+                table.insert(state.samples, res_s.id)
+            elseif res_s.kind == "samples" then
+                for i, id in ipairs(res_s.ids) do
+                    if id != res_m.ids[i] then
+                        return false, "batch sample id diverged"
+                    end
+                    table.insert(state.samples, id)
+                end
+            elseif res_s.kind == "doc" then
+                if res_s.id != res_m.id then
+                    return false, "doc id diverged"
+                end
+                table.insert(state.docs, {id = res_s.id, title = res_s.title})
             end
         end
-        return true, nil
-    end)
+
+        eq_ok, eq_msg = compare_dual_state(pair.sqlite_db, pair.mariadb_db)
+        if not eq_ok then
+            return false, string.format("after step %d (%s): %s", step_idx, step.op, tostring(eq_msg))
+        end
+    end
+    return true, nil
+end
+
+function prop_dual_backend_trace(trace)
+    pair = create_dual_stores()
+    run_ok, err_or_res, fail_reason = pcall(execute_dual_trace_steps, pair, trace)
     destroy_dual_stores(pair)
     if not run_ok then
         return false, "raised error: " .. tostring(err_or_res)
     end
     return err_or_res, fail_reason
-end, {trials = 6, max_shrinks = 10})
+end
+
+ok = laws.forall("Law L6: SQLite vs. MariaDB observational equivalence", TRACE_GEN, prop_dual_backend_trace, {trials = 6, max_shrinks = 10})
 
 if not ok then
     os.exit(1)

@@ -108,15 +108,17 @@ return {
 }
 EOF
     cat > extensions/after-logger/main.lua <<'EOF'
+function handle_after_create(new_values, old_values, ctx)
+    if new_values.code == "FAIL-ME" then
+        error("deliberate failure")
+    end
+    rows = ctx.query("batch", {code = new_values.code})
+    ctx.update_entity("batch", rows[1].id, {status = "processed"})
+    return {}
+end
+
 return {
-    on_after = function(new_values, old_values, ctx)
-        if new_values.code == "FAIL-ME" then
-            error("deliberate failure")
-        end
-        rows = ctx.query("batch", {code = new_values.code})
-        ctx.update_entity("batch", rows[1].id, {status = "processed"})
-        return {}
-    end,
+    on_after = handle_after_create,
 }
 EOF
     "$BIN" extension approve after-logger

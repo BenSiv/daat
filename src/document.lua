@@ -268,7 +268,7 @@ function migrate_document_link_layout(db_path)
     if document_link_needs_migration(db_path) == false then
         return
     end
-    db.with_lock(db_path, "daat_document_link_layout", 120, function()
+    function run_link_layout_migration()
         if document_link_needs_migration(db_path) == false then
             return
         end
@@ -277,7 +277,8 @@ function migrate_document_link_layout(db_path)
             return
         end
         copy_document_links_to_new_layout(db_path)
-    end)
+    end
+    db.with_lock(db_path, "daat_document_link_layout", 120, run_link_layout_migration)
 end
 
 function copy_document_links_to_new_layout(db_path)

@@ -372,7 +372,7 @@ end})
 -- membership flag (`pool_active`), and resyncing `document_count`
 -- against `(archived_at IS NULL) AND (merged_into IS NULL)` so prior
 -- double-archive or unarchived-active drift is repaired on upgrade.
-table.insert(MIGRATIONS, {version = 11, name = "log_scale_at_write and pool_active conservation columns", run = function(db_path)
+function migrate_pool_conservation_columns(db_path)
     if not exists(db_path, "document") then
         return
     end
@@ -381,7 +381,9 @@ table.insert(MIGRATIONS, {version = 11, name = "log_scale_at_write and pool_acti
     if exists(db_path, "knowledge_pool_state") then
         doc.resync_pool_count(db_path)
     end
-end})
+end
+
+table.insert(MIGRATIONS, {version = 11, name = "log_scale_at_write and pool_active conservation columns", run = migrate_pool_conservation_columns})
 
 function latest_version()
     latest = 0
@@ -413,21 +415,20 @@ function store.migrate(db_path)
     if current_version(db_path) >= target then
         return
     end
-    ok, err = pcall(function()
-        db.with_lock(db_path, "daat_store_migrate", 600, function()
-            ran_migration = false
-            for _, m in ipairs(MIGRATIONS) do
-                if current_version(db_path) < m.version then
-                    m.run(db_path)
-                    store.set_number(db_path, "store.schema_version", m.version)
-                    ran_migration = true
-                end
+    function run_pending_migrations()
+        ran_migration = false
+        for _, m in ipairs(MIGRATIONS) do
+            if current_version(db_path) < m.version then
+                m.run(db_path)
+                store.set_number(db_path, "store.schema_version", m.version)
+                ran_migration = true
             end
-            if ran_migration then
-                store.set_text(db_path, "web.builtin_schema_signature", nil)
-            end
-        end)
-    end)
+        end
+        if ran_migration then
+            store.set_text(db_path, "web.builtin_schema_signature", nil)
+        end
+    end
+    ok, err = pcall(db.with_lock, db_path, "daat_store_migrate", 600, run_pending_migrations)
     if ok == false then
         error("store migration failed: " .. tostring(err))
     end
