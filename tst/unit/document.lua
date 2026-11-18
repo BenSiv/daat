@@ -357,4 +357,28 @@ function tests.plot_spec_to_gnuplot_cfg_rejects_non_table_spec()
     check(err != nil, "should return an error message")
 end
 
+function tests.plot_spec_to_gnuplot_cfg_enforces_series_with_allowlist()
+    print("Testing plot_spec_to_gnuplot_cfg allows valid series.with styles and blocks arbitrary gnuplot directives")
+    ok_cfg, ok_err = document.plot_spec_to_gnuplot_cfg({
+        series = {{x = {1, 2}, y = {3, 4}, with = "lines"}, {x = {1, 2}, y = {4, 5}, with = "scatter"}},
+    })
+    check(ok_err == nil and ok_cfg != nil, "known series.with styles must be accepted")
+    check(ok_cfg.data[1].with == "lines", "with=lines should map to lines")
+    check(ok_cfg.data[2].with == "points", "with=scatter alias should map to points")
+
+    bad_payloads = {
+        "lines; system 'id'",
+        "linespoints lw 2; set output '/tmp/pwn'",
+        "lines `id`",
+        123,
+    }
+    for _, bad in ipairs(bad_payloads) do
+        bad_cfg, bad_err = document.plot_spec_to_gnuplot_cfg({
+            series = {{x = {1, 2}, y = {3, 4}, with = bad}},
+        })
+        check(bad_cfg == nil and bad_err != nil,
+            "injected or unknown series.with must be rejected: " .. tostring(bad))
+    end
+end
+
 unit.run(tests)

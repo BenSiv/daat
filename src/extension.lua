@@ -661,6 +661,9 @@ function extension.invoke(ext_dir, name, manifest, hook_name, new_values, old_va
     if type(hook_fn) != "function" then
         return true, nil
     end
+    if sandbox.pcall_bounded != nil then
+        return sandbox.pcall_bounded(nil, hook_fn, new_values, old_values, ctx)
+    end
     return pcall(hook_fn, new_values, old_values, ctx)
 end
 

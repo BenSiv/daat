@@ -1636,6 +1636,22 @@ end
 
 PLOT_TYPE_TO_WITH = {line = "linespoints", scatter = "points", bar = "boxes"}
 
+-- Closed allowlist for an explicit per-series `with` override. Because
+-- gnuplot's `plot ... w <style>` clause is unquoted, passing free-form
+-- text through `gnuplot_safe_string` would still allow spaces, semicolons,
+-- single quotes, and `system(...)` directives into the generated script.
+ALLOWED_SERIES_WITH = {
+    lines = "lines",
+    points = "points",
+    linespoints = "linespoints",
+    boxes = "boxes",
+    impulses = "impulses",
+    steps = "steps",
+    line = "linespoints",
+    scatter = "points",
+    bar = "boxes",
+}
+
 -- Pure translation from the fence's JSON spec into the table shape
 -- gnuplot.create expects -- no file I/O, no shelling out, so it's
 -- unit-testable on its own. Returns (cfg, nil) on success or
@@ -1669,7 +1685,10 @@ function document.plot_spec_to_gnuplot_cfg(spec)
 
         series_with = default_with
         if series.with != nil then
-            series_with = document.gnuplot_safe_string(series.with)
+            if type(series.with) != "string" or ALLOWED_SERIES_WITH[series.with] == nil then
+                return nil, "series " .. tostring(i) .. " has unsupported \"with\" style (allowed: lines, points, linespoints, boxes, impulses, steps)"
+            end
+            series_with = ALLOWED_SERIES_WITH[series.with]
         end
         series_title = "series " .. tostring(i)
         if series.name != nil then
@@ -1704,12 +1723,18 @@ function document.render_plot(spec_text)
 
     cfg, cfg_err = document.plot_spec_to_gnuplot_cfg(spec)
     if cfg == nil then
-        return "<div class=\"platform-plot platform-plot-error\">Could not render plot: " .. tostring(cfg_err) .. ".</div>"
+        safe_err = string.gsub(tostring(cfg_err), "&", "&amp;")
+        safe_err = string.gsub(safe_err, "<", "&lt;")
+        safe_err = string.gsub(safe_err, ">", "&gt;")
+        return "<div class=\"platform-plot platform-plot-error\">Could not render plot: " .. safe_err .. ".</div>"
     end
 
     plot = gnuplot.create(cfg)
     out_path = os.tmpname()
     ok, gnuplot_output, script_path = gnuplot.savefig(plot, out_path)
+    if gnuplot.cleanup != nil then
+        gnuplot.cleanup(plot)
+    end
     if script_path != nil then
         os.remove(script_path)
     end
