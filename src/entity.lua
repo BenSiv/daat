@@ -175,11 +175,16 @@ function entity.validate(db_path, entity_type, values, old)
 
     for _, field in ipairs(fields) do
         value = values[field.name]
+        old_val = nil
+        if is_update then
+            old_val = old[field.name]
+        end
 
         if field.type == "multi_select" or field.type == "multi_reference" then
             items = schema.normalize_multi_value(value)
+            old_items = schema.normalize_multi_value(old_val)
             if #items == 0 then
-                if tonumber(field.required) == 1 then
+                if tonumber(field.required) == 1 and (not is_update or #old_items > 0) then
                     table.insert(issues, {field = field.name, severity = "error",
                         message = "required field is missing"})
                 end
@@ -188,8 +193,14 @@ function entity.validate(db_path, entity_type, values, old)
                 if allowed == nil then
                     allowed = {}
                 end
+                old_enum_set = {}
+                if is_update then
+                    for _, ov in ipairs(old_items) do
+                        old_enum_set[tostring(ov)] = true
+                    end
+                end
                 for _, item in ipairs(items) do
-                    ok = false
+                    ok = (old_enum_set[tostring(item)] == true)
                     for _, v in ipairs(allowed) do
                         if tostring(v) == tostring(item) then
                             ok = true
@@ -215,8 +226,9 @@ function entity.validate(db_path, entity_type, values, old)
             end
         elseif field.type == "polymorphic_reference" or field.type == "multi_polymorphic_reference" then
             items = schema.normalize_polymorphic_value(value)
+            old_items = schema.normalize_polymorphic_value(old_val)
             if #items == 0 then
-                if tonumber(field.required) == 1 then
+                if tonumber(field.required) == 1 and (not is_update or #old_items > 0) then
                     table.insert(issues, {field = field.name, severity = "error",
                         message = "required field is missing"})
                 end
@@ -246,7 +258,8 @@ function entity.validate(db_path, entity_type, values, old)
                 end
             end
         elseif (value == nil or value == "") then
-            if tonumber(field.required) == 1 then
+            old_non_empty = is_update and old_val != nil and tostring(old_val) != ""
+            if tonumber(field.required) == 1 and (not is_update or old_non_empty) then
                 table.insert(issues, {field = field.name, severity = "error",
                     message = "required field is missing"})
             end
@@ -261,7 +274,7 @@ function entity.validate(db_path, entity_type, values, old)
                 if allowed == nil then
                     allowed = {}
                 end
-                ok = false
+                ok = (is_update and old_val != nil and tostring(old_val) == tostring(value))
                 for _, v in ipairs(allowed) do
                     if tostring(v) == tostring(value) then
                         ok = true

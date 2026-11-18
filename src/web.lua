@@ -768,45 +768,67 @@ function builtin_schema_signature()
     if exe_attr != nil then
         table.insert(parts, "exe=" .. tostring(exe_attr.modification) .. ":" .. tostring(exe_attr.size) .. ":" .. tostring(exe_attr.ino))
     end
-    src_attr = lfs_mod.attributes("src/web.lua")
-    if src_attr != nil then
-        src_files = {}
-        for f in lfs_mod.dir("src") do
-            if string.match(f, "%.lua$") != nil then
-                table.insert(src_files, f)
-            end
-        end
-        table.sort(src_files)
-        for _, f in ipairs(src_files) do
-            fa = lfs_mod.attributes("src/" .. f)
-            if fa != nil then
-                table.insert(parts, f .. ":" .. tostring(fa.modification) .. ":" .. tostring(fa.size))
+    -- When running unbundled via luam in tests, debug.getinfo gives the
+    -- real directory of web.lua independent of the caller's CWD; bundled
+    -- bin/daat embeds modules without "@" file paths, relying on /proc/self/exe.
+    if debug != nil and type(debug.getinfo) == "function" then
+        info = debug.getinfo(builtin_schema_signature, "S")
+        if info != nil and type(info.source) == "string" and string.sub(info.source, 1, 1) == "@" then
+            src_file_path = string.sub(info.source, 2)
+            src_dir = paths.dirname(src_file_path)
+            dir_attr = lfs_mod.attributes(src_dir)
+            if dir_attr != nil and dir_attr.mode == "directory" then
+                src_files = {}
+                for f in lfs_mod.dir(src_dir) do
+                    if string.match(f, "%.lua$") != nil then
+                        table.insert(src_files, f)
+                    end
+                end
+                table.sort(src_files)
+                for _, f in ipairs(src_files) do
+                    fa = lfs_mod.attributes(paths.joinpath(src_dir, f))
+                    if fa != nil then
+                        table.insert(parts, f .. ":" .. tostring(fa.modification) .. ":" .. tostring(fa.size))
+                    end
+                end
             end
         end
     end
     return table.concat(parts, "|")
 end
 
-function ensure_builtin_schemas(db_path)
+function builtin_schemas_up_to_date(db_path, expected_sig)
     store_mod = require("store")
-    expected_sig = builtin_schema_signature()
     ok_sig, stored_sig = pcall(store_mod.get_text, db_path, "web.builtin_schema_signature")
     if ok_sig == true and stored_sig == expected_sig then
-        -- Probe document_link.link_hash (0 rows fetched) so out-of-band
-        -- legacy table swaps still trigger document.init_schema.
         ok_probe, _ = pcall(db.query, db_path, "SELECT link_hash FROM document_link LIMIT 0;")
         if ok_probe == true then
-            return
+            return true
         end
     end
-    store_mod.ensure_system_tables(db_path)
-    ledger.init_schema(db_path)
-    schema.init_schema(db_path)
-    auth.init_schema(db_path)
-    document.init_schema(db_path)
-    knowledge.init_schema(db_path)
-    agent.init_schema(db_path)
-    store_mod.set_text(db_path, "web.builtin_schema_signature", expected_sig)
+    return false
+end
+
+function ensure_builtin_schemas(db_path)
+    expected_sig = builtin_schema_signature()
+    if builtin_schemas_up_to_date(db_path, expected_sig) then
+        return
+    end
+    function run_locked_builtin_schemas()
+        if builtin_schemas_up_to_date(db_path, expected_sig) then
+            return
+        end
+        store_mod = require("store")
+        store_mod.ensure_system_tables(db_path)
+        ledger.init_schema(db_path)
+        schema.init_schema(db_path)
+        auth.init_schema(db_path)
+        document.init_schema(db_path)
+        knowledge.init_schema(db_path)
+        agent.init_schema(db_path)
+        store_mod.set_text(db_path, "web.builtin_schema_signature", expected_sig)
+    end
+    db.with_lock(db_path, "daat_builtin_schema", 120, run_locked_builtin_schemas)
 end
 
 function cgi.handle_request()
