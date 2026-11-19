@@ -82,7 +82,7 @@ if [ -n "$RESCORE" ]; then
 fi
 
 ENV_DIR=$(./bld/eval-env.sh --provider "$PROVIDER" --seed "$SEED")
-RUN_DIR="$REPO_ROOT/eval-out/runs/$(date +%Y%m%d-%H%M%S)-$MODE"
+RUN_DIR="${DAAT_EVAL_RUN_DIR:-$REPO_ROOT/eval-out/runs/$(date +%Y%m%d-%H%M%S)-$MODE}"
 mkdir -p "$RUN_DIR/work"
 : > "$RUN_DIR/results.jsonl"
 printf '%s\n' "$EXTRA" > "$RUN_DIR/extra.txt"

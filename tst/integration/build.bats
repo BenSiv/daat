@@ -111,3 +111,11 @@ EOF
     [ "$status" -eq 0 ]
     [[ "$output" =~ "delegated:" ]]
 }
+
+@test ".dockerignore excludes eval-out/, .git, .store/, and bin/ from Docker build contexts" {
+    [ -f "$PROJECT_ROOT/.dockerignore" ]
+    grep -q '^eval-out/' "$PROJECT_ROOT/.dockerignore"
+    grep -q '^\.git$' "$PROJECT_ROOT/.dockerignore"
+    grep -q '^\.store/' "$PROJECT_ROOT/.dockerignore"
+    grep -q '^bin/' "$PROJECT_ROOT/.dockerignore"
+}

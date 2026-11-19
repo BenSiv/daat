@@ -30,6 +30,7 @@ fi
 
 MARIADB_EPHEMERAL_DIR=""
 MARIADB_EPHEMERAL_PID=""
+EVAL_EPHEMERAL_DIR=""
 
 cleanup_ephemeral_mariadb() {
     if [ -n "$MARIADB_EPHEMERAL_PID" ]; then
@@ -38,6 +39,9 @@ cleanup_ephemeral_mariadb() {
     fi
     if [ -n "$MARIADB_EPHEMERAL_DIR" ] && [ -d "$MARIADB_EPHEMERAL_DIR" ]; then
         rm -rf "$MARIADB_EPHEMERAL_DIR"
+    fi
+    if [ -n "$EVAL_EPHEMERAL_DIR" ] && [ -d "$EVAL_EPHEMERAL_DIR" ]; then
+        rm -rf "$EVAL_EPHEMERAL_DIR"
     fi
 }
 trap cleanup_ephemeral_mariadb EXIT
@@ -156,7 +160,10 @@ done
 
 echo
 echo "Running the agent scorecard in test mode (doc/agent-eval.md)"
-LUAM_DIR="$LUAM_DIR" ./bld/eval.sh --mode test
+EVAL_EPHEMERAL_DIR="$(mktemp -d)"
+DAAT_EVAL_RUN_DIR="$EVAL_EPHEMERAL_DIR/run" LUAM_DIR="$LUAM_DIR" ./bld/eval.sh --mode test
+rm -rf "$EVAL_EPHEMERAL_DIR"
+EVAL_EPHEMERAL_DIR=""
 
 echo
 ensure_mariadb_test_server
