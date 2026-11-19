@@ -663,6 +663,7 @@ function ui_admin.render_system(show_sql, show_admin)
         items = items .. ui_common.render_sitemap_item("sql", "SQL console", "Run ad hoc, read-only queries.")
     end
     if show_admin then
+        items = items .. ui_common.render_sitemap_item("system-status", "Status & Approvals", "Deployment health, runtime checks, and view/extension approvals.")
         items = items .. ui_common.render_sitemap_item("admin-users", "Users", "Manage accounts and capabilities.")
         items = items .. ui_common.render_sitemap_item("admin-api-keys", "API keys", "Manage external-integration API keys.")
         items = items .. ui_common.render_sitemap_item("settings", "Settings", "Site name, branding, colors, and chat prompt.")
@@ -686,6 +687,257 @@ function ui_admin.render_system(show_sql, show_admin)
     </div>
 </div>
 """, style_block, ui_common.render_page_header("System", nil, nil), items)
+end
+
+function status_text(cond, t_str, f_str)
+    if cond == true then
+        return t_str
+    end
+    return f_str
+end
+
+function status_default(val, fallback)
+    if val == nil or val == "" then
+        return fallback
+    end
+    return tostring(val)
+end
+
+function ui_admin.render_system_status(report, csrf_token, message, is_error)
+    sections = {}
+    if message != nil and message != "" then
+        msg_class = "platform-admin-message"
+        if is_error == true then
+            msg_class = "platform-admin-message platform-admin-message-error"
+        end
+        table.insert(sections, {type = "message", css_class = msg_class, text = message})
+    end
+
+    for _, iss in ipairs(report.issues) do
+        table.insert(sections, {
+            type = "message",
+            css_class = "platform-admin-message platform-admin-message-error",
+            text = "Error: " .. iss,
+        })
+    end
+    for _, warn in ipairs(report.warnings) do
+        table.insert(sections, {
+            type = "message",
+            css_class = "platform-admin-message",
+            text = "Warning: " .. warn,
+        })
+    end
+
+    -- 1. Store, Providers & Queues summary table
+    table.insert(sections, {type = "subheading", text = "Deployment Health"})
+    health_rows = {
+        {{"Database backend"}, {report.store.backend .. " (" .. report.store.target .. ")"}, {status_text(report.store.connected, "connected", "disconnected")}},
+        {{"Database auth"}, {report.store.credential_status}, {status_text(report.config.ok, "config ok", "config errors")}},
+        {
+            {"Agent provider"},
+            {report.providers.agent.provider .. " (model: " .. status_default(report.providers.agent.model, "-") ..
+                ", embedding: " .. status_default(report.providers.agent.embedding_model, "-") .. ")"},
+            {report.providers.agent.credential_status},
+        },
+        {{"Search provider"}, {report.providers.search.provider}, {report.providers.search.credential_status}},
+        {
+            {"Mail provider"},
+            {report.providers.mail.provider .. " (password reset: " .. status_text(report.providers.mail.password_reset_enabled, "enabled", "disabled") .. ")"},
+            {report.providers.mail.credential_status},
+        },
+    }
+    for _, b in ipairs(report.binaries) do
+        bin_state = "not installed (optional)"
+        if b.available == true then
+            bin_state = "found"
+        elseif b.required == true then
+            bin_state = "MISSING (required)"
+        end
+        table.insert(health_rows, {{"Binary: " .. b.name}, {b.purpose}, {bin_state}})
+    end
+    if report.queues != nil then
+        table.insert(health_rows, {
+            {"Pending queues"},
+            {string.format("embeddings=%d, reviews=%d, extensions=%d, background=%d, curations=%d",
+                report.queues.embeddings_due,
+                report.queues.retrievals_unreviewed,
+                report.queues.extension_jobs_pending,
+                report.queues.agent_background_pending,
+                report.queues.conversations_due_curation)},
+            {"ready"},
+        })
+    end
+    table.insert(sections, {
+        type = "table",
+        css_class = "platform-admin-users",
+        columns = {"Check", "Details", "Status"},
+        rows = health_rows,
+    })
+
+    -- 2. Schemas sync status
+    if report.schemas != nil then
+        table.insert(sections, {type = "subheading", text = "Schemas"})
+        sync_state = status_text(report.schemas.in_sync, "in sync", "unapplied changes on disk")
+        schema_action_cell = {"Up to date"}
+        if report.schemas.in_sync != true then
+            schema_action_cell = {
+                {
+                    type = "form", method = "POST", action = "system-status-schema-sync", css_class = "platform-admin-inline-form",
+                    fields = {
+                        {type = "hidden", name = "csrf_token", value = csrf_token},
+                    },
+                    submit_class = "btn-secondary", submit_label = "Sync schemas",
+                },
+            }
+        end
+        table.insert(sections, {
+            type = "table",
+            css_class = "platform-admin-users",
+            columns = {"Registered types", "Files on disk", "Status", "Action"},
+            rows = {
+                {
+                    {tostring(report.schemas.registered_count)},
+                    {tostring(report.schemas.disk_count)},
+                    {sync_state},
+                    schema_action_cell,
+                },
+            },
+        })
+    end
+
+    -- 3. Views approvals
+    table.insert(sections, {type = "subheading", text = "Saved Views Approval"})
+    if #report.views == 0 then
+        table.insert(sections, {type = "message", css_class = "platform-admin-message", text = "No view definitions found on disk."})
+    else
+        view_rows = {}
+        for _, vw in ipairs(report.views) do
+            action_cell = {"Invalid file"}
+            if vw.status == "approved" then
+                action_cell = {
+                    {
+                        type = "form", method = "POST", action = "system-status-view-revoke", css_class = "platform-admin-inline-form",
+                        fields = {
+                            {type = "hidden", name = "csrf_token", value = csrf_token},
+                            {type = "hidden", name = "name", value = vw.name},
+                        },
+                        submit_class = "btn-danger", submit_label = "Revoke",
+                    },
+                }
+            elseif vw.status == "unapproved" or vw.status == "drifted" then
+                btn_label = "Approve"
+                if vw.status == "drifted" then
+                    btn_label = "Re-approve SQL"
+                end
+                action_cell = {
+                    {
+                        type = "form", method = "POST", action = "system-status-view-approve", css_class = "platform-admin-inline-form",
+                        fields = {
+                            {type = "hidden", name = "csrf_token", value = csrf_token},
+                            {type = "hidden", name = "name", value = vw.name},
+                        },
+                        submit_class = "btn-secondary", submit_label = btn_label,
+                    },
+                }
+            end
+            sql_display = vw.sql
+            if vw.status == "invalid" then
+                sql_display = status_default(vw.error, "invalid view")
+            end
+            table.insert(view_rows, {
+                {vw.name},
+                {sql_display},
+                {vw.status},
+                action_cell,
+            })
+        end
+        table.insert(sections, {
+            type = "table",
+            css_class = "platform-admin-users",
+            columns = {"View", "SQL", "Approval", "Action"},
+            rows = view_rows,
+        })
+    end
+
+    -- 4. Extensions approvals
+    table.insert(sections, {type = "subheading", text = "Extensions Approval"})
+    if #report.extensions == 0 then
+        table.insert(sections, {type = "message", css_class = "platform-admin-message", text = "No extensions found on disk."})
+    else
+        ext_rows = {}
+        for _, ex in ipairs(report.extensions) do
+            ext_action = {"Invalid manifest"}
+            if ex.status == "approved" then
+                ext_action = {
+                    {
+                        type = "form", method = "POST", action = "system-status-extension-revoke", css_class = "platform-admin-inline-form",
+                        fields = {
+                            {type = "hidden", name = "csrf_token", value = csrf_token},
+                            {type = "hidden", name = "name", value = ex.name},
+                        },
+                        submit_class = "btn-danger", submit_label = "Revoke",
+                    },
+                }
+            elseif ex.status == "unapproved" or ex.status == "drifted" then
+                btn_label = "Approve"
+                if ex.status == "drifted" then
+                    btn_label = "Re-approve capabilities"
+                end
+                ext_action = {
+                    {
+                        type = "form", method = "POST", action = "system-status-extension-approve", css_class = "platform-admin-inline-form",
+                        fields = {
+                            {type = "hidden", name = "csrf_token", value = csrf_token},
+                            {type = "hidden", name = "name", value = ex.name},
+                        },
+                        submit_class = "btn-secondary", submit_label = btn_label,
+                    },
+                }
+            end
+            caps_display = ex.capabilities_summary
+            if ex.status == "invalid" then
+                caps_display = status_default(ex.error, "invalid manifest")
+            end
+            ev_text = "-"
+            if type(ex.events) == "table" and #ex.events > 0 then
+                ev_text = table.concat(ex.events, ", ")
+            end
+            table.insert(ext_rows, {
+                {ex.name},
+                {ev_text},
+                {caps_display},
+                {ex.status},
+                ext_action,
+            })
+        end
+        table.insert(sections, {
+            type = "table",
+            css_class = "platform-admin-users",
+            columns = {"Extension", "Events", "Requested Capabilities", "Approval", "Action"},
+            rows = ext_rows,
+        })
+    end
+
+    validate_err = page_lib.validate(sections)
+    if validate_err != nil then
+        error(validate_err)
+    end
+
+    style_block = ui_common.inline_styles({
+        ui_common.container_css(),
+        ui_common.button_css(),
+        ui_common.page_header_css(),
+        ui_common.admin_message_css(),
+        asset.read("ui/admin_users.css"),
+    })
+    return string.format("""
+<div class="fossil-doc" data-title="Status &amp; Approvals">
+    %s
+    <div class="platform-container">
+        %s
+%s    </div>
+</div>
+""", style_block, ui_common.render_page_header("Status & Approvals", nil, nil), page_lib.render(sections))
 end
 
 function ui_admin.render_admin_triggers(triggers, nonce)

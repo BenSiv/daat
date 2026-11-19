@@ -57,6 +57,7 @@ ui.render_admin_api_keys = ui_admin.render_admin_api_keys
 ui.render_settings = ui_admin.render_settings
 ui.render_home = ui_admin.render_home
 ui.render_system = ui_admin.render_system
+ui.render_system_status = ui_admin.render_system_status
 ui.render_admin_triggers = ui_admin.render_admin_triggers
 
 -- Knowledge pool, templates, documents & chat pages (ui.knowledge_pages)

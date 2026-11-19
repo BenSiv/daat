@@ -44,6 +44,7 @@ const web = require("web")
 const db = require("database")
 const store = require("store")
 const passage = require("document.passage")
+const status_lib = require("status")
 const verify = require("verify")
 const context_report = require("context_report")
 
@@ -164,6 +165,8 @@ end
 const COMMAND_FUNCS = {
     ["init"] = do_init,
     ["config"] = config.do_config,
+    ["status"] = status_lib.do_status,
+    ["doctor"] = status_lib.do_status,
     ["schema"] = do_schema,
     ["entity"] = do_entity,
     ["ledger"] = do_ledger,
@@ -198,7 +201,7 @@ function run_main()
     end
 
     if command == nil or command == "-h" or command == "--help" then
-        print("Usage: daat <init|config|schema|entity|ledger|extension|view|user|api-key|document|knowledge|agent|repair|tag|store> ...")
+        print("Usage: daat <init|config|status|doctor|schema|entity|ledger|extension|view|user|api-key|document|knowledge|agent|repair|tag|store> ...")
         if command == nil then
             return 1
         end
@@ -222,7 +225,7 @@ function run_main()
         return 0
     end
 
-    if command == "config" then
+    if command == "config" or command == "status" or command == "doctor" then
         return func(cmd_args, ".")
     end
 
