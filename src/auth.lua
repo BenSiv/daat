@@ -18,19 +18,19 @@
 -- request field/header must match) -- doesn't need HMAC signing since
 -- it's only ever compared to itself, not decoded or trusted alone.
 
-db = require("database")
-paths = require("paths")
-bcrypt = require("bcrypt")
-hmac = require("hmac")
-mail_provider = require("mail_provider")
+const db = require("database")
+const paths = require("paths")
+const bcrypt = require("bcrypt")
+const hmac = require("hmac")
+const mail_provider = require("mail_provider")
 
-auth = {}
+const auth = {}
 
 -- hex_encode used before its own definition below -- pre-declared,
 -- see ../../luam/doc/forward_references.md
 hex_encode = nil
 
-SESSION_TTL_SECONDS = 60 * 60 * 24 * 7 -- 7 days
+const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7 -- 7 days
 auth.SESSION_TTL_SECONDS = SESSION_TTL_SECONDS
 
 auth.SCHEMA = """
@@ -311,7 +311,7 @@ end
 -- random string, so "has this account ever had a password?" is a
 -- fact the code can check (auth.has_password), not a guess. It can't
 -- match any password: bcrypt.verify rejects it as an invalid hash.
-NO_PASSWORD_HASH = "!no-password"
+const NO_PASSWORD_HASH = "!no-password"
 
 function auth.has_password(user)
     return user != nil and user.password_hash != nil and user.password_hash != NO_PASSWORD_HASH
@@ -657,10 +657,10 @@ end
 -- Forgot-password reset links
 --------------------------------------------------------------------------
 
-RESET_TTL_SECONDS = 60 * 60 -- 1 hour
+const RESET_TTL_SECONDS = 60 * 60 -- 1 hour
 -- At most one new link per account per window, so the (unauthenticated)
 -- request form can't be used to flood someone's inbox.
-RESET_THROTTLE_SECONDS = 5 * 60
+const RESET_THROTTLE_SECONDS = 5 * 60
 
 -- Keyed with the store's session secret rather than a bare digest, and
 -- deterministic (unlike bcrypt), so a token can be looked up directly by
@@ -715,7 +715,7 @@ end
 
 -- A setup link has longer to live than a reset one: it's the first
 -- email a new account gets, often read days after the admin sent it.
-SETUP_TTL_SECONDS = 7 * 24 * 60 * 60
+const SETUP_TTL_SECONDS = 7 * 24 * 60 * 60
 
 -- Issues one emailed link (purpose "reset" or "setup") to user.email and
 -- sends it. -> true | nil, err. The link is the same /reset-password

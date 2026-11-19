@@ -23,9 +23,9 @@
 -- this facade file itself stays one level up, same split as
 -- agent_provider.lua/src/provider/agent_*.lua.
 
-config = require("config")
+const config = require("config")
 
-search_provider = {}
+const search_provider = {}
 
 function search_provider.name()
     return config.platform_config().search_provider

@@ -24,14 +24,14 @@
 -- changed, not on every write -- one outside job's apply writes thousands of
 -- memberships, and nothing reads evidence until judgment or display.
 
-db = require("database")
-entity = require("entity")
-config = require("config")
-json = require("dkjson")
+const db = require("database")
+const entity = require("entity")
+const config = require("config")
+const json = require("dkjson")
 
-tag = {}
+const tag = {}
 
-TAG_CENTRE_SCHEMA = """
+const TAG_CENTRE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS tag_centre (
     tag_id INTEGER PRIMARY KEY,
     members INTEGER NOT NULL DEFAULT 0,
@@ -41,14 +41,14 @@ CREATE TABLE IF NOT EXISTS tag_centre (
 """
 
 
-ACTIVE = "(archived_at IS NULL OR archived_at = '')"
+const ACTIVE = "(archived_at IS NULL OR archived_at = '')"
 
 -- Evidence a pair rests on before its lift counts, and how far lift is
 -- pulled towards 1: PRIOR median-weights added to both sides.
-TAG_EVIDENCE_MIN_SUPPORT = 3
-TAG_EVIDENCE_PRIOR = 2.0
+const TAG_EVIDENCE_MIN_SUPPORT = 3
+const TAG_EVIDENCE_PRIOR = 2.0
 
-_tag_schema_ready = {}
+const _tag_schema_ready = {}
 
 function tag.init_schema(db_path)
     key = db.cache_key(db_path)
@@ -297,7 +297,7 @@ end
 -- on purpose -- a tier-3 record is one to three sentences -- so they
 -- always have a subject. Found 2026-10-29: 33 of 141 new records fell
 -- under tag_min_text and stayed out of every tag.
-TAG_LADDER_SOURCE_TYPES = {curated = true, reference = true, record = true}
+const TAG_LADDER_SOURCE_TYPES = {curated = true, reference = true, record = true}
 
 -- Too little text of its own to have a subject (tag_min_text): the
 -- embedding's body_chars, or nil when not known yet.

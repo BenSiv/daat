@@ -13,14 +13,14 @@
 -- Derived like document_embedding: rebuilt when the text changes, safe
 -- to drop, refilled by `daat repair aspects`.
 
-config = require("config")
-db = require("database")
-entity = require("entity")
-document = require("document")
-passage = require("passage")
-hmac = require("hmac")
+const config = require("config")
+const db = require("database")
+const entity = require("entity")
+const document = require("document")
+const passage = require("passage")
+const hmac = require("hmac")
 
-aspect = {}
+const aspect = {}
 
 -- One row per aspect of a document. vector_packed is int8: the vector
 -- (cut to aspect_dims when set) scaled by its largest component, so a
@@ -32,7 +32,7 @@ aspect = {}
 -- aspect reads (src/curate.lua). text_hash covers the content, the
 -- model and every setting that shapes the aspects, so a change of any
 -- of them rebuilds them.
-ASPECT_SCHEMA = """
+const ASPECT_SCHEMA = """
 CREATE TABLE IF NOT EXISTS document_aspect (
     document_id INTEGER NOT NULL,
     model VARCHAR(128) NOT NULL,
@@ -92,7 +92,7 @@ function aspect.group_count(n, max)
 end
 
 -- Iterations of k-means at most; it usually settles in a few.
-GROUP_ITERATIONS = 12
+const GROUP_ITERATIONS = 12
 
 -- aspect.group(vectors, k, seed) -> {{members, centroid, medoid}, ...}
 -- Spherical k-means over unit vectors, deterministic: the first centre

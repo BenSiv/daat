@@ -11,9 +11,9 @@
 -- live in exactly one place rather than per backend. Implementations
 -- live under src/provider/ (mail_smtp.lua, mail_test.lua).
 
-config = require("config")
+const config = require("config")
 
-mail_provider = {}
+const mail_provider = {}
 
 function mail_provider.name()
     return config.platform_config().mail_provider

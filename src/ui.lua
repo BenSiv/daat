@@ -1,14 +1,14 @@
-asset = require("asset")
-db = require("database")
-schema = require("schema")
-view = require("view")
-config = require("config")
-document = require("document")
-html_lib = require("html")
-render_lib = require("render")
-ui_assets = require("ui.assets")
+const asset = require("asset")
+const db = require("database")
+const schema = require("schema")
+const view = require("view")
+const config = require("config")
+const document = require("document")
+const html_lib = require("html")
+const render_lib = require("render")
+const ui_assets = require("ui.assets")
 
-html = {}
+const html = {}
 
 -- label_print_button_html/label_print_js/related_records_html/
 -- platform_chat_widget_css used before their own definitions below --
@@ -19,7 +19,7 @@ label_print_button_html, label_print_js, related_records_html, platform_chat_wid
 -- primitives live in luam/lib/html.lua.
 html.escape = html_lib.escape
 html.html_escape = html_lib.html_escape
-json_for_script = html_lib.json_for_script
+const json_for_script = html_lib.json_for_script
 
 -- The ".platform-container" shell (card look: padding/shadow/border/
 -- rounded corners) was copy-pasted, identically byte-for-byte except
@@ -36,7 +36,7 @@ json_for_script = html_lib.json_for_script
 -- this CSS but never apply the .platform-container class at all; their
 -- actual card is the separately-sized .platform-login-card/
 -- .platform-account-card, so this rule is inert there either way.)
-PLATFORM_CONTENT_MAX_WIDTH = 2400
+const PLATFORM_CONTENT_MAX_WIDTH = 2400
 
 -- The standard page gutter -- shared by the main content area's own
 -- top margin and side gutters (platform_container_css) and the
@@ -52,7 +52,7 @@ PLATFORM_CONTENT_MAX_WIDTH = 2400
 -- like the chat widget's fixed 20px. calc(100% - 2*PLATFORM_GUTTER)
 -- below is relative to .platform-container's actual containing block
 -- instead, which fixes that.
-PLATFORM_GUTTER = 20
+const PLATFORM_GUTTER = 20
 
 -- The icon nav rail's own width -- shared with the chat widget's own
 -- stretch-to-nav-edge limit (platform_chat_widget_css) the same way
@@ -63,7 +63,7 @@ PLATFORM_GUTTER = 20
 -- hand -- structurally identical to the gutter/chat-offset drift this
 -- same session already fixed once, just not yet caught here. One
 -- number now, not two coincidentally-matching ones.
-PLATFORM_NAV_WIDTH = 72
+const PLATFORM_NAV_WIDTH = 72
 
 -- One shared context table for every layout CSS block below, rendered
 -- via render.lua's named {{{ }}} placeholders instead of positional
@@ -80,7 +80,7 @@ PLATFORM_NAV_WIDTH = 72
 -- `local`) only takes effect from this point in the chunk onward, so
 -- a function defined earlier that referenced this name would silently
 -- resolve it as an unset global instead.
-PLATFORM_LAYOUT = {
+const PLATFORM_LAYOUT = {
     gutter = PLATFORM_GUTTER,
     gutter_x2 = PLATFORM_GUTTER * 2,
     nav_width = PLATFORM_NAV_WIDTH,
@@ -512,7 +512,7 @@ end
 
 -- The CSS custom-property names a theme may override, in a fixed
 -- display order -- matches config.lua's own THEME_COLOR_KEYS exactly.
-THEME_COLOR_KEYS = {
+const THEME_COLOR_KEYS = {
     "accent", "accent_2", "bg", "bg_2", "border", "border_2",
     "heading", "input_text", "muted", "muted_2", "text", "th_text",
     "tier_0", "tier_1", "tier_2", "tier_3",
@@ -538,15 +538,15 @@ THEME_COLOR_KEYS = {
 -- rail -- reused as-is from this deployment's own earlier hand-built
 -- icon set (house/document/book/database/checkmark/gear), which lived
 -- fine as generic iconography rather than anything Celleste-specific.
-ICON_HOME = "<svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M3 11l9-8 9 8\"/><path d=\"M5 10v10a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1V10\"/></svg>"
-ICON_NOTEBOOK = "<svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M4 5a2 2 0 0 1 2-2h5v18H6a2 2 0 0 1-2-2V5z\"/><path d=\"M20 5a2 2 0 0 0-2-2h-5v18h5a2 2 0 0 0 2-2V5z\"/></svg>"
-ICON_DATA = "<svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><ellipse cx=\"12\" cy=\"5\" rx=\"8\" ry=\"3\"/><path d=\"M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5\"/><path d=\"M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6\"/></svg>"
-ICON_KNOWLEDGE = "<svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z\"/><path d=\"M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z\"/></svg>"
-ICON_TASKS = "<svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M9 11l3 3L22 4\"/><path d=\"M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11\"/></svg>"
-ICON_SYSTEM = "<svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"3\"/><path d=\"M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z\"/></svg>"
+const ICON_HOME = "<svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M3 11l9-8 9 8\"/><path d=\"M5 10v10a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1V10\"/></svg>"
+const ICON_NOTEBOOK = "<svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M4 5a2 2 0 0 1 2-2h5v18H6a2 2 0 0 1-2-2V5z\"/><path d=\"M20 5a2 2 0 0 0-2-2h-5v18h5a2 2 0 0 0 2-2V5z\"/></svg>"
+const ICON_DATA = "<svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><ellipse cx=\"12\" cy=\"5\" rx=\"8\" ry=\"3\"/><path d=\"M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5\"/><path d=\"M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6\"/></svg>"
+const ICON_KNOWLEDGE = "<svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z\"/><path d=\"M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z\"/></svg>"
+const ICON_TASKS = "<svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M9 11l3 3L22 4\"/><path d=\"M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11\"/></svg>"
+const ICON_SYSTEM = "<svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"3\"/><path d=\"M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z\"/></svg>"
 -- Chat bubble -- the floating widget's toggle button icon, not part of
 -- the icon rail's own order (see html.render_chat_widget below).
-ICON_CHAT_BUBBLE = "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z\"/></svg>"
+const ICON_CHAT_BUBBLE = "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z\"/></svg>"
 
 -- The `:root { --platform-x: value; ... }` block a deployment's real
 -- theme.lua colors compile down to -- shared by html.page_shell (the
@@ -874,7 +874,7 @@ end
 -- word_diff_html returns nil so the caller falls back to the old plain
 -- old -> new rendering rather than either hanging the request or
 -- silently truncating a real diff.
-DIFF_MAX_WORDS = 400
+const DIFF_MAX_WORDS = 400
 
 function split_words(text)
     words = {}
@@ -1759,12 +1759,12 @@ end
 -- since computing real SVG text metrics server-side isn't available;
 -- 200px comfortably fits "some_field_name : multi_reference", the
 -- longest realistic name:type pair in this codebase's own schemas.
-DIAGRAM_BOX_WIDTH = 200
-DIAGRAM_HEADER_HEIGHT = 26
-DIAGRAM_ROW_HEIGHT = 18
-DIAGRAM_COLUMN_GAP = 70
-DIAGRAM_ROW_GAP = 34
-DIAGRAM_PADDING = 40
+const DIAGRAM_BOX_WIDTH = 200
+const DIAGRAM_HEADER_HEIGHT = 26
+const DIAGRAM_ROW_HEIGHT = 18
+const DIAGRAM_COLUMN_GAP = 70
+const DIAGRAM_ROW_GAP = 34
+const DIAGRAM_PADDING = 40
 
 -- One row per real field (schema.fields()) plus a synthetic leading
 -- `id` row -- every entity has one, but it's a builtin column, never
@@ -2920,7 +2920,7 @@ end
 -- comment for the real mechanism): a document only advances once it's
 -- actually been revised, and the tier it lands in depends on the shape
 -- that revision produced -- not on how often it's been retrieved.
-KNOWLEDGE_TIER_LABELS = {
+const KNOWLEDGE_TIER_LABELS = {
     [0] = "Tier 0: Raw Intake",
     [1] = "Tier 1: Curated Draft",
     [2] = "Tier 2: Developed Reference",
@@ -2931,7 +2931,7 @@ KNOWLEDGE_TIER_LABELS = {
 -- /knowledge -- closes the "no explanation exists anywhere" gap: the
 -- names alone don't communicate that promotion depends on real editing,
 -- not just retrieval count.
-KNOWLEDGE_TIER_CAPTIONS = {
+const KNOWLEDGE_TIER_CAPTIONS = {
     [0] = "Captured, not yet worked on.",
     [1] = "Lightly edited -- summarized or cleaned up.",
     [2] = "Fully developed -- multi-section, covers a nuanced subject.",
@@ -2949,7 +2949,7 @@ KNOWLEDGE_TIER_CAPTIONS = {
 -- color here already follows. Reused as-is for node color in the
 -- knowledge-graph explorer (doc/knowledge-graph-explorer.md) once that
 -- ships, so a document's tier reads the same way on both pages.
-KNOWLEDGE_TIER_COLORS = {
+const KNOWLEDGE_TIER_COLORS = {
     [0] = "#b0abf0",
     [1] = "#8880ec",
     [2] = "#5c52e0",
@@ -3380,7 +3380,6 @@ function html.render_sql(db_path, sql_text, column_names, rows, err, ref_columns
     end
 
     page_lib = require("page")
-    render_lib = require("render")
     sections = {
         {
             type = "form",

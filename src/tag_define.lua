@@ -12,20 +12,20 @@
 -- so a definition is rewritten in place only when that changes -- not
 -- when documents come and go -- and archived when its tag is.
 
-db = require("database")
-entity = require("entity")
-document = require("document")
-knowledge = require("knowledge")
-tag_upkeep = require("tag_upkeep")
-agent_provider = require("agent_provider")
+const db = require("database")
+const entity = require("entity")
+const document = require("document")
+const knowledge = require("knowledge")
+const tag_upkeep = require("tag_upkeep")
+const agent_provider = require("agent_provider")
 
-tag_define = {}
+const tag_define = {}
 
-DEFINE_PROMPT = """You define one subject tag of a lab's knowledge base, for its ontology.
+const DEFINE_PROMPT = """You define one subject tag of a lab's knowledge base, for its ontology.
 Write one definition of one to three sentences: what the tag covers, as a kind of its broader tag when it has one ("<Label> is <the broader area> concerned with ..."), then what sets it apart from its sibling tags. Use only what the tag's documents or sub-tags show.
 Reply with the definition only."""
 
-DEFINE_CHECK_PROMPT = """You check a tag's definition against what it was written from: the tag's label, broader tag, sibling tags and documents (or sub-tags).
+const DEFINE_CHECK_PROMPT = """You check a tag's definition against what it was written from: the tag's label, broader tag, sibling tags and documents (or sub-tags).
 Reply PASS if it describes what those show, names nothing they don't, and tells the tag apart from its siblings. Otherwise reply FAIL: followed by one short reason. Reply with nothing else."""
 
 function define_row(db_path, tag_id)

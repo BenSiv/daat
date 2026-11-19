@@ -23,12 +23,12 @@
 -- same discipline template.lua's own four types and the canvas's own
 -- four element types were grown under -- not speculatively.
 
-html_lib = require("html")
-render_lib = require("render")
+const html_lib = require("html")
+const render_lib = require("render")
 
-page = {}
+const page = {}
 
-FORM_FIELD_TYPES = {text = true, password = true, hidden = true, checkbox = true, file = true, textarea = true}
+const FORM_FIELD_TYPES = {text = true, password = true, hidden = true, checkbox = true, file = true, textarea = true}
 
 -- Validates one field list (a form's own top-level `fields`, or one of
 -- its `groups[i].fields` -- see `form`'s own validation below for why

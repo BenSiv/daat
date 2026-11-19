@@ -10,12 +10,12 @@
 -- their passages change with them. Only passage embeddings are cached
 -- (document_passage_cache), keyed by the passage text, and they expire.
 
-config = require("config")
-db = require("database")
-document = require("document")
-hmac = require("hmac")
+const config = require("config")
+const db = require("database")
+const document = require("document")
+const hmac = require("hmac")
 
-passage = {}
+const passage = {}
 
 --------------------------------------------------------------------------
 -- The embedding cache
@@ -25,7 +25,7 @@ passage = {}
 -- at any time; keyed by text, not document, so identical passages share
 -- an entry and an edited document's old passages simply stop being used
 -- and expire (passage_cache_days after last_used_at).
-PASSAGE_CACHE_SCHEMA = """
+const PASSAGE_CACHE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS document_passage_cache (
     text_hash VARCHAR(64) NOT NULL,
     model VARCHAR(128) NOT NULL,

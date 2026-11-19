@@ -36,30 +36,30 @@
 -- runs it by hand, with --dry-run (proposals only) and --judge (ask the
 -- agent too, still writing nothing).
 
-db = require("database")
-entity = require("entity")
-config = require("config")
-json = require("dkjson")
-tag = require("tag")
-agent_provider = require("agent_provider")
+const db = require("database")
+const entity = require("entity")
+const config = require("config")
+const json = require("dkjson")
+const tag = require("tag")
+const agent_provider = require("agent_provider")
 
-tag_upkeep = {}
+const tag_upkeep = {}
 
-TAG_SPLIT_SPREAD = 1.15
-TAG_REJUDGE_CHANGE = 0.10
-TAG_FIT_CHANGE = 0.20
+const TAG_SPLIT_SPREAD = 1.15
+const TAG_REJUDGE_CHANGE = 0.10
+const TAG_FIT_CHANGE = 0.20
 -- Agent calls per run, so one run's cost stays bounded; the rest wait
 -- for the next run.
-TAG_JUDGMENTS_PER_RUN = 5
+const TAG_JUDGMENTS_PER_RUN = 5
 -- A --pairs-above review asks about at most this many pairs.
-TAG_REVIEW_PAIRS = 20
-TAG_TWO_MEANS_ROUNDS = 10
-TAG_PROMPT_TITLES = 8
-TAG_PROMPT_EXCERPT = 200
+const TAG_REVIEW_PAIRS = 20
+const TAG_TWO_MEANS_ROUNDS = 10
+const TAG_PROMPT_TITLES = 8
+const TAG_PROMPT_EXCERPT = 200
 
 -- Per tag: its spread when built (or last restructured) and its member
 -- count when its label was last judged.
-TAG_UPKEEP_SCHEMA = """
+const TAG_UPKEEP_SCHEMA = """
 CREATE TABLE IF NOT EXISTS tag_upkeep (
     tag_id INTEGER PRIMARY KEY,
     built_spread REAL NOT NULL,
@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS tag_upkeep (
 
 -- Every verdict, with the member counts it was given at -- the memory
 -- that keeps a declined split or merge from being asked again.
-TAG_JUDGMENT_SCHEMA = """
+const TAG_JUDGMENT_SCHEMA = """
 CREATE TABLE IF NOT EXISTS tag_judgment (
     id INTEGER PRIMARY KEY %s,
     kind VARCHAR(16) NOT NULL,
@@ -84,7 +84,7 @@ CREATE TABLE IF NOT EXISTS tag_judgment (
 );
 """
 
-SPLIT_PROMPT = """You review one tag in a lab's knowledge base. Its documents have drifted into two groups, A (the larger) and B; each is summarised by its most central titles.
+const SPLIT_PROMPT = """You review one tag in a lab's knowledge base. Its documents have drifted into two groups, A (the larger) and B; each is summarised by its most central titles.
 Answer SAME if one tag still fits both groups -- the same subject -- or DIFFERENT if they are distinct subjects worth a tag each.
 Reply on the first line with SAME or DIFFERENT, then " -- " and one short reason.
 If DIFFERENT, add two lines naming the groups:
@@ -92,21 +92,21 @@ A: <label> | <one-sentence description>
 B: <label> | <one-sentence description>
 Keep the tag's current label for A if it still fits A. Labels are 2-5 words, specific (organism, method, material) rather than generic, no quotes."""
 
-MERGE_PROMPT = """You compare two tags in a lab's knowledge base. Each is summarised by its label and its most central titles.
+const MERGE_PROMPT = """You compare two tags in a lab's knowledge base. Each is summarised by its label and its most central titles.
 Answer SAME if they are about the same subject and would be clearer to a reader as one tag, or DIFFERENT if each is a distinct subject worth its own tag.
 Reply on the first line with SAME or DIFFERENT, then " -- " and one short reason.
 If SAME, add one line naming the merged tag (keep the first tag's label if it fits all of it):
 NAME: <label> | <one-sentence description>
 Labels are 2-5 words, specific (organism, method, material) rather than generic, no quotes."""
 
-FIT_PROMPT = """You review one tag in a lab's knowledge base. You get its label, its description, its most central titles, its newest titles, the words that set it apart from the other tags (most distinctive first), and the labels of its nearest neighbouring tags.
+const FIT_PROMPT = """You review one tag in a lab's knowledge base. You get its label, its description, its most central titles, its newest titles, the words that set it apart from the other tags (most distinctive first), and the labels of its nearest neighbouring tags.
 Answer FITS if the label and description describe its documents as a subject and tell it apart from its neighbours, or RENAME if they don't -- too generic, naming the kind of file (spreadsheet, template, notes) rather than the subject, or no longer what the documents are about.
 Reply on the first line with FITS or RENAME, then " -- " and one short reason.
 If RENAME, add one line:
 NAME: <label> | <one-sentence description>
 Labels are 2-5 words, specific (organism, method, material) rather than generic, no quotes."""
 
-ACTIVE_ROW = "(archived_at IS NULL OR archived_at = '')"
+const ACTIVE_ROW = "(archived_at IS NULL OR archived_at = '')"
 
 function tag_upkeep.init_schema(db_path)
     db.exec(db_path, TAG_UPKEEP_SCHEMA)
@@ -603,7 +603,7 @@ function tag_upkeep.parse(answer, verdicts)
 end
 
 -- Neighbouring tags shown to the label check.
-UPKEEP_NEIGHBOURS = 5
+const UPKEEP_NEIGHBOURS = 5
 -- Computed once per process: every active tag's distinctive words
 -- (tag_terms.lua, against all the others) and the tags themselves.
 UPKEEP_EVIDENCE = nil

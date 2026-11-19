@@ -24,14 +24,14 @@
 -- that hit's review) stays in its own hand-rolled tables here -- these
 -- are event logs, not pool content, so they don't belong on `document`.
 
-db = require("database")
-document = require("document")
-entity = require("entity")
-config = require("config")
+const db = require("database")
+const document = require("document")
+const entity = require("entity")
+const config = require("config")
 
-knowledge = {}
+const knowledge = {}
 
-KNOWLEDGE_SCHEMA = """
+const KNOWLEDGE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS knowledge_retrieval (
     id INTEGER PRIMARY KEY {{AUTOINC}},
     session_id TEXT,
@@ -182,7 +182,7 @@ end
 -- for any of them -- a console request like "average messages per chat
 -- session" hits the identical invented-table-name risk, just against
 -- these instead of document.
-HAND_ROLLED_TABLE_COLUMNS = {
+const HAND_ROLLED_TABLE_COLUMNS = {
     knowledge_retrieval = {
         {name = "id", note = "primary key"},
         {name = "session_id", note = "agent_session.id this retrieval happened within"},
@@ -225,7 +225,7 @@ end
 -- actually been retrieved, or was created as system/agent-derived
 -- content in the first place -- distinguishing that from every other
 -- ordinary, never-touched document.
-KNOWLEDGE_MEMBER_WHERE = "(retrieval_count > 0 OR (source_type IS NOT NULL AND source_type != ''))"
+const KNOWLEDGE_MEMBER_WHERE = "(retrieval_count > 0 OR (source_type IS NOT NULL AND source_type != ''))"
 
 --------------------------------------------------------------------------
 -- Documents as the pool's own records
@@ -700,7 +700,7 @@ end
 
 -- Minimum distinct retrievals two documents must share before
 -- evaluation triggers at all.
-CO_RETRIEVAL_LINK_THRESHOLD = 3
+const CO_RETRIEVAL_LINK_THRESHOLD = 3
 
 -- co_count must also be at least this fraction of the *less-retrieved*
 -- of the two documents' own retrieval_count -- guards against a hub
@@ -708,13 +708,13 @@ CO_RETRIEVAL_LINK_THRESHOLD = 3
 -- links to everything it happens to share a handful of retrievals with:
 -- its own retrieval_count is high too, so the ratio stays low even
 -- when its absolute co_count with everything is high.
-CO_RETRIEVAL_HUB_RATIO = 0.25
+const CO_RETRIEVAL_HUB_RATIO = 0.25
 
 -- After a decline, co_count must grow by at least this much again past
 -- last_co_count before the same pair is re-evaluated -- otherwise a
 -- declined pair would get re-asked on every single subsequent shared
 -- retrieval forever.
-CO_RETRIEVAL_REEVALUATION_STEP = 3
+const CO_RETRIEVAL_REEVALUATION_STEP = 3
 
 -- Usage-driven edge strength (doc/link-strength-redesign.md): an
 -- already-linked pair that keeps being co-retrieved has its edge's
@@ -723,9 +723,9 @@ CO_RETRIEVAL_REEVALUATION_STEP = 3
 -- edge, so this is a flat constant rather than a reinforcement_delta(tier)
 -- table -- matches document.reinforcement_delta's own tier-0 floor,
 -- which is otherwise unrelated to this value.
-LINK_REINFORCEMENT_DELTA = 0.15
+const LINK_REINFORCEMENT_DELTA = 0.15
 
-LINK_EVALUATION_SYSTEM_PROMPT = """
+const LINK_EVALUATION_SYSTEM_PROMPT = """
 Two documents from the same knowledge pool have repeatedly been retrieved together in the same searches. Judge whether they describe a genuinely meaningful connection (the same topic, a real dependency, one explains or extends the other) as opposed to just coincidental overlap in unrelated searches. Reply on a single line: YES or NO, a colon, then one sentence. For YES, the sentence states the specific connection in terms of the documents' content (what one says about, uses from, or adds to the other) and names the information both share (the experiment, sample, method, result or decision) -- not merely that they are related, of the same kind ("both are meeting notes") or were retrieved together; if you can't name what they share, answer NO. For NO, the sentence says why the overlap is coincidental. A YES sentence is written into a note that links both documents right before it, so refer to them by what they are, never as "Document A" or "Document B". Example: "YES: the subculture protocol calls for exactly this medium recipe."
 """
 
@@ -802,7 +802,7 @@ end
 
 -- A connection document's whole content is its reason: fewer words
 -- than this can't say what the two documents share.
-LINK_REASON_MIN_WORDS = 8
+const LINK_REASON_MIN_WORDS = 8
 
 function knowledge.link_reason_too_thin(reason)
     if reason == nil then
@@ -915,8 +915,8 @@ end
 -- heat without ever bumping its retrieval_count -- without it, a
 -- document that only ever accrues heat by spreading activation would
 -- never become due for review.
-DUE_FOR_REVIEW_RETRIEVAL_COUNT = 2
-DUE_FOR_REVIEW_HEAT = 1.15
+const DUE_FOR_REVIEW_RETRIEVAL_COUNT = 2
+const DUE_FOR_REVIEW_HEAT = 1.15
 
 function knowledge.due_for_review(retrieval_count, effective_heat)
     return tonumber(retrieval_count) >= DUE_FOR_REVIEW_RETRIEVAL_COUNT
@@ -1036,7 +1036,7 @@ end
 -- mixing letters and digits ("Exp141", "CCN51", "TcLEC2"), or a
 -- numbered reference ("Experiment 208", "Sample 131", "Chapter 4").
 -- Anything else in the reason is paraphrase, which a rule can't check.
-CLAIM_REFERENCE_WORDS = {"Experiment", "Exp", "Sample", "Table", "Figure", "Chapter"}
+const CLAIM_REFERENCE_WORDS = {"Experiment", "Exp", "Sample", "Table", "Figure", "Chapter"}
 
 function knowledge.reason_claims(reason)
     claims = {}
@@ -1434,7 +1434,7 @@ end
 -- document the curation wrote can hold one. A source -- a synced file, a
 -- page someone wrote, a chat transcript, reasoning, a connection note, a
 -- legacy distilled fact -- stays at tier 0 however it's edited or used.
-CURATED_SOURCE_TYPES = {curated = true, reference = true, record = true}
+const CURATED_SOURCE_TYPES = {curated = true, reference = true, record = true}
 
 function knowledge.can_hold_tier(source_type)
     return source_type != nil and CURATED_SOURCE_TYPES[source_type] == true
@@ -1544,7 +1544,7 @@ function knowledge.search_and_log(db_path, query_text, limit, use_semantic, sess
     return results, retrieval_id, query_vector, query_model
 end
 
-RETRIEVAL_REVIEW_STALE_SECONDS = 900
+const RETRIEVAL_REVIEW_STALE_SECONDS = 900
 
 function new_retrieval_claim_token()
     urandom = io.open("/dev/urandom", "rb")

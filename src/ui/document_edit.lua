@@ -5,12 +5,12 @@
 -- page shell, CSS, and ToastUI + inline `[[` / `@` mention controller
 -- as raw standalone assets (`ui/document_edit.{html,css,js}`).
 
-asset = require("asset")
-html_lib = require("html")
-json = require("dkjson")
-render_lib = require("render")
+const asset = require("asset")
+const html_lib = require("html")
+const json = require("dkjson")
+const render_lib = require("render")
 
-document_edit = {}
+const document_edit = {}
 
 function document_edit.resolve_initial_fields(doc, prefill)
     heading_text = "New document"

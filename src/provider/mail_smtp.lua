@@ -13,12 +13,12 @@
 -- The credentials go in a curl -K config file (os.tmpname -> 0600),
 -- never on the command line, where any local `ps` could read them.
 
-external_tool = require("external_tool")
-config = require("config")
+const external_tool = require("external_tool")
+const config = require("config")
 
-mail_smtp = {}
+const mail_smtp = {}
 
-SMTP_TIMEOUT_SECONDS = 30
+const SMTP_TIMEOUT_SECONDS = 30
 
 -- curl -K config syntax: a double-quoted value, backslash-escaped.
 function curl_config_quote(s)

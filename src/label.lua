@@ -12,10 +12,10 @@
 -- query runner (view.run_sql) -- a label_template row's `sql` field is
 -- genuinely just a single-parameter view, structurally.
 
-db = require("database")
-view = require("view")
+const db = require("database")
+const view = require("view")
 
-label = {}
+const label = {}
 
 -- ZPL's own command-prefix characters -- a substituted field value
 -- containing either one unescaped would corrupt the label (e.g. break

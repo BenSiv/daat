@@ -6,15 +6,15 @@
 -- scriptable before-hooks (extension-authored validation rules, see
 -- doc/extensibility.md) plug into the same contract, run after.
 
-db = require("database")
-ledger = require("ledger")
-schema = require("schema")
-config = require("config")
-extension = require("extension")
-json = require("dkjson")
-view = require("view")
+const db = require("database")
+const ledger = require("ledger")
+const schema = require("schema")
+const config = require("config")
+const extension = require("extension")
+const json = require("dkjson")
+const view = require("view")
 
-entity = {}
+const entity = {}
 
 -- has_error used before its own definition below -- pre-declared,
 -- see ../../luam/doc/forward_references.md
@@ -1035,8 +1035,8 @@ end
 --      untouched).
 --   3. Cold start or schema-set change: checks table existence once via
 --      `db.get_tables` and batches `SELECT COUNT(*)` in `UNION ALL` chunks.
-ACTIVE_COUNTS_STATE_KEY = "entity.active_counts_cache"
-COUNT_UNION_CHUNK_SIZE = 25
+const ACTIVE_COUNTS_STATE_KEY = "entity.active_counts_cache"
+const COUNT_UNION_CHUNK_SIZE = 25
 
 function to_int_or_zero(v)
     n = tonumber(v)

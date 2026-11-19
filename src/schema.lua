@@ -3,12 +3,12 @@
 -- one describes. This is the only place field-type -> SQL-type mapping
 -- happens.
 
-db = require("database")
-sandbox = require("sandbox")
-paths = require("paths")
-lfs = require("lfs")
+const db = require("database")
+const sandbox = require("sandbox")
+const paths = require("paths")
+const lfs = require("lfs")
 
-schema = {}
+const schema = {}
 
 _fields_cache = {}
 _registered_cache = {}
@@ -44,7 +44,7 @@ function shallow_copy_list(items)
     return out
 end
 
-FIELD_TYPES = {"text", "number", "date", "select", "reference", "multi_select", "multi_reference", "sql_select", "polymorphic_reference", "multi_polymorphic_reference"}
+const FIELD_TYPES = {"text", "number", "date", "select", "reference", "multi_select", "multi_reference", "sql_select", "polymorphic_reference", "multi_polymorphic_reference"}
 
 -- Field types stored in a companion junction table (schema.
 -- ensure_multi_field_table) instead of as a column on the entity's own
@@ -53,7 +53,7 @@ FIELD_TYPES = {"text", "number", "date", "select", "reference", "multi_select", 
 -- a real link to another entity type), not one generic "multivalue"
 -- flag, since the junction table's second column differs (a literal
 -- value vs. a real FK).
-MULTI_FIELD_TYPES = {multi_select = true, multi_reference = true}
+const MULTI_FIELD_TYPES = {multi_select = true, multi_reference = true}
 
 function is_multi_field_type(t)
     return MULTI_FIELD_TYPES[t] == true
@@ -81,7 +81,7 @@ end
 -- inventing a single type with a cardinality flag, matching this
 -- codebase's own established convention (select/multi_select is the
 -- same split).
-POLYMORPHIC_FIELD_TYPES = {polymorphic_reference = true, multi_polymorphic_reference = true}
+const POLYMORPHIC_FIELD_TYPES = {polymorphic_reference = true, multi_polymorphic_reference = true}
 
 function is_polymorphic_field_type(t)
     return POLYMORPHIC_FIELD_TYPES[t] == true
@@ -105,7 +105,7 @@ end
 -- code needs no changes at all -- it already just decodes enum_values
 -- as a plain list, agnostic of whether it came from an inline list or a
 -- shared dropdown.
-DROPDOWN_SCHEMA = """
+const DROPDOWN_SCHEMA = """
 -- VARCHAR(255), not TEXT -- same MariaDB/InnoDB key-length reasoning as
 -- ledger.lua's own entity_type/entity_field (a bare TEXT/BLOB column
 -- can't be part of a key without an explicit bounded length).
@@ -241,7 +241,7 @@ end
 -- db.now_expr's backend-specific default) that schema.validate itself
 -- is never given, and every name in it is a plain string literal
 -- anyway.
-RESERVED_FIELD_NAMES = {
+const RESERVED_FIELD_NAMES = {
     "id", "created_by", "created_at", "updated_by", "updated_at",
     "last_event_id", "external_id", "name", "archived_at",
 }
@@ -264,7 +264,7 @@ end
 -- behaves identically to a plain TEXT one there (verified directly:
 -- stores 500KB with no truncation, `pragma_table_info` reports the
 -- type as declared).
-SQL_TYPE = {
+const SQL_TYPE = {
     text = "LONGTEXT",
     number = "REAL",
     date = "TEXT",

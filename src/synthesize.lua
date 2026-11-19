@@ -16,19 +16,19 @@
 -- last saw and how that went (pending, running, referenced, nothing,
 -- rejected, failed), like knowledge_curation for the curate step.
 
-db = require("database")
-document = require("document")
-knowledge = require("knowledge")
-config = require("config")
+const db = require("database")
+const document = require("document")
+const knowledge = require("knowledge")
+const config = require("config")
 
-synthesize = {}
+const synthesize = {}
 
 -- Notes a tag needs before it gets a reference.
-SYNTHESIZE_MIN_NOTES = 3
+const SYNTHESIZE_MIN_NOTES = 3
 -- Notes one reference is written from, the tag's most central first.
-SYNTHESIZE_MAX_NOTES = 12
+const SYNTHESIZE_MAX_NOTES = 12
 
-SYNTHESIZE_SYSTEM_PROMPT = """
+const SYNTHESIZE_SYSTEM_PROMPT = """
 You write a reference for a lab team's knowledge base: one structured document on one subject, made from curated notes that share a tag.
 Start with one line "# <title>" naming the subject. Then a short overview, then sections ("## ...") by theme, not one section per note.
 Merge what the notes say about the same thing. State numbers, conditions and results exactly as the notes give them. Where notes disagree, say so and cite both.
@@ -37,11 +37,11 @@ At most 900 words.
 A tag can hold a few notes off its subject. Write about the subject most of the notes share, leave the others out, and end with one line "Left out: [[Note title]], ..." naming them. Only if most of the notes share no subject, reply with one line: "NOTHING: <the reason, in a few words>".
 """
 
-SYNTHESIZE_RELEVANCE_RULE = """
+const SYNTHESIZE_RELEVANCE_RULE = """
 Judge relevance by the team's field and subject matter: published papers, books, protocols and reviews on its subjects count. Only if the notes' shared subject has nothing to do with the team's field, reply with one line: "NOTHING: <the reason, in a few words>".
 """
 
-SYNTHESIZE_CHECK_SYSTEM_PROMPT = """
+const SYNTHESIZE_CHECK_SYSTEM_PROMPT = """
 You check a reference against the notes it was written from. Reply PASS if every statement in it is supported by the note it cites, it adds nothing the notes don't say, and it doesn't drop any note's main point without saying so (a note named in its "Left out:" line is dropped on purpose). Otherwise reply FAIL: followed by one short reason. Reply with nothing else.
 """
 
@@ -98,7 +98,7 @@ end
 -- Active tags with enough notes, most notes first, whose notes this
 -- reference hasn't seen. With `recheck`, tags whose last try came to
 -- nothing, was rejected or failed (or was left running) count too.
-SYNTHESIZE_STALE_CLAIM_SECONDS = 900
+const SYNTHESIZE_STALE_CLAIM_SECONDS = 900
 
 function synthesize_stale_cutoff(db_path)
     rows = db.query(db_path, "SELECT " .. require("store").ago_expr(db_path, SYNTHESIZE_STALE_CLAIM_SECONDS) .. " AS cutoff;")

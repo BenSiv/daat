@@ -21,9 +21,9 @@
 -- so nothing is lost if a migration turns out wrong; a later migration
 -- drops them once a release has run on the new layout.
 
-db = require("database")
+const db = require("database")
 
-store = {}
+const store = {}
 
 -- SQL expression evaluating to 'YYYY-MM-DD HH:MM:SS' `seconds` in the
 -- past, on the exact same clock and timezone basis as `db.now_expr`
@@ -37,7 +37,7 @@ function store.ago_expr(db_path, seconds)
     return string.format("datetime('now', 'localtime', '-%d seconds')", secs)
 end
 
-SYSTEM_STATE_SCHEMA = """
+const SYSTEM_STATE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS system_state (
     name VARCHAR(64) PRIMARY KEY,
     text_value LONGTEXT,
@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS system_state (
 -- text. Approval holds only while the current content still matches
 -- (extension.is_approved, view.is_approved), so an edit after approval
 -- needs approving again.
-SYSTEM_APPROVAL_SCHEMA = """
+const SYSTEM_APPROVAL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS system_approval (
     kind VARCHAR(16) NOT NULL,
     name VARCHAR(255) NOT NULL,
@@ -222,7 +222,7 @@ end
 -- Migrations, in order. Never edit one that has shipped; add a new one.
 --------------------------------------------------------------------------
 
-MIGRATIONS = {}
+const MIGRATIONS = {}
 
 -- 1. Checkpoint values that each had a one-row table move to system_state.
 table.insert(MIGRATIONS, {version = 1, name = "checkpoints into system_state", run = function(db_path)
@@ -343,7 +343,7 @@ end})
 
 -- 5. One prefix per domain (doc/schema-revision.md, "Naming proposal").
 -- Plain renames: same columns, same rows, same index names.
-STORE_RENAMES = {
+const STORE_RENAMES = {
     {"user", "auth_user"},
     {"api_key", "auth_api_key"},
     {"password_reset", "auth_email_link"},

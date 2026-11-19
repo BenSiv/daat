@@ -11,13 +11,13 @@
 -- programmablesearchengine.google.com -- no Terraform/gcloud path
 -- creates that half, only the API key itself.
 
-json = require("dkjson")
-external_tool = require("external_tool")
+const json = require("dkjson")
+const external_tool = require("external_tool")
 
-search_google_cse = {}
+const search_google_cse = {}
 
-SEARCH_API_URL = "https://www.googleapis.com/customsearch/v1"
-RESULT_COUNT = 5
+const SEARCH_API_URL = "https://www.googleapis.com/customsearch/v1"
+const RESULT_COUNT = 5
 
 function search_credentials()
     key = os.getenv("GOOGLE_SEARCH_API_KEY")

@@ -13,9 +13,9 @@
 -- var name kept as-is from the pre-provider-split web_search.lua, no
 -- functional reason to rename it now that only the module has moved.
 
-json = require("dkjson")
+const json = require("dkjson")
 
-search_test = {}
+const search_test = {}
 
 function search_test.search(query)
     test_raw = os.getenv("WEB_SEARCH_TEST_RESULTS")

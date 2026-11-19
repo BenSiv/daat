@@ -18,25 +18,25 @@
 -- distilled again once it's rewritten; dedup keeps that from repeating
 -- records.
 
-db = require("database")
-entity = require("entity")
-document = require("document")
-knowledge = require("knowledge")
-config = require("config")
-json = require("dkjson")
+const db = require("database")
+const entity = require("entity")
+const document = require("document")
+const knowledge = require("knowledge")
+const config = require("config")
+const json = require("dkjson")
 
-distill = {}
+const distill = {}
 
 -- Claims one reference yields at most.
-DISTILL_MAX_CLAIMS = 12
+const DISTILL_MAX_CLAIMS = 12
 -- Cosine at or above which a candidate and an existing record or legacy
 -- fact are put to the judge (Ben, 2026-10-29: 0.80, measured on prod
 -- before trusting it).
-DISTILL_NEAR_COSINE = 0.80
+const DISTILL_NEAR_COSINE = 0.80
 -- Existing records shown to the judge per candidate.
-DISTILL_JUDGE_MATCHES = 3
+const DISTILL_JUDGE_MATCHES = 3
 
-DISTILL_SYSTEM_PROMPT = """
+const DISTILL_SYSTEM_PROMPT = """
 You split a reference from a lab team's knowledge base into records: single claims a team member would look up on their own -- a result with its numbers and conditions, a condition that worked or failed, a protocol parameter, a definition.
 Each record is self-contained: it names the organism, cell line, medium or method it is about, so it reads correctly without the reference. One to three sentences. Use only what the reference and its notes say, with numbers exactly as given.
 At most 12 records, the most useful first. Skip background a reader wouldn't look up.
@@ -47,12 +47,12 @@ NOTES: <the title of each note it rests on, exactly as given, separated by "; ">
 If the reference holds no such claim, reply with one line: "NOTHING: <the reason, in a few words>".
 """
 
-DISTILL_JUDGE_SYSTEM_PROMPT = """
+const DISTILL_JUDGE_SYSTEM_PROMPT = """
 You compare a new claim with existing records in a lab team's knowledge base.
 Reply SAME <n> if record n already states this claim (the new one adds nothing that matters), UPDATE <n> if it states the same claim but the new one is more complete or more exact, or NEW if no record states this claim. Reply with that one line only.
 """
 
-DISTILL_CHECK_SYSTEM_PROMPT = """
+const DISTILL_CHECK_SYSTEM_PROMPT = """
 You check records against the notes they cite. For each numbered record, reply on its own line "<n>: PASS" if every statement in it is supported by the notes it cites, adds nothing they don't say, and reads correctly on its own; otherwise "<n>: FAIL: <one short reason>". Reply with those lines only.
 """
 
@@ -72,7 +72,7 @@ function distill_record_status(db_path, reference_id, reference_hash, status, re
         tonumber(reference_id), db.quote(reference_hash), db.quote(status), db.literal(reason)))
 end
 
-DISTILL_STALE_CLAIM_SECONDS = 900
+const DISTILL_STALE_CLAIM_SECONDS = 900
 
 function distill_stale_cutoff(db_path)
     rows = db.query(db_path, "SELECT " .. require("store").ago_expr(db_path, DISTILL_STALE_CLAIM_SECONDS) .. " AS cutoff;")

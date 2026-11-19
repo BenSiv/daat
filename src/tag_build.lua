@@ -35,40 +35,40 @@
 -- computed tag holds a membership a person set (pinned, excluded, or a
 -- #tag in the text) -- a person's choice wins.
 
-db = require("database")
-entity = require("entity")
-config = require("config")
-json = require("dkjson")
-tag = require("tag")
-tag_upkeep = require("tag_upkeep")
-agent_provider = require("agent_provider")
-document = require("document")
+const db = require("database")
+const entity = require("entity")
+const config = require("config")
+const json = require("dkjson")
+const tag = require("tag")
+const tag_upkeep = require("tag_upkeep")
+const agent_provider = require("agent_provider")
+const document = require("document")
 
-tag_build = {}
+const tag_build = {}
 
-BUILD_SEED = 42
+const BUILD_SEED = 42
 -- Documents build_vectors left out for too little text (for the report).
 BUILD_SHORT = 0
-BUILD_RUNS = 10
-BUILD_FRACTION = 0.8
-BUILD_MAX_ITERATIONS = 15
-BUILD_TAG_RANGE = {15, 60}
-BUILD_MIN_SIZE = 10
+const BUILD_RUNS = 10
+const BUILD_FRACTION = 0.8
+const BUILD_MAX_ITERATIONS = 15
+const BUILD_TAG_RANGE = {15, 60}
+const BUILD_MIN_SIZE = 10
 -- Micro-clusters: sqrt(n), capped -- above the tag range's top on a
 -- real pool, or the cut has no resolution near it (prod 2026-10-12:
 -- sqrt(n/2) = 63 micro-clusters cut at 60 tags, the range's edge). No
 -- floor beyond 2: on a small pool a fixed floor leaves micro-clusters of
 -- a few documents that consensus runs never put together.
-BUILD_MICRO_MAX = 150
-BUILD_DOCS_PER_TAG = 60
+const BUILD_MICRO_MAX = 150
+const BUILD_DOCS_PER_TAG = 60
 
-NAMING_PROMPT = """You name one group of documents from a lab's knowledge base, built as a tag.
+const NAMING_PROMPT = """You name one group of documents from a lab's knowledge base, built as a tag.
 You get its most central documents, and the words that set it apart from the other groups (most distinctive first). Name the subject the documents share, made specific by those words -- a subject, not a list of the words, and not the kind of file (spreadsheet, template, notes).
 Reply with one line: <label> | <one-sentence description of what the documents are about>.
 The label is 2-5 words, a subject: specific (organism, method, material) rather than generic ("Research", "Science").
 Never name publishing or access boilerplate (open access, licences, journals, downloads). No quotes, no preamble."""
 
-DISTINCT_PROMPT = """Several groups of documents in a lab's knowledge base were given the same label. Each is summarised below by its most central titles.
+const DISTINCT_PROMPT = """Several groups of documents in a lab's knowledge base were given the same label. Each is summarised below by its most central titles.
 Give each a distinct 2-5 word label that says how it differs from the others, keeping the shared subject where it fits.
 Reply with exactly one label per line, in the order given -- no numbering, quotes or preamble."""
 

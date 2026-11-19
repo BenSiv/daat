@@ -8,10 +8,10 @@
 -- sequence needed, and it ties identity directly to the ledger rather
 -- than to whatever the projected table's storage happens to assign.
 
-db = require("database")
-json = require("dkjson")
+const db = require("database")
+const json = require("dkjson")
 
-ledger = {}
+const ledger = {}
 
 ledger.SCHEMA = """
 -- VARCHAR(255), not TEXT, on every column that's a primary or
@@ -161,7 +161,7 @@ end
 -- Full event history for one entity, oldest first.
 -- entity.fields('entity_event'): the same history every detail page
 -- shows a user, queryable by the agent via entity.query.
-ENTITY_EVENT_SQL_COLUMNS = {
+const ENTITY_EVENT_SQL_COLUMNS = {
     {name = "event_id", note = "primary key, in write order"},
     {name = "entity_id", note = "the entity's id -- ids come from one sequence shared by every entity type, so also filter entity_type"},
     {name = "entity_type", note = "registered entity type name (e.g. document)"},

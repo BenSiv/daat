@@ -9,7 +9,7 @@
 -- and a fixed set of functions -- never load()/loadstring(), so a
 -- formula can't run anything but arithmetic.
 
-calc = {}
+const calc = {}
 
 function fold(values, pick)
     result = values[1]
@@ -19,7 +19,7 @@ function fold(values, pick)
     return result
 end
 
-FUNCTIONS = {
+const FUNCTIONS = {
     ln = {1, function(a) return math.log(a[1]) end},
     log10 = {1, function(a) return math.log10(a[1]) end},
     log2 = {1, function(a) return math.log(a[1]) / math.log(2) end},
@@ -36,14 +36,14 @@ FUNCTIONS = {
 
 -- Where a function is only defined for some inputs, say so instead of
 -- returning nan/inf the model might quote as a result.
-DOMAIN = {
+const DOMAIN = {
     ln = function(a) return a[1] > 0 end,
     log10 = function(a) return a[1] > 0 end,
     log2 = function(a) return a[1] > 0 end,
     sqrt = function(a) return a[1] >= 0 end,
 }
 
-CONSTANTS = {pi = math.pi, e = math.exp(1)}
+const CONSTANTS = {pi = math.pi, e = math.exp(1)}
 
 function tokenize(text)
     tokens = {}

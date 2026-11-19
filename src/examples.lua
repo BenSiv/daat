@@ -11,12 +11,12 @@
 -- "never clobber real content" convention as schema.sync_table's own
 -- add-column-only semantics.
 
-paths = require("paths")
-config = require("config")
+const paths = require("paths")
+const config = require("config")
 
-examples = {}
+const examples = {}
 
-EXAMPLE_CATEGORY_SCHEMA = """-- Example entity type (see doc/schema.md for the full field-type
+const EXAMPLE_CATEGORY_SCHEMA = """-- Example entity type (see doc/schema.md for the full field-type
 -- reference). "category" is referenced by the "widget" example below,
 -- to demonstrate the "reference" field type end to end.
 --
@@ -32,7 +32,7 @@ return {
 }
 """
 
-EXAMPLE_WIDGET_SCHEMA = """-- Example entity type demonstrating every field type this platform
+const EXAMPLE_WIDGET_SCHEMA = """-- Example entity type demonstrating every field type this platform
 -- supports: text, number (with an optional min/max UI hint), date,
 -- select (a fixed list of values), and reference (a link to another
 -- entity type, here "category" -- see category.lua alongside this
@@ -51,7 +51,7 @@ return {
 }
 """
 
-EXAMPLE_VIEW = """-- Example saved view: a named, read-only SELECT query rendered as a
+const EXAMPLE_VIEW = """-- Example saved view: a named, read-only SELECT query rendered as a
 -- table (see doc/schema.md). Every entity type's generated table has
 -- id/label/etc columns from its own schema plus the builtin ones
 -- (created_at, archived_at, ...) -- this one reads the "widget"
@@ -74,7 +74,7 @@ return {
 }
 """
 
-EXAMPLE_EXTENSION_MANIFEST = """-- Example extension manifest (see doc/extensibility.md). Declares
+const EXAMPLE_EXTENSION_MANIFEST = """-- Example extension manifest (see doc/extensibility.md). Declares
 -- what this extension is allowed to do -- an admin has to approve
 -- these exact capabilities before the extension actually runs; editing
 -- main.lua's logic doesn't need re-approval, but changing this
@@ -93,7 +93,7 @@ return {
 }
 """
 
-EXAMPLE_EXTENSION_MAIN = """-- Example before-hook: rejects a negative "quantity" on the "widget"
+const EXAMPLE_EXTENSION_MAIN = """-- Example before-hook: rejects a negative "quantity" on the "widget"
 -- example entity type. Before-hooks run synchronously inside the write
 -- and can return issues that block it outright (see
 -- doc/extensibility.md) -- this is where validation rules that a
@@ -125,7 +125,7 @@ return {
 }
 """
 
-EXAMPLE_TEMPLATE = """-- Example entry template (see src/template.lua's own header comment
+const EXAMPLE_TEMPLATE = """-- Example entry template (see src/template.lua's own header comment
 -- for the full shape reference). Produces a Markdown snippet a user
 -- copies into a new document -- templates never write a document
 -- directly, so this carries no execution risk and needs no admin
@@ -144,7 +144,7 @@ return {
 }
 """
 
-EXAMPLE_THEME_LUA = """-- Every field here is optional -- delete this file entirely for the
+const EXAMPLE_THEME_LUA = """-- Every field here is optional -- delete this file entirely for the
 -- plain generic default (indigo/slate, no logo, no extra chat
 -- instructions). Edit through Settings once the store is initialized,
 -- or by hand here before first boot -- config.save_theme overwrites
@@ -181,7 +181,7 @@ return {
 -- file changes nothing (sandbox.run on an all-comments file returns nil,
 -- same as no file at all) -- it's reference documentation of what's
 -- available, not a behavior change.
-EXAMPLE_PLATFORM_LUA = """-- Every field here is optional; see doc/architecture.md's own table
+const EXAMPLE_PLATFORM_LUA = """-- Every field here is optional; see doc/architecture.md's own table
 -- for the full list and current defaults. Uncomment and edit only what
 -- this deployment actually needs to override.
 return {

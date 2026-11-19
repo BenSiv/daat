@@ -5,9 +5,9 @@
 -- have been sent (recipient, subject, body, and the full raw message)
 -- instead of standing up a real SMTP server.
 
-json = require("dkjson")
+const json = require("dkjson")
 
-mail_test = {}
+const mail_test = {}
 
 function mail_test.send(message)
     outbox = os.getenv("MAIL_TEST_OUTBOX")

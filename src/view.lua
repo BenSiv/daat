@@ -8,14 +8,14 @@
 -- escalation-detection principle as extension.capabilities_equal, just
 -- keyed on the query text instead of a capabilities table).
 
-db = require("database")
-json = require("dkjson")
-paths = require("paths")
-lfs = require("lfs")
-sandbox = require("sandbox")
-schema = require("schema")
+const db = require("database")
+const json = require("dkjson")
+const paths = require("paths")
+const lfs = require("lfs")
+const sandbox = require("sandbox")
+const schema = require("schema")
 
-view = {}
+const view = {}
 
 -- Approvals live in system_approval (store.lua), kind 'view'.
 function view.init_schema(db_path)
@@ -28,14 +28,14 @@ end
 -- substring search -- platform's own tables have columns like
 -- updated_at/updated_by, which a naive substring check for "update"
 -- would wrongly reject).
-FORBIDDEN_SQL_WORDS = {
+const FORBIDDEN_SQL_WORDS = {
     "insert", "update", "delete", "drop", "alter", "attach", "detach",
     "pragma", "create", "replace", "vacuum", "reindex", "trigger", "exec",
     "outfile", "dumpfile", "load_file", "load_extension",
     "get_lock", "release_lock", "release_all_locks", "sleep", "benchmark",
 }
 
-FORBIDDEN_SQL_WORDS_SET = {}
+const FORBIDDEN_SQL_WORDS_SET = {}
 for _, w in ipairs(FORBIDDEN_SQL_WORDS) do
     FORBIDDEN_SQL_WORDS_SET[w] = true
 end
@@ -246,7 +246,7 @@ end
 -- into the SQL text, so there's no injection surface from the value
 -- itself regardless of type. `type` controls the coercion applied
 -- before binding, not any kind of SQL-text validation.
-PARAM_TYPES = {"integer", "number", "text"}
+const PARAM_TYPES = {"integer", "number", "text"}
 
 function is_valid_param_type(t)
     for _, valid in ipairs(PARAM_TYPES) do
@@ -680,7 +680,7 @@ end
 -- individual entity.fields listing -- document_link/knowledge_pool_state
 -- are only ever named in prose, via document.knowledge_pool_sql_columns_text)
 -- but never the other way around.
-HAND_ROLLED_DOCUMENTED_TABLES = {
+const HAND_ROLLED_DOCUMENTED_TABLES = {
     document_link = true,
     entity_event = true,
     knowledge_pool_state = true,
@@ -699,7 +699,7 @@ view.HAND_ROLLED_DOCUMENTED_TABLES = HAND_ROLLED_DOCUMENTED_TABLES
 
 -- Words that terminate a FROM/JOIN table-reference item or cannot be a
 -- bare table alias.
-SQL_CLAUSE_WORDS = {
+const SQL_CLAUSE_WORDS = {
     ["as"] = true, where = true, on = true, using = true, join = true, straight_join = true,
     left = true, right = true, inner = true, outer = true, cross = true, full = true,
     natural = true, group = true, order = true, limit = true, offset = true,
@@ -707,7 +707,7 @@ SQL_CLAUSE_WORDS = {
     indexed = true, ["not"] = true, use = true, force = true, ignore = true,
 }
 
-FROM_CLAUSE_TERMINATORS = {
+const FROM_CLAUSE_TERMINATORS = {
     where = true, on = true, using = true, join = true, straight_join = true,
     left = true, right = true, inner = true, outer = true, cross = true, full = true,
     natural = true, group = true, order = true, limit = true, offset = true,
@@ -1096,7 +1096,7 @@ end
 -- (found by the agent scorecard, doc/agent-eval.md). Everything else
 -- keeps the dialect note, since a wrong function or syntax is the
 -- common other cause.
-SCHEMA_ERROR_PATTERNS = {"no such column", "no such table", "unknown column", "unknown table", "doesn't exist"}
+const SCHEMA_ERROR_PATTERNS = {"no such column", "no such table", "unknown column", "unknown table", "doesn't exist"}
 
 function view.sql_error_hint(err_text)
     lowered = string.lower(tostring(err_text))

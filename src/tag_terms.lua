@@ -7,21 +7,21 @@
 -- documents say what a tag is about, distinctive words how it differs
 -- from its neighbours.
 
-db = require("database")
-document = require("document")
+const db = require("database")
+const document = require("document")
 
-tag_terms = {}
+const tag_terms = {}
 
 -- How much of each document is read: its title and the start of its own
 -- text (past any sync header).
-TERMS_CHARS_PER_DOCUMENT = 4000
+const TERMS_CHARS_PER_DOCUMENT = 4000
 -- A word must appear in this many of a tag's documents to count, so one
 -- long document can't fill a tag's list.
-TERMS_MIN_DOCUMENTS = 2
-TERMS_PER_TAG = 12
+const TERMS_MIN_DOCUMENTS = 2
+const TERMS_PER_TAG = 12
 
 -- Common English filler beyond search's stopwords.
-TERMS_STOPWORDS = {}
+const TERMS_STOPWORDS = {}
 for _, word in ipairs({
     "has", "have", "had", "can", "could", "will", "would", "should", "may", "might", "also", "such",
     "use", "used", "using", "each", "other", "between", "after", "before", "during", "while", "both",

@@ -7,15 +7,15 @@
 -- update_entity bindings). extension.invoke() takes an already-built ctx
 -- rather than building one itself.
 
-db = require("database")
-json = require("dkjson")
-paths = require("paths")
-lfs = require("lfs")
-sandbox = require("sandbox")
-config = require("config")
-schema = require("schema")
+const db = require("database")
+const json = require("dkjson")
+const paths = require("paths")
+const lfs = require("lfs")
+const sandbox = require("sandbox")
+const config = require("config")
+const schema = require("schema")
 
-extension = {}
+const extension = {}
 
 -- How many retries make sense before giving up on a job plausibly
 -- depends on how flaky a given deployment's own extensions/network are
@@ -60,7 +60,7 @@ end
 -- enqueue_after_hooks), and on MariaDB any CREATE TABLE -- IF NOT EXISTS
 -- included -- commits the open transaction implicitly, which would
 -- split entity.create_batch's one transaction into one per row.
-extension_schema_ready = {}
+const extension_schema_ready = {}
 
 function extension_schema_key(db_path)
     return db.cache_key(db_path)
@@ -114,7 +114,7 @@ end
 -- An owned name becomes a file name (<kind>/<name>.lua) and, for a
 -- schema, a table name -- the schema pattern is schema.valid_name_syntax's
 -- own; view names may also carry hyphens (e.g. "widgets-in-stock").
-OWNED_NAME_PATTERNS = {
+const OWNED_NAME_PATTERNS = {
     schemas = "^[a-z_][a-z0-9_]*$",
     views = "^[a-z0-9_][a-z0-9_-]*$",
 }
@@ -707,7 +707,7 @@ function extension.enqueue_after_hooks(db_path, ext_dir, event_name, entity_type
     end
 end
 
-JOB_STALE_CLAIM_SECONDS = 900
+const JOB_STALE_CLAIM_SECONDS = 900
 
 function new_job_claim_token()
     urandom = io.open("/dev/urandom", "rb")

@@ -2,37 +2,37 @@ if package.preload["config"] == nil then
     package.path = "src/?.lua;" .. package.path
 end
 
-config = require("config")
+const config = require("config")
 
-init = require("init")
-do_init = init.do_init
+const init = require("init")
+const do_init = init.do_init
 
-schema = require("schema")
-do_schema = schema.do_schema
+const schema = require("schema")
+const do_schema = schema.do_schema
 
-entity = require("entity")
-do_entity = entity.do_entity
-do_extension = entity.do_extension
+const entity = require("entity")
+const do_entity = entity.do_entity
+const do_extension = entity.do_extension
 
-ledger = require("ledger")
-do_ledger = ledger.do_ledger
+const ledger = require("ledger")
+const do_ledger = ledger.do_ledger
 
-view = require("view")
-do_view = view.do_view
+const view = require("view")
+const do_view = view.do_view
 
-auth = require("auth")
-do_user = auth.do_user
-do_api_key = auth.do_api_key
+const auth = require("auth")
+const do_user = auth.do_user
+const do_api_key = auth.do_api_key
 
-document = require("document")
-do_document = document.do_document
+const document = require("document")
+const do_document = document.do_document
 
-knowledge = require("knowledge")
-do_knowledge = knowledge.do_knowledge
-repair = require("repair")
-do_repair = repair.do_repair
-tag_upkeep = require("tag_upkeep")
-do_tag = tag_upkeep.do_tag
+const knowledge = require("knowledge")
+const do_knowledge = knowledge.do_knowledge
+const repair = require("repair")
+const do_repair = repair.do_repair
+const tag_upkeep = require("tag_upkeep")
+const do_tag = tag_upkeep.do_tag
 
 -- Required explicitly here (not left to load transitively via web's
 -- own require) since knowledge.lua can't require agent.lua back itself
@@ -40,12 +40,12 @@ do_tag = tag_upkeep.do_tag
 -- not just an ordering nuisance) -- the one thing that needs both,
 -- `daat knowledge distill`, is dispatched from here instead of
 -- inside knowledge.do_knowledge.
-agent = require("agent")
-agent_tools = require("agent_tools")
+const agent = require("agent")
+const agent_tools = require("agent_tools")
 
-cgi = require("cgi")
-web = require("web")
-db = require("database")
+const cgi = require("cgi")
+const web = require("web")
+const db = require("database")
 
 function run_main()
     if cgi.is_cgi() then

@@ -38,12 +38,12 @@
 -- document-naming convention (e.g. a folder-path prefix) belongs here, in
 -- a deployment's own template files, never hardcoded into platform itself.
 
-paths = require("paths")
-lfs = require("lfs")
-sandbox = require("sandbox")
-schema = require("schema")
+const paths = require("paths")
+const lfs = require("lfs")
+const sandbox = require("sandbox")
+const schema = require("schema")
 
-template = {}
+const template = {}
 
 function template.names(templates_dir)
     names = {}

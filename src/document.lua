@@ -35,24 +35,24 @@
 -- generates links already has full audit history via the document
 -- entity itself; a link row's own history would just be churn.
 
-db = require("database")
-schema = require("schema")
-entity = require("entity")
-tag = require("tag")
-reference = require("reference")
-json = require("dkjson")
-external_tool = require("external_tool")
-gnuplot = require("gnuplot")
-hmac = require("hmac")
-config = require("config")
+const db = require("database")
+const schema = require("schema")
+const entity = require("entity")
+const tag = require("tag")
+const reference = require("reference")
+const json = require("dkjson")
+const external_tool = require("external_tool")
+const gnuplot = require("gnuplot")
+const hmac = require("hmac")
+const config = require("config")
 
-document = {}
+const document = {}
 
 -- shell_quote/strip_spaces used before their own definitions below --
 -- pre-declared, see ../../luam/doc/forward_references.md
 shell_quote, strip_spaces = nil, nil
 
-DOCUMENT_SCHEMA = {
+const DOCUMENT_SCHEMA = {
     name = "document",
     fields = {
         {name = "parent_id", type = "reference", required = false, entity_type = "document"},
@@ -72,7 +72,7 @@ DOCUMENT_SCHEMA = {
 --   "pinned" (a person put the document in the tag; never removed by
 --   the job) or "excluded" (a person took it out; never re-added, and
 --   treated as absent everywhere).
-TAG_SCHEMA = {
+const TAG_SCHEMA = {
     name = "tag",
     fields = {
         -- "label", not "name": every entity table already has a
@@ -91,7 +91,7 @@ TAG_SCHEMA = {
     },
 }
 
-DOCUMENT_TAG_SCHEMA = {
+const DOCUMENT_TAG_SCHEMA = {
     name = "document_tag",
     fields = {
         {name = "document", type = "reference", required = true, entity_type = "document"},
@@ -113,7 +113,7 @@ DOCUMENT_TAG_SCHEMA = {
 --   words as document_tag.decision.
 --   reason: why the two are related, in words; evidence: what it was
 --   derived from (JSON), so it can be checked.
-TAG_RELATION_SCHEMA = {
+const TAG_RELATION_SCHEMA = {
     name = "tag_relation",
     fields = {
         {name = "tag_a", type = "reference", required = true, entity_type = "tag"},
@@ -136,7 +136,7 @@ TAG_RELATION_SCHEMA = {
 --   weight: the pair's total; support: how many distinct underlying
 --   things (documents, entities) it rests on.
 --   producer: "core", or the extension that wrote the row.
-TAG_EVIDENCE_SCHEMA = {
+const TAG_EVIDENCE_SCHEMA = {
     name = "tag_evidence",
     fields = {
         {name = "tag_a", type = "reference", required = true, entity_type = "tag"},
@@ -156,7 +156,7 @@ TAG_EVIDENCE_SCHEMA = {
 -- text) goes through link_hash instead. raw_strength/archived_at/
 -- created_at are usage metadata about the edge, the way heat is about a
 -- document -- not knowledge, which lives only in content.
-DOCUMENT_LINK_TABLE_SQL = """
+const DOCUMENT_LINK_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS %s (
     id INTEGER PRIMARY KEY %s,
     from_document_id INTEGER NOT NULL,
@@ -174,7 +174,7 @@ CREATE TABLE IF NOT EXISTS %s (
 -- together (knowledge.maybe_link_co_retrieved), read as a share of a
 -- retrieved document's total outgoing strength by spread_activation.
 -- Every new row starts here.
-BASE_LINK_STRENGTH = 1.0
+const BASE_LINK_STRENGTH = 1.0
 
 function document.link_hash(link_text)
     return hmac.sha256("document_link", link_text)
@@ -233,7 +233,7 @@ end
 -- ../../luam/doc/forward_references.md.
 copy_document_links_to_new_layout, sql_null_to_nil = nil, nil
 
-LINK_MIGRATION_BATCH = 200
+const LINK_MIGRATION_BATCH = 200
 
 -- Every store before this layout keyed document_link by
 -- (from_document_id, link_text) -- and also held links no content
@@ -362,7 +362,7 @@ end
 -- (agent_provider.embedding_model -- platform.lua's embedding_model, else
 -- the provider's default); search compares only vectors from the current
 -- one, so after a change of model `daat repair embeddings` re-embeds.
-DOCUMENT_EMBEDDING_SCHEMA = """
+const DOCUMENT_EMBEDDING_SCHEMA = """
 CREATE TABLE IF NOT EXISTS document_embedding (
     document_id INTEGER PRIMARY KEY,
     model TEXT NOT NULL,
@@ -377,7 +377,7 @@ CREATE TABLE IF NOT EXISTS document_embedding (
 -- Documents saved since their embedding was made, with when they were
 -- last saved (UTC, "YYYY-MM-DD HH:MM:SS", written by Lua so the quiet-
 -- period comparison means the same on SQLite and MariaDB).
-DOCUMENT_EMBEDDING_DUE_SCHEMA = """
+const DOCUMENT_EMBEDDING_DUE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS document_embedding_due (
     document_id INTEGER PRIMARY KEY,
     queued_at VARCHAR(19) NOT NULL
@@ -388,7 +388,7 @@ CREATE TABLE IF NOT EXISTS document_embedding_due (
 -- (document.sync_links writes it on every path), so `daat repair links`
 -- can skip documents whose content hasn't changed since. Derived like
 -- document_link itself: archiving drops the row (document.drop_derived).
-DOCUMENT_LINK_SYNC_SCHEMA = """
+const DOCUMENT_LINK_SYNC_SCHEMA = """
 CREATE TABLE IF NOT EXISTS document_link_sync (
     document_id INTEGER PRIMARY KEY,
     content_hash VARCHAR(64) NOT NULL
@@ -420,7 +420,7 @@ function ensure_document_knowledge_columns(db_path)
     document.ensure_document_pool_columns(db_path, nil)
 end
 
-ACTIVE_POOL_DOCUMENT_WHERE = "(archived_at IS NULL OR archived_at = '') AND merged_into IS NULL"
+const ACTIVE_POOL_DOCUMENT_WHERE = "(archived_at IS NULL OR archived_at = '') AND merged_into IS NULL"
 
 -- Full log-space per-document scale (`log_scale_at_write`) plus explicit
 -- active-pool membership (`pool_active` = 1 iff in the conserved pool).
@@ -462,7 +462,7 @@ end
 -- editable-field listing -- read-only documentation, never a
 -- schema.fields()/DOCUMENT_SCHEMA source, so it can't leak into the edit
 -- form the way adding these to DOCUMENT_SCHEMA.fields would.
-KNOWLEDGE_POOL_SQL_COLUMNS = {
+const KNOWLEDGE_POOL_SQL_COLUMNS = {
     {name = "tier", note = "0-3, knowledge-pool maturity tier"},
     {name = "retrieval_count", note = "direct search-hit count"},
     {name = "last_retrieved_at", note = "timestamp of last search hit"},
@@ -478,11 +478,11 @@ KNOWLEDGE_POOL_SQL_COLUMNS = {
     {name = "scale_at_write", note = "legacy linear scale column kept for rollback -- ignore it and read log_scale_at_write instead"},
     {name = "pool_active", note = "1 while this document participates in the active conserved heat pool (neither archived nor merged_into), else 0"},
 }
-KNOWLEDGE_POOL_SQL_NOTE = "Related tables, hand-rolled rather than schema.register()'d so entity.list_types never mentions them: knowledge_pool_state (one row, id=1: pool_scale/log_pool_scale/document_count) and document_link (queryable via entity.query; entity.fields('document_link') lists its columns) -- a derived index of [[links]] in document content; why two documents are connected is in content, not here."
+const KNOWLEDGE_POOL_SQL_NOTE = "Related tables, hand-rolled rather than schema.register()'d so entity.list_types never mentions them: knowledge_pool_state (one row, id=1: pool_scale/log_pool_scale/document_count) and document_link (queryable via entity.query; entity.fields('document_link') lists its columns) -- a derived index of [[links]] in document content; why two documents are connected is in content, not here."
 
 -- entity.fields('document_link'): it's queryable (view.queryable_tables),
 -- so its columns get the same real-columns answer as document_embedding.
-DOCUMENT_LINK_SQL_COLUMNS = {
+const DOCUMENT_LINK_SQL_COLUMNS = {
     {name = "id", note = "primary key"},
     {name = "from_document_id", note = "FK to document.id -- the document whose content holds the [[link]]"},
     {name = "to_document_id", note = "FK to document.id -- the linked document; NULL while the link points at a page not created yet"},
@@ -514,7 +514,7 @@ end
 -- entity.fields('document_embedding') answers with real columns instead
 -- of agent.lua falling through to the generic "unknown entity type"
 -- message.
-DOCUMENT_EMBEDDING_SQL_COLUMNS = {
+const DOCUMENT_EMBEDDING_SQL_COLUMNS = {
     {name = "document_id", note = "primary key, FK to document.id"},
     {name = "model", note = "which embedding model produced this vector"},
     {name = "vector_json", note = "the cached embedding vector, JSON-encoded"},
@@ -566,7 +566,7 @@ end
 -- See "The representation change" in doc/heat-decay-redesign.md for why
 -- only this shared value needs log-space (each row's own
 -- scale_at_write stays linear, unaffected).
-KNOWLEDGE_POOL_STATE_SCHEMA = """
+const KNOWLEDGE_POOL_STATE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS knowledge_pool_state (
     id INTEGER PRIMARY KEY,
     pool_scale REAL NOT NULL DEFAULT 1.0,
@@ -580,7 +580,7 @@ CREATE TABLE IF NOT EXISTS knowledge_pool_state (
 -- function referencing it -- even one elsewhere in the same file (a
 -- stricter static-scoping check than vanilla Lua does; see
 -- document.register_pool_document just below, which needs this).
-BASE_HEAT = 1.0
+const BASE_HEAT = 1.0
 
 -- Retrofits `log_pool_scale` onto an existing knowledge_pool_state
 -- table (KNOWLEDGE_POOL_STATE_SCHEMA's CREATE TABLE IF NOT EXISTS only
@@ -606,7 +606,7 @@ function ensure_knowledge_pool_state_log_scale_column(db_path)
     end
 end
 
-_pool_state_ready = {}
+const _pool_state_ready = {}
 
 -- Seeds the single state row exactly once, from a one-time COUNT(*) --
 -- the only place this design scans the whole pool (see "Migration of
@@ -744,7 +744,7 @@ end
 -- browsable like any other folder, never containing a user's own
 -- authored documents. Created lazily on first use, not at init time;
 -- idempotent -- a second call reuses the existing folder.
-KNOWLEDGE_POOL_FOLDER_TITLE = "Knowledge Pool"
+const KNOWLEDGE_POOL_FOLDER_TITLE = "Knowledge Pool"
 
 function find_knowledge_pool_folder(db_path)
     rows = db.query(db_path, string.format(
@@ -919,7 +919,7 @@ end
 -- a single line, with no brackets inside. An unclosed [[ therefore
 -- matches nothing -- plain text on the page, never an index row --
 -- instead of swallowing everything up to the next ]].
-LINK_PATTERN = "%[%[([^%[%]\n]+)%]%]"
+const LINK_PATTERN = "%[%[([^%[%]\n]+)%]%]"
 
 -- How a document is written as a link, or nil if it can't be: the
 -- grammar has no escaping, so a title containing a bracket or a newline
@@ -1077,7 +1077,7 @@ end
 
 -- Bytes, not characters -- document.clip_text backs off to a UTF-8
 -- boundary rather than splitting a multi-byte character.
-CONTEXT_MAX_LENGTH = 500
+const CONTEXT_MAX_LENGTH = 500
 
 -- Trims, and caps at CONTEXT_MAX_LENGTH; nil for blank text.
 function document.clip_text(text)
@@ -1468,7 +1468,7 @@ end
 -- to the flat per-neighbor split this replaces. Behavior only diverges
 -- once real, repeated co-retrieval differentiates one edge's strength
 -- from its siblings'.
-SPREADING_ACTIVATION_FACTOR = 0.35
+const SPREADING_ACTIVATION_FACTOR = 0.35
 
 function document.weighted_spreading_delta(base_delta, edge_strength, total_strength)
     if total_strength == nil or total_strength <= 0 then
@@ -1538,7 +1538,7 @@ end
 -- each side's Connections list. Filed under the Knowledge Pool folder,
 -- where other notes about the pool live. nil if either document can't
 -- be written as a link (document.link_ref).
-CONNECTION_TITLE_SEPARATOR = " ↔ "
+const CONNECTION_TITLE_SEPARATOR = " ↔ "
 document.CONNECTION_TITLE_SEPARATOR = CONNECTION_TITLE_SEPARATOR
 
 -- Whether a title has a connection document's shape; tag.lua counts such
@@ -1649,7 +1649,7 @@ end
 -- heuristic (agent.lua) already used for compaction decisions. A whole
 -- large PDF dumped into one turn's context is exactly the kind of thing
 -- that budget is meant to guard against.
-ATTACHMENT_TEXT_MAX_CHARS = 20000
+const ATTACHMENT_TEXT_MAX_CHARS = 20000
 
 -- Chat-widget file attachments (`/api/chat-widget-attach`, cgi.lua) --
 -- "documents for context," not vision/images and not a real platform
@@ -1758,13 +1758,13 @@ function document.gnuplot_safe_string(s)
     return s
 end
 
-PLOT_TYPE_TO_WITH = {line = "linespoints", scatter = "points", bar = "boxes"}
+const PLOT_TYPE_TO_WITH = {line = "linespoints", scatter = "points", bar = "boxes"}
 
 -- Closed allowlist for an explicit per-series `with` override. Because
 -- gnuplot's `plot ... w <style>` clause is unquoted, passing free-form
 -- text through `gnuplot_safe_string` would still allow spaces, semicolons,
 -- single quotes, and `system(...)` directives into the generated script.
-ALLOWED_SERIES_WITH = {
+const ALLOWED_SERIES_WITH = {
     lines = "lines",
     points = "points",
     linespoints = "linespoints",
@@ -1917,7 +1917,7 @@ end
 -- on document.lua, never the reverse, so anything document.search
 -- itself needs has to live here.
 
-TIER_WEIGHT = {[0] = 0.0, [1] = 0.10, [2] = 0.20, [3] = 0.35}
+const TIER_WEIGHT = {[0] = 0.0, [1] = 0.10, [2] = 0.20, [3] = 0.35}
 
 -- Accessor (not the bare TIER_WEIGHT table) for cross-file use --
 -- knowledge.lua reads this rather than TIER_WEIGHT directly, since a
@@ -2381,7 +2381,7 @@ function document.connectivity_status(peer_count)
     return "linked-" .. tostring(peer_count)
 end
 
-GENERIC_TITLES = {["note"] = true, ["untitled note"] = true, ["manual note"] = true, [""] = true, ["untitled"] = true}
+const GENERIC_TITLES = {["note"] = true, ["untitled note"] = true, ["manual note"] = true, [""] = true, ["untitled"] = true}
 
 function document.title_is_generic(title)
     if title == nil then
@@ -2531,7 +2531,6 @@ end
 -- left alone. -> true (embedded), false (unchanged), or nil, err.
 function document.reindex_embedding(db_path, document_id, if_changed)
     agent_provider = require("agent_provider")
-    json = require("dkjson")
 
     doc = entity.get(db_path, "document", document_id)
     if doc == nil then
@@ -2677,7 +2676,6 @@ end
 -- are searched via a slower JSON fallback until this runs). Returns the
 -- number of rows packed.
 function document.repack_all_embeddings(db_path)
-    json = require("dkjson")
     rows = db.query(db_path, "SELECT document_id, vector_json FROM document_embedding WHERE vector_packed IS NULL;")
     packed_count = 0
     if rows == nil then
@@ -2710,7 +2708,7 @@ end
 
 -- Content is read RESYNC_LINKS_PAGE documents at a time, not one
 -- entity.get each nor the whole corpus in one result.
-RESYNC_LINKS_PAGE = 200
+const RESYNC_LINKS_PAGE = 200
 
 -- Re-syncs every active document whose content differs from what its
 -- links were last synced from (document_link_sync), or has no such row;
@@ -2815,7 +2813,7 @@ end
 -- degradation" -- every "or" then matched as a substring of nearly every
 -- document ("for", "work", "procedure"), thousands of times in a long
 -- PDF, and buried the real hits under whichever documents were longest.
-SEARCH_STOPWORDS = {}
+const SEARCH_STOPWORDS = {}
 for _, word in ipairs({
     "a", "an", "and", "or", "not", "the", "of", "in", "on", "at", "to", "for", "from", "by", "with",
     "into", "about", "as", "is", "are", "was", "were", "be", "been", "it", "its", "this", "that",
@@ -2828,7 +2826,7 @@ end
 -- For tag_terms.lua's distinctive words.
 document.search_stopwords = SEARCH_STOPWORDS
 
-SEARCH_MAX_TERMS = 8
+const SEARCH_MAX_TERMS = 8
 
 -- Lowercased query words, edge punctuation stripped (quotes, brackets,
 -- a trailing comma or '?', the '*' a model sometimes sends as "match
@@ -2877,12 +2875,12 @@ end
 -- slot). Never by kind: a chat transcript, a distilled note and a
 -- synced file are all knowledge on the same level, ranked by relevance
 -- and usage (heat, tier) alone.
-SEARCHABLE_DOCUMENT_WHERE = """
+const SEARCHABLE_DOCUMENT_WHERE = """
 (d.archived_at IS NULL OR d.archived_at = '')
 AND d.merged_into IS NULL
 """
 
-SEARCH_RESULT_COLUMNS = """
+const SEARCH_RESULT_COLUMNS = """
 d.id, d.title, d.tier, d.retrieval_count, d.raw_heat, d.log_scale_at_write,
 d.source_type, d.source_id, d.content_hash, d.created_at, d.external_id
 """
@@ -2890,25 +2888,25 @@ d.source_type, d.source_id, d.content_hash, d.created_at, d.external_id
 -- How many candidates each ranking (lexical, semantic) contributes to
 -- the fused list -- well past any `limit` a caller asks for, so fusion
 -- has real overlap to work with.
-SEARCH_CANDIDATES_PER_RANKING = 50
+const SEARCH_CANDIDATES_PER_RANKING = 50
 -- Reciprocal-rank-fusion constant (the standard 60): flattens the gap
 -- between neighbouring ranks so neither ranking's #1 dominates alone.
-SEARCH_RRF_K = 60
+const SEARCH_RRF_K = 60
 -- Cosine similarity at or below which an embedding match is not a
 -- match at all -- an irrelevant document at the bottom of a results
 -- list is still a wrong result.
-SEARCH_SIMILARITY_FLOOR = 0.45
+const SEARCH_SIMILARITY_FLOOR = 0.45
 -- BM25's usual constants: term-frequency saturation and how strongly a
 -- long document's counts are discounted for its length.
-BM25_K1 = 1.2
-BM25_B = 0.75
+const BM25_K1 = 1.2
+const BM25_B = 0.75
 -- A query term in the title counts as this many content-weight hits'
 -- worth of evidence, on top of the content score.
-SEARCH_TITLE_WEIGHT = 2.0
+const SEARCH_TITLE_WEIGHT = 2.0
 
 -- How many documents get exact per-term counts (stage 2 below) after
 -- the cheap presence pass narrows the field.
-SEARCH_COUNTED_CANDIDATES = 200
+const SEARCH_COUNTED_CANDIDATES = 200
 
 -- Lexical ranking, computed in SQL in two stages, and never by reading
 -- content into Lua. Found live: the previous version selected every
@@ -3112,7 +3110,6 @@ function semantic_ranking(db_path, query_vector, model)
         return {}
     end
     query_unit = document.unpack_vector(query_packed)
-    json = require("dkjson")
     rows = db.query(db_path, string.format("""
         SELECT e.document_id, e.vector_packed,
                CASE WHEN e.vector_packed IS NULL THEN e.vector_json END AS vector_json
@@ -3438,8 +3435,8 @@ end
 -- ledger. Embeddings from another model than the current one are only
 -- counted: deleting them would just leave search without vectors until
 -- `daat repair embeddings` re-embeds. -> {{label, action, count}, ...}
-ACTIVE_DOCUMENT_IDS = "SELECT id FROM document WHERE archived_at IS NULL OR archived_at = ''"
-ACTIVE_TAG_IDS = "SELECT id FROM tag WHERE archived_at IS NULL OR archived_at = ''"
+const ACTIVE_DOCUMENT_IDS = "SELECT id FROM document WHERE archived_at IS NULL OR archived_at = ''"
+const ACTIVE_TAG_IDS = "SELECT id FROM tag WHERE archived_at IS NULL OR archived_at = ''"
 
 function document.prune_derived(db_path, dry_run)
     checks = {

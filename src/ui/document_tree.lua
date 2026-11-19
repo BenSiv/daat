@@ -5,12 +5,12 @@
 -- and fuzzy title-search controller as raw standalone assets
 -- (`ui/document_tree.{html,css,js}`).
 
-asset = require("asset")
-html_lib = require("html")
-json = require("dkjson")
-render_lib = require("render")
+const asset = require("asset")
+const html_lib = require("html")
+const json = require("dkjson")
+const render_lib = require("render")
 
-document_tree = {}
+const document_tree = {}
 
 -- Groups a flat {id, title, parent_id} list by parent, keyed "root" for
 -- top-level rows -- one query from document.all_active(), built into a

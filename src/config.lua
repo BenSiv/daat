@@ -4,14 +4,14 @@
 -- most web servers set natively) is the CGI-mode signal for where that
 -- root is; CLI mode just uses the current directory.
 
-paths = require("paths")
-sandbox = require("sandbox")
+const paths = require("paths")
+const sandbox = require("sandbox")
 
-config = {}
+const config = {}
 
-STORE_DIR = ".store"
-DB_FILE = "store.db"
-SESSION_SECRET_FILE = "session_secret"
+const STORE_DIR = ".store"
+const DB_FILE = "store.db"
+const SESSION_SECRET_FILE = "session_secret"
 -- theme.lua/platform.lua, not .json -- one config format across the
 -- whole platform (schemas/dropdowns/views/templates/extension
 -- manifests are all the same sandboxed-Lua-table convention already;
@@ -22,8 +22,8 @@ SESSION_SECRET_FILE = "session_secret"
 -- the only thing a loaded file can do is construct and return a table,
 -- which still goes through the same field-by-field validation below
 -- either way.
-THEME_FILE = "theme.lua"
-PLATFORM_CONFIG_FILE = "platform.lua"
+const THEME_FILE = "theme.lua"
+const PLATFORM_CONFIG_FILE = "platform.lua"
 PLATFORM_CONFIG_CACHE = nil
 -- platform.lua's table as written, for config.setting.
 PLATFORM_SETTINGS_CACHE = {}
@@ -39,7 +39,7 @@ PLATFORM_SETTINGS_CACHE = {}
 -- default surface, single hue) -- see html.theme_root_css's own
 -- fallback defaults for the values, and doc/knowledge-graph-explorer.md
 -- for the second place this ramp is meant to be reused (node color).
-THEME_COLOR_KEYS = {
+const THEME_COLOR_KEYS = {
     "accent", "accent_2", "bg", "bg_2", "border", "border_2",
     "heading", "input_text", "muted", "muted_2", "text", "th_text",
     "tier_0", "tier_1", "tier_2", "tier_3",
@@ -289,7 +289,7 @@ end
 -- inputs are not stored at all (lean). The legacy prompt_retention_days
 -- key is still read as an alias for model_input_days, with <= 0 mapped
 -- to "forever" to preserve its old meaning.
-RETENTION_STRATEGIES = {
+const RETENTION_STRATEGIES = {
     full = {
         knowledge_days = "forever",
         tool_trace_days = "forever",

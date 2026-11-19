@@ -37,14 +37,14 @@
 -- documents (~30 KB each) against all 54,504 names: 41 ms per save,
 -- 565 ms for the largest, down from 410 ms / 3.4 s without the prefixes.
 
-db = require("database")
-entity = require("entity")
-schema = require("schema")
-config = require("config")
+const db = require("database")
+const entity = require("entity")
+const schema = require("schema")
+const config = require("config")
 
-reference = {}
+const reference = {}
 
-REFERENCE_NAME_SCHEMA = """
+const REFERENCE_NAME_SCHEMA = """
 CREATE TABLE IF NOT EXISTS entity_name_index (
     name_key VARCHAR(255) NOT NULL,
     entity_type VARCHAR(64) NOT NULL,
@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS entity_name_index (
 );
 """
 
-DOCUMENT_REFERENCE_SCHEMA = """
+const DOCUMENT_REFERENCE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS document_mention (
     document_id INTEGER NOT NULL,
     entity_type VARCHAR(64) NOT NULL,
@@ -61,15 +61,15 @@ CREATE TABLE IF NOT EXISTS document_mention (
 );
 """
 
-REFERENCE_PREFIX_SCHEMA = """
+const REFERENCE_PREFIX_SCHEMA = """
 CREATE TABLE IF NOT EXISTS entity_name_prefix (
     prefix VARCHAR(8) NOT NULL PRIMARY KEY
 );
 """
 
-REFERENCE_PREFIX_LENGTH = 4
+const REFERENCE_PREFIX_LENGTH = 4
 
-REFERENCE_INDEXES = {
+const REFERENCE_INDEXES = {
     {table = "entity_name_index", name = "idx_reference_name_key", columns = "name_key"},
     {table = "entity_name_index", name = "idx_reference_name_entity", columns = "entity_type, entity_id"},
     {table = "document_mention", name = "idx_document_reference_document", columns = "document_id"},
@@ -78,18 +78,18 @@ REFERENCE_INDEXES = {
 
 -- Never targets: documents are linked, not referenced, and the tag
 -- types are about documents, not things documents name.
-REFERENCE_SKIPPED_TYPES = {document = true, document_tag = true, tag = true, tag_relation = true, tag_evidence = true}
+const REFERENCE_SKIPPED_TYPES = {document = true, document_tag = true, tag = true, tag_relation = true, tag_evidence = true}
 
 -- reference.resolve lists every match, up to this many.
-REFERENCE_RESOLVE_LIMIT = 50
+const REFERENCE_RESOLVE_LIMIT = 50
 
 -- Rows per multi-row INSERT when rebuilding the index, as document.lua's
 -- LINK_MIGRATION_BATCH: one statement per name was ~150k round trips on
 -- celleste-lims, at 1-2 ms each over the Cloud SQL Auth Proxy.
-REFERENCE_INSERT_BATCH = 200
+const REFERENCE_INSERT_BATCH = 200
 
 -- Words longer than this many tokens aren't names worth a lookup.
-REFERENCE_MAX_NAME_TOKENS = 8
+const REFERENCE_MAX_NAME_TOKENS = 8
 
 function reference_has_column(db_path, table_name, column_name)
     for _, column in ipairs(db.get_columns(db_path, table_name)) do

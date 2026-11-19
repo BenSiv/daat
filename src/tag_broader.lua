@@ -29,16 +29,16 @@
 -- stick; a rerun is a fresh judgment and moved tags back). A broad tag
 -- such a hand placement points to counts as in use.
 
-db = require("database")
-entity = require("entity")
-config = require("config")
-tag = require("tag")
-tag_upkeep = require("tag_upkeep")
-agent_provider = require("agent_provider")
+const db = require("database")
+const entity = require("entity")
+const config = require("config")
+const tag = require("tag")
+const tag_upkeep = require("tag_upkeep")
+const agent_provider = require("agent_provider")
 
-tag_broader = {}
+const tag_broader = {}
 
-BROADER_PROMPT = """You organise the subject tags of a lab's knowledge base into broad subject areas, for browsing.
+const BROADER_PROMPT = """You organise the subject tags of a lab's knowledge base into broad subject areas, for browsing.
 Group by what the documents are about, not by the kind of document: literature, protocols, data and meeting notes on the same subject belong in the same area. Tags whose subject is outside the lab's field can share one area.
 Use the areas of the library below. Only when no library area fits a tag, add a new area, and say why in one line. Put every tag in exactly one area; leave out library areas no tag belongs to.
 For each area you use reply:

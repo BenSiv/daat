@@ -14,12 +14,12 @@
 -- A new repair is one REPAIRS entry; `daat repair` with no name lists
 -- them all.
 
-document = require("document")
-tag = require("tag")
-tag_upkeep = require("tag_upkeep")
-reference = require("reference")
+const document = require("document")
+const tag = require("tag")
+const tag_upkeep = require("tag_upkeep")
+const reference = require("reference")
 
-repair = {}
+const repair = {}
 
 function repair_links(cmd_args, db_path)
     entity_id = tonumber(cmd_args[2])
@@ -310,7 +310,7 @@ function repair_connections(cmd_args, db_path)
 end
 
 -- Ordered (a list, not a map) so `daat repair`'s listing is stable.
-REPAIRS = {
+const REPAIRS = {
     {name = "links", usage = "links [document_id | --all]", run = repair_links,
      description = "Re-parse [[...]] links from document content into document_link, for documents whose content changed since their links were last synced (--all: every document)."},
     {name = "embeddings", usage = "embeddings [document_id | --all]", run = repair_embeddings,

@@ -2,18 +2,18 @@
 -- database) plus the schemas/extensions/views/templates directories in
 -- the current directory.
 
-paths = require("paths")
-config = require("config")
-schema = require("schema")
-ledger = require("ledger")
-extension = require("extension")
-auth = require("auth")
-document = require("document")
-knowledge = require("knowledge")
-agent = require("agent")
-examples = require("examples")
+const paths = require("paths")
+const config = require("config")
+const schema = require("schema")
+const ledger = require("ledger")
+const extension = require("extension")
+const auth = require("auth")
+const document = require("document")
+const knowledge = require("knowledge")
+const agent = require("agent")
+const examples = require("examples")
 
-init = {}
+const init = {}
 
 -- config.db_path returns either a SQLite file path (a string) or a
 -- MariaDB connection descriptor (a table) -- this is the one place

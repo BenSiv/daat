@@ -24,19 +24,19 @@
 -- CURATE_INPUT_MAX_CHARS of a long source reach a note: one subject at a
 -- time, through use.
 
-db = require("database")
-document = require("document")
-knowledge = require("knowledge")
+const db = require("database")
+const document = require("document")
+const knowledge = require("knowledge")
 
-curate = {}
+const curate = {}
 
 -- What the agent reads of a source; a paper past this is cut, with a
 -- note saying so (its abstract, methods and results come first).
-CURATE_INPUT_MAX_CHARS = 40000
+const CURATE_INPUT_MAX_CHARS = 40000
 -- Shorter than this has nothing to curate (a stub, a folder page).
-CURATE_MIN_CHARS = 500
+const CURATE_MIN_CHARS = 500
 
-CURATE_SYSTEM_PROMPT = """
+const CURATE_SYSTEM_PROMPT = """
 You curate a team's knowledge base. Rewrite the source below as a clean note in your own words for a colleague who hasn't read it: one line on what it is, then its key findings, methods or decisions, with the concrete numbers, conditions, materials and names that matter. Leave out boilerplate, file paths, headers, tool output, greetings and anything the source doesn't support. Never add a fact that isn't in the source.
 
 Format: the first line is "# " and a title naming the subject specifically (not the file name). Then the note in Markdown, at most about 400 words, with short sections or bullets where they help.
@@ -55,7 +55,7 @@ If the source holds nothing worth keeping (small talk, a failed or empty exchang
 -- First version (2026-10-28) said "unrelated to this team's work"; the
 -- model read that as the team's own lab data only and skipped a book on
 -- cacao breeding. Published work in the field is what a team reads.
-CURATE_RELEVANCE_RULE = """
+const CURATE_RELEVANCE_RULE = """
 Judge relevance by the team's field and subject matter, not only its own data: published papers, books, protocols and reviews on its subjects are worth curating. Only if the source's subject has nothing to do with the team's field, reply with one line: "NOTHING: <the reason, in a few words>".
 """
 
@@ -70,17 +70,17 @@ function curate.system_prompt()
     return CURATE_SYSTEM_PROMPT .. "\nAbout this team and its work:\n" .. theme.system_prompt_extra .. "\n" .. CURATE_RELEVANCE_RULE
 end
 
-CURATE_CHECK_SYSTEM_PROMPT = """
+const CURATE_CHECK_SYSTEM_PROMPT = """
 You check a curated note against the source it was written from. Reply PASS if every statement in the note is supported by the source, it adds nothing the source doesn't say, and it's clearly cleaner and more useful to a reader than the raw source. A long source may be cut, with a line saying so; the note was written from the part shown, so judge it against that part only. Otherwise reply FAIL: followed by one short reason. Reply with nothing else.
 """
 
 -- Said after the curate prompt when the source shown is one part of a
 -- long document (an aspect), not the whole of it.
-CURATE_ASPECT_RULE = """
+const CURATE_ASPECT_RULE = """
 The source below is one part of a longer document: its passages about one subject, in document order, with "[...]" where text in between was left out. Write the note about this part only, titled by its own subject, not the whole document's.
 """
 
-CURATE_ASPECT_CHECK_RULE = """
+const CURATE_ASPECT_CHECK_RULE = """
 The source shown is one part of a longer document; judge the note against that part only.
 """
 
@@ -89,7 +89,7 @@ The source shown is one part of a longer document; judge the note against that p
 -- distilled facts, or anything the curation wrote itself. Not chat
 -- transcripts either: a chat is curated from its conversation, by
 -- session (below, "Curating a conversation"), not from its document.
-CURATE_SOURCE_TYPES = {}
+const CURATE_SOURCE_TYPES = {}
 
 function curate.is_source(doc)
     if doc == nil then
@@ -409,7 +409,7 @@ end
 -- (curate-pending every 2 minutes) took the same pending rows as a
 -- `repair curate` batch and wrote a second note for one source. A row
 -- left running by a process that died is retried by `--recheck`.
-CURATE_STALE_CLAIM_SECONDS = 900
+const CURATE_STALE_CLAIM_SECONDS = 900
 
 function curate_claim(db_path, document_id)
     token = new_claim_token()
@@ -583,7 +583,7 @@ end
 -- curated. One row per session in knowledge_conversation_curation, with
 -- the statuses and the in-place rewrite of knowledge_curation.
 
-CURATE_CONVERSATION_RULE = """
+const CURATE_CONVERSATION_RULE = """
 The source is a conversation between a member of the team and the assistant. "User" lines are what they asked, "Decision" lines what they approved or declined; state corrections and stated preferences as such. "Research" lines are the assistant's own sub-investigations. Write the note for the whole team: state what was established, decided and still open, and the caveats raised, not who asked or how the conversation went. Name the records and documents the answers relied on.
 """
 

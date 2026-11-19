@@ -20,16 +20,16 @@
 -- one place, same as for mail_smtp.lua. The client secret and the
 -- bearer token go in curl -K config files, never on the command line.
 
-json = require("dkjson")
-external_tool = require("external_tool")
-config = require("config")
+const json = require("dkjson")
+const external_tool = require("external_tool")
+const config = require("config")
 
-mail_graph = {}
+const mail_graph = {}
 
-GRAPH_TIMEOUT_SECONDS = 30
-TOKEN_URL_TEMPLATE = "https://login.microsoftonline.com/%s/oauth2/v2.0/token"
-SEND_URL_TEMPLATE = "https://graph.microsoft.com/v1.0/users/%s/sendMail"
-GRAPH_SCOPE = "https://graph.microsoft.com/.default"
+const GRAPH_TIMEOUT_SECONDS = 30
+const TOKEN_URL_TEMPLATE = "https://login.microsoftonline.com/%s/oauth2/v2.0/token"
+const SEND_URL_TEMPLATE = "https://graph.microsoft.com/v1.0/users/%s/sendMail"
+const GRAPH_SCOPE = "https://graph.microsoft.com/.default"
 
 -- curl -K config syntax: a double-quoted value, backslash-escaped.
 function curl_config_quote(s)

@@ -17,19 +17,19 @@
 --       active `tag.parent` forests, plus tier-ladder provenance (`tier > 0`
 --       implies `knowledge.can_hold_tier(source_type)`).
 
-db = require("database")
-json = require("dkjson")
-schema = require("schema")
-entity = require("entity")
-document = require("document")
-reference = require("reference")
-tag = require("tag")
-knowledge = require("knowledge")
+const db = require("database")
+const json = require("dkjson")
+const schema = require("schema")
+const entity = require("entity")
+const document = require("document")
+const reference = require("reference")
+const tag = require("tag")
+const knowledge = require("knowledge")
 
-verify = {}
+const verify = {}
 
-VERIFY_LINK_PATTERN = "%[%[([^%[%]\n]+)%]%]"
-VERIFY_SKIPPED_NAME_TYPES = {
+const VERIFY_LINK_PATTERN = "%[%[([^%[%]\n]+)%]%]"
+const VERIFY_SKIPPED_NAME_TYPES = {
     document = true,
     document_tag = true,
     tag = true,

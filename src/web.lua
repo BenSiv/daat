@@ -1,30 +1,30 @@
-db = require("database")
-config = require("config")
-schema = require("schema")
-entity = require("entity")
-ledger = require("ledger")
-view = require("view")
-template = require("template")
-html = require("ui")
-cgi_lib = require("cgi")
-json = require("dkjson")
-paths = require("paths")
-auth = require("auth")
-document = require("document")
-knowledge = require("knowledge")
-agent = require("agent")
-multipart = require("multipart")
-label = require("label")
-extension = require("extension")
-mail_provider = require("mail_provider")
+const db = require("database")
+const config = require("config")
+const schema = require("schema")
+const entity = require("entity")
+const ledger = require("ledger")
+const view = require("view")
+const template = require("template")
+const html = require("ui")
+const cgi_lib = require("cgi")
+const json = require("dkjson")
+const paths = require("paths")
+const auth = require("auth")
+const document = require("document")
+const knowledge = require("knowledge")
+const agent = require("agent")
+const multipart = require("multipart")
+const label = require("label")
+const extension = require("extension")
+const mail_provider = require("mail_provider")
 
-cgi = {}
+const cgi = {}
 
 -- Duplicated from config.lua/html.lua (both already keep their own
 -- copy for the same reason) -- Luam's per-module isolation means a
 -- bare top-level global in one file isn't visible from another, only
 -- what a module explicitly returns on its own table.
-THEME_COLOR_KEYS = {
+const THEME_COLOR_KEYS = {
     "accent", "accent_2", "bg", "bg_2", "border", "border_2",
     "heading", "input_text", "muted", "muted_2", "text", "th_text",
     "tier_0", "tier_1", "tier_2", "tier_3",
@@ -34,13 +34,13 @@ THEME_COLOR_KEYS = {
 -- /logout, and the login form's own POST) requires. Real session/login
 -- machinery lives in auth.lua -- see cgi.handle_request's session
 -- verification block below.
-REQUIRED_CAPABILITY = "i"
+const REQUIRED_CAPABILITY = "i"
 
 -- Rows per /browse page. A flat, fixed page size rather than a
 -- user-configurable one -- simple, and every entity type here is a
 -- plain projected SQL table so COUNT/LIMIT/OFFSET are cheap regardless
 -- of size.
-BROWSE_PAGE_SIZE = 100
+const BROWSE_PAGE_SIZE = 100
 
 function cgi.has_capability(capabilities, letter)
     if capabilities == nil or capabilities == "" then
@@ -150,7 +150,7 @@ function issues_to_message(issues)
     return table.concat(parts, "; ")
 end
 
-parse_query = cgi_lib.parse_query
+const parse_query = cgi_lib.parse_query
 
 -- Filters/reorders a schema layout's fields to a comma-separated
 -- allowlist, e.g. "?columns=lab_name,volume_ul" -- lets one embedded
@@ -192,10 +192,6 @@ function collect_locked_fields(db_path, layout, params)
             field_name = string.sub(key, 6)
             for _, field in ipairs(layout.fields) do
                 if field.name == field_name and field.type != "multi_select" and field.type != "multi_reference" then
-                    -- NOT named `label` -- that bare global is the
-                    -- required `label` module (src/label.lua);
-                    -- reassigning it here would silently break
-                    -- any later `label.xxx` call in this same request.
                     display_label = value
                     if field.type == "reference" and field.ref_entity_type != nil then
                         resolved = html.entity_display_label(db_path, field.ref_entity_type, tonumber(value))
@@ -214,7 +210,7 @@ end
 -- How many preview rows (mixture -> its own ingredients,
 -- etc.) render inline on /detail before pointing at the full,
 -- paginated /browse view instead.
-RELATED_RECORDS_PREVIEW_LIMIT = 10
+const RELATED_RECORDS_PREVIEW_LIMIT = 10
 
 -- Every real, plain `reference` field elsewhere that points back at
 -- this entity_type -- e.g. ingredient.mixture -> mixture -- with a
@@ -242,7 +238,7 @@ end
 -- document's Related records are only the deployment's and extensions'
 -- types (e.g. a task attached to it), each with the usual "+ Add" link
 -- that pre-fills the document.
-DOCUMENT_OWN_REFERENCING_TYPES = {document = true, document_tag = true}
+const DOCUMENT_OWN_REFERENCING_TYPES = {document = true, document_tag = true}
 
 function document_related_records(db_path, document_id)
     result = {}
@@ -275,7 +271,7 @@ response_csrf_header = nil
 -- luam/lib/cgi.lua); behind a TLS-terminating load balancer the web
 -- server has to set it itself (the deployment's Apache config does,
 -- see doc/auth.md), or cookies go out without Secure.
-request_is_https = cgi_lib.is_https
+const request_is_https = cgi_lib.is_https
 
 -- Headers every response carries. Why each one, and why these values,
 -- is in doc/auth.md ("Response headers"). In short: the CSP lets only
@@ -361,9 +357,9 @@ function print_error_html(status, message)
     return print_response(status, "text/html", "<h3>Error: " .. html.html_escape(tostring(message)) .. "</h3>")
 end
 
-parse_cookies = cgi_lib.parse_cookies
-set_cookie_header = cgi_lib.set_cookie_header
-clear_cookie_header = cgi_lib.clear_cookie_header
+const parse_cookies = cgi_lib.parse_cookies
+const set_cookie_header = cgi_lib.set_cookie_header
+const clear_cookie_header = cgi_lib.clear_cookie_header
 
 -- A new session cookie for `login`, signed with the account's current
 -- session_version -- used right after the caller changed their own

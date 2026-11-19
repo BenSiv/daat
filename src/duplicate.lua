@@ -28,23 +28,23 @@
 -- (document.on_entity_archived). A later sync updates the archived row
 -- in place and doesn't bring it back.
 
-document = require("document")
-entity = require("entity")
-db = require("database")
-hmac = require("hmac")
+const document = require("document")
+const entity = require("entity")
+const db = require("database")
+const hmac = require("hmac")
 
-duplicate = {}
+const duplicate = {}
 
 -- A body shorter than this is a stub (a folder page, a file whose text
 -- didn't extract): stubs look alike without being the same paper.
-DUPLICATE_MIN_BODY = 2000
+const DUPLICATE_MIN_BODY = 2000
 -- Share of word 5-grams two extractions of the same paper must have in
 -- common (of the smaller set), and the least their word counts may
 -- differ by (shorter / longer).
-DUPLICATE_MIN_SHARED = 0.8
-DUPLICATE_MIN_LENGTH_RATIO = 0.8
-DUPLICATE_SHINGLE_WORDS = 5
-DUPLICATE_BATCH = 100
+const DUPLICATE_MIN_SHARED = 0.8
+const DUPLICATE_MIN_LENGTH_RATIO = 0.8
+const DUPLICATE_SHINGLE_WORDS = 5
+const DUPLICATE_BATCH = 100
 
 function duplicate.body(content)
     if content == nil then

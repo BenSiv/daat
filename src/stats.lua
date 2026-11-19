@@ -5,7 +5,7 @@
 -- doc/agent-eval.md). A fit over every point, with the exponential
 -- phase found from the data, gives one answer from the same rows.
 
-stats = {}
+const stats = {}
 
 -- Ordinary least squares y = intercept + slope * x. Returns slope,
 -- intercept, r2 (1 when every point is on the line), or nil and why.
@@ -56,9 +56,9 @@ end
 
 -- How close a window's slope must come to the steepest one to count as
 -- the same growth phase, and how straight (on a log scale) it must be.
-PHASE_SLOPE_SHARE = 0.97
-PHASE_MIN_R2 = 0.98
-PHASE_MIN_POINTS = 3
+const PHASE_SLOPE_SHARE = 0.97
+const PHASE_MIN_R2 = 0.98
+const PHASE_MIN_POINTS = 3
 
 -- Fits ln(y) = intercept + rate * x. With opts.x_min/x_max, over that
 -- range only. Otherwise the exponential phase is found from the data:
