@@ -207,3 +207,31 @@ teardown() {
     [[ "$output" =~ "\"LOT-DUP\":${current_id}" ]]
     [[ ! "$output" =~ "\"LOT-DUP\":${stale_id}" ]]
 }
+
+@test "repeated entity archive and unarchive on a document are pool-idempotent and conserve heat" {
+    d1=$("$BIN" entity create document title="Doc One" content="alpha" | grep -o '[0-9]\+')
+    d2=$("$BIN" entity create document title="Doc Two" content="beta" | grep -o '[0-9]\+')
+
+    [ "$(sqlite3 .store/store.db "SELECT document_count FROM knowledge_pool_state WHERE id = 1;")" = "2" ]
+
+    # First archive drains d1; repeated archive is a strict no-op on pool count & scale.
+    "$BIN" entity archive document "$d1"
+    [ "$(sqlite3 .store/store.db "SELECT document_count FROM knowledge_pool_state WHERE id = 1;")" = "1" ]
+    scale_after_first=$(sqlite3 .store/store.db "SELECT printf('%.12f', log_pool_scale) FROM knowledge_pool_state WHERE id = 1;")
+
+    "$BIN" entity archive document "$d1"
+    [ "$(sqlite3 .store/store.db "SELECT document_count FROM knowledge_pool_state WHERE id = 1;")" = "1" ]
+    [ "$(sqlite3 .store/store.db "SELECT printf('%.12f', log_pool_scale) FROM knowledge_pool_state WHERE id = 1;")" = "$scale_after_first" ]
+
+    # First unarchive restores d1; repeated unarchive on active doc is a strict no-op.
+    "$BIN" entity unarchive document "$d1"
+    [ "$(sqlite3 .store/store.db "SELECT document_count FROM knowledge_pool_state WHERE id = 1;")" = "2" ]
+    scale_after_restore=$(sqlite3 .store/store.db "SELECT printf('%.12f', log_pool_scale) FROM knowledge_pool_state WHERE id = 1;")
+
+    "$BIN" entity unarchive document "$d1"
+    [ "$(sqlite3 .store/store.db "SELECT document_count FROM knowledge_pool_state WHERE id = 1;")" = "2" ]
+    [ "$(sqlite3 .store/store.db "SELECT printf('%.12f', log_pool_scale) FROM knowledge_pool_state WHERE id = 1;")" = "$scale_after_restore" ]
+
+    # Total effective heat across active documents equals 2 * 1.0 within floating tolerance.
+    [ "$(python3 -c "import math, sqlite3; c = sqlite3.connect('.store/store.db'); L = c.execute('SELECT log_pool_scale FROM knowledge_pool_state WHERE id = 1').fetchone()[0]; rows = c.execute('SELECT raw_heat, log_scale_at_write FROM document WHERE pool_active = 1').fetchall(); print(int(abs(sum(r * math.exp(L - l) for r, l in rows) - 2.0) < 1e-9))")" = "1" ]
+}

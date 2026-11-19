@@ -513,7 +513,7 @@ function curate.due_sources(db_path, recheck)
         SELECT d.id, d.title, d.content, d.source_type, d.retrieval_count FROM document d
         LEFT JOIN knowledge_curation c ON c.document_id = d.id
         WHERE (d.archived_at IS NULL OR d.archived_at = '')
-          AND (d.merged_into IS NULL OR d.merged_into = '')
+          AND d.merged_into IS NULL
           AND (d.source_type IS NULL OR d.source_type = '' OR d.source_type = 'chat_session')
           AND d.retrieval_count >= 2
         ORDER BY d.retrieval_count DESC, d.id;""")

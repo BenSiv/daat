@@ -670,3 +670,35 @@ EOF
     run_cgi "/browse" "type=sample"
     [[ "$output" =~ "LOT-42" ]]
 }
+
+@test "/api/autocomplete matches display, identifier, and first schema fields while excluding archived rows" {
+    cat > schemas/instrument.lua <<'EOF'
+return {
+  name = "instrument",
+  fields = {
+    {name = "asset_code", type = "text", required = true, identifier = true},
+    {name = "model_name", type = "text", required = true, display = true},
+  },
+}
+EOF
+    "$BIN" schema add schemas/instrument.lua
+    active_inst=$("$BIN" entity create instrument asset_code="INST-01" model_name="Spectrometer" | grep -o '[0-9]\+')
+    archived_inst=$("$BIN" entity create instrument asset_code="INST-02" model_name="Spectrometer Old" | grep -o '[0-9]\+')
+    "$BIN" entity archive instrument "$archived_inst"
+
+    # Matches via identifier=true field, returns display=true label, and excludes archived row.
+    run_cgi "/api/autocomplete" "type=instrument&query=INST"
+    [[ "$output" =~ "200 OK" ]]
+    [[ "$output" =~ '"name":"Spectrometer"' ]]
+    [[ ! "$output" =~ "Spectrometer Old" ]]
+
+    # Also matches display-less/identifier-less schema via its first user field without hardcoding field names.
+    run_cgi "/api/autocomplete" "type=sample&query=LOT-42"
+    [[ "$output" =~ "200 OK" ]]
+    [[ "$output" =~ '"name":"LOT-42"' ]]
+
+    "$BIN" entity archive sample 3
+    run_cgi "/api/autocomplete" "type=sample&query=LOT-42"
+    [[ "$output" =~ "200 OK" ]]
+    [[ ! "$output" =~ "LOT-42" ]]
+}

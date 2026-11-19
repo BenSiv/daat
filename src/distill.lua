@@ -176,7 +176,7 @@ function distill_pool(db_path, model)
                CASE WHEN e.vector_packed IS NULL THEN e.vector_json END AS vector_json
         FROM document d JOIN document_embedding e ON e.document_id = d.id AND e.model = %s
         WHERE d.source_type IN ('record', 'distilled') AND (d.archived_at IS NULL OR d.archived_at = '')
-          AND (d.merged_into IS NULL OR d.merged_into = '');""", db.quote(model)))
+          AND d.merged_into IS NULL;""", db.quote(model)))
     pool = {}
     if rows == nil then
         return pool
@@ -374,7 +374,6 @@ function distill.run(db_path, reference_id, author)
                             absorbed[w.match.id] = true
                             archived_id = entity.archive(db_path, "document", w.match.id, author, nil, "covered by record #" .. tostring(record_id))
                             if archived_id != nil then
-                                document.on_entity_archived(db_path, "document", archived_id)
                                 db.exec(db_path, string.format("UPDATE document SET merged_into = %d WHERE id = %d;", record_id, w.match.id))
                                 counts.absorbed = counts.absorbed + 1
                             end

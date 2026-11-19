@@ -14,14 +14,7 @@ _fields_cache = {}
 _registered_cache = {}
 
 function schema_cache_key(db_path)
-    if db.is_mariadb(db_path) then
-        return "mariadb:" .. tostring(db_path.host) .. ":" .. tostring(db_path.port) .. ":" .. tostring(db_path.database)
-    end
-    attr = lfs.attributes(tostring(db_path))
-    if attr != nil then
-        return "sqlite:" .. tostring(db_path) .. ":" .. tostring(attr.ino)
-    end
-    return "sqlite:" .. tostring(db_path)
+    return db.cache_key(db_path)
 end
 
 function invalidate_schema_cache(db_path)

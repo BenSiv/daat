@@ -287,3 +287,30 @@ view|stock|SELECT 1|admin" ]
     [ "$(store "SELECT COUNT(*) FROM pragma_index_list('knowledge_retrieval') WHERE name = 'knowledge_retrieval_status_id_idx';")" = "1" ]
     [ "$(store "SELECT number_value >= 10 FROM system_state WHERE name = 'store.schema_version';")" = "1" ]
 }
+
+@test "migration 11 backfills log_scale_at_write from scale_at_write, sets pool_active, and repairs drifted document_count" {
+    d1=$("$BIN" entity create document title="Active A" content="alpha" | grep -o '[0-9]\+')
+    d2=$("$BIN" entity create document title="Active B" content="beta" | grep -o '[0-9]\+')
+    d3=$("$BIN" entity create document title="Retired C" content="gamma" | grep -o '[0-9]\+')
+
+    # Simulate a pre-migration-11 store with legacy scale_at_write, a retired row,
+    # and a drifted document_count = 99.
+    store "ALTER TABLE document DROP COLUMN log_scale_at_write;"
+    store "ALTER TABLE document DROP COLUMN pool_active;"
+    store "UPDATE document SET scale_at_write = 0.5 WHERE id = $d1;"
+    store "UPDATE document SET scale_at_write = 0.25 WHERE id = $d2;"
+    store "UPDATE document SET archived_at = '2026-10-01 00:00:00', scale_at_write = 1.0 WHERE id = $d3;"
+    store "UPDATE knowledge_pool_state SET document_count = 99 WHERE id = 1;"
+    rewind_to 10
+
+    run "$BIN" entity list document
+    [ "$status" -eq 0 ]
+
+    [ "$(store "SELECT ABS(log_scale_at_write - (-0.6931471805599453)) < 1e-9 FROM document WHERE id = $d1;")" = "1" ]
+    [ "$(store "SELECT ABS(log_scale_at_write - (-1.3862943611198906)) < 1e-9 FROM document WHERE id = $d2;")" = "1" ]
+    [ "$(store "SELECT pool_active FROM document WHERE id = $d1;")" = "1" ]
+    [ "$(store "SELECT pool_active FROM document WHERE id = $d2;")" = "1" ]
+    [ "$(store "SELECT pool_active FROM document WHERE id = $d3;")" = "0" ]
+    [ "$(store "SELECT document_count FROM knowledge_pool_state WHERE id = 1;")" = "2" ]
+    [ "$(store "SELECT number_value >= 11 FROM system_state WHERE name = 'store.schema_version';")" = "1" ]
+}

@@ -375,7 +375,7 @@ end
 -- -> {built, unchanged, short, failed, aspects}
 function aspect.refresh_all(db_path, limit)
     counts = {built = 0, unchanged = 0, short = 0, failed = 0, aspects = 0}
-    rows = db.query(db_path, "SELECT id FROM document WHERE (archived_at IS NULL OR archived_at = '') AND (merged_into IS NULL OR merged_into = '') ORDER BY id;")
+    rows = db.query(db_path, "SELECT id FROM document WHERE (archived_at IS NULL OR archived_at = '') AND merged_into IS NULL ORDER BY id;")
     if rows == nil then
         return counts
     end

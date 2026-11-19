@@ -363,10 +363,16 @@ assistant|answer|{\"blocks\":[{\"type\":\"text\",\"text\":\"M9, per the protocol
     [[ "$output" =~ "(chat s3: rejected)" ]]
     run db "SELECT source_ref FROM document WHERE source_type = 'chat_session' AND archived_at IS NULL;"
     [ "$output" = "s3" ]
+    # Retiring 2 of 3 transcripts drains their heat into the remaining active pool document.
+    [ "$(db "SELECT document_count FROM knowledge_pool_state WHERE id = 1;")" = "1" ]
+    [ "$(db "SELECT COUNT(*) FROM document WHERE pool_active = 1;")" = "1" ]
 
     run "$BIN" repair retire-transcripts --undo "$TEST_DIR/retire.log"
     [[ "$output" =~ "2 transcript(s) restored" ]]
     [ "$(db "SELECT COUNT(*) FROM document WHERE source_type = 'chat_session' AND archived_at IS NULL;")" = "3" ]
+    # Undoing retirement re-registers both transcripts in the heat pool.
+    [ "$(db "SELECT document_count FROM knowledge_pool_state WHERE id = 1;")" = "3" ]
+    [ "$(db "SELECT COUNT(*) FROM document WHERE pool_active = 1;")" = "3" ]
 }
 
 @test "conversation curation splits assistant thinking blocks out as non-core reasoning: included when short, trimmed before answers when over budget" {

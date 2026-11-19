@@ -45,7 +45,7 @@ agent_tools = require("agent_tools")
 
 cgi = require("cgi")
 web = require("web")
-database_adapter = require("database_adapter")
+db = require("database")
 
 function run_main()
     if cgi.is_cgi() then
@@ -81,7 +81,7 @@ function run_main()
     end
 
     if command == nil or command == "-h" or command == "--help" then
-        print("Usage: daat <init|schema|entity|ledger|extension|view|user|api-key|document|knowledge|agent|repair|tag> ...")
+        print("Usage: daat <init|schema|entity|ledger|extension|view|user|api-key|document|knowledge|agent|repair|tag|store> ...")
         return
     end
 
@@ -156,6 +156,25 @@ function run_main()
         print(string.format("metrics: Removed %d metrics and control rows %s", pruned.metrics, mt_label))
         deleted = passage.prune_cache(db_path, conf.passage_cache_days)
         print(string.format("passage_cache: Deleted %d passage embeddings unused for %s days", deleted, tostring(conf.passage_cache_days)))
+        return
+    end
+
+    if command == "store" and arg[2] == "verify" then
+        if config.is_initialized(".") == false then
+            print("Not initialized. Run 'daat init' first.")
+            os.exit(1)
+        end
+        verify_mod = require("verify")
+        verify_args = {}
+        for i = 2, #arg do
+            table.insert(verify_args, arg[i])
+        end
+        verify_mod.do_verify(verify_args, config.db_path("."))
+        return
+    end
+
+    if command == "store" then
+        print("Usage: daat store <prune|verify> [--json]")
         return
     end
 
@@ -251,9 +270,9 @@ function run_main()
 end
 
 function main()
-    database_adapter.sqlite_keep_open(true)
+    db.sqlite_keep_open(true)
     ok_run, run_err = pcall(run_main)
-    database_adapter.sqlite_close_all()
+    db.sqlite_close_all()
     if not ok_run then
         error(run_err, 0)
     end

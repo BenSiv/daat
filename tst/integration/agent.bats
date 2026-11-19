@@ -847,8 +847,8 @@ EOF
     resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
     session_id=$(extract_query_param "$resp" "session_id")
 
-    scripted="$(tool_call_response "entity.query" '{"sql":"SELECT DATEDIFF(created_at, updated_at) FROM task"}')"
-    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"how long did tasks take\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+    scripted="$(tool_call_response "entity.query" '{"sql":"SELECT DATE_FORMAT(created_at, '\''%Y-%m'\'') FROM task"}')"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"group tasks by month\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
     run latest_tool_result "$session_id"
     [[ "$output" =~ "SQLite dialect" ]]
@@ -1817,6 +1817,62 @@ EOF
     [[ "$output" =~ "[Prior tool result, document.search]: stray result" ]]
     run raw_get "/api/chat-widget-history" "session_id=${session_id}" "$COOKIE"
     [[ "$output" =~ "ok" ]]
+}
+
+@test "an approved write a crash left running tells the model to check before proposing it again, not to run it again (#22)" {
+    resp=$(start_chat "$COOKIE" "$CSRF" "Crashed write")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    # An earlier read cut off with no result, then a proposed
+    # entity.create the person approved; the process died after claiming
+    # it (status 'running') and before its result was stored. Vertex
+    # numbers each response's calls from call_1, so both calls share an id.
+    db="$TEST_DIR/.store/store.db"
+    sqlite3 "$db" "INSERT INTO agent_message (session_id, role, content) VALUES ('${session_id}', 'user', 'add a person named Dana Levi');"
+    sqlite3 "$db" "INSERT INTO agent_message (session_id, role, content) VALUES ('${session_id}', 'assistant', '{\"blocks\":[{\"type\":\"toolCall\",\"id\":\"call_1\",\"name\":\"entity.list_types\",\"arguments\":{}}]}');"
+    sqlite3 "$db" "INSERT INTO agent_message (session_id, role, content) VALUES ('${session_id}', 'user', 'go on');"
+    write_id=$(sqlite3 "$db" "INSERT INTO agent_message (session_id, role, content) VALUES ('${session_id}', 'assistant', '{\"blocks\":[{\"type\":\"toolCall\",\"id\":\"call_1\",\"name\":\"entity.create\",\"arguments\":{\"entity_type\":\"person\",\"full_name\":\"Dana Levi\"}}]}'); SELECT last_insert_rowid();")
+    sqlite3 "$db" "INSERT INTO agent_pending_action (session_id, tool, method, args_json, status, tool_call_id, message_id) VALUES ('${session_id}', 'entity', 'create', '{\"entity_type\":\"person\",\"full_name\":\"Dana Levi\"}', 'running', 'call_1', ${write_id});"
+
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"continue\"}" "$COOKIE" "$CSRF" "$(done_response "ok")" >/dev/null
+
+    run sqlite3 "$db" "SELECT prompt FROM agent_model_call WHERE session_id = '${session_id}' ORDER BY id ASC LIMIT 1;"
+    [[ "$output" =~ "this action was approved, but the turn was interrupted while it ran, so it may or may not have been done. Check whether it took effect" ]]
+    # The cut-off read keeps the plain text: one of each, not two of either.
+    [[ $(grep -o "may or may not have been done" <<< "$output" | wc -l) -eq 1 ]]
+    [[ $(grep -o "Run it again if you still need it" <<< "$output" | wc -l) -eq 1 ]]
+    # The row stays running: nothing runs it again on its own.
+    run sqlite3 "$db" "SELECT status FROM agent_pending_action WHERE session_id = '${session_id}';"
+    [ "$output" = "running" ]
+}
+
+@test "an action left running before message_id was recorded is still matched, by its call id and tool (#22)" {
+    resp=$(start_chat "$COOKIE" "$CSRF" "Crashed write, older row")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    db="$TEST_DIR/.store/store.db"
+    sqlite3 "$db" "INSERT INTO agent_message (session_id, role, content) VALUES ('${session_id}', 'user', 'add a person named Dana Levi');"
+    sqlite3 "$db" "INSERT INTO agent_message (session_id, role, content) VALUES ('${session_id}', 'assistant', '{\"blocks\":[{\"type\":\"toolCall\",\"id\":\"call_1\",\"name\":\"entity.create\",\"arguments\":{\"entity_type\":\"person\",\"full_name\":\"Dana Levi\"}}]}');"
+    sqlite3 "$db" "INSERT INTO agent_pending_action (session_id, tool, method, args_json, status, tool_call_id) VALUES ('${session_id}', 'entity', 'create', '{}', 'running', 'call_1');"
+
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"continue\"}" "$COOKIE" "$CSRF" "$(done_response "ok")" >/dev/null
+
+    run sqlite3 "$db" "SELECT prompt FROM agent_model_call WHERE session_id = '${session_id}' ORDER BY id ASC LIMIT 1;"
+    [[ "$output" =~ "may or may not have been done" ]]
+    [[ ! "$output" =~ "Run it again if you still need it" ]]
+}
+
+@test "a proposed write records the assistant message holding its call (#22)" {
+    write_task_schema
+    resp=$(start_chat "$COOKIE" "$CSRF" "Proposed write")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"create a task\"}" "$COOKIE" "$CSRF" \
+        "$(tool_call_response "entity.create" '{"entity_type":"task","title":"Buy agar","status":"open"}')" >/dev/null
+
+    db="$TEST_DIR/.store/store.db"
+    run sqlite3 "$db" "SELECT p.message_id = m.id FROM agent_pending_action p JOIN agent_message m ON m.session_id = p.session_id AND m.role = 'assistant' WHERE p.session_id = '${session_id}' ORDER BY m.id DESC LIMIT 1;"
+    [ "$output" = "1" ]
 }
 
 @test "compaction never keeps a tool result while compacting away the call it answers" {

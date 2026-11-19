@@ -152,10 +152,7 @@ end
 -- by message_id, which is what the per-turn section does.
 function call_sections(db_path, since, out)
     classes = account_classes(db_path)
-    length_fn = "LENGTH"
-    if db.is_mariadb(db_path) then
-        length_fn = "CHAR_LENGTH"
-    end
+    length_fn = "CHAR_LENGTH"
     -- The model-call log is agent_model_call. A store not yet migrated
     -- (e.g. production read before a deploy) still has it as
     -- knowledge_context, without a kind column on older layouts; those
@@ -431,10 +428,7 @@ function context_report.stored_by_type(db_path, since)
     for _, dtype in ipairs(STORED_DATA_TYPES) do
         totals[dtype] = {rows = 0, chars = 0}
     end
-    length_fn = "LENGTH"
-    if db.is_mariadb(db_path) then
-        length_fn = "CHAR_LENGTH"
-    end
+    length_fn = "CHAR_LENGTH"
     if db.table_exists(db_path, "agent_message") then
         has_data_type = false
         for _, name in ipairs(db.get_columns(db_path, "agent_message")) do

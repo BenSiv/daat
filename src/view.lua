@@ -305,6 +305,9 @@ end
 -- escaping helper trusted everywhere else in this codebase) --
 -- genuinely safe for these specific types, just not a real prepared
 -- statement.
+-- Executes a view's SELECT across SQLite and MariaDB, delegating
+-- single-parameter binding to `db.query_params` (`luam/lib/database.lua`)
+-- so this file never imports `sqlite3` or `database_adapter` directly.
 function view.run_sql(db_path, sql_text, param_type, param_value)
     if view.is_select_only(sql_text) == false then
         return nil, "refusing to run: not a plain SELECT"
@@ -318,74 +321,7 @@ function view.run_sql(db_path, sql_text, param_type, param_value)
         return rows
     end
 
-    bind_value = param_value
-    if param_type == "integer" or param_type == "number" then
-        bind_value = tonumber(param_value)
-        if bind_value == nil then
-            return nil, "parameter must be a number"
-        end
-    elseif param_value == nil or param_value == "" then
-        return nil, "missing required parameter"
-    end
-
-    placeholder_count = 0
-    for _ in string.gmatch(sql_text, "%?") do
-        placeholder_count = placeholder_count + 1
-    end
-    if placeholder_count != 1 then
-        return nil, "sql doesn't have exactly one '?' placeholder"
-    end
-
-    if db.is_mariadb(db_path) then
-        literal = tostring(bind_value)
-        if param_type == "text" then
-            literal = db.quote(bind_value)
-        end
-        -- Plain (non-pattern) find + string.sub, not gsub -- gsub's
-        -- replacement argument treats a literal '%' specially (a
-        -- backreference escape), which real substituted text (e.g. a
-        -- lab_name containing '%') could easily contain.
-        pos = string.find(sql_text, "?", 1, true)
-        substituted = string.sub(sql_text, 1, pos - 1) .. literal .. string.sub(sql_text, pos + 1)
-        rows = db.query(db_path, substituted)
-        if rows == nil then
-            return {}
-        end
-        return rows
-    end
-
-    database_adapter = require("database_adapter")
-    sqlite3 = require("sqlite3")
-    ok_open, conn, owned = pcall(database_adapter.acquire_sqlite_connection, db_path)
-    if not ok_open or conn == nil then
-        return nil, "cannot open database"
-    end
-
-    vm, err = sqlite3.prepare(conn, sql_text)
-    if vm == nil then
-        database_adapter.release_sqlite_connection(conn, owned, false)
-        return nil, "invalid sql: " .. tostring(err)
-    end
-    if sqlite3.stmt.bind_parameter_count(vm) != 1 then
-        sqlite3.stmt.finalize(vm)
-        database_adapter.release_sqlite_connection(conn, owned, false)
-        return nil, "sql doesn't have exactly one '?' placeholder"
-    end
-
-    bind_rc = sqlite3.stmt.bind(vm, 1, bind_value)
-    if bind_rc != 0 then
-        sqlite3.stmt.finalize(vm)
-        database_adapter.release_sqlite_connection(conn, owned, false)
-        return nil, "failed to bind parameter"
-    end
-
-    rows = {}
-    for row in sqlite3.stmt.nrows(vm) do
-        table.insert(rows, row)
-    end
-    sqlite3.stmt.finalize(vm)
-    database_adapter.release_sqlite_connection(conn, owned, false)
-    return rows
+    return db.query_params(db_path, sql_text, {{type = param_type, value = param_value}})
 end
 
 -- Ad-hoc, unsaved SELECT execution against the entity store -- for

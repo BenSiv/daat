@@ -139,22 +139,24 @@ function tests.content_hash_is_deterministic()
 end
 
 function tests.pool_effective_heat_reads_raw_heat_unchanged_when_pool_scale_matches()
-    print("Testing pool_effective_heat returns raw_heat unchanged when scale_at_write matches the current pool_scale")
-    check(document.pool_effective_heat(1.5, 1.0, 1.0) == 1.5, "matching scale should mean no adjustment, got " .. tostring(document.pool_effective_heat(1.5, 1.0, 1.0)))
+    print("Testing pool_effective_heat returns raw_heat unchanged when log_scale_at_write matches log_pool_scale")
+    check(document.pool_effective_heat(1.5, -42.0, -42.0) == 1.5, "matching log scale should mean no adjustment")
+    -- Also stays exact well past IEEE-754 binary64's -745.13 linear underflow cliff:
+    check(document.pool_effective_heat(1.5, -5000.0, -5000.0) == 1.5, "matching log scale past -745 must not underflow")
 end
 
 function tests.pool_effective_heat_applies_accumulated_shrink()
     print("Testing pool_effective_heat applies whatever proportional shrink accumulated since this row was last written")
-    -- pool_scale halved since this row's own scale_at_write -- its true
+    -- pool_scale halved (ln(0.5)) since this row's own log_scale_at_write -- its true
     -- current share is half of its stored raw_heat.
-    result = document.pool_effective_heat(2.0, 1.0, 0.5)
-    check(result == 1.0, "expected 2.0 * (0.5/1.0) = 1.0, got " .. tostring(result))
+    result = document.pool_effective_heat(2.0, -1000.0, -1000.0 + math.log(0.5))
+    check(math.abs(result - 1.0) < 1e-12, "expected 2.0 * 0.5 = 1.0, got " .. tostring(result))
 end
 
 function tests.pool_effective_heat_falls_back_to_base_heat_on_missing_data()
-    print("Testing pool_effective_heat falls back to BASE_HEAT for nil/zero inputs")
-    check(document.pool_effective_heat(nil, 1.0, 1.0) == document.base_heat(), "nil raw_heat should fall back to BASE_HEAT")
-    check(document.pool_effective_heat(1.0, 0, 1.0) == document.base_heat(), "zero scale_at_write should fall back to BASE_HEAT (would divide by zero otherwise)")
+    print("Testing pool_effective_heat falls back to BASE_HEAT for nil inputs")
+    check(document.pool_effective_heat(nil, 0.0, 0.0) == document.base_heat(), "nil raw_heat should fall back to BASE_HEAT")
+    check(document.pool_effective_heat(1.0, nil, 0.0) == document.base_heat(), "nil log_scale_at_write should fall back to BASE_HEAT")
 end
 
 function tests.tier_weight_known_and_unknown_tiers()
@@ -175,7 +177,7 @@ function tests.knowledge_pool_sql_columns_text_names_the_real_columns()
     for _, name in ipairs({
         "tier", "retrieval_count", "last_retrieved_at", "source_type",
         "source_id", "source_ref", "external_id", "content_hash",
-        "duplicate_of", "merged_into", "raw_heat", "scale_at_write",
+        "duplicate_of", "merged_into", "raw_heat", "log_scale_at_write", "scale_at_write", "pool_active",
     }) do
         check(string.find(text, name, 1, true) != nil, "expected column '" .. name .. "' to be named, got:\n" .. text)
     end
