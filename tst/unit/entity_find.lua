@@ -7,7 +7,7 @@
 -- distinctive or not, and only references keep to the distinctive ones.
 
 agent_tools = require("agent_tools")
-reference = require("reference")
+reference = require("document.reference")
 document = require("document")
 entity = require("entity")
 schema = require("schema")

@@ -16,13 +16,13 @@
 
 const document = require("document")
 const tag = require("tag")
-const tag_upkeep = require("tag_upkeep")
-const reference = require("reference")
-const aspect_lib = require("aspect")
-const duplicate_lib = require("duplicate")
-const curate_lib = require("curate")
-const synthesize_lib = require("synthesize")
-const distill_lib = require("distill")
+const tag_upkeep = require("tag.upkeep")
+const reference = require("document.reference")
+const aspect_lib = require("document.aspect")
+const duplicate_lib = require("document.duplicate")
+const curate_lib = require("knowledge.curate")
+const synthesize_lib = require("knowledge.synthesize")
+const distill_lib = require("knowledge.distill")
 const knowledge_lib = require("knowledge")
 
 const repair = {}

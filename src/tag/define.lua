@@ -16,7 +16,7 @@ const db = require("database")
 const entity = require("entity")
 const document = require("document")
 const knowledge = require("knowledge")
-const tag_upkeep = require("tag_upkeep")
+const tag_upkeep = require("tag.upkeep")
 const agent_provider = require("agent_provider")
 
 const tag_define = {}

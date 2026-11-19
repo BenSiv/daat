@@ -33,7 +33,7 @@ const db = require("database")
 const entity = require("entity")
 const config = require("config")
 const tag = require("tag")
-const tag_upkeep = require("tag_upkeep")
+const tag_upkeep = require("tag.upkeep")
 const agent_provider = require("agent_provider")
 
 const tag_broader = {}

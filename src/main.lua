@@ -31,7 +31,7 @@ const knowledge = require("knowledge")
 const do_knowledge = knowledge.do_knowledge
 const repair = require("repair")
 const do_repair = repair.do_repair
-const tag_cli = require("tag_cli")
+const tag_cli = require("tag.cli")
 const do_tag = tag_cli.do_tag
 
 -- Required explicitly here since knowledge.lua does not require agent.lua
@@ -43,7 +43,7 @@ const cgi = require("cgi")
 const web = require("web")
 const db = require("database")
 const store = require("store")
-const passage = require("passage")
+const passage = require("document.passage")
 const verify = require("verify")
 const context_report = require("context_report")
 

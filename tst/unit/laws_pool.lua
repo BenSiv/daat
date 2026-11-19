@@ -15,7 +15,7 @@ schema = require("schema")
 entity = require("entity")
 document = require("document")
 knowledge = require("knowledge")
-duplicate = require("duplicate")
+duplicate = require("document.duplicate")
 verify = require("verify")
 
 ORIGIN_CWD = lfs.currentdir()
@@ -499,7 +499,7 @@ end
     end
     table.insert(cmd_parts, "wait")
     rc = os.execute("bash -c " .. string.format("%q", table.concat(cmd_parts, " ")))
-    check(rc == 0, "expected all concurrent pool workers to exit 0, got rc=" .. tostring(rc))
+    check(rc == true or rc == 0, "expected all concurrent pool workers to exit 0, got rc=" .. tostring(rc))
 
     l1 = verify.pool_thermodynamics(sut.db_path)
     if l1.ok == false then

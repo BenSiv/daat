@@ -30,7 +30,7 @@ const schema_lib = require("schema")
 const config = require("config")
 const json = require("dkjson")
 const vector_lib = require("vector")
-const document_text = require("document_text")
+const document_text = require("document.text")
 const store_lib = require("store")
 
 const tag = {}

@@ -8,7 +8,7 @@
 -- from its neighbours.
 
 const db = require("database")
-const document_text = require("document_text")
+const document_text = require("document.text")
 
 const tag_terms = {}
 

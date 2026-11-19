@@ -16,9 +16,12 @@ unit = require("unit")
 check = unit.check
 tests = unit.suite()
 
--- Luam's type() calls a boolean a "flag".
+function is_boolean(value)
+    return value == true or value == false
+end
+
 function optional_flag(value)
-    return value == nil or type(value) == "flag"
+    return value == nil or is_boolean(value)
 end
 
 function extension_entry(name, tools)
@@ -34,7 +37,7 @@ function tests.every_builtin_record_follows_the_field_rules()
     for group, methods in pairs(agent_tools.AGENT_TOOLS) do
         for method, record in pairs(methods) do
             name = group .. "." .. method
-            check(type(record.destructive) == "flag", name .. ": destructive must be true or false")
+            check(is_boolean(record.destructive), name .. ": destructive must be true or false")
             check(optional_flag(record.in_research), name .. ": in_research must be true, false or absent")
             check(record.control == nil or agent.CONTROL_KINDS[record.control] != nil,
                 name .. ": control '" .. tostring(record.control) .. "' isn't a CONTROL_KINDS kind")
@@ -116,7 +119,7 @@ end
 function tests.turn_ending_kinds_are_complete()
     print("Testing every turn-ending control kind says what run_turn needs")
     for name, kind in pairs(agent.CONTROL_KINDS) do
-        check(type(kind.ends_turn) == "flag", name .. ": ends_turn must be true or false")
+        check(is_boolean(kind.ends_turn), name .. ": ends_turn must be true or false")
         if kind.ends_turn == true then
             for _, field in ipairs({"result", "another_this_turn", "status", "message_argument"}) do
                 check(type(kind[field]) == "string" and kind[field] != "", name .. ": a turn-ending kind needs " .. field)

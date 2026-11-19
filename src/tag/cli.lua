@@ -3,10 +3,10 @@
 -- depend on tag_upkeep one-way without a cycle back.
 
 const entity = require("entity")
-const tag_upkeep = require("tag_upkeep")
-const tag_build = require("tag_build")
-const tag_define = require("tag_define")
-const tag_broader = require("tag_broader")
+const tag_upkeep = require("tag.upkeep")
+const tag_build = require("tag.build")
+const tag_define = require("tag.define")
+const tag_broader = require("tag.broader")
 
 const tag_cli = {}
 

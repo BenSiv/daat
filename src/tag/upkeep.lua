@@ -43,7 +43,7 @@ const json = require("dkjson")
 const tag = require("tag")
 const agent_provider = require("agent_provider")
 const store_lib = require("store")
-const tag_terms_lib = require("tag_terms")
+const tag_terms_lib = require("tag.terms")
 
 const tag_upkeep = {}
 

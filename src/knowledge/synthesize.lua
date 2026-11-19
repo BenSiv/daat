@@ -18,7 +18,7 @@
 
 const db = require("database")
 const document = require("document")
-const knowledge = require("knowledge_store")
+const knowledge = require("knowledge.store")
 const config = require("config")
 const store_lib = require("store")
 const agent_provider_lib = require("agent_provider")

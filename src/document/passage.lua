@@ -12,7 +12,7 @@
 
 const config = require("config")
 const db = require("database")
-const document_text = require("document_text")
+const document_text = require("document.text")
 const hmac = require("hmac")
 const vector_lib = require("vector")
 const store_lib = require("store")

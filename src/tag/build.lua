@@ -40,11 +40,11 @@ const entity = require("entity")
 const config = require("config")
 const json = require("dkjson")
 const tag = require("tag")
-const tag_upkeep = require("tag_upkeep")
+const tag_upkeep = require("tag.upkeep")
 const agent_provider = require("agent_provider")
 const document = require("document")
 const vector_lib = require("vector")
-const tag_terms_lib = require("tag_terms")
+const tag_terms_lib = require("tag.terms")
 
 const tag_build = {}
 

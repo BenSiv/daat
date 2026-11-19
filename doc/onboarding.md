@@ -62,18 +62,20 @@ cd dev && ./deploy.sh
 | `tst/eval/` | The agent scorecard: the demo-lab generator, scenarios, checks and report (`agent-eval.md`) |
 | `vnd/` | Vendored, checked-in frontend JS (Toast UI Editor, Zebra Browser Print) -- no CDN, no JS build step |
 
-`src/*.lua` at a glance -- each module's top-of-file comment has the full story:
+`src/` at a glance -- larger domains expose a `src/<domain>.lua` facade backed by acyclic submodules under `src/<domain>/`:
 
 - `main.lua` -- CLI/CGI entry point
-- `web.lua` -- route dispatch, capability checks (the low-level CGI/HTTP/cookie and `multipart/form-data` helpers live in `../luam/lib/cgi.lua` and `../luam/lib/multipart.lua`)
-- `entity.lua` / `ledger.lua` / `schema.lua` -- the entity/history/schema model
-- `auth.lua` -- login, sessions, CSRF
-- `document.lua` -- the Document entity type and its tree/links
-- `knowledge.lua` -- the knowledge pool (tiering/heat on documents)
+- `web.lua` + `web/` -- route dispatch, per-request context, and capability checks (`web/{auth_routes,admin_routes,entity_routes,document_routes,chat_routes,api_routes,attachment_routes}.lua`; the low-level CGI/HTTP/cookie and `multipart/form-data` helpers live in `../luam/lib/cgi.lua` and `../luam/lib/multipart.lua`)
+- `entity.lua` / `ledger.lua` / `schema.lua` / `store.lua` -- the entity/history/schema/DDL model
+- `auth.lua` -- login, sessions, CSRF, API keys, password reset
+- `tag.lua` + `tag/` -- the tag ontology (`tag/{terms,upkeep,build,broader,define,cli}.lua`)
+- `document.lua` + `document/` -- the Document entity type, hybrid search, and submodules (`document/{text,schema_pool,links,markdown,embeddings,passage,aspect,reference,duplicate}.lua`)
+- `knowledge.lua` + `knowledge/` -- the knowledge pool (`knowledge/{store,links,review,curate,synthesize,distill}.lua`)
+- `repair.lua` / `verify.lua` -- backfill, repair, and ledger/store integrity verification
 - `agent.lua` + `agent_tools.lua` -- the chat/assistant subsystem: the turn loop, approval gate and tool registry in `agent.lua`, the tool records and their handlers in `agent_tools.lua` (`agent-tools.md`)
 - `agent_provider.lua` + `provider/agent_*.lua` -- the pluggable LLM backends (Vertex, Claude, Ollama/OpenAI-compatible `/v1`, and the scripted `test` provider)
 - `extension.lua` / `view.lua` -- the drop-in extensibility mechanisms (see below)
-- `ui.lua` / `template.lua` / `page.lua` -- rendering (`page.lua` is daat's own first-party page-section vocabulary, deliberately separate from `ui.lua`'s extension canvas -- see `doc/templating.md`; the low-level escaping and `{{ }}` interpolation modules `html.lua` and `render.lua` live in `../luam/lib/`)
+- `ui.lua` + `ui/` / `template.lua` / `page.lua` -- rendering (`ui/{common,data_pages,admin_pages,knowledge_pages}.lua` + `ui/css/*.css`; `page.lua` is daat's own first-party page-section vocabulary, deliberately separate from `ui.lua`'s extension canvas -- see `doc/templating.md`; the low-level escaping and `{{ }}` interpolation modules `html.lua` and `render.lua` live in `../luam/lib/`)
 - `config.lua` / `init.lua` / `label.lua` -- deployment config, `daat init`, ZPL labels (the storage adapter `database.lua` -- with the raw per-backend bindings one layer down in `database_adapter.lua` -- and the subprocess helper `external_tool.lua` are shared infrastructure in `../luam/lib/`, not daat's own `src/`)
 
 ## Architecture concepts to know before contributing

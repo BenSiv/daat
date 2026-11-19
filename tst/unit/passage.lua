@@ -1,7 +1,7 @@
 -- src/passage.lua: splitting documents into passages along their own
 -- structure (doc/passage-retrieval-plan.md, commit 1).
 
-passage = require("passage")
+passage = require("document.passage")
 
 unit = require("unit")
 check = unit.check
@@ -128,8 +128,8 @@ package.path = %q
 package.cpath = %q
 init = require("init")
 db = require("database")
-passage = require("passage")
-curate = require("curate")
+passage = require("document.passage")
+curate = require("knowledge.curate")
 dir = arg[1]
 init.do_init({}, dir)
 db_path = dir .. "/.store/store.db"
@@ -159,7 +159,7 @@ assert(rem != nil and #rem == 1 and rem[1].text_hash == "new_h", "expected new_h
         sub_dir = dir .. "/tz_" .. tostring(idx)
         lfs.mkdir(sub_dir)
         rc = os.execute(string.format("TZ=%q %q %q %q", tz, luam_bin, probe_script, sub_dir))
-        check(rc == 0, "expected TZ=" .. tz .. " cutoff probe to pass, got rc=" .. tostring(rc))
+        check(rc == true or rc == 0, "expected TZ=" .. tz .. " cutoff probe to pass, got rc=" .. tostring(rc))
     end
     os.execute("rm -rf '" .. dir .. "'")
 end
