@@ -710,16 +710,12 @@ end
 const JOB_STALE_CLAIM_SECONDS = 900
 
 function new_job_claim_token()
-    urandom = io.open("/dev/urandom", "rb")
-    if urandom == nil then
+    crypto_lib = require("crypto")
+    tok = crypto_lib.random_hex(8)
+    if tok == nil then
         return tostring(os.time()) .. "_" .. tostring(math.random(100000, 999999))
     end
-    raw = io.read(urandom, 8)
-    io.close(urandom)
-    function byte_to_hex(c)
-        return string.format("%02x", string.byte(c))
-    end
-    return (string.gsub(raw, ".", byte_to_hex))
+    return tok
 end
 
 function extension.pending_jobs(db_path, limit)

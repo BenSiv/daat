@@ -159,7 +159,7 @@ fi
 echo
 echo "Running Luam unit tests (tst/unit/)"
 export LUA_PATH="./tst/lib/?.lua;./src/?.lua;${LUAM_DIR}/lib/?.lua;${LUAM_DIR}/lib/?/init.lua;;"
-export LUA_CPATH="${LUAM_DIR}/bin/?.so;${LUAM_DIR}/lib/lfs/?.so;${LUAM_DIR}/lib/hmac/?.so;${LUAM_DIR}/lib/bcrypt/?.so;${LUAM_DIR}/lib/mariadb/?.so;;"
+export LUA_CPATH="${LUAM_DIR}/lib/?.so;${LUAM_DIR}/lib/?/?.so;${LUAM_DIR}/bin/?.so;;"
 for f in tst/unit/*.lua; do
     echo "--- $f ---"
     "$LUAM_DIR/bin/luam" "$f"

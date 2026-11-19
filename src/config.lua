@@ -775,8 +775,7 @@ function config.load()
     if type(parsed.extension_max_job_attempts) == "number" then
         conf.extension_max_job_attempts = parsed.extension_max_job_attempts
     end
-    -- true/false compared directly: Luam's type() calls them "flag", not
-    -- "boolean" (schema.lua's same note).
+    -- Explicit true/false boolean check.
     if parsed.chat_attachments_enabled == true or parsed.chat_attachments_enabled == false then
         conf.chat_attachments_enabled = parsed.chat_attachments_enabled
     end

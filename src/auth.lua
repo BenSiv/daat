@@ -125,7 +125,7 @@ function auth.init_schema(db_path)
     return ok, err
 end
 
--- A per-store HMAC secret, generated once from /dev/urandom and never
+-- A per-store HMAC secret, generated once via CSPRNG and never
 -- rotated automatically (rotating it invalidates every outstanding
 -- session cookie, so that's an explicit operator action, not implicit
 -- request-time behavior).
@@ -136,17 +136,12 @@ function auth.ensure_session_secret(root)
         return true
     end
 
-    urandom = io.open("/dev/urandom", "rb")
-    if urandom == nil then
-        return nil, "cannot open /dev/urandom"
-    end
-    raw = io.read(urandom, 32)
-    io.close(urandom)
-    if raw == nil or string.len(raw) != 32 then
-        return nil, "short read from /dev/urandom"
+    crypto_lib = require("crypto")
+    secret, rand_err = crypto_lib.random_hex(32)
+    if secret == nil then
+        return nil, rand_err
     end
 
-    secret = hex_encode(raw)
     file = io.open(path, "w")
     if file == nil then
         return nil, "cannot create session secret file: " .. path
@@ -168,25 +163,9 @@ function auth.session_secret(root)
     return secret
 end
 
-function hex_encode(bytes)
-    hex = {}
-    for i = 1, string.len(bytes) do
-        table.insert(hex, string.format("%02x", string.byte(bytes, i)))
-    end
-    return table.concat(hex)
-end
-
 function random_hex_token(num_bytes)
-    urandom = io.open("/dev/urandom", "rb")
-    if urandom == nil then
-        return nil, "cannot open /dev/urandom"
-    end
-    raw = io.read(urandom, num_bytes)
-    io.close(urandom)
-    if raw == nil or string.len(raw) != num_bytes then
-        return nil, "short read from /dev/urandom"
-    end
-    return hex_encode(raw)
+    crypto_lib = require("crypto")
+    return crypto_lib.random_hex(num_bytes)
 end
 
 -- Not a full constant-time comparison across arbitrary lengths (Lua's

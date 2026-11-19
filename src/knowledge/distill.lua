@@ -399,13 +399,11 @@ end
 
 -- Takes a queued reference for this process (as curate_claim).
 function distill_claim(db_path, reference_id)
-    urandom = io.open("/dev/urandom", "rb")
-    if urandom == nil then
+    crypto_lib = require("crypto")
+    token = crypto_lib.random_hex(8)
+    if token == nil then
         return false
     end
-    raw = io.read(urandom, 8)
-    io.close(urandom)
-    token = string.gsub(raw, ".", function(c) return string.format("%02x", string.byte(c)) end)
     stale_expr = store_lib.ago_expr(db_path, DISTILL_STALE_CLAIM_SECONDS)
     db.exec(db_path, string.format(
         "UPDATE knowledge_distillation SET status = 'running', reason = %s, queued_at = %s WHERE reference_id = %d AND (status = 'pending' OR (status = 'running' AND queued_at IS NOT NULL AND queued_at < %s));",

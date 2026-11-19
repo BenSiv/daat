@@ -698,20 +698,8 @@ end
 -- unguessable ids, so it gets its own copy rather than an implicit
 -- cross-file dependency on one.
 function random_session_token()
-    urandom = io.open("/dev/urandom", "rb")
-    if urandom == nil then
-        return nil, "cannot open /dev/urandom"
-    end
-    raw = io.read(urandom, 16)
-    io.close(urandom)
-    if raw == nil or string.len(raw) != 16 then
-        return nil, "short read from /dev/urandom"
-    end
-    hex = {}
-    for i = 1, string.len(raw) do
-        table.insert(hex, string.format("%02x", string.byte(raw, i)))
-    end
-    return table.concat(hex)
+    crypto_lib = require("crypto")
+    return crypto_lib.random_hex(16)
 end
 
 function agent.create_session(db_path, login, title)

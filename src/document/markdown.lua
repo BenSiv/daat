@@ -5,6 +5,7 @@ const doc_links = require("document.links")
 const external_tool = require("external_tool")
 const gnuplot = require("gnuplot")
 const json = require("dkjson")
+const markdown_lib = require("markdown")
 const tag = require("tag")
 
 const doc_markdown = {}
@@ -168,13 +169,7 @@ function doc_markdown.render_markdown(content)
     if content == nil or content == "" then
         return ""
     end
-    html, _ = external_tool.with_temp_file(content, "w", function(tmp_path)
-        return external_tool.capture("cmark-gfm -e table -e strikethrough -e autolink " .. external_tool.shell_quote(tmp_path))
-    end)
-    if html == nil then
-        html = ""
-    end
-    return doc_markdown.render_plot_fences(html)
+    return doc_markdown.render_plot_fences(markdown_lib.render(content))
 end
 
 function doc_markdown.render_html(db_path, content)

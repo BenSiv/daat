@@ -475,13 +475,13 @@ function semantic_ranking(db_path, query_vector, model)
     end
     best = {}
     for _, row in ipairs(rows) do
-        unit = document.unpack_vector(row.vector_packed)
-        if unit == nil and row.vector_json != nil then
+        packed = row.vector_packed
+        if (packed == nil or packed == "") and row.vector_json != nil then
             decoded, _, _ = json.decode(row.vector_json)
-            unit = document.unpack_vector(document.pack_vector(decoded))
+            packed = document.pack_vector(decoded)
         end
         id = tonumber(row.document_id)
-        best[id] = {id = id, similarity = dot_product(query_unit, unit)}
+        best[id] = {id = id, similarity = vector_lib.dot_packed(query_packed, packed)}
     end
     if config.load().search_aspects == true then
         for id, match in pairs(aspect_lib.best_matches(db_path, query_unit, model, SEARCHABLE_DOCUMENT_WHERE)) do

@@ -402,13 +402,8 @@ function curate.run_aspect(db_path, document_id, n, author)
 end
 
 function new_claim_token()
-    urandom = io.open("/dev/urandom", "rb")
-    if urandom == nil then
-        return nil
-    end
-    raw = io.read(urandom, 8)
-    io.close(urandom)
-    return (string.gsub(raw, ".", function(c) return string.format("%02x", string.byte(c)) end))
+    crypto_lib = require("crypto")
+    return crypto_lib.random_hex(8)
 end
 
 -- Takes a queued source for this process: pending -> running, marked

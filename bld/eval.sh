@@ -55,7 +55,7 @@ if [ -z "${LUAM_DIR:-}" ]; then
 fi
 export LUAM_DIR
 export LUA_PATH="$REPO_ROOT/src/?.lua;${LUAM_DIR}/lib/?.lua;${LUAM_DIR}/lib/?/init.lua;;"
-export LUA_CPATH="${LUAM_DIR}/bin/?.so;${LUAM_DIR}/lib/lfs/?.so;${LUAM_DIR}/lib/hmac/?.so;${LUAM_DIR}/lib/bcrypt/?.so;${LUAM_DIR}/lib/mariadb/?.so;;"
+export LUA_CPATH="${LUAM_DIR}/lib/?.so;${LUAM_DIR}/lib/?/?.so;${LUAM_DIR}/bin/?.so;;"
 LUAM="$LUAM_DIR/bin/luam"
 
 if [ -n "$RESCORE" ]; then

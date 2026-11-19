@@ -295,13 +295,8 @@ function knowledge_review.search_and_log(db_path, query_text, limit, use_semanti
 end
 
 function new_retrieval_claim_token()
-    urandom = io.open("/dev/urandom", "rb")
-    if urandom == nil then
-        return nil
-    end
-    raw = io.read(urandom, 8)
-    io.close(urandom)
-    return (string.gsub(raw, ".", function(c) return string.format("%02x", string.byte(c)) end))
+    crypto_lib = require("crypto")
+    return crypto_lib.random_hex(8)
 end
 
 function claim_retrieval_review(db_path, retrieval_id, stale_cutoff)

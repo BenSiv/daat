@@ -322,11 +322,8 @@ function schema.validate(def)
     -- entity.update/entity.archive be given a non-empty `reason`
     -- before either is allowed to proceed for this type. Optional,
     -- default false either way -- most schemas set neither. Checked
-    -- via direct true/false comparison, not type(x) == "boolean" --
-    -- this Luam dialect's type() reports a real boolean as "flag", not
-    -- "boolean" (matches how every other boolean-ish field in this
-    -- file -- required, display -- is already checked elsewhere: ==
-    -- true/== false, never by type name).
+    -- via direct true/false comparison (matching how required, display,
+    -- and other boolean fields in this file are checked).
     if def.require_reason_on_update != nil and def.require_reason_on_update != true and def.require_reason_on_update != false then
         return string.format("schema '%s': 'require_reason_on_update' must be true or false", def.name)
     end
