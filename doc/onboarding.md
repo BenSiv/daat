@@ -37,8 +37,8 @@ cd dev && ./deploy.sh
 
 **Optional** -- you do not need any of this to build, test, or run the app or its chat UI, because tests default to a deterministic stub LLM provider (see "Testing conventions"):
 
-- `curl` and `gcloud` (`gcloud auth application-default login` plus a `vertex_project` in `platform.lua`) -- only if you want to exercise the Google Vertex AI chat/embeddings backend.
-- `curl` and a local [Ollama](https://ollama.com/) server (or any OpenAI-compatible `/v1` endpoint configured via `agent_provider = "ollama"` and optional `ollama_url`, `agent_model`, `embedding_model`, and `OLLAMA_API_KEY`/`OPENAI_API_KEY` in `platform.lua`) -- if you want to run tool-calling chat and embeddings locally with open-weights models (`qwen3:8b` and `nomic-embed-text` by default) and no cloud account.
+- `curl` and `gcloud` (`gcloud auth application-default login` plus a `vertex_project` in `config.lua`) -- only if you want to exercise the Google Vertex AI chat/embeddings backend.
+- `curl` and a local [Ollama](https://ollama.com/) server (or any OpenAI-compatible `/v1` endpoint configured via `agent_provider = "ollama"` and optional `ollama_url`, `agent_model`, `embedding_model`, and `OLLAMA_API_KEY`/`OPENAI_API_KEY` in `config.lua`) -- if you want to run tool-calling chat and embeddings locally with open-weights models (`qwen3:8b` and `nomic-embed-text` by default) and no cloud account.
 
 ### Build & test
 
@@ -99,8 +99,8 @@ Three drop-in mechanisms, none requiring changes to `src/`:
 ## Testing conventions
 
 - `tst/unit/*.lua` test one module each, without the binary or CGI, run directly by the interpreter. They use the shared harness in `tst/lib/unit.lua`: `check = unit.check`, `tests = unit.suite()`, each test written as `function tests.<what_it_shows>()`, and `unit.run(tests)` as the last line. Every test in the suite runs, in the order written; a duplicate name is refused, and a test that raises counts as a failure without stopping the rest. A fixture built once for the file (a temp store's `db_path`) goes to every test through `unit.run(tests, db_path)`.
-- `tst/integration/*.bats` exercise the real compiled `bin/daat` binary with real CGI environment variables end to end. `tst/integration/test_helper.bash` provides the shared harness: `setup_test_env`/`cleanup_test_env` (a fresh scratch dir per test), `write_platform_config`, `login_test_user`, CGI-call helpers (`raw_get`, `raw_post`, `run_cgi`, `run_cgi_admin`, etc), and `run_luam <script.lua>` for a test that must call a module function directly.
-- **You will never need real LLM credentials to run the test suite.** `write_platform_config` defaults every test's `platform.lua` to `agent_provider = "test"`, which selects `src/provider/agent_test.lua` -- a deterministic stub scripted via the `AGENT_TEST_RESPONSES` env var (canned JSON responses matching `agent-protocol.md`'s shape). It lives in `src/` rather than `tst/` specifically so it gets bundled into the same binary the tests run against -- tests exercise the real production binary, never a separate test build.
+- `tst/integration/*.bats` exercise the real compiled `bin/daat` binary with real CGI environment variables end to end. `tst/integration/test_helper.bash` provides the shared harness: `setup_test_env`/`cleanup_test_env` (a fresh scratch dir per test), `write_config`, `login_test_user`, CGI-call helpers (`raw_get`, `raw_post`, `run_cgi`, `run_cgi_admin`, etc), and `run_luam <script.lua>` for a test that must call a module function directly.
+- **You will never need real LLM credentials to run the test suite.** `write_config` defaults every test's `config.lua` to `agent_provider = "test"`, which selects `src/provider/agent_test.lua` -- a deterministic stub scripted via the `AGENT_TEST_RESPONSES` env var (canned JSON responses matching `agent-protocol.md`'s shape). It lives in `src/` rather than `tst/` specifically so it gets bundled into the same binary the tests run against -- tests exercise the real production binary, never a separate test build.
 
 ## Working on the agent
 

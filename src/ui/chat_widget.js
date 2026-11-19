@@ -450,7 +450,7 @@
     }
 
     // attachBtn/fileInput only exist in the DOM at all when
-    // config.platform_config().chat_attachments_enabled is on for this
+    // config.load().chat_attachments_enabled is on for this
     // deployment (ui.render_chat_widget's own attach_html) -- guard
     // the whole wiring, not just individual calls, so a disabled
     // deployment's widget script has nothing left that ever touches

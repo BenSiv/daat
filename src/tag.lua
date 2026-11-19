@@ -141,7 +141,7 @@ function tag.document_vector(db_path, document_id)
     if type(full) != "table" then
         return nil
     end
-    return tag_unit(full, config.platform_config().tag_dims)
+    return tag_unit(full, config.load().tag_dims)
 end
 
 function tag_load_centre(db_path, tag_id, for_update)
@@ -353,7 +353,7 @@ function tag_too_short(db_path, document_id)
     if body_chars == nil then
         return false
     end
-    return body_chars < config.platform_config().tag_min_text
+    return body_chars < config.load().tag_min_text
 end
 
 -- Join the nearest tag: the best-scoring active centre, plus the second
@@ -440,7 +440,7 @@ function tag.place_document(db_path, document_id)
     end
     wanted = {}
     wanted[best] = best_score
-    within = config.platform_config().tag_second_within
+    within = config.load().tag_second_within
     if second != nil and within != nil and best_score - second_score < within then
         wanted[second] = second_score
     end

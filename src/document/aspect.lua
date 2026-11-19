@@ -275,7 +275,7 @@ end
 -- embedded in batches and cached, which warms stage 2 of search too.
 function aspect.refresh(db_path, document_id)
     document_id = tonumber(document_id)
-    conf = config.platform_config()
+    conf = config.load()
     model = agent_provider_lib.embedding_model()
     if model == nil then
         return nil, "no embedding model"
@@ -397,7 +397,7 @@ function aspect.passages(db_path, document_id, n)
     if doc == nil or doc.content == nil then
         return nil
     end
-    conf = config.platform_config()
+    conf = config.load()
     by_offset = {}
     for _, p in ipairs(passage.split(doc.content, conf.passage_max_chars, conf.passage_min_chars)) do
         by_offset[p.offset - 1] = p
@@ -426,7 +426,7 @@ end
 -- `where` is the searchable-document condition on `d`.
 function aspect.best_matches(db_path, query_vector, model, where)
     best = {}
-    query_unit = aspect.cut(query_vector, config.platform_config().aspect_dims)
+    query_unit = aspect.cut(query_vector, config.load().aspect_dims)
     if query_unit == nil then
         return best
     end

@@ -8,7 +8,7 @@ load test_helper.bash
 
 setup() {
     setup_test_env
-    write_platform_config ", search_passages = true, passage_min_chars = 50"
+    write_config ", search_passages = true, passage_min_chars = 50"
     "$BIN" init >/dev/null
     export AGENT_TEST_EMBEDDINGS=terms
     export AGENT_TEST_EMBEDDINGS_LOG="$TEST_DIR/embeddings.log"
@@ -50,7 +50,7 @@ embedded_lines() {
 }
 
 @test "search shows the passage that answers the question, deep in the document, with its position" {
-    write_platform_config ", search_passages = true, passage_min_chars = 50, passages_per_document = 1"
+    write_config ", search_passages = true, passage_min_chars = 50, passages_per_document = 1"
     run agent_search "incubator cultures degrees"
     [[ "$output" =~ "[at character " ]]
     [[ "$output" =~ "twenty five degrees" ]]
@@ -58,7 +58,7 @@ embedded_lines() {
 }
 
 @test "with search_passages off, search shows today's keyword excerpt" {
-    write_platform_config ", search_passages = false"
+    write_config ", search_passages = false"
     run agent_search "incubator cultures degrees"
     [[ ! "$output" =~ "[at character " ]]
     [[ "$output" =~ "twenty five degrees" ]]
@@ -97,7 +97,7 @@ embedded_lines() {
 }
 
 @test "passage_max_embeds_per_search caps new embeddings in one search" {
-    write_platform_config ", search_passages = true, passage_min_chars = 50, passage_max_embeds_per_search = 1"
+    write_config ", search_passages = true, passage_min_chars = 50, passage_max_embeds_per_search = 1"
     page_search "incubator cultures degrees" >/dev/null
     [ "$(embedded_lines)" -eq 1 ]
 }
@@ -111,7 +111,7 @@ embedded_lines() {
     [[ "$output" =~ "stored prompts" ]]
     [ "$(sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM document_passage_cache;")" -eq $((total - 1)) ]
 
-    write_platform_config ", passage_cache_days = 0"
+    write_config ", passage_cache_days = 0"
     sqlite3 "$TEST_DIR/.store/store.db" "UPDATE document_passage_cache SET last_used_at = '2020-01-01 00:00:00';"
     run "$BIN" store prune
     [[ "$output" =~ "Deleted 0 passage embeddings" ]]

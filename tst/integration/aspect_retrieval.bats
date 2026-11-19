@@ -27,7 +27,7 @@ handbook() {
 
 setup() {
     setup_test_env
-    write_platform_config "${ASPECTS}, build_aspects = true, search_aspects = true"
+    write_config "${ASPECTS}, build_aspects = true, search_aspects = true"
     "$BIN" init >/dev/null
     export AGENT_TEST_EMBEDDINGS=terms
     export AGENT_TEST_EMBEDDINGS_LOG="$TEST_DIR/embeddings.log"
@@ -78,7 +78,7 @@ embedded_lines() {
 }
 
 @test "with search_aspects off, the same search doesn't find it, and hits record no aspect" {
-    write_platform_config "${ASPECTS}, build_aspects = true, search_aspects = false"
+    write_config "${ASPECTS}, build_aspects = true, search_aspects = false"
     page_search "qqqvq" >/dev/null
     [ "$(hits)" -eq 0 ]
     page_search "greenhouse" >/dev/null
@@ -92,7 +92,7 @@ embedded_lines() {
 }
 
 @test "with build_aspects off nothing is built on save; repair aspects builds them, then finds them unchanged" {
-    write_platform_config "${ASPECTS}, build_aspects = false, search_aspects = true"
+    write_config "${ASPECTS}, build_aspects = false, search_aspects = true"
     handbook "Second handbook" rotor Rotor
     second=$(db "SELECT id FROM document WHERE title = 'Second handbook';")
     [ "$(db "SELECT COUNT(*) FROM document_aspect WHERE document_id = ${second};")" -eq 0 ]
@@ -109,7 +109,7 @@ embedded_lines() {
 }
 
 @test "repair aspects --limit builds at most that many documents" {
-    write_platform_config "${ASPECTS}, build_aspects = false"
+    write_config "${ASPECTS}, build_aspects = false"
     db "DELETE FROM document_aspect;"
     handbook "Second handbook" rotor Rotor
     run "$BIN" repair aspects --limit 1
@@ -128,7 +128,7 @@ embedded_lines() {
 @test "changing an aspect setting makes the aspects stale" {
     run "$BIN" repair aspects "$DOC_ID"
     [[ "$output" =~ "unchanged" ]]
-    write_platform_config "${ASPECTS}, build_aspects = true, search_aspects = true, aspect_dims = 16"
+    write_config "${ASPECTS}, build_aspects = true, search_aspects = true, aspect_dims = 16"
     run "$BIN" repair aspects "$DOC_ID"
     [[ "$output" =~ "built" ]]
     [ "$(db "SELECT MIN(LENGTH(vector_packed)) FROM document_aspect;")" = "16" ]
@@ -151,7 +151,7 @@ embedded_lines() {
 }
 
 @test "if the aspect build fails, the document stays queued and the next run retries" {
-    write_platform_config "${ASPECTS}, build_aspects = true, embedding_quiet_minutes = 5"
+    write_config "${ASPECTS}, build_aspects = true, embedding_quiet_minutes = 5"
     db "DELETE FROM document_aspect; DELETE FROM document_passage_cache;"
     db "INSERT INTO document_embedding_due (document_id, queued_at) VALUES (${DOC_ID}, '2020-01-01 00:00:00');"
     AGENT_TEST_EMBEDDINGS_FAIL=1 run "$BIN" document embed-pending
@@ -191,7 +191,7 @@ SOURCE_NOTE=$'# Greenhouse routine\n\nPlants were watered and the lights checked
 }
 
 @test "with curate_aspects off, aspect hits queue nothing" {
-    write_platform_config "${ASPECTS}, build_aspects = true, search_aspects = true, curate_aspects = false"
+    write_config "${ASPECTS}, build_aspects = true, search_aspects = true, curate_aspects = false"
     page_search "qqqvq" >/dev/null
     page_search "qqqvq" >/dev/null
     [ "$(hits)" -eq 2 ]
@@ -253,7 +253,7 @@ SOURCE_NOTE=$'# Greenhouse routine\n\nPlants were watered and the lights checked
 }
 
 @test "repair aspects counts a document whose build fails, says why, and goes on to the rest" {
-    write_platform_config "${ASPECTS}, build_aspects = false"
+    write_config "${ASPECTS}, build_aspects = false"
     db "DELETE FROM document_aspect; DELETE FROM document_passage_cache;"
     AGENT_TEST_EMBEDDINGS_FAIL=1 run "$BIN" repair aspects
     [ "$status" -eq 0 ]

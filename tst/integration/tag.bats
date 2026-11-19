@@ -211,7 +211,7 @@ members() {
 }
 
 @test "repair tags --place-untagged places untagged documents with a subject: short sources stay out, short ladder documents go in" {
-    write_platform_config ", tag_min_text = 200"
+    write_config ", tag_min_text = 200"
     a=$(new_document "Leaf callus")
     embed "$a" '[1, 0, 0, 0, 0, 0, 0, 0]'
     callus=$(new_tag "Callus induction")

@@ -15,7 +15,7 @@
 --   the text in common are usually two versions whose differences
 --   matter.
 -- Only externally synced files are considered (namespaced external_id
--- "<source>:...", or platform.lua's duplicate_external_prefixes when set):
+-- "<source>:...", or config.lua's duplicate_external_prefixes when set):
 -- a page someone wrote is never folded into another, the same rule
 -- knowledge.duplication_status keeps.
 --
@@ -164,7 +164,7 @@ function escape_like_prefix(prefix)
 end
 
 function duplicate_external_where()
-    prefixes = config.platform_config().duplicate_external_prefixes
+    prefixes = config.load().duplicate_external_prefixes
     if prefixes == nil or #prefixes == 0 then
         return "external_id LIKE '%:%'"
     end

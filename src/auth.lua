@@ -718,7 +718,7 @@ function send_account_link(root, db_path, user, purpose, site_name)
         db.quote(token_hash), db.quote(user.login), now, now + ttl, db.quote(purpose), db.quote(user.email)
     ))
 
-    base_url = string.gsub(config.platform_config().public_url, "/+$", "")
+    base_url = string.gsub(config.load().public_url, "/+$", "")
     -- In the #fragment, not the query string: browsers never send a
     -- fragment to the server, so the token can't land in the web
     -- server's or a load balancer's access log. /reset-password's own

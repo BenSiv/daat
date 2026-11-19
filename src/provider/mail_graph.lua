@@ -4,10 +4,10 @@
 -- password -- Exchange Online is retiring password (Basic) auth for
 -- SMTP, and this needs no SMTP AUTH setting on the mailbox at all.
 --
--- platform.lua: graph_tenant_id and graph_client_id (an Entra app
+-- config.lua: graph_tenant_id and graph_client_id (an Entra app
 -- registration -- neither is secret); the client secret is
--- PLATFORM_GRAPH_CLIENT_SECRET in the environment, same split as
--- smtp_user/PLATFORM_SMTP_PASSWORD. The app needs the Graph Mail.Send
+-- DAAT_GRAPH_CLIENT_SECRET in the environment, same split as
+-- smtp_user/DAAT_SMTP_PASSWORD. The app needs the Graph Mail.Send
 -- *application* permission, which on its own can send as any mailbox
 -- in the tenant -- the tenant admin scopes it to mail_from with
 -- Exchange Online RBAC for Applications (or an application access
@@ -93,17 +93,17 @@ function mail_graph.token(conf, secret)
 end
 
 function mail_graph.send(message)
-    -- This backend's own platform.lua settings (config.setting).
+    -- This backend's own config.lua settings (config.setting).
     conf = {graph_tenant_id = config.setting("graph_tenant_id"), graph_client_id = config.setting("graph_client_id")}
     if not valid_id(conf.graph_tenant_id) then
-        return nil, "graph_tenant_id is not set (or invalid) in platform.lua"
+        return nil, "graph_tenant_id is not set (or invalid) in config.lua"
     end
     if not valid_id(conf.graph_client_id) then
-        return nil, "graph_client_id is not set (or invalid) in platform.lua"
+        return nil, "graph_client_id is not set (or invalid) in config.lua"
     end
-    secret = os.getenv("PLATFORM_GRAPH_CLIENT_SECRET")
+    secret = os.getenv("DAAT_GRAPH_CLIENT_SECRET")
     if secret == nil or secret == "" then
-        return nil, "PLATFORM_GRAPH_CLIENT_SECRET is not set"
+        return nil, "DAAT_GRAPH_CLIENT_SECRET is not set"
     end
 
     token, token_err = mail_graph.token(conf, secret)

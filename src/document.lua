@@ -483,7 +483,7 @@ function semantic_ranking(db_path, query_vector, model)
         id = tonumber(row.document_id)
         best[id] = {id = id, similarity = dot_product(query_unit, unit)}
     end
-    if config.platform_config().search_aspects == true then
+    if config.load().search_aspects == true then
         for id, match in pairs(aspect_lib.best_matches(db_path, query_unit, model, SEARCHABLE_DOCUMENT_WHERE)) do
             if best[id] == nil or match.similarity > best[id].similarity then
                 best[id] = {id = id, similarity = match.similarity, aspect = match.aspect, aspect_offset = match.passage_offset}

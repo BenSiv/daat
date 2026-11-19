@@ -20,7 +20,7 @@ const extension = {}
 -- How many retries make sense before giving up on a job plausibly
 -- depends on how flaky a given deployment's own extensions/network are
 -- -- not a bare hardcoded literal; read fresh from
--- config.platform_config() per call rather than resolved once at load.
+-- config.load() per call rather than resolved once at load.
 
 extension.SCHEMA = """
 -- VARCHAR(255), not TEXT -- MariaDB/InnoDB refuses a bare TEXT column
@@ -728,7 +728,7 @@ function extension.pending_jobs(db_path, limit)
     stale_expr = store_lib.ago_expr(db_path, JOB_STALE_CLAIM_SECONDS)
     rows = db.query(db_path, string.format(
         "SELECT * FROM system_job WHERE (status = 'pending' OR (status LIKE 'running:%%' AND updated_at IS NOT NULL AND updated_at < %s)) AND attempts < %d ORDER BY job_id ASC LIMIT %d;",
-        stale_expr, config.platform_config().extension_max_job_attempts, limit
+        stale_expr, config.load().extension_max_job_attempts, limit
     ))
     if rows == nil then
         return {}
@@ -761,7 +761,7 @@ end
 function extension.mark_job_failed(db_path, job, message)
     attempts = tonumber(job.attempts) + 1
     status = "pending"
-    if attempts >= config.platform_config().extension_max_job_attempts then
+    if attempts >= config.load().extension_max_job_attempts then
         status = "failed"
     end
     db.exec(db_path, string.format(

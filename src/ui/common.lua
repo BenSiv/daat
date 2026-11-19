@@ -310,7 +310,7 @@ end
 
 function ui_common.page_shell(title, active, body, nonce, show_sql, show_admin, has_tasks_view, nav_extensions, theme, author, page_context)
     if theme == nil then
-        theme = {site_name = "Platform", colors = {}}
+        theme = {site_name = "Daat", colors = {}}
     end
     if page_context == nil then
         page_context = {page_type = active, title = title}
@@ -345,7 +345,7 @@ function ui_common.page_shell(title, active, body, nonce, show_sql, show_admin, 
                 })
             end
         end
-        nav_config = config_lib.platform_config()
+        nav_config = config_lib.load()
         nav_items = ui_common.apply_nav_hidden(nav_items, nav_config.nav_hidden)
         nav_items = ui_common.apply_nav_order(nav_items, nav_config.nav_order)
     end
@@ -381,7 +381,7 @@ function ui_common.page_shell(title, active, body, nonce, show_sql, show_admin, 
 
     chat_widget_html = ""
     if author != nil then
-        chat_widget_html = ui_common.render_chat_widget(nonce, config_lib.platform_config().chat_attachments_enabled == true)
+        chat_widget_html = ui_common.render_chat_widget(nonce, config_lib.load().chat_attachments_enabled == true)
     end
 
     safe_nonce = nonce

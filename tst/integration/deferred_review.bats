@@ -13,7 +13,7 @@ setup() {
     # Omit search_review_mode completely so every test here exercises the
     # real deployment default ("deferred") unless explicitly testing an
     # override.
-    cat > "$TEST_DIR/platform.lua" <<'EOF'
+    cat > "$TEST_DIR/config.lua" <<'EOF'
 return {agent_provider = "test", search_provider = "test", embedding_quiet_minutes = 0, tag_min_text = 0, agent_turn_mode = "inline", link_passage_gate = 0}
 EOF
     "$BIN" init >/dev/null

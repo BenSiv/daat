@@ -420,14 +420,14 @@ print('\n'.join(lines))
     [[ "$output" =~ "Showing first 1000 rows" ]]
 }
 
-@test "/sql's row cap is configurable via platform.lua's platform_adhoc_row_cap, not fixed at 1000" {
+@test "/sql's row cap is configurable via config.lua's adhoc_row_cap, not fixed at 1000" {
     for i in $(seq 1 5); do
         "$BIN" entity create person full_name="Extra $i"
     done
     # setup()'s own Dr. Cohen makes 6 total -- override the cap well
     # below that, cheaply, instead of the default test's 1010-row bulk
     # insert (which exercises the *default* value specifically).
-    write_platform_config ', platform_adhoc_row_cap = 3'
+    write_config ', adhoc_row_cap = 3'
     run env GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/sql" \
         QUERY_STRING="q=SELECT+id+FROM+person%3B" \
         HTTP_COOKIE="session=${ADMIN_SESSION_COOKIE}; csrf=${ADMIN_CSRF_TOKEN}" \
@@ -521,8 +521,8 @@ EOF
     [[ "$output" =~ 'class="platform-nav-link platform-nav-link-active" href="data"' ]]
 }
 
-@test "platform.lua's nav_hidden hides the listed rail item, keeps the rest" {
-    write_platform_config ', nav_hidden = {"data"}'
+@test "config.lua's nav_hidden hides the listed rail item, keeps the rest" {
+    write_config ', nav_hidden = {"data"}'
 
     run_cgi "/"
     [ "$status" -eq 0 ]
@@ -535,8 +535,8 @@ EOF
     [[ "$output" =~ 'class="platform-nav-link platform-nav-link-active" href="/"' ]]
 }
 
-@test "platform.lua's nav_order moves listed rail items first, keeps the rest in their original order" {
-    write_platform_config ', nav_order = {"data", "home"}'
+@test "config.lua's nav_order moves listed rail items first, keeps the rest in their original order" {
+    write_config ', nav_order = {"data", "home"}'
 
     run_cgi "/"
     [ "$status" -eq 0 ]
@@ -558,8 +558,8 @@ EOF
     [ "$home_pos" -lt "$documents_pos" ]
 }
 
-@test "platform.lua with no nav_order/nav_hidden renders today's default rail unchanged (upgrade safety)" {
-    write_platform_config ''
+@test "config.lua with no nav_order/nav_hidden renders today's default rail unchanged (upgrade safety)" {
+    write_config ''
 
     run_cgi "/"
     [ "$status" -eq 0 ]

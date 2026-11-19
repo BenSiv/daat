@@ -46,7 +46,7 @@ function chat_widget_state(db_path, session_id, viewer_login)
 end
 
 function run_chat_turn(db_path, root, session_id, author, user_message)
-    if config.platform_config().agent_turn_mode == "inline" then
+    if config.load().agent_turn_mode == "inline" then
         agent.run_turn(db_path, session_id, author, nil, agent.default_model(), user_message)
         return
     end
@@ -138,7 +138,7 @@ function chat_routes.handle(req)
     end
 
     if path_info == "/api/chat-widget-attach" and method == "POST" then
-        if config.platform_config().chat_attachments_enabled != true then
+        if config.load().chat_attachments_enabled != true then
             return web_ctx.respond(req, "404 Not Found", "application/json", json.encode({error = "not found"}))
         end
         if not web_ctx.require_csrf(req) then
@@ -172,7 +172,7 @@ function chat_routes.handle(req)
             return web_ctx.respond(req, "404 Not Found", "application/json", json.encode({error = "no such chat session"}))
         end
         model = agent.default_model()
-        inline = config.platform_config().agent_turn_mode == "inline"
+        inline = config.load().agent_turn_mode == "inline"
         result = agent.approve_pending(db_path, tonumber(body_data.pending_id), author, nil, model, inline)
         if inline == false and result != nil then
             agent.start_detached_turn(db_path, req.root, result.session_id)
@@ -209,7 +209,7 @@ function chat_routes.handle(req)
             return web_ctx.respond(req, "404 Not Found", "application/json", json.encode({error = "no such chat session"}))
         end
         model = agent.default_model()
-        inline = config.platform_config().agent_turn_mode == "inline"
+        inline = config.load().agent_turn_mode == "inline"
         result = agent.deny_pending(db_path, tonumber(body_data.pending_id), author, nil, model, inline, body_data.reason)
         if inline == false and result != nil then
             agent.start_detached_turn(db_path, req.root, result.session_id)

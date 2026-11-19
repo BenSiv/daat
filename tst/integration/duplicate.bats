@@ -181,7 +181,7 @@ $text" >/dev/null
     [[ "$output" =~ "1 paper(s) with copies, 1 copy(ies) would be folded" ]]
     [[ ! "$output" =~ "Notebook Entry" ]]
 
-    write_platform_config ', duplicate_external_prefixes = {"s3:"}'
+    write_config ', duplicate_external_prefixes = {"s3:"}'
     run "$BIN" repair duplicates --dry-run
     [ "$status" -eq 0 ]
     [[ "$output" =~ "0 paper(s) with copies, 0 copy(ies) would be folded" ]]

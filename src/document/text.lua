@@ -124,7 +124,7 @@ function document_text.compute_embedding_text(db_path, doc)
     if body == nil then
         body = ""
     end
-    patterns = config.platform_config().embedding_skip
+    patterns = config.load().embedding_skip
     if patterns != nil and #patterns > 0 then
         kept = {}
         for line in string.gmatch(body .. "\n", "(.-)\n") do

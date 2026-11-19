@@ -106,8 +106,8 @@ function tests.hand_rolled_sql_columns_text_covers_every_event_log_table()
 end
 
 function tests.search_review_mode_defaults_to_deferred()
-    print("Testing config.platform_config().search_review_mode defaults to deferred")
-    conf = require("config").platform_config()
+    print("Testing config.load().search_review_mode defaults to deferred")
+    conf = require("config").load()
     check(conf.search_review_mode == "deferred",
         "expected default search_review_mode == 'deferred', got " .. tostring(conf.search_review_mode))
 end

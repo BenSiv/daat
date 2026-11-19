@@ -111,14 +111,14 @@ end
 
 -- Active documents with an embedding: ids, centred unit vectors.
 function build_vectors(db_path)
-    dims = config.platform_config().tag_dims
+    dims = config.load().tag_dims
     rows = db.query(db_path, """
         SELECT e.document_id, e.vector_packed, e.body_chars,
                CASE WHEN e.vector_packed IS NULL THEN e.vector_json END AS vector_json
         FROM document_embedding e JOIN document d ON d.id = e.document_id
         WHERE (d.archived_at IS NULL OR d.archived_at = '') ORDER BY e.document_id;""")
     ids, raw = {}, {}
-    min_text = config.platform_config().tag_min_text
+    min_text = config.load().tag_min_text
     BUILD_SHORT = 0
     for _, row in ipairs(build_list(rows)) do
         -- Too little text of its own to have a subject (tag_min_text);
@@ -339,7 +339,7 @@ end
 -- merge i leaves m - i groups, living for h[i+1] - h[i]. The range's floor
 -- scales with the pool -- a tag per BUILD_DOCS_PER_TAG documents at least,
 -- up to BUILD_TAG_RANGE's -- so a small pool can have a few tags.
--- The range's top: `--max-tags N`, else platform.lua's tag_build_max,
+-- The range's top: `--max-tags N`, else config.lua's tag_build_max,
 -- else BUILD_TAG_RANGE's (Ben, 2026-10-29: 50 tags were too many).
 BUILD_MAX_TAGS = nil
 
@@ -347,7 +347,7 @@ function build_max_tags()
     if BUILD_MAX_TAGS != nil then
         return BUILD_MAX_TAGS
     end
-    configured = tonumber(config.platform_config().tag_build_max)
+    configured = tonumber(config.load().tag_build_max)
     if configured != nil then
         return configured
     end
@@ -357,7 +357,7 @@ end
 -- How strongly the build leans to fewer tags: a level is scored by its
 -- life / tags^c, so a level with more tags must live clearly longer to
 -- win. 0 is the longest-lived level as is. `--coarseness C`, else
--- platform.lua's tag_build_coarseness (Ben, 2026-10-29: fewer tags, but
+-- config.lua's tag_build_coarseness (Ben, 2026-10-29: fewer tags, but
 -- left to the data rather than a fixed number).
 BUILD_COARSENESS = nil
 
@@ -365,7 +365,7 @@ function build_coarseness()
     if BUILD_COARSENESS != nil then
         return BUILD_COARSENESS
     end
-    configured = tonumber(config.platform_config().tag_build_coarseness)
+    configured = tonumber(config.load().tag_build_coarseness)
     if configured != nil then
         return configured
     end
@@ -466,7 +466,7 @@ function build_assign(vectors, micro, group_of, groups)
         end
         centres = build_centres(vectors, label_of, groups)
     end
-    within = config.platform_config().tag_second_within
+    within = config.load().tag_second_within
     tags, slot = {}, {}
     for c = 1, groups do
         if centres[c] != nil then
@@ -501,7 +501,7 @@ function tag_build.plan(db_path, report)
         return nil, "fewer than two documents with an embedding"
     end
     report(string.format("%d documents with an embedding (pool average removed, %d dimensions); %d left out with under %d characters of text",
-        n, #vectors[1], BUILD_SHORT, config.platform_config().tag_min_text))
+        n, #vectors[1], BUILD_SHORT, config.load().tag_min_text))
     m = math.max(2, math.min(BUILD_MICRO_MAX, math.floor(math.sqrt(n) + 0.5)))
     rng = build_rng(BUILD_SEED)
     everyone = {}

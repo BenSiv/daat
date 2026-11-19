@@ -9,7 +9,7 @@
 -- any field its schema marks `identifier = true` (lab_number, a catalog
 -- number). Matching ignores case, spacing and separators ("Exp 185" is
 -- Exp185). A deployment adds aliases for how its people write names
--- (platform.lua's reference_aliases).
+-- (config.lua's reference_aliases).
 --
 -- entity_name_index is the lookup index (name key -> entity), kept by the
 -- entity hooks so a save never loads every name; documents and the tag
@@ -168,7 +168,7 @@ end
 -- gives document text.
 function reference_aliased(text)
     text = string.lower(tostring(text))
-    aliases = config.platform_config().reference_aliases
+    aliases = config.load().reference_aliases
     if aliases != nil then
         for _, alias in ipairs(aliases) do
             text, _ = string.gsub(text, alias[1], alias[2])
@@ -445,7 +445,7 @@ function reference.find(db_path, text)
     for _, row in ipairs(prefix_rows) do
         prefixes[row.prefix] = true
     end
-    keys = reference.candidate_keys(text, config.platform_config().reference_aliases, prefixes)
+    keys = reference.candidate_keys(text, config.load().reference_aliases, prefixes)
     targets = {}
     for start = 1, #keys, 500 do
         quoted = {}

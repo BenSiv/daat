@@ -108,7 +108,7 @@ The arithmetic is cheap. Moving the bytes may not be: today's stage 1 already ta
 
 This also fixes the 40k cut for long sources: parts past it become reachable one subject at a time, through use.
 
-### Settings (`platform.lua`)
+### Settings (`config.lua`)
 
 | Setting | Default | |
 |---|---|---|

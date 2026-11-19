@@ -135,6 +135,6 @@ With CGI boot at `5.6 ms`, SQLite `GET /login` at `9.2 ms` (`479 req/s` at `c = 
 1. **Transport (`luam/lib/cgi.lua` + `luam/lib/socket`):** `luam/lib` already ships `socket/core.so`. Add an opt-in pre-fork HTTP/1.1 or SCGI accept loop (`daat serve --listen 127.0.0.1:8001 --workers N --max-requests 1000`) that populates the per-request CGI environment table and invokes `web.handle_request`, fronted by Apache `mod_proxy_http` (`ProxyPass / http://127.0.0.1:8001/`).
 2. **State-hygiene checklist before enabling persistent workers:**
    - Reset per-request module state at the start of every request: `response_nonce` in `src/web.lua` and any request-scoped display-label cache.
-   - Gate `PLATFORM_CONFIG_CACHE` and `PLATFORM_SETTINGS_CACHE` in `src/config.lua` on file `mtime` (`lfs.attributes(..., "modification")`) so edits to `platform.lua` or `theme.lua` take effect without restarting workers.
+   - Gate `CONFIG_CACHE` and `SETTINGS_CACHE` in `src/config.lua` on file `mtime` (`lfs.attributes(..., "modification")`) so edits to `config.lua` or `theme.lua` take effect without restarting workers.
    - Invalidate in-memory `schema.fields` / `schema.is_registered` caches across workers by checking `schema.sync_signature` in `system_state` (1 point read per request, which `schema.sync_all` already performs).
    - Run `collectgarbage("step")` after each response and recycle each worker after `max_requests = 1000` (`MaxRequestsPerChild`) to guarantee bounded memory while keeping MariaDB and SQLite handles warm across requests.

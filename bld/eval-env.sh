@@ -76,7 +76,7 @@ if [ ! -f "$ENV_DIR/facts.json" ]; then
     rm -rf "$ENV_DIR.tmp"
     mkdir -p "$ENV_DIR.tmp"
     cp -r tst/eval/demo-lab/schemas "$ENV_DIR.tmp/schemas"
-    printf '%s\n' "$PLATFORM" > "$ENV_DIR.tmp/platform.lua"
+    printf '%s\n' "$PLATFORM" > "$ENV_DIR.tmp/config.lua"
     (cd "$ENV_DIR.tmp" && "$LUAM_DIR/bin/luam" "$REPO_ROOT/tst/eval/load.lua" "$REPO_ROOT" "$SEED" >&2)
     rm -rf "$ENV_DIR"
     mv "$ENV_DIR.tmp" "$ENV_DIR"

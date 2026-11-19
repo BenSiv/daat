@@ -280,7 +280,7 @@ function admin_routes.handle(req)
         end
 
         new_theme = config.load_theme(root)
-        new_theme.site_name = web_ctx.default_value(form.site_name, "Platform")
+        new_theme.site_name = web_ctx.default_value(form.site_name, "Daat")
         new_theme.hide_home_heading = (form.hide_home_heading == "1")
         new_theme.system_prompt_extra = nil
         if form.system_prompt_extra != nil and form.system_prompt_extra != "" then

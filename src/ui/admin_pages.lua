@@ -495,7 +495,7 @@ function ui_admin.render_settings(theme, csrf_token, message, is_error)
         })
     end
 
-    logo_status = "No logo uploaded -- the sidebar shows the default icon and \"Platform\" as plain text."
+    logo_status = "No logo uploaded -- the sidebar shows the default icon and \"Daat\" as plain text."
     if theme.has_logo == true then
         logo_status = "A logo is set. Uploading a new file below replaces it; there is no separate \"remove\" action today -- redeploy tooling or a direct theme-assets/ edit still handles removal."
     end
@@ -517,7 +517,7 @@ function ui_admin.render_settings(theme, csrf_token, message, is_error)
                 css_class = "platform-settings-section",
                 heading = "Site",
                 fields = {
-                    {type = "text", name = "site_name", label = "Site name", value = theme.site_name, placeholder = "Platform"},
+                    {type = "text", name = "site_name", label = "Site name", value = theme.site_name, placeholder = "Daat"},
                     {
                         type = "checkbox", name = "hide_home_heading",
                         label = "Hide the site name heading on Home (use when the logo already reads as a wordmark)",
@@ -580,7 +580,7 @@ function ui_admin.render_settings(theme, csrf_token, message, is_error)
 end
 
 function ui_admin.render_home(theme, show_sql, show_admin, has_tasks_view, nav_extensions)
-    site_name = "Platform"
+    site_name = "Daat"
     has_logo = false
     hide_home_heading = false
     if theme != nil then

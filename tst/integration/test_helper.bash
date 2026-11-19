@@ -16,7 +16,7 @@ setup_test_env() {
     resolve_bin
     export TEST_DIR="$(mktemp -d)"
     cd "$TEST_DIR"
-    write_platform_config
+    write_config
 }
 
 # run_luam <script.lua> [args...]: bats-`run`s a Lua script against the
@@ -35,7 +35,7 @@ run_luam() {
         "${luam_dir}/bin/luam" "$@"
 }
 
-# Writes platform.lua into TEST_DIR (config.platform_config() resolves
+# Writes config.lua into TEST_DIR (config.load() resolves
 # it relative to DOCUMENT_ROOT, which falls back to "." -- the real
 # CGI/CLI cwd every raw_get/raw_post/"$BIN" call in these tests already
 # runs from). Called once with no overrides from setup_test_env, so
@@ -46,9 +46,9 @@ run_luam() {
 # override one specific knob. Each "$BIN" invocation is its own fresh
 # process, so overwriting this file between two calls in the same test
 # is always safe -- there's no stale in-process cache to worry about.
-write_platform_config() {
+write_config() {
     local extra_lua_fields="${1:-}"
-    cat > "$TEST_DIR/platform.lua" <<EOF
+    cat > "$TEST_DIR/config.lua" <<EOF
 return {agent_provider = "test", search_provider = "test", embedding_quiet_minutes = 0, tag_min_text = 0, agent_turn_mode = "inline", search_review_mode = "inline"${extra_lua_fields}}
 EOF
 }
@@ -142,7 +142,7 @@ raw_post() {
     local test_responses="${4:-}"
     local compaction_threshold="${5:-}"
     if [ -n "$compaction_threshold" ]; then
-        write_platform_config ", agent_compaction_threshold = ${compaction_threshold}"
+        write_config ", agent_compaction_threshold = ${compaction_threshold}"
     fi
     printf '%s' "$body" | AGENT_TEST_RESPONSES="$test_responses" \
         GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="$path_info" QUERY_STRING="" \

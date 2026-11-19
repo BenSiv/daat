@@ -4,7 +4,7 @@ set -euo pipefail
 # The agent scorecard -- see doc/agent-eval.md.
 #
 #   bld/eval.sh [--mode test|live] [--repeat N] [--only NAME] [--set core|growth|all] [--extra 'k = v, ...']
-#   --extra appends platform.lua fields to every run's copy of the demo
+#   --extra appends config.lua fields to every run's copy of the demo
 #   lab (e.g. --extra 'search_passages = true'), to compare settings
 #   without rebuilding or re-embedding the lab.
 #               [--compare eval-out/runs/<run>/results.json] [--seed N]
@@ -96,7 +96,7 @@ for scenario in tst/eval/scenarios/*.lua; do
         work="$RUN_DIR/work/$name-$r"
         cp -r "$ENV_DIR" "$work"
         if [ -n "$EXTRA" ]; then
-            sed -i "\$ s/}[[:space:]]*\$/, ${EXTRA}}/" "$work/platform.lua"
+            sed -i "\$ s/}[[:space:]]*\$/, ${EXTRA}}/" "$work/config.lua"
         fi
         (
             cd "$work"

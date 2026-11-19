@@ -597,7 +597,7 @@ end
 -- a given deployment holds, how big a table a human reasonably wants to
 -- browse at once, how much context budget the configured AGENT_MODEL
 -- has -- so neither is a bare hardcoded literal; each is read fresh
--- from config.platform_config() per call (not resolved once at load).
+-- from config.load() per call (not resolved once at load).
 
 function view.run_adhoc(db_path, sql_text)
     problem = view.select_only_problem(sql_text)
@@ -606,7 +606,7 @@ function view.run_adhoc(db_path, sql_text)
     end
 
     config = config_lib
-    row_cap = config.platform_config().platform_adhoc_row_cap
+    row_cap = config.load().adhoc_row_cap
     query_text = sql_text
     body = string.gsub(sql_text, "%s+$", "")
     if string.sub(body, -1) == ";" then
@@ -979,7 +979,7 @@ function archived_rows_note(db_path, sql_text, referenced)
         ". Archived rows are deleted/superseded records -- unless you specifically want them, re-run with `<table>.archived_at IS NULL` for each."
 end
 
--- A separate, smaller default cap than platform_adhoc_row_cap -- that
+-- A separate, smaller default cap than adhoc_row_cap -- that
 -- one is sized for a human reading an HTML table in a browser; this
 -- result goes straight into the model's own prompt/context, where 1000
 -- rows would be wasteful at best and a real token-cost problem at
@@ -992,7 +992,7 @@ function view.run_agent_query(db_path, sql_text)
     end
 
     config = config_lib
-    row_cap = config.platform_config().agent_query_row_cap
+    row_cap = config.load().agent_query_row_cap
     referenced = referenced_table_names(sql_text)
     if #referenced == 0 then
         return nil, nil, "refusing to run: no FROM/JOIN table found"

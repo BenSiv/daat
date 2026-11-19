@@ -17,7 +17,7 @@ end
 const STORE_DIR = ".store"
 const DB_FILE = "store.db"
 const SESSION_SECRET_FILE = "session_secret"
--- theme.lua/platform.lua, not .json -- one config format across the
+-- theme.lua/config.lua, not .json -- one config format across the
 -- whole platform (schemas/dropdowns/views/templates/extension
 -- manifests are all the same sandboxed-Lua-table convention already;
 -- see doc/schema.md). Loaded via sandbox.run(source, path,
@@ -28,10 +28,10 @@ const SESSION_SECRET_FILE = "session_secret"
 -- which still goes through the same field-by-field validation below
 -- either way.
 const THEME_FILE = "theme.lua"
-const PLATFORM_CONFIG_FILE = "platform.lua"
-PLATFORM_CONFIG_CACHE = nil
--- platform.lua's table as written, for config.setting.
-PLATFORM_SETTINGS_CACHE = {}
+const CONFIG_FILE = "config.lua"
+CONFIG_CACHE = nil
+-- config.lua's table as written, for config.setting.
+SETTINGS_CACHE = {}
 
 -- The CSS custom-property names a theme.lua may override -- matches
 -- ui.lua's own var(--platform-*, <fallback>) usage sites exactly, so a
@@ -67,20 +67,20 @@ function config.store_dir(root)
 end
 
 -- "sqlite" (default) or "mariadb" -- see doc/mariadb-migration.md.
--- Sourced from platform.lua (config.platform_config()) now, not a raw
+-- Sourced from config.lua (config.load()) now, not a raw
 -- env var directly -- see that function's own header for why.
 function config.db_backend()
-    return config.platform_config().db_backend
+    return config.load().db_backend
 end
 
 -- Connection descriptor for the mariadb backend. host/port/user/
--- database come from platform.lua -- real, version-controlled
+-- database come from config.lua -- real, version-controlled
 -- deployment content, not secrets. The password is the one field here
--- that stays a plain env var (PLATFORM_MARIADB_PASSWORD, never written
--- to a file this repo tracks) -- see config.platform_config()'s header.
+-- that stays a plain env var (DAAT_MARIADB_PASSWORD, never written
+-- to a file this repo tracks) -- see config.load()'s header.
 function config.mariadb_descriptor()
-    conf = config.platform_config()
-    password = os.getenv("PLATFORM_MARIADB_PASSWORD")
+    conf = config.load()
+    password = os.getenv("DAAT_MARIADB_PASSWORD")
     if password == nil then
         password = ""
     end
@@ -190,24 +190,24 @@ end
 -- Vendored third-party assets platform itself ships (e.g. the Toast UI
 -- Editor bundle) -- unlike theme_assets_dir, this is NOT
 -- DOCUMENT_ROOT-relative: these files belong to the daat
--- checkout/build, not a deployment's own data. PLATFORM_VENDOR_DIR
+-- checkout/build, not a deployment's own data. DAAT_VENDOR_DIR
 -- lets a real deployment point at wherever it actually copied
 -- vnd/ to (e.g. /app/vnd in the Celleste Docker image); unset
 -- defaults to "./vnd", which matches running from a plain repo
 -- checkout (CLI/dev usage, tests).
 function config.vendor_assets_dir()
-    dir = os.getenv("PLATFORM_VENDOR_DIR")
+    dir = os.getenv("DAAT_VENDOR_DIR")
     if dir != nil and dir != "" then
         return dir
     end
     return "./vnd"
 end
 
-function config.platform_config_path(root)
+function config.config_path(root)
     if root == nil then
         root = config.find_root()
     end
-    return paths.joinpath(root, PLATFORM_CONFIG_FILE)
+    return paths.joinpath(root, CONFIG_FILE)
 end
 
 -- Every deployment-tunable setting that ISN'T a secret: which
@@ -215,12 +215,12 @@ end
 -- retry budgets (doc/architecture.md's own table), and the MariaDB
 -- connection's host/port/user/database. All of it is real,
 -- version-controlled deployment content -- meant to be committed
--- (see lims/platform.lua, seeded into the image/store exactly like
+-- (see lims/config.lua, seeded into the image/store exactly like
 -- theme.lua already is), not something only an operator's shell
 -- environment happens to know. The one field in this whole area that
 -- IS a secret, the MariaDB password, deliberately stays out of this
 -- file and out of version control entirely -- see
--- config.mariadb_descriptor's own PLATFORM_MARIADB_PASSWORD env var
+-- config.mariadb_descriptor's own DAAT_MARIADB_PASSWORD env var
 -- read.
 --
 -- nav_order/nav_hidden's own shared validation: a plain list of
@@ -241,9 +241,9 @@ function validate_nav_key_list(raw)
 end
 
 -- Same generic-hook contract as load_theme below: absent or malformed
--- platform.lua, every field just falls back to its default rather
+-- config.lua, every field just falls back to its default rather
 -- than erroring -- a deployment that wants none of this can skip the
--- file entirely. Memoized per-process (PLATFORM_CONFIG_CACHE) since a
+-- file entirely. Memoized per-process (CONFIG_CACHE) since a
 -- single turn loop reads several of these fields across several calls
 -- -- safe to cache because CGI/CLI both start a fresh Lua process per
 -- request/invocation, so there's never a stale value left over from
@@ -317,18 +317,6 @@ function valid_retention_days(value)
     return nil
 end
 
-function valid_legacy_prompt_days(value)
-    if value == "forever" then
-        return "forever"
-    end
-    if type(value) == "number" then
-        if value <= 0 then
-            return "forever"
-        end
-        return value
-    end
-    return nil
-end
 
 function config.resolve_retention(parsed)
     strategy = "standard"
@@ -347,10 +335,6 @@ function config.resolve_retention(parsed)
     if type(parsed) != "table" then
         return policy
     end
-    legacy_days = valid_legacy_prompt_days(parsed.prompt_retention_days)
-    if legacy_days != nil then
-        policy.model_input_days = legacy_days
-    end
     mi_days = valid_retention_days(parsed.model_input_days)
     if mi_days != nil then
         policy.model_input_days = mi_days
@@ -360,12 +344,6 @@ function config.resolve_retention(parsed)
     end
     if type(parsed.agent_retention_override) == "table" then
         overrides = parsed.agent_retention_override
-        if overrides.prompt_retention_days != nil and overrides.model_input_days == nil then
-            ov_legacy = valid_legacy_prompt_days(overrides.prompt_retention_days)
-            if ov_legacy != nil then
-                policy.model_input_days = ov_legacy
-            end
-        end
         for _, key in ipairs({"knowledge_days", "tool_trace_days", "model_input_days", "metrics_days"}) do
             ov = valid_retention_days(overrides[key])
             if ov != nil then
@@ -385,7 +363,6 @@ function apply_retention(conf, policy)
     conf.knowledge_days = policy.knowledge_days
     conf.tool_trace_days = policy.tool_trace_days
     conf.model_input_days = policy.model_input_days
-    conf.prompt_retention_days = policy.model_input_days
     conf.metrics_days = policy.metrics_days
     conf.agent_transcript_documents = policy.transcript_documents
 end
@@ -410,9 +387,9 @@ function config.resolve_masking(value)
     return policy
 end
 
-function config.platform_config()
-    if PLATFORM_CONFIG_CACHE != nil then
-        return PLATFORM_CONFIG_CACHE
+function config.load()
+    if CONFIG_CACHE != nil then
+        return CONFIG_CACHE
     end
 
     -- Which backend to call is the deployment's choice, so core names
@@ -422,7 +399,7 @@ function config.platform_config()
     -- embedding_model). A provider's own settings (a cloud project, a
     -- mail server) aren't listed here either: the provider reads them
     -- itself through config.setting.
-    PLATFORM_SETTINGS_CACHE = {}
+    SETTINGS_CACHE = {}
     conf = {
         agent_provider = nil,
         agent_model = nil,
@@ -554,7 +531,7 @@ function config.platform_config()
         -- user's, never tool traces).
         agent_carry_user_requests = false,
         agent_carry_user_requests_limit = 5,
-        platform_adhoc_row_cap = 1000,
+        adhoc_row_cap = 1000,
         extension_max_job_attempts = 5,
         -- Tag upkeep (tag.lua): vectors are the cached embeddings cut to
         -- tag_dims (256 lost about a point against the full 768 in the
@@ -648,10 +625,10 @@ function config.platform_config()
     }
     apply_retention(conf, config.resolve_retention(nil))
 
-    path = config.platform_config_path()
+    path = config.config_path()
     file = io.open(path, "r")
     if file == nil then
-        PLATFORM_CONFIG_CACHE = conf
+        CONFIG_CACHE = conf
         return conf
     end
     contents = io.read(file, "*all")
@@ -659,14 +636,14 @@ function config.platform_config()
 
     ok, parsed = sandbox.run(contents, path, sandbox.data_env())
     if ok == false or type(parsed) != "table" then
-        PLATFORM_CONFIG_CACHE = conf
+        CONFIG_CACHE = conf
         return conf
     end
 
     if type(parsed.agent_provider) == "string" and parsed.agent_provider != "" then
         conf.agent_provider = parsed.agent_provider
     end
-    PLATFORM_SETTINGS_CACHE = parsed
+    SETTINGS_CACHE = parsed
     if type(parsed.agent_model) == "string" and parsed.agent_model != "" then
         conf.agent_model = parsed.agent_model
     end
@@ -792,8 +769,8 @@ function config.platform_config()
     if type(parsed.agent_carry_user_requests_limit) == "number" and parsed.agent_carry_user_requests_limit >= 1 then
         conf.agent_carry_user_requests_limit = math.floor(parsed.agent_carry_user_requests_limit)
     end
-    if type(parsed.platform_adhoc_row_cap) == "number" then
-        conf.platform_adhoc_row_cap = parsed.platform_adhoc_row_cap
+    if type(parsed.adhoc_row_cap) == "number" then
+        conf.adhoc_row_cap = parsed.adhoc_row_cap
     end
     if type(parsed.extension_max_job_attempts) == "number" then
         conf.extension_max_job_attempts = parsed.extension_max_job_attempts
@@ -866,16 +843,16 @@ function config.platform_config()
         end
     end
 
-    PLATFORM_CONFIG_CACHE = conf
+    CONFIG_CACHE = conf
     return conf
 end
 
--- A provider's own platform.lua setting (vertex_project, smtp_url,
+-- A provider's own config.lua setting (vertex_project, smtp_url,
 -- ...), as written: core doesn't know these keys, so the provider that
 -- reads one checks it. An empty string counts as unset.
 function config.setting(key)
-    config.platform_config()
-    value = PLATFORM_SETTINGS_CACHE[key]
+    config.load()
+    value = SETTINGS_CACHE[key]
     if value == "" then
         return nil
     end
@@ -887,7 +864,7 @@ end
 -- Missing any one, the whole flow stays off rather than half-working
 -- (e.g. sending a link with no host in it).
 function config.password_reset_enabled()
-    conf = config.platform_config()
+    conf = config.load()
     return conf.mail_provider != nil and conf.mail_from != nil and conf.public_url != nil
 end
 
@@ -899,7 +876,7 @@ end
 -- <fallback>) defaults (its current indigo/slate palette) untouched.
 -- site_name similarly defaults to a generic label, never a company name.
 function config.load_theme(root)
-    theme = {site_name = "Platform", colors = {}, has_logo = false, hide_home_heading = false, system_prompt_extra = nil}
+    theme = {site_name = "Daat", colors = {}, has_logo = false, hide_home_heading = false, system_prompt_extra = nil}
     path = config.theme_path(root)
     file = io.open(path, "r")
     if file == nil then
@@ -972,7 +949,7 @@ end
 -- string.
 function config.save_theme(root, theme)
     lines = {"return {"}
-    if theme.site_name != nil and theme.site_name != "" and theme.site_name != "Platform" then
+    if theme.site_name != nil and theme.site_name != "" and theme.site_name != "Daat" then
         table.insert(lines, "    site_name = " .. lua_string_literal(theme.site_name) .. ",")
     end
     if theme.has_logo == true then

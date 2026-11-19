@@ -377,7 +377,7 @@ function knowledge.do_knowledge(cmd_args, db_path)
             elseif score == nil then
                 print("Can't measure: " .. tostring(pa))
             else
-                threshold = config.platform_config().link_passage_gate
+                threshold = config.load().link_passage_gate
                 verdict = "stops it"
                 if threshold <= 0 or score >= threshold then
                     verdict = "passes"

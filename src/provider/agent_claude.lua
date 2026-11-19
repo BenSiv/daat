@@ -37,7 +37,7 @@
 -- not as one of Claude's server tools. See doc/agent-protocol.md.
 --
 -- Requires ANTHROPIC_API_KEY in the environment (PassEnv'd the same
--- way PLATFORM_MARIADB_PASSWORD already is -- see apache-platform.conf).
+-- way DAAT_MARIADB_PASSWORD already is -- see apache-platform.conf).
 
 json = require("dkjson")
 config = require("config")
@@ -46,7 +46,7 @@ external_tool = require("external_tool")
 agent_claude = {}
 
 -- This provider's default for agent_provider.model, used when
--- platform.lua sets no agent_model. No embeddings here.
+-- config.lua sets no agent_model. No embeddings here.
 agent_claude.default_model = "claude-sonnet-5"
 ANTHROPIC_VERSION = "2023-06-01"
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
@@ -281,7 +281,7 @@ function claude_stop_reason_to_canonical(stop_reason)
     return "error"
 end
 
--- Translates platform.lua's agent_thinking ("off" | "summary" | "full",
+-- Translates config.lua's agent_thinking ("off" | "summary" | "full",
 -- doc/agent-data.md, decision 5) into Claude's `thinking` parameter and
 -- an adjusted `max_tokens` (Anthropic requires max_tokens > budget_tokens).
 CLAUDE_SUMMARY_THINKING_BUDGET = 2048
@@ -289,7 +289,7 @@ CLAUDE_FULL_THINKING_BUDGET = 8192
 
 function claude_thinking_config(thinking_mode, base_max_tokens)
     if thinking_mode == nil then
-        thinking_mode = config.platform_config().agent_thinking
+        thinking_mode = config.load().agent_thinking
     end
     if thinking_mode == "summary" then
         return {type = "enabled", budget_tokens = CLAUDE_SUMMARY_THINKING_BUDGET},

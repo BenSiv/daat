@@ -17,7 +17,7 @@ setup() {
     SESSION=$(printf '%s' "$raw" | grep -o 'Set-Cookie: session=[^;]*' | sed 's/Set-Cookie: session=//')
     CSRF=$(printf '%s' "$raw" | grep -o 'Set-Cookie: csrf=[^;]*' | sed 's/Set-Cookie: csrf=//')
     COOKIE="session=${SESSION}; csrf=${CSRF}"
-    write_platform_config ', agent_turn_mode = "detached"'
+    write_config ', agent_turn_mode = "detached"'
     # The worker is started with the CGI's own binary (SCRIPT_FILENAME).
     export SCRIPT_FILENAME="$BIN"
 }
@@ -80,7 +80,7 @@ wait_idle() {
     # makes three of them inside one tool call (4+ s without a beat of
     # its own); elsewhere at most two calls run back to back (the final
     # answer and its self-check, ~2 s).
-    write_platform_config ', agent_turn_mode = "detached", agent_turn_stale_seconds = 3'
+    write_config ', agent_turn_mode = "detached", agent_turn_stale_seconds = 3'
     export AGENT_TEST_CONVERSE_DELAY=1
     sid=$(new_session)
     scripted="$(tool_call_response "research.investigate" '{"question":"what types exist"}')"$'\1'"$(tool_call_response "entity.list_types" "{}")"$'\1'"$(tool_call_response "entity.list_types" "{}")"$'\1'"$(done_response "There is a task type.")"$'\1'"$(done_response "Found it: task.")"
@@ -113,7 +113,7 @@ wait_idle() {
 }
 
 @test "a MALFORMED_FUNCTION_CALL reply is retried once before it's an error" {
-    write_platform_config ''
+    write_config ''
     sid=$(new_session)
     malformed='{"content":[],"stopReason":"error","errorMessage":"Vertex AI stopped generating (finishReason: MALFORMED_FUNCTION_CALL)"}'
     scripted="${malformed}"$'\1'"$(done_response "Recovered.")"
@@ -130,7 +130,7 @@ wait_idle() {
 }
 
 @test "a MALFORMED_RESPONSE reply is retried once too" {
-    write_platform_config ''
+    write_config ''
     sid=$(new_session)
     malformed='{"content":[],"stopReason":"error","errorMessage":"empty response (finishReason: MALFORMED_RESPONSE)"}'
     scripted="${malformed}"$'\1'"$(done_response "Recovered.")"
@@ -149,7 +149,7 @@ wait_idle() {
 # AGENT_TEST_SELF_CHECK_RESPONSE (provider/agent_test.lua).
 
 @test "a detached turn that spends its step budget goes on by itself, with a progress note, and finishes" {
-    write_platform_config ', agent_turn_mode = "detached", agent_max_turns = 1, agent_auto_continue_max = 2'
+    write_config ', agent_turn_mode = "detached", agent_max_turns = 1, agent_auto_continue_max = 2'
     export AGENT_TEST_SELF_CHECK_RESPONSE="$(done_response "Listed the types; checking fields next.")"
     sid=$(new_session)
     scripted="$(tool_call_response "entity.list_types" '{}')"$'\1'"$(done_response "Final answer.")"
@@ -163,7 +163,7 @@ wait_idle() {
 }
 
 @test "auto-continue stops at agent_auto_continue_max and reports where it got to" {
-    write_platform_config ', agent_turn_mode = "detached", agent_max_turns = 1, agent_auto_continue_max = 1'
+    write_config ', agent_turn_mode = "detached", agent_max_turns = 1, agent_auto_continue_max = 1'
     export AGENT_TEST_SELF_CHECK_RESPONSE="$(done_response "Status: still looking.")"
     sid=$(new_session)
     # One scripted tool call, repeated: every step budget ends unanswered.
@@ -176,7 +176,7 @@ wait_idle() {
 }
 
 @test "an inline turn never auto-continues" {
-    write_platform_config ', agent_turn_mode = "inline", agent_max_turns = 1, agent_auto_continue_max = 3'
+    write_config ', agent_turn_mode = "inline", agent_max_turns = 1, agent_auto_continue_max = 3'
     export AGENT_TEST_SELF_CHECK_RESPONSE="$(done_response "Status: out of steps.")"
     sid=$(new_session)
     run raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${sid}\",\"message\":\"dig\"}" "$COOKIE" "$CSRF" "$(tool_call_response "entity.list_types" '{}')"
@@ -187,7 +187,7 @@ wait_idle() {
 @test "auto-continue also stops at agent_auto_continue_minutes, with budgets still left" {
     # No time at all: the first budget's end is already past the limit,
     # so the turn stops there although agent_auto_continue_max allows 5.
-    write_platform_config ', agent_turn_mode = "detached", agent_max_turns = 1, agent_auto_continue_max = 5, agent_auto_continue_minutes = 0'
+    write_config ', agent_turn_mode = "detached", agent_max_turns = 1, agent_auto_continue_max = 5, agent_auto_continue_minutes = 0'
     export AGENT_TEST_SELF_CHECK_RESPONSE="$(done_response "Status: out of time.")"
     sid=$(new_session)
     raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${sid}\",\"message\":\"dig\"}" "$COOKIE" "$CSRF" "$(tool_call_response "entity.list_types" '{}')" >/dev/null
@@ -243,7 +243,7 @@ wait_idle() {
 }
 
 @test "a second malformed reply in a row isn't retried again: the turn ends in a visible error" {
-    write_platform_config ''
+    write_config ''
     for reason in MALFORMED_FUNCTION_CALL MALFORMED_RESPONSE; do
         sid=$(new_session)
         malformed="{\"content\":[],\"stopReason\":\"error\",\"errorMessage\":\"stopped generating (finishReason: ${reason})\"}"

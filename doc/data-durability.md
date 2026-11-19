@@ -20,7 +20,7 @@ For a **from-source or local dev install still running SQLite** (`.store/store.d
 
 ### Phase 1 -- SQLite dev/from-source installs only (Cloud SQL already covers prod)
 
-If running from source against SQLite (no `db_backend: "mariadb"` in `platform.lua`), the original plan still applies: switch to WAL mode (`PRAGMA journal_mode=WAL;`) and either run [Litestream](https://litestream.io/) or a systemd timer doing `sqlite3 store.db ".backup /tmp/backup.db"` + upload on an interval. Not relevant to production anymore -- skip straight to Phase 2 there.
+If running from source against SQLite (no `db_backend: "mariadb"` in `config.lua`), the original plan still applies: switch to WAL mode (`PRAGMA journal_mode=WAL;`) and either run [Litestream](https://litestream.io/) or a systemd timer doing `sqlite3 store.db ".backup /tmp/backup.db"` + upload on an interval. Not relevant to production anymore -- skip straight to Phase 2 there.
 
 ### Phase 2 -- Documented, tested restore runbook (still open)
 
@@ -39,7 +39,7 @@ Write the actual steps taken down in this section once run for real.
 
 ## Critical files
 - `/root/software/infra/gcp/lims/main.tf` -- `google_sql_database_instance.platform`, its `backup_configuration` block, instance tier/zone
-- `/root/software/infra/gcp/lims/module/platform_compute/templates/startup-platform.sh.tpl` -- where the app's DB connection is configured (seeds `platform.lua`'s `db_backend`, Cloud SQL Auth Proxy sidecar)
+- `/root/software/infra/gcp/lims/module/platform_compute/templates/startup-platform.sh.tpl` -- where the app's DB connection is configured (seeds `config.lua`'s `db_backend`, Cloud SQL Auth Proxy sidecar)
 - `/root/projects/luam/lib/db.lua` -- backend dispatch (`is_mariadb()`); where a `PRAGMA journal_mode=WAL` call would be added for the SQLite dev path
 - `/root/projects/daat/doc/mariadb-migration.md` -- the full cutover history/rationale
 - `/root/projects/daat/doc/architecture.md` -- "Storage" section, current dual-backend picture

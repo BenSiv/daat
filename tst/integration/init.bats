@@ -24,13 +24,13 @@ teardown() {
     [ ! -f theme.lua ]
 }
 
-@test "init --with-examples writes one example of each kind plus theme.lua/platform.lua" {
-    # setup_test_env's own write_platform_config already seeded a
-    # minimal platform.lua (agent_provider = "test", for the
+@test "init --with-examples writes one example of each kind plus theme.lua/config.lua" {
+    # setup_test_env's own write_config already seeded a
+    # minimal config.lua (agent_provider = "test", for the
     # deterministic test provider) -- remove it first so this test
-    # exercises examples.write_all's real platform.lua stub, not the
+    # exercises examples.write_all's real config.lua stub, not the
     # harness's own scaffolding file.
-    rm -f platform.lua
+    rm -f config.lua
 
     run "$BIN" init --with-examples
     [[ "$output" =~ "Initialized store at" ]]
@@ -43,8 +43,8 @@ teardown() {
     [ -f extensions/widget-quantity-range/manifest.lua ]
     [ -f extensions/widget-quantity-range/main.lua ]
     [ -f theme.lua ]
-    [ -f platform.lua ]
-    run cat platform.lua
+    [ -f config.lua ]
+    run cat config.lua
     [[ "$output" =~ "-- agent_provider = \"ollama\"" ]]
     [[ "$output" =~ "-- agent_model = \"qwen3:8b\"" ]]
 
@@ -75,7 +75,7 @@ teardown() {
 
     # Same harness-scaffolding removal as the previous test -- see its
     # own comment.
-    rm -f platform.lua
+    rm -f config.lua
 
     run "$BIN" init --with-examples
     [[ "$output" =~ "Already initialized" ]]

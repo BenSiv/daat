@@ -69,7 +69,7 @@ Today `daat agent prune-prompts` clears old prompts. Rather than add a second, s
 
 Each rule reports what it removed. `daat agent prune-prompts` stays as an alias for one release, so the running timer keeps working until the startup script switches to the new name.
 
-### Settings (`platform.lua`, all with defaults)
+### Settings (`config.lua`, all with defaults)
 
 | Setting | Default | What it does |
 |---|---|---|
@@ -163,7 +163,7 @@ Each is tested on its own, on a `feature/passage-retrieval` branch.
 
 ## Decisions (2026-10-26)
 
-1. **`passage_cache_days` defaults to 30,** as a deployment setting in `platform.lua`, like every other value here. Nothing is hard-coded.
+1. **`passage_cache_days` defaults to 30,** as a deployment setting in `config.lua`, like every other value here. Nothing is hard-coded.
 2. **People and the agent see the same thing.** The `/documents` search page shows the same passages the agent gets, from the same function. This is a standing design rule for the whole system (`doc/architecture.md`, "The agent sees what a user sees"): anything that decides what a search, list or record shows decides it once, for both.
 
 Approved: the batched-embedding check against Vertex, and the live scorecard comparison.

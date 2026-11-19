@@ -50,7 +50,7 @@ const context_report = require("context_report")
 function run_prune(db_path)
     agent.init_schema(db_path)
     passage.init_schema(db_path)
-    conf = config.platform_config()
+    conf = config.load()
     pruned = agent.prune_retention(db_path, conf)
     policy = pruned.policy
     mi_label = "(kept forever)"

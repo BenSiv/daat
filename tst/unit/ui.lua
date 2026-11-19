@@ -97,7 +97,7 @@ function tests.render_mixed_elements_in_order()
     check(heading_pos < table_pos and table_pos < button_pos, "elements should render in the order given: " .. rendered)
 end
 
--- apply_nav_hidden/apply_nav_order: the platform.lua
+-- apply_nav_hidden/apply_nav_order: the config.lua
 -- nav_order/nav_hidden overlay applied on top of ui.page_shell's own
 -- capability-gated nav_items list. No prior coverage existed since
 -- these are new -- exercised directly here rather than only through a

@@ -496,7 +496,7 @@ csrf_from() {
 }
 
 @test "a route's own Referrer-Policy replaces the default instead of duplicating it" {
-    write_platform_config ', mail_provider = "test", mail_from = "noreply@example.com", public_url = "https://lims.example.com/"'
+    write_config ', mail_provider = "test", mail_from = "noreply@example.com", public_url = "https://lims.example.com/"'
     run raw_get "/reset-password"
     [ "$(printf '%s' "$output" | grep -ci '^Referrer-Policy:')" = "1" ]
     [[ "$output" =~ "Referrer-Policy: no-referrer" ]]

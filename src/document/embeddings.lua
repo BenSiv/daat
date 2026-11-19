@@ -68,7 +68,7 @@ function doc_embeddings.refresh_embedding(db_path, document_id)
         tag.on_document_vector_changed(db_path, document_id, old_vector)
         tag.place_document(db_path, document_id)
     end
-    if embedded != nil and config.platform_config().build_aspects == true then
+    if embedded != nil and config.load().build_aspects == true then
         outcome, aspect_err = aspect_lib.refresh(db_path, document_id)
         if outcome == nil then
             return nil, "aspects: " .. tostring(aspect_err)
@@ -82,7 +82,7 @@ function utc_timestamp(seconds)
 end
 
 function doc_embeddings.queue_embedding(db_path, document_id)
-    if config.platform_config().embedding_quiet_minutes == 0 then
+    if config.load().embedding_quiet_minutes == 0 then
         doc_embeddings.refresh_embedding(db_path, document_id)
         return
     end
@@ -92,7 +92,7 @@ function doc_embeddings.queue_embedding(db_path, document_id)
 end
 
 function doc_embeddings.embed_pending(db_path)
-    quiet_minutes = config.platform_config().embedding_quiet_minutes
+    quiet_minutes = config.load().embedding_quiet_minutes
     cutoff = utc_timestamp(os.time() - quiet_minutes * 60)
     rows = db.query(db_path, string.format("""
         SELECT q.document_id, q.queued_at, d.id AS live_id FROM document_embedding_due q
@@ -127,7 +127,7 @@ function doc_embeddings.embed_pending(db_path)
         counts.waiting = tonumber(waiting[1].n) - counts.failed
     end
     counts.upkeep = {}
-    if counts.embedded > 0 and config.platform_config().tag_restructure == true then
+    if counts.embedded > 0 and config.load().tag_restructure == true then
         ok, report = pcall(tag_upkeep_lib.run, db_path, {judge = true, apply = true})
         if ok then
             counts.upkeep = report

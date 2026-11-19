@@ -32,7 +32,7 @@
 -- archived, never deleted.
 --
 -- Runs after `daat document embed-pending` embeds anything, when
--- platform.lua's tag_restructure is on; `daat repair tags --restructure`
+-- config.lua's tag_restructure is on; `daat repair tags --restructure`
 -- runs it by hand, with --dry-run (proposals only) and --judge (ask the
 -- agent too, still writing nothing).
 
@@ -302,7 +302,7 @@ function upkeep_members(db_path, tag_id)
         LEFT JOIN document_embedding e ON e.document_id = dt.document
         WHERE dt.tag = %d AND (dt.archived_at IS NULL OR dt.archived_at = '') AND dt.decision != 'excluded'
         ORDER BY dt.id;""", tonumber(tag_id)))
-    dims = config.platform_config().tag_dims
+    dims = config.load().tag_dims
     members = {}
     for _, row in ipairs(upkeep_list(rows)) do
         vector = nil
@@ -427,7 +427,7 @@ function tag_upkeep.proposals(db_path, dry_run, pairs_above, relabel)
     if review then
         merge_cosine = pairs_above
     end
-    split_min = config.platform_config().tag_split_min
+    split_min = config.load().tag_split_min
     busy = {}
     proposals = {}
     for _, t in ipairs(tags) do

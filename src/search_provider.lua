@@ -2,7 +2,7 @@
 -- agent_provider.lua's own facade (see that file's header), just for
 -- internet_search.search (src/agent.lua's own AGENT_TOOLS entry)
 -- instead of the chat LLM. Loaded dynamically by name
--- (config.platform_config().search_provider, no default: unset means
+-- (config.load().search_provider, no default: unset means
 -- no web search; "google_cse" for src/provider/search_google_cse.lua)
 -- rather than required directly, so swapping backends -- or substituting
 -- the deterministic test provider -- is a config change, not a code
@@ -28,12 +28,12 @@ const config = require("config")
 const search_provider = {}
 
 function search_provider.name()
-    return config.platform_config().search_provider
+    return config.load().search_provider
 end
 
 function search_provider.load()
     if search_provider.name() == nil then
-        return nil, "no search_provider is set in platform.lua"
+        return nil, "no search_provider is set in config.lua"
     end
     ok, mod = pcall(require, "provider.search_" .. search_provider.name())
     if ok == false or mod == nil then

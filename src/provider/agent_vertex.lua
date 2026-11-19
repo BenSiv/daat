@@ -66,7 +66,7 @@
 --
 -- Requires a GCE service account (the metadata server) or, off GCE, a
 -- logged-in `gcloud` on PATH (see vertex_gcloud_access_token), and two
--- platform.lua settings of its own, read through config.setting (core
+-- config.lua settings of its own, read through config.setting (core
 -- doesn't know them): vertex_project (required, no default -- this is
 -- a real, potentially billed GCP project, never hardcoded here) and
 -- vertex_region (optional, defaults to DEFAULT_REGION below).
@@ -79,11 +79,11 @@ paths = require("paths")
 agent_vertex = {}
 
 -- This provider's defaults for agent_provider.model/embedding_model,
--- used when platform.lua sets no agent_model/embedding_model.
+-- used when config.lua sets no agent_model/embedding_model.
 agent_vertex.default_model = "gemini-3.5-flash-lite"
 agent_vertex.default_embedding_model = "text-embedding-005"
 
--- Translates platform.lua's agent_thinking ("off" | "summary" | "full",
+-- Translates config.lua's agent_thinking ("off" | "summary" | "full",
 -- doc/agent-data.md, decision 5) into Vertex's generationConfig.thinkingConfig.
 -- Confirmed live on Vertex AI (celleste-elab): includeThoughts alone
 -- returns zero thought parts on models whose default thinking budget is
@@ -92,7 +92,7 @@ agent_vertex.default_embedding_model = "text-embedding-005"
 -- HIGH; "off" omits thought summaries (includeThoughts = false).
 function vertex_thinking_config(thinking_mode)
     if thinking_mode == nil then
-        thinking_mode = config.platform_config().agent_thinking
+        thinking_mode = config.load().agent_thinking
     end
     if thinking_mode == "summary" then
         return {includeThoughts = true, thinkingLevel = "MEDIUM"}
@@ -107,7 +107,7 @@ end
 -- model as of brex 153144598) 404s on a regional endpoint like
 -- us-central1 -- "global" is not just an option for a 3.x-family model,
 -- it's the only location that actually serves one. Falls back to this
--- only when platform.lua sets no vertex_region of its own; a
+-- only when config.lua sets no vertex_region of its own; a
 -- deployment that deliberately picked a regional model (or a real
 -- future one that does support regional locations) can still override
 -- it explicitly.
@@ -129,7 +129,7 @@ REQUEST_TIMEOUT_SECONDS = 120
 function vertex_config()
     project = config.setting("vertex_project")
     if type(project) != "string" then
-        return nil, nil, "vertex_project is not set in platform.lua"
+        return nil, nil, "vertex_project is not set in config.lua"
     end
     region = config.setting("vertex_region")
     if type(region) != "string" then

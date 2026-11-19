@@ -33,7 +33,7 @@ HOST = arg[1]
 PORT = tonumber(arg[2])
 USER = arg[3]
 DB_PREFIX = arg[4]
-PASSWORD = os.getenv("PLATFORM_MARIADB_PASSWORD")
+PASSWORD = os.getenv("DAAT_MARIADB_PASSWORD")
 if PASSWORD == nil then
     PASSWORD = ""
 end
@@ -90,7 +90,7 @@ function create_dual_stores()
     lfs.mkdir(dir)
     lfs.mkdir(dir .. "/.store")
     lfs.mkdir(dir .. "/extensions")
-    pf = io.open(dir .. "/platform.lua", "w")
+    pf = io.open(dir .. "/config.lua", "w")
     io.write(pf, """return {agent_provider = "test", search_provider = "test", embedding_quiet_minutes = 0, tag_min_text = 0}""")
     io.close(pf)
     lfs.chdir(dir)

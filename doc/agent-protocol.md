@@ -14,7 +14,7 @@ provider.converse(model, system_prompt, messages, tools) -> (response, err, usag
 provider.embeddings(model, text) -> (vector, err)  -- optional
 ```
 
-Loaded dynamically by name (`config.platform_config().agent_provider`, unset by default) via `agent_provider.lua`, so switching providers -- or swapping in the deterministic `test` provider for repeatable, cost-free test runs -- is a config change, not a code change.
+Loaded dynamically by name (`config.load().agent_provider`, unset by default) via `agent_provider.lua`, so switching providers -- or swapping in the deterministic `test` provider for repeatable, cost-free test runs -- is a config change, not a code change.
 
 ## Messages
 
@@ -67,4 +67,4 @@ Some vendors offer tools they execute themselves (Anthropic's `web_search`, `cod
 1. Write `src/provider/agent_<name>.lua` implementing `.generate`/`.converse` (and `.embeddings` if the vendor has one).
 2. Translate `messages`/`tools` from the canonical shape above into the vendor's real wire format, and the vendor's response back into canonical blocks/`stopReason` -- entirely within that one file.
 3. No changes needed to `agent.lua`, `web.lua`, or the existing test suite (`src/provider/agent_test.lua`'s scripted fixtures already use this canonical shape directly).
-4. Set `config.platform_config().agent_provider` to `"<name>"` to switch.
+4. Set `config.load().agent_provider` to `"<name>"` to switch.

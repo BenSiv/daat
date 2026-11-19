@@ -130,7 +130,7 @@ function knowledge_review.review_retrieval(db_path, retrieval_id, author)
     if rows == nil then
         return
     end
-    curate_aspects = config.platform_config().curate_aspects == true
+    curate_aspects = config.load().curate_aspects == true
     peer_count = #rows - 1
     if peer_count < 0 then
         peer_count = 0
@@ -261,7 +261,7 @@ end
 
 function knowledge_review.search_and_log(db_path, query_text, limit, use_semantic, session_id, author)
     results, query_vector, query_model = document.search(db_path, query_text, limit, use_semantic)
-    mode = config.platform_config().search_review_mode
+    mode = config.load().search_review_mode
     if mode != "inline" then
         if #results == 0 then
             retrieval_id = knowledge_review.begin_retrieval(db_path, session_id, query_text, 0, author, "reviewed")
@@ -424,7 +424,7 @@ end
 
 function knowledge_review.search_for_display(db_path, query_text, limit, session_id, author, full)
     results, _, query_vector, query_model = knowledge_review.search_and_log(db_path, query_text, limit, true, session_id, author)
-    conf = config.platform_config()
+    conf = config.load()
     budget = conf.agent_search_excerpt_length
     if full == true then
         budget = conf.agent_search_excerpt_full_length

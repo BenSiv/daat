@@ -257,7 +257,7 @@ function knowledge_links.judge_link(doc_a, doc_b)
 end
 
 function knowledge_links.link_similarity(db_path, doc_a, doc_b, every_passage)
-    conf = config.platform_config()
+    conf = config.load()
     per_document = conf.link_gate_passages_per_document
     max_new = conf.link_gate_max_embeds
     if every_passage == true then
@@ -277,7 +277,7 @@ function knowledge_links.link_similarity(db_path, doc_a, doc_b, every_passage)
 end
 
 function knowledge_links.passes_passage_gate(db_path, doc_a, doc_b, every_passage)
-    threshold = config.platform_config().link_passage_gate
+    threshold = config.load().link_passage_gate
     if threshold <= 0 then
         return true, nil, nil
     end

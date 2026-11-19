@@ -28,7 +28,7 @@ extension = require("extension")
 agent = {}
 
 -- Turn-budget/size constants in this file are read fresh from
--- config.platform_config() every time rather than hardcoded (see
+-- config.load() every time rather than hardcoded (see
 -- doc/architecture.md's "Chat" config table for the full list and
 -- defaults) -- the right value genuinely depends on deployment
 -- choices (which model is configured, that provider's own latency,
@@ -39,7 +39,7 @@ agent = {}
 
 -- The model every chat turn uses, for cgi.lua's chat routes and
 -- main.lua's CLI dispatch (`daat knowledge distill`, `daat agent
--- run-pending-background`) alike: platform.lua's agent_model, else the
+-- run-pending-background`) alike: config.lua's agent_model, else the
 -- provider's own default -- never a model name in core.
 function agent.default_model()
     return agent_provider.model()
@@ -175,7 +175,7 @@ function agent.record_model_call(db_path, session_id, message_id, prompt, model_
     if model_id == nil then
         model_id = agent.default_model()
     end
-    if config.platform_config().model_input_days == 0 then
+    if config.load().model_input_days == 0 then
         prompt = nil
     end
     _, call_id = db.exec(db_path, string.format(
@@ -325,7 +325,7 @@ function agent.prune_knowledge(db_path, days)
     if candidates == nil then
         return 0
     end
-    curate = require("curate")
+    curate = require("knowledge.curate")
     removed = 0
     for _, c in ipairs(candidates) do
         sid = tostring(c.session_id)
@@ -398,10 +398,10 @@ function agent.prune_metrics(db_path, days)
 end
 
 -- agent.prune_retention(db_path, conf) -> summary table
--- Runs every agent retention rule for `conf` (or config.platform_config()).
+-- Runs every agent retention rule for `conf` (or config.load()).
 function agent.prune_retention(db_path, conf)
     if conf == nil then
-        conf = config.platform_config()
+        conf = config.load()
     end
     policy = conf.retention
     if policy == nil then
@@ -1580,7 +1580,7 @@ build_history_messages = nil
 -- Returns the count and which way it was made ("recorded" or
 -- "estimated").
 function agent.context_tokens(db_path, session_id, active)
-    conf = config.platform_config()
+    conf = config.load()
     per_token = conf.agent_chars_per_token
     rows = db.query(db_path, string.format(
         "SELECT message_id, prompt_tokens FROM agent_model_call WHERE session_id = %s AND kind = 'chat' " ..
@@ -1688,7 +1688,7 @@ agent.COMPACTION_ANSWERS_HEADER = COMPACTION_ANSWERS_HEADER
 function agent.compact_if_needed(db_path, session_id, system_prompt, model)
     active = agent.active_messages(db_path, session_id)
 
-    threshold = config.platform_config().agent_compaction_threshold
+    threshold = config.load().agent_compaction_threshold
 
     -- The previous summary stands for everything before the kept tail
     -- (active_messages puts it first), so it's always folded into the
@@ -1840,8 +1840,8 @@ function agent.compact_if_needed(db_path, session_id, system_prompt, model)
     if #compacted_answers > 0 then
         summary = summary .. "\n\n" .. COMPACTION_ANSWERS_HEADER .. "\n" .. table.concat(compacted_answers, "\n")
     end
-    if config.platform_config().agent_pin_schema == true then
-        pinned = pinned_schema_block(to_compact, config.platform_config().agent_pinned_schema_chars)
+    if config.load().agent_pin_schema == true then
+        pinned = pinned_schema_block(to_compact, config.load().agent_pinned_schema_chars)
         if pinned != nil then
             summary = summary .. "\n\n" .. pinned
         end
@@ -2394,7 +2394,7 @@ end
 -- without a result. Without it (a token estimate), every unanswered call
 -- gets the plain text.
 function build_history_messages(messages, writes)
-    result_cap = config.platform_config().agent_tool_result_cap
+    result_cap = config.load().agent_tool_result_cap
     result = {}
     interrupted = {}
     for _, msg in ipairs(messages) do
@@ -2497,7 +2497,7 @@ function format_masked_stub(tool_name, args, orig_chars, result_id)
 end
 
 function agent.masking_policy(loop_kind)
-    conf = config.platform_config()
+    conf = config.load()
     enabled = false
     if type(conf.agent_masking) == "table" and loop_kind != nil then
         enabled = conf.agent_masking[loop_kind] == true
@@ -2939,7 +2939,7 @@ function agent.session_requests(db_path, session_id)
 end
 
 function agent.session_confirmed_schema(db_path, session_id, budget)
-    conf = config.platform_config()
+    conf = config.load()
     if db_path == nil or session_id == nil or conf.agent_pin_schema != true then
         return nil
     end
@@ -2964,7 +2964,7 @@ function agent.user_prior_requests(db_path, login, exclude_session_id, limit)
         return {}
     end
     if limit == nil then
-        limit = config.platform_config().agent_carry_user_requests_limit
+        limit = config.load().agent_carry_user_requests_limit
     end
     if limit == nil or limit <= 0 then
         return {}
@@ -3004,7 +3004,7 @@ function agent.user_prior_requests(db_path, login, exclude_session_id, limit)
 end
 
 function agent.prior_requests_prompt_block(db_path, login, session_id)
-    conf = config.platform_config()
+    conf = config.load()
     if conf.agent_carry_user_requests != true then
         return nil
     end
@@ -3028,7 +3028,7 @@ end
 -- agent_pinned_schema_chars), and the specific sub-question -- never the
 -- main loop's `tool_trace`.
 function agent.subagent_start_messages(db_path, session_id, question)
-    conf = config.platform_config()
+    conf = config.load()
     requests = agent.session_requests(db_path, session_id)
     schema_block = agent.session_confirmed_schema(db_path, session_id, conf.agent_pinned_schema_chars)
     if #requests == 0 and schema_block == nil then
@@ -3084,7 +3084,7 @@ end
 function agent.run_research_loop(db_path, author, session_id, model, question, max_turns, step_kind, parent_message_id)
     agent_tools = require("agent_tools")
     if max_turns == nil then
-        max_turns = config.platform_config().agent_research_max_turns
+        max_turns = config.load().agent_research_max_turns
     end
     if step_kind == nil then
         step_kind = "research"
@@ -3200,7 +3200,7 @@ function agent.run_research_loop(db_path, author, session_id, model, question, m
             end
             table.insert(messages, {
                 role = "toolResult", toolCallId = tool_call.id, toolName = tool_call.name,
-                content = {{type = "text", text = agent.cap_tool_text(result_text, config.platform_config().agent_tool_result_cap, result_id)}},
+                content = {{type = "text", text = agent.cap_tool_text(result_text, config.load().agent_tool_result_cap, result_id)}},
                 isError = is_error, resultId = result_id, origChars = string.len(result_text),
             })
             agent.turn_heartbeat(db_path, session_id)
@@ -3256,7 +3256,7 @@ function agent.pending_background_tasks(db_path, limit)
     end
     rows = db.query(db_path, string.format(
         "SELECT * FROM agent_background_task WHERE status = 'pending' AND attempts < %d ORDER BY id ASC LIMIT %d;",
-        config.platform_config().agent_background_max_attempts, limit
+        config.load().agent_background_max_attempts, limit
     ))
     if rows == nil then
         return {}
@@ -3278,7 +3278,7 @@ end
 function agent.mark_background_task_failed(db_path, task, message)
     attempts = tonumber(task.attempts) + 1
     status = "pending"
-    if attempts >= config.platform_config().agent_background_max_attempts then
+    if attempts >= config.load().agent_background_max_attempts then
         status = "failed"
     end
     db.exec(db_path, string.format(
@@ -3352,7 +3352,7 @@ function agent.turn_status(db_path, session_id)
         return "idle"
     end
     beat = utc_seconds(rows[1].turn_heartbeat_at)
-    stale_after = config.platform_config().agent_turn_stale_seconds
+    stale_after = config.load().agent_turn_stale_seconds
     if beat != nil and utc_seconds(utc_now()) - beat <= stale_after then
         return "running"
     end
@@ -3467,7 +3467,7 @@ function agent.run_pending_background_tasks(db_path, model, limit)
             failed = failed + 1
         else
             finding, err = agent.run_research_loop(db_path, login, task.session_id, model, task.question,
-                config.platform_config().agent_background_max_turns, "background", tonumber(task.parent_message_id))
+                config.load().agent_background_max_turns, "background", tonumber(task.parent_message_id))
             if finding == nil then
                 agent.mark_background_task_failed(db_path, task, tostring(err))
                 failed = failed + 1
@@ -3594,7 +3594,7 @@ function agent.run_tool(db_path, author, session_id, tool_name, method_name, arg
             return nil, gate_err
         end
     end
-    if context_messages != nil and config.platform_config().agent_dedupe_repeat_calls == true then
+    if context_messages != nil and config.load().agent_dedupe_repeat_calls == true then
         earlier = agent.find_repeat(context_messages, tostring(tool_name) .. "." .. tostring(method_name), args, function(name)
             dot = string.find(name, ".", 1, true)
             if dot == nil then
@@ -3626,7 +3626,7 @@ end
 --   {status = "error", message = "..."}
 --
 -- Each call gets its own fresh turn budget (agent_max_turns, see
--- config.platform_config()), even a resume after a pause -- deliberate, not an
+-- config.load()), even a resume after a pause -- deliberate, not an
 -- oversight: the approval pause is itself a human circuit breaker, so
 -- restarting the budget on resume doesn't reopen an unbounded-loop risk
 -- the way it would in a fully autonomous run with no pauses at all.
@@ -3659,7 +3659,7 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
     -- loop's own check just below is what actually consumes the flag
     -- (checked, then cleared, every time it's found set) -- that's the
     -- only place a stale flag can ever survive past.
-    max_turns = config.platform_config().agent_max_turns
+    max_turns = config.load().agent_max_turns
     malformed_retried = false
     -- An auto-continued turn (options.auto_continue: the detached
     -- worker, which no request timeout bounds) starts a fresh step
@@ -3687,7 +3687,7 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
             -- A long turn can outgrow the window between steps: check
             -- again before every step after the first (the first was
             -- checked above, before the loop).
-            if step_number > 1 and config.platform_config().agent_compaction_mid_turn == true then
+            if step_number > 1 and config.load().agent_compaction_mid_turn == true then
                 agent.compact_if_needed(db_path, session_id, system_prompt, model)
             end
             active = agent.active_messages(db_path, session_id)
@@ -3895,7 +3895,7 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
                 end
             end
         end
-        conf = config.platform_config()
+        conf = config.load()
         if auto_continue == false or continuations >= conf.agent_auto_continue_max
                 or os.time() - turn_started_at >= conf.agent_auto_continue_minutes * 60 then
             break

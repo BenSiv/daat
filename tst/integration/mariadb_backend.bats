@@ -16,17 +16,17 @@ setup() {
     resolve_bin
 
     # host/port/user/database are real, version-controlled deployment
-    # content now (platform.lua, written below) -- only the password
+    # content now (config.lua, written below) -- only the password
     # stays a plain env var (config.mariadb_descriptor's own
-    # PLATFORM_MARIADB_PASSWORD read), same secrets-stay-external split
+    # DAAT_MARIADB_PASSWORD read), same secrets-stay-external split
     # production uses. Still plain bash variables here (not exported)
     # since the `mariadb` CLI calls throughout this file need them for
     # string interpolation regardless of how the app itself reads them.
-    PLATFORM_MARIADB_HOST="${MARIADB_TEST_HOST:-127.0.0.1}"
-    PLATFORM_MARIADB_PORT="${MARIADB_TEST_PORT:-3306}"
-    PLATFORM_MARIADB_USER="${MARIADB_TEST_USER:-platform_test}"
-    export PLATFORM_MARIADB_PASSWORD="${MARIADB_TEST_PASSWORD:-platform_test_pw}"
-    PLATFORM_MARIADB_DATABASE="${MARIADB_TEST_DATABASE:-platform_bats_test_$$}"
+    DAAT_MARIADB_HOST="${MARIADB_TEST_HOST:-127.0.0.1}"
+    DAAT_MARIADB_PORT="${MARIADB_TEST_PORT:-3306}"
+    DAAT_MARIADB_USER="${MARIADB_TEST_USER:-platform_test}"
+    export DAAT_MARIADB_PASSWORD="${MARIADB_TEST_PASSWORD:-platform_test_pw}"
+    DAAT_MARIADB_DATABASE="${MARIADB_TEST_DATABASE:-platform_bats_test_$$}"
 
     if ! command -v mariadb >/dev/null 2>&1; then
         if [ "${DAAT_REQUIRE_MARIADB:-0}" = "1" ]; then
@@ -40,29 +40,29 @@ setup() {
     # isolation for the SQLite path) -- drop-then-create, not just
     # create, so a test that crashed mid-run doesn't leave stale
     # tables for the next one.
-    if ! mariadb -h "$PLATFORM_MARIADB_HOST" -P "$PLATFORM_MARIADB_PORT" \
-            -u "$PLATFORM_MARIADB_USER" -p"$PLATFORM_MARIADB_PASSWORD" \
-            -e "DROP DATABASE IF EXISTS $PLATFORM_MARIADB_DATABASE; CREATE DATABASE $PLATFORM_MARIADB_DATABASE;" \
+    if ! mariadb -h "$DAAT_MARIADB_HOST" -P "$DAAT_MARIADB_PORT" \
+            -u "$DAAT_MARIADB_USER" -p"$DAAT_MARIADB_PASSWORD" \
+            -e "DROP DATABASE IF EXISTS $DAAT_MARIADB_DATABASE; CREATE DATABASE $DAAT_MARIADB_DATABASE;" \
             2>/dev/null; then
         if [ "${DAAT_REQUIRE_MARIADB:-0}" = "1" ]; then
-            echo "MariaDB test server unreachable at ${PLATFORM_MARIADB_HOST}:${PLATFORM_MARIADB_PORT} despite DAAT_REQUIRE_MARIADB=1" >&2
+            echo "MariaDB test server unreachable at ${DAAT_MARIADB_HOST}:${DAAT_MARIADB_PORT} despite DAAT_REQUIRE_MARIADB=1" >&2
             return 1
         fi
-        skip "no reachable MariaDB test server at ${PLATFORM_MARIADB_HOST}:${PLATFORM_MARIADB_PORT} -- skipping"
+        skip "no reachable MariaDB test server at ${DAAT_MARIADB_HOST}:${DAAT_MARIADB_PORT} -- skipping"
     fi
 
     export TEST_DIR="$(mktemp -d)"
     cd "$TEST_DIR"
-    cat > platform.lua <<EOF
-return {db_backend = "mariadb", mariadb_host = "${PLATFORM_MARIADB_HOST}", mariadb_port = ${PLATFORM_MARIADB_PORT}, mariadb_user = "${PLATFORM_MARIADB_USER}", mariadb_database = "${PLATFORM_MARIADB_DATABASE}"}
+    cat > config.lua <<EOF
+return {db_backend = "mariadb", mariadb_host = "${DAAT_MARIADB_HOST}", mariadb_port = ${DAAT_MARIADB_PORT}, mariadb_user = "${DAAT_MARIADB_USER}", mariadb_database = "${DAAT_MARIADB_DATABASE}"}
 EOF
 }
 
 teardown() {
-    if [ -n "${PLATFORM_MARIADB_DATABASE:-}" ] && command -v mariadb >/dev/null 2>&1; then
-        mariadb -h "$PLATFORM_MARIADB_HOST" -P "$PLATFORM_MARIADB_PORT" \
-            -u "$PLATFORM_MARIADB_USER" -p"$PLATFORM_MARIADB_PASSWORD" \
-            -e "DROP DATABASE IF EXISTS $PLATFORM_MARIADB_DATABASE;" 2>/dev/null || true
+    if [ -n "${DAAT_MARIADB_DATABASE:-}" ] && command -v mariadb >/dev/null 2>&1; then
+        mariadb -h "$DAAT_MARIADB_HOST" -P "$DAAT_MARIADB_PORT" \
+            -u "$DAAT_MARIADB_USER" -p"$DAAT_MARIADB_PASSWORD" \
+            -e "DROP DATABASE IF EXISTS $DAAT_MARIADB_DATABASE;" 2>/dev/null || true
     fi
     cd "$PROJECT_ROOT"
     rm -rf "$TEST_DIR"
@@ -295,17 +295,17 @@ EOF
         wait "$pid"
     done
 
-    null_count=$(mariadb -h "$PLATFORM_MARIADB_HOST" -P "$PLATFORM_MARIADB_PORT" \
-        -u "$PLATFORM_MARIADB_USER" -p"$PLATFORM_MARIADB_PASSWORD" -N \
-        -e "SELECT COUNT(*) FROM $PLATFORM_MARIADB_DATABASE.entity_event WHERE event_type = 'create' AND entity_id IS NULL;")
+    null_count=$(mariadb -h "$DAAT_MARIADB_HOST" -P "$DAAT_MARIADB_PORT" \
+        -u "$DAAT_MARIADB_USER" -p"$DAAT_MARIADB_PASSWORD" -N \
+        -e "SELECT COUNT(*) FROM $DAAT_MARIADB_DATABASE.entity_event WHERE event_type = 'create' AND entity_id IS NULL;")
     [ "$null_count" -eq 0 ]
 
-    total_creates=$(mariadb -h "$PLATFORM_MARIADB_HOST" -P "$PLATFORM_MARIADB_PORT" \
-        -u "$PLATFORM_MARIADB_USER" -p"$PLATFORM_MARIADB_PASSWORD" -N \
-        -e "SELECT COUNT(*) FROM $PLATFORM_MARIADB_DATABASE.entity_event WHERE event_type = 'create';")
-    distinct_entity_ids=$(mariadb -h "$PLATFORM_MARIADB_HOST" -P "$PLATFORM_MARIADB_PORT" \
-        -u "$PLATFORM_MARIADB_USER" -p"$PLATFORM_MARIADB_PASSWORD" -N \
-        -e "SELECT COUNT(DISTINCT entity_id) FROM $PLATFORM_MARIADB_DATABASE.entity_event WHERE event_type = 'create';")
+    total_creates=$(mariadb -h "$DAAT_MARIADB_HOST" -P "$DAAT_MARIADB_PORT" \
+        -u "$DAAT_MARIADB_USER" -p"$DAAT_MARIADB_PASSWORD" -N \
+        -e "SELECT COUNT(*) FROM $DAAT_MARIADB_DATABASE.entity_event WHERE event_type = 'create';")
+    distinct_entity_ids=$(mariadb -h "$DAAT_MARIADB_HOST" -P "$DAAT_MARIADB_PORT" \
+        -u "$DAAT_MARIADB_USER" -p"$DAAT_MARIADB_PASSWORD" -N \
+        -e "SELECT COUNT(DISTINCT entity_id) FROM $DAAT_MARIADB_DATABASE.entity_event WHERE event_type = 'create';")
     [ "$total_creates" -eq 15 ]
     [ "$distinct_entity_ids" -eq 15 ]
 }
@@ -355,8 +355,8 @@ JSON
 }
 
 @test "passage search caches embeddings in document_passage_cache on MariaDB/MySQL, reads them back, and prunes them" {
-    cat > platform.lua <<EOF2
-return {db_backend = "mariadb", mariadb_host = "${PLATFORM_MARIADB_HOST}", mariadb_port = ${PLATFORM_MARIADB_PORT}, mariadb_user = "${PLATFORM_MARIADB_USER}", mariadb_database = "${PLATFORM_MARIADB_DATABASE}", agent_provider = "test", search_provider = "test", embedding_quiet_minutes = 0, search_passages = true, passage_min_chars = 50}
+    cat > config.lua <<EOF2
+return {db_backend = "mariadb", mariadb_host = "${DAAT_MARIADB_HOST}", mariadb_port = ${DAAT_MARIADB_PORT}, mariadb_user = "${DAAT_MARIADB_USER}", mariadb_database = "${DAAT_MARIADB_DATABASE}", agent_provider = "test", search_provider = "test", embedding_quiet_minutes = 0, search_passages = true, passage_min_chars = 50}
 EOF2
     export AGENT_TEST_EMBEDDINGS=terms
     export AGENT_TEST_EMBEDDINGS_LOG="$TEST_DIR/embeddings.log"
@@ -367,7 +367,7 @@ EOF2
     raw=$(printf 'login=alice&password=secret123' | GATEWAY_INTERFACE=CGI/1.1 REQUEST_METHOD=POST PATH_INFO=/login QUERY_STRING="" "$BIN")
     session=$(printf '%s' "$raw" | grep -o 'Set-Cookie: session=[^;]*' | sed 's/Set-Cookie: session=//')
     page() { GATEWAY_INTERFACE=CGI/1.1 REQUEST_METHOD=GET PATH_INFO=/documents QUERY_STRING="q=incubator+cultures+degrees" HTTP_COOKIE="session=$session" "$BIN"; }
-    q() { mariadb -N -h "$PLATFORM_MARIADB_HOST" -P "$PLATFORM_MARIADB_PORT" -u "$PLATFORM_MARIADB_USER" -p"$PLATFORM_MARIADB_PASSWORD" "$PLATFORM_MARIADB_DATABASE" -e "$1" 2>/dev/null; }
+    q() { mariadb -N -h "$DAAT_MARIADB_HOST" -P "$DAAT_MARIADB_PORT" -u "$DAAT_MARIADB_USER" -p"$DAAT_MARIADB_PASSWORD" "$DAAT_MARIADB_DATABASE" -e "$1" 2>/dev/null; }
 
     run page
     [[ "$output" =~ "twenty five degrees" ]]
@@ -389,8 +389,8 @@ EOF2
 }
 
 @test "aspects are built into document_aspect on MariaDB/MySQL, and search finds a document through one" {
-    cat > platform.lua <<EOF2
-return {db_backend = "mariadb", mariadb_host = "${PLATFORM_MARIADB_HOST}", mariadb_port = ${PLATFORM_MARIADB_PORT}, mariadb_user = "${PLATFORM_MARIADB_USER}", mariadb_database = "${PLATFORM_MARIADB_DATABASE}", agent_provider = "test", search_provider = "test", embedding_quiet_minutes = 0, search_passages = true, passage_min_chars = 50, aspect_min_chars = 1000, build_aspects = true, search_aspects = true}
+    cat > config.lua <<EOF2
+return {db_backend = "mariadb", mariadb_host = "${DAAT_MARIADB_HOST}", mariadb_port = ${DAAT_MARIADB_PORT}, mariadb_user = "${DAAT_MARIADB_USER}", mariadb_database = "${DAAT_MARIADB_DATABASE}", agent_provider = "test", search_provider = "test", embedding_quiet_minutes = 0, search_passages = true, passage_min_chars = 50, aspect_min_chars = 1000, build_aspects = true, search_aspects = true}
 EOF2
     export AGENT_TEST_EMBEDDINGS=terms
     "$BIN" init >/dev/null
@@ -402,7 +402,7 @@ EOF2
     "$BIN" document create-json <<< "[{\"title\":\"Lab handbook\",\"content\":\"# Greenhouse\\n${filler}\\n\\n# Watering\\n${filler}\\n\\n# Centrifuge\\n${spin}\"}]" >/dev/null
     raw=$(printf 'login=alice&password=secret123' | GATEWAY_INTERFACE=CGI/1.1 REQUEST_METHOD=POST PATH_INFO=/login QUERY_STRING="" "$BIN")
     session=$(printf '%s' "$raw" | grep -o 'Set-Cookie: session=[^;]*' | sed 's/Set-Cookie: session=//')
-    q() { mariadb -N -h "$PLATFORM_MARIADB_HOST" -P "$PLATFORM_MARIADB_PORT" -u "$PLATFORM_MARIADB_USER" -p"$PLATFORM_MARIADB_PASSWORD" "$PLATFORM_MARIADB_DATABASE" -e "$1" 2>/dev/null; }
+    q() { mariadb -N -h "$DAAT_MARIADB_HOST" -P "$DAAT_MARIADB_PORT" -u "$DAAT_MARIADB_USER" -p"$DAAT_MARIADB_PASSWORD" "$DAAT_MARIADB_DATABASE" -e "$1" 2>/dev/null; }
 
     [ "$(q "SELECT COUNT(*) FROM document_aspect;")" -ge 2 ]
     [ "$(q "SELECT MIN(LENGTH(vector_packed)) FROM document_aspect;")" = "64" ]
@@ -413,13 +413,13 @@ EOF2
 }
 
 @test "store migration 9 widens MariaDB agent_message.content to LONGTEXT so >64 KB thinking payloads survive (#37)" {
-    cat > platform.lua <<EOF2
-return {db_backend = "mariadb", mariadb_host = "${PLATFORM_MARIADB_HOST}", mariadb_port = ${PLATFORM_MARIADB_PORT}, mariadb_user = "${PLATFORM_MARIADB_USER}", mariadb_database = "${PLATFORM_MARIADB_DATABASE}", agent_provider = "test", agent_thinking = "full", agent_turn_mode = "inline"}
+    cat > config.lua <<EOF2
+return {db_backend = "mariadb", mariadb_host = "${DAAT_MARIADB_HOST}", mariadb_port = ${DAAT_MARIADB_PORT}, mariadb_user = "${DAAT_MARIADB_USER}", mariadb_database = "${DAAT_MARIADB_DATABASE}", agent_provider = "test", agent_thinking = "full", agent_turn_mode = "inline"}
 EOF2
     "$BIN" init >/dev/null
     read -r session csrf <<< "$(login_test_user alice i)"
     cookie="session=${session}; csrf=${csrf}"
-    q() { mariadb -N -h "$PLATFORM_MARIADB_HOST" -P "$PLATFORM_MARIADB_PORT" -u "$PLATFORM_MARIADB_USER" -p"$PLATFORM_MARIADB_PASSWORD" "$PLATFORM_MARIADB_DATABASE" -e "$1" 2>/dev/null; }
+    q() { mariadb -N -h "$DAAT_MARIADB_HOST" -P "$DAAT_MARIADB_PORT" -u "$DAAT_MARIADB_USER" -p"$DAAT_MARIADB_PASSWORD" "$DAAT_MARIADB_DATABASE" -e "$1" 2>/dev/null; }
 
     # Trigger agent table creation, then rewind to the pre-migration-9 MariaDB
     # layout (plain TEXT = 65,535-byte cap) to verify store.migrate widens it.
@@ -437,13 +437,13 @@ EOF2
 }
 
 @test "store prune stubs tool_trace rows, clears model_input, reports stored chars by type, and is idempotent on MariaDB (#35)" {
-    cat > platform.lua <<EOF2
-return {db_backend = "mariadb", mariadb_host = "${PLATFORM_MARIADB_HOST}", mariadb_port = ${PLATFORM_MARIADB_PORT}, mariadb_user = "${PLATFORM_MARIADB_USER}", mariadb_database = "${PLATFORM_MARIADB_DATABASE}", agent_provider = "test", agent_turn_mode = "inline", agent_retention = "standard"}
+    cat > config.lua <<EOF2
+return {db_backend = "mariadb", mariadb_host = "${DAAT_MARIADB_HOST}", mariadb_port = ${DAAT_MARIADB_PORT}, mariadb_user = "${DAAT_MARIADB_USER}", mariadb_database = "${DAAT_MARIADB_DATABASE}", agent_provider = "test", agent_turn_mode = "inline", agent_retention = "standard"}
 EOF2
     "$BIN" init >/dev/null
     read -r session csrf <<< "$(login_test_user alice i)"
     cookie="session=${session}; csrf=${csrf}"
-    q() { mariadb -N -h "$PLATFORM_MARIADB_HOST" -P "$PLATFORM_MARIADB_PORT" -u "$PLATFORM_MARIADB_USER" -p"$PLATFORM_MARIADB_PASSWORD" "$PLATFORM_MARIADB_DATABASE" -e "$1" 2>/dev/null; }
+    q() { mariadb -N -h "$DAAT_MARIADB_HOST" -P "$DAAT_MARIADB_PORT" -u "$DAAT_MARIADB_USER" -p"$DAAT_MARIADB_PASSWORD" "$DAAT_MARIADB_DATABASE" -e "$1" 2>/dev/null; }
 
     resp=$(raw_post_json "/api/chat-widget-start" '{"title":"MariaDB prune"}' "$cookie" "$csrf" "")
     sid=$(json_body "$resp" | jq -r '.session_id')
@@ -472,13 +472,13 @@ EOF2
 }
 
 @test "deferred search_review_mode queues retrieval review on MariaDB and review-pending drains it idempotently" {
-    cat > platform.lua <<EOF2
-return {db_backend = "mariadb", mariadb_host = "${PLATFORM_MARIADB_HOST}", mariadb_port = ${PLATFORM_MARIADB_PORT}, mariadb_user = "${PLATFORM_MARIADB_USER}", mariadb_database = "${PLATFORM_MARIADB_DATABASE}", agent_provider = "test", search_provider = "test", embedding_quiet_minutes = 0}
+    cat > config.lua <<EOF2
+return {db_backend = "mariadb", mariadb_host = "${DAAT_MARIADB_HOST}", mariadb_port = ${DAAT_MARIADB_PORT}, mariadb_user = "${DAAT_MARIADB_USER}", mariadb_database = "${DAAT_MARIADB_DATABASE}", agent_provider = "test", search_provider = "test", embedding_quiet_minutes = 0}
 EOF2
     "$BIN" init >/dev/null
     read -r session csrf <<< "$(login_test_user alice i)"
     cookie="session=${session}; csrf=${csrf}"
-    q() { mariadb -N -h "$PLATFORM_MARIADB_HOST" -P "$PLATFORM_MARIADB_PORT" -u "$PLATFORM_MARIADB_USER" -p"$PLATFORM_MARIADB_PASSWORD" "$PLATFORM_MARIADB_DATABASE" -e "$1" 2>/dev/null; }
+    q() { mariadb -N -h "$DAAT_MARIADB_HOST" -P "$DAAT_MARIADB_PORT" -u "$DAAT_MARIADB_USER" -p"$DAAT_MARIADB_PASSWORD" "$DAAT_MARIADB_DATABASE" -e "$1" 2>/dev/null; }
 
     "$BIN" entity create document title="Bioreactor Protocol" content="Careful bioreactor pH and dissolved oxygen control." >/dev/null
     doc_id=$(q "SELECT id FROM document WHERE title = 'Bioreactor Protocol';")
@@ -508,11 +508,11 @@ EOF2
 }
 
 @test "store migration 11 and daat store verify succeed end-to-end on MariaDB" {
-    cat > platform.lua <<EOF2
-return {db_backend = "mariadb", mariadb_host = "${PLATFORM_MARIADB_HOST}", mariadb_port = ${PLATFORM_MARIADB_PORT}, mariadb_user = "${PLATFORM_MARIADB_USER}", mariadb_database = "${PLATFORM_MARIADB_DATABASE}", agent_provider = "test", search_provider = "test", embedding_quiet_minutes = 0}
+    cat > config.lua <<EOF2
+return {db_backend = "mariadb", mariadb_host = "${DAAT_MARIADB_HOST}", mariadb_port = ${DAAT_MARIADB_PORT}, mariadb_user = "${DAAT_MARIADB_USER}", mariadb_database = "${DAAT_MARIADB_DATABASE}", agent_provider = "test", search_provider = "test", embedding_quiet_minutes = 0}
 EOF2
     "$BIN" init >/dev/null
-    q() { mariadb -N -h "$PLATFORM_MARIADB_HOST" -P "$PLATFORM_MARIADB_PORT" -u "$PLATFORM_MARIADB_USER" -p"$PLATFORM_MARIADB_PASSWORD" "$PLATFORM_MARIADB_DATABASE" -e "$1" 2>/dev/null; }
+    q() { mariadb -N -h "$DAAT_MARIADB_HOST" -P "$DAAT_MARIADB_PORT" -u "$DAAT_MARIADB_USER" -p"$DAAT_MARIADB_PASSWORD" "$DAAT_MARIADB_DATABASE" -e "$1" 2>/dev/null; }
 
     d1=$("$BIN" entity create document title="MariaDB Doc A" content="Links to [[MariaDB Doc B]]." | grep -o '[0-9]\+')
     d2=$("$BIN" entity create document title="MariaDB Doc B" content="Second note." | grep -o '[0-9]\+')
@@ -531,7 +531,7 @@ EOF2
 
 @test "Law L6: dual-backend SQLite vs. MariaDB observational equivalence across seeded command traces" {
     run_luam "$PROJECT_ROOT/tst/integration/lua/dual_backend_laws.lua" \
-        "$PLATFORM_MARIADB_HOST" "$PLATFORM_MARIADB_PORT" "$PLATFORM_MARIADB_USER" "$PLATFORM_MARIADB_DATABASE"
+        "$DAAT_MARIADB_HOST" "$DAAT_MARIADB_PORT" "$DAAT_MARIADB_USER" "$DAAT_MARIADB_DATABASE"
     [ "$status" -eq 0 ]
     [[ "$output" =~ "Law L6 dual-backend SQLite == MariaDB observational equivalence passed" ]]
 }
@@ -583,8 +583,8 @@ EOF
 }
 
 @test "email verification and forgot/reset-password flow work end-to-end on MariaDB" {
-    cat > platform.lua <<EOF2
-return {db_backend = "mariadb", mariadb_host = "${PLATFORM_MARIADB_HOST}", mariadb_port = ${PLATFORM_MARIADB_PORT}, mariadb_user = "${PLATFORM_MARIADB_USER}", mariadb_database = "${PLATFORM_MARIADB_DATABASE}", mail_provider = "test", mail_from = "noreply@example.com", public_url = "https://lims.example.com/"}
+    cat > config.lua <<EOF2
+return {db_backend = "mariadb", mariadb_host = "${DAAT_MARIADB_HOST}", mariadb_port = ${DAAT_MARIADB_PORT}, mariadb_user = "${DAAT_MARIADB_USER}", mariadb_database = "${DAAT_MARIADB_DATABASE}", mail_provider = "test", mail_from = "noreply@example.com", public_url = "https://lims.example.com/"}
 EOF2
     export MAIL_TEST_OUTBOX="$TEST_DIR/outbox"
     "$BIN" init >/dev/null
@@ -622,12 +622,12 @@ EOF2
 }
 
 @test "tags, tag_centre incremental updates, and repair tags --place-untagged work on MariaDB" {
-    cat > platform.lua <<EOF2
-return {db_backend = "mariadb", mariadb_host = "${PLATFORM_MARIADB_HOST}", mariadb_port = ${PLATFORM_MARIADB_PORT}, mariadb_user = "${PLATFORM_MARIADB_USER}", mariadb_database = "${PLATFORM_MARIADB_DATABASE}", agent_provider = "test", embedding_quiet_minutes = 0, tag_min_text = 0}
+    cat > config.lua <<EOF2
+return {db_backend = "mariadb", mariadb_host = "${DAAT_MARIADB_HOST}", mariadb_port = ${DAAT_MARIADB_PORT}, mariadb_user = "${DAAT_MARIADB_USER}", mariadb_database = "${DAAT_MARIADB_DATABASE}", agent_provider = "test", embedding_quiet_minutes = 0, tag_min_text = 0}
 EOF2
     export AGENT_TEST_EMBEDDINGS=terms
     "$BIN" init >/dev/null
-    q() { mariadb -N -h "$PLATFORM_MARIADB_HOST" -P "$PLATFORM_MARIADB_PORT" -u "$PLATFORM_MARIADB_USER" -p"$PLATFORM_MARIADB_PASSWORD" "$PLATFORM_MARIADB_DATABASE" -e "$1" 2>/dev/null; }
+    q() { mariadb -N -h "$DAAT_MARIADB_HOST" -P "$DAAT_MARIADB_PORT" -u "$DAAT_MARIADB_USER" -p"$DAAT_MARIADB_PASSWORD" "$DAAT_MARIADB_DATABASE" -e "$1" 2>/dev/null; }
 
     "$BIN" entity create tag label="Bioreactor" source=computed >/dev/null
     tag_id=$(q "SELECT id FROM tag WHERE label = 'Bioreactor';")
@@ -647,11 +647,11 @@ EOF2
 }
 
 @test "repair duplicates folds near-identical synced papers and updates links on MariaDB" {
-    cat > platform.lua <<EOF2
-return {db_backend = "mariadb", mariadb_host = "${PLATFORM_MARIADB_HOST}", mariadb_port = ${PLATFORM_MARIADB_PORT}, mariadb_user = "${PLATFORM_MARIADB_USER}", mariadb_database = "${PLATFORM_MARIADB_DATABASE}", agent_provider = "test", embedding_quiet_minutes = 0}
+    cat > config.lua <<EOF2
+return {db_backend = "mariadb", mariadb_host = "${DAAT_MARIADB_HOST}", mariadb_port = ${DAAT_MARIADB_PORT}, mariadb_user = "${DAAT_MARIADB_USER}", mariadb_database = "${DAAT_MARIADB_DATABASE}", agent_provider = "test", embedding_quiet_minutes = 0}
 EOF2
     "$BIN" init >/dev/null
-    q() { mariadb -N -h "$PLATFORM_MARIADB_HOST" -P "$PLATFORM_MARIADB_PORT" -u "$PLATFORM_MARIADB_USER" -p"$PLATFORM_MARIADB_PASSWORD" "$PLATFORM_MARIADB_DATABASE" -e "$1" 2>/dev/null; }
+    q() { mariadb -N -h "$DAAT_MARIADB_HOST" -P "$DAAT_MARIADB_PORT" -u "$DAAT_MARIADB_USER" -p"$DAAT_MARIADB_PASSWORD" "$DAAT_MARIADB_DATABASE" -e "$1" 2>/dev/null; }
 
     body=$(python3 -c "print(' '.join('lipid%d' % i for i in range(1, 451)))")
     "$BIN" entity create document title="Lipid Maturation" external_id="sharepoint:item-1" content="$body" >/dev/null
@@ -668,12 +668,12 @@ EOF2
 }
 
 @test "tier curation ladder (curate -> synthesize -> distill) and store verify succeed on MariaDB" {
-    cat > platform.lua <<EOF2
-return {db_backend = "mariadb", mariadb_host = "${PLATFORM_MARIADB_HOST}", mariadb_port = ${PLATFORM_MARIADB_PORT}, mariadb_user = "${PLATFORM_MARIADB_USER}", mariadb_database = "${PLATFORM_MARIADB_DATABASE}", agent_provider = "test", embedding_quiet_minutes = 0, tag_min_text = 0}
+    cat > config.lua <<EOF2
+return {db_backend = "mariadb", mariadb_host = "${DAAT_MARIADB_HOST}", mariadb_port = ${DAAT_MARIADB_PORT}, mariadb_user = "${DAAT_MARIADB_USER}", mariadb_database = "${DAAT_MARIADB_DATABASE}", agent_provider = "test", embedding_quiet_minutes = 0, tag_min_text = 0}
 EOF2
     export AGENT_TEST_EMBEDDINGS=terms
     "$BIN" init >/dev/null
-    q() { mariadb -N -h "$PLATFORM_MARIADB_HOST" -P "$PLATFORM_MARIADB_PORT" -u "$PLATFORM_MARIADB_USER" -p"$PLATFORM_MARIADB_PASSWORD" "$PLATFORM_MARIADB_DATABASE" -e "$1" 2>/dev/null; }
+    q() { mariadb -N -h "$DAAT_MARIADB_HOST" -P "$DAAT_MARIADB_PORT" -u "$DAAT_MARIADB_USER" -p"$DAAT_MARIADB_PASSWORD" "$DAAT_MARIADB_DATABASE" -e "$1" 2>/dev/null; }
 
     "$BIN" entity create tag label="Medium B" source=computed >/dev/null
     tag_id=$(q "SELECT id FROM tag WHERE label = 'Medium B';")

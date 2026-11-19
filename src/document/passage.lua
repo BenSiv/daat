@@ -479,7 +479,7 @@ function passage.best_pair(db_path, model, content_a, content_b, per_document, m
     if model == nil then
         return nil, "no embedding model"
     end
-    conf = config.platform_config()
+    conf = config.load()
     all_a = passage.split(content_a, conf.passage_max_chars, conf.passage_min_chars)
     all_b = passage.split(content_b, conf.passage_max_chars, conf.passage_min_chars)
     if #all_a == 0 or #all_b == 0 then
@@ -538,7 +538,7 @@ end
 -- capped at passage_max_embeds_per_search new embeddings; passages over
 -- the cap are scored by words only.
 function passage.excerpts(db_path, results, query_text, query_vector, model, budget, full)
-    conf = config.platform_config()
+    conf = config.load()
     per_document = conf.passages_per_document
     if full == true then
         per_document = per_document * 2

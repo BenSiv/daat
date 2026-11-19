@@ -811,7 +811,7 @@ end
 -- Nothing queued or running is due.
 function curate.due_conversations(db_path, quiet_minutes)
     if quiet_minutes == nil then
-        quiet_minutes = config_lib.platform_config().agent_curate_quiet_minutes
+        quiet_minutes = config_lib.load().agent_curate_quiet_minutes
     end
     cutoff_expr = store_lib.ago_expr(db_path, math.floor(quiet_minutes * 60))
     rows = db.query(db_path, string.format(
@@ -973,7 +973,7 @@ end
 -- turns would keep writing them. Archived, never deleted: each line
 -- "archived #N" is what --undo reads back.
 function curate.retire_transcripts(db_path, dry_run, author)
-    if config_lib.platform_config().agent_transcript_documents == "whole" then
+    if config_lib.load().agent_transcript_documents == "whole" then
         return {"Transcript documents are still kept (agent_transcript_documents = \"whole\"); set it to \"off\" first."}
     end
     entity = entity_lib

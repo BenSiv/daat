@@ -1,6 +1,6 @@
 -- Builds a demo-lab deployment in the current directory
 -- (doc/agent-eval.md, "Loader"). Run from an empty directory that
--- already holds platform.lua and schemas/ -- bld/eval-env.sh does that
+-- already holds config.lua and schemas/ -- bld/eval-env.sh does that
 -- and caches the result.
 --
 --   luam tst/eval/load.lua <repo_root> [seed]
@@ -109,7 +109,7 @@ embedded = db.query(db_path, "SELECT COUNT(*) AS n FROM document_embedding;")[1]
 -- Aspects for the long documents (doc/aspect-retrieval-plan.md), built
 -- whatever the deployment's build_aspects says, so a run can compare
 -- search_aspects on and off over the same lab (bld/eval.sh --extra).
-aspects = require("aspect").refresh_all(db_path)
+aspects = require("document.aspect").refresh_all(db_path)
 
 -- A document without an embedding is invisible to semantic search, so
 -- a half-embedded lab would quietly score retrieval wrong: refuse it.

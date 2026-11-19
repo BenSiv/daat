@@ -414,11 +414,11 @@ EOF
 
 @test "an unconfigured/failing embedding provider never fails the page save itself (best-effort)" {
     # Explicitly pinned to vertex with no vertex_project configured
-    # (platform.lua's own default field, see config.platform_config())
+    # (config.lua's own default field, see config.load())
     # -- agent_vertex.embeddings returns nil, err gracefully
     # (never throws) -- document.create_page must still succeed and
     # never propagate that failure.
-    cat > "${TEST_DIR}/platform.lua" <<'EOF'
+    cat > "${TEST_DIR}/config.lua" <<'EOF'
 return {agent_provider = "vertex"}
 EOF
     run save_document "csrf_token=${CSRF}&title=Home&parent_id=&content=hello"
@@ -472,7 +472,7 @@ EOF
     # `daat repair embeddings` is how a store backfills those after the
     # fact, or after a provider outage silently dropped some
     # best-effort saves.
-    cat > "${TEST_DIR}/platform.lua" <<'EOF'
+    cat > "${TEST_DIR}/config.lua" <<'EOF'
 return {agent_provider = "vertex"}
 EOF
     save_document "csrf_token=${CSRF}&title=Home&parent_id=&content=hello" >/dev/null
@@ -481,7 +481,7 @@ EOF
 
     # Back to the (working) test provider -- as if the deployment fixed
     # its Vertex configuration before running the backfill.
-    write_platform_config
+    write_config
     run "$BIN" repair embeddings
     [[ "$output" =~ "Reindexed 1 document(s), 0 failed" ]]
 

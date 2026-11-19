@@ -79,7 +79,7 @@ refs_of() {
 
 @test "deployment aliases match how people write names" {
     exp=$(new_entity experiment "Exp185")
-    write_platform_config ', reference_aliases = {{"experiment%s*(%d)", "exp%1"}}'
+    write_config ', reference_aliases = {{"experiment%s*(%d)", "exp%1"}}'
     d=$(new_document "Report" "Results of Experiment 185 are in.")
     [ "$(refs_of "$d")" = "experiment:${exp} " ]
 }

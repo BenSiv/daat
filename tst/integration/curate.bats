@@ -336,10 +336,10 @@ assistant|answer|{\"blocks\":[{\"type\":\"text\",\"text\":\"M9, per the protocol
 }
 
 @test "repair retire-transcripts archives transcripts of curated chats, keeps the rest, and --undo restores them" {
-    write_platform_config ', agent_transcript_documents = "whole"'
+    write_config ', agent_transcript_documents = "whole"'
     run "$BIN" repair retire-transcripts
     [[ "$output" =~ "set it to \"off\" first" ]]
-    write_platform_config
+    write_config
 
     for sid in s1 s2 s3; do
         "$BIN" entity create document title="Chat: $sid" content="transcript $sid" >/dev/null
