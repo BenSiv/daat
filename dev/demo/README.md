@@ -28,7 +28,7 @@ credentials, CI) is up to whoever runs it, and lives with them, not here.
   ```
 
 - **TLS in front of port 8000**: `apache.conf` sets `HTTPS=on`, so cookies are always marked Secure.
-- **Background queues on a timer**: `daat agent run-pending-background`, `extension run-pending`, `document embed-pending`, `knowledge curate-pending 3`, and hourly `store prune`.
+- **Background queues on a timer**: `daat run-pending` (which drains extension after-hooks, `document embed-pending`, deferred retrieval reviews, `knowledge curate-pending`, and `agent run-pending-background` in order), plus hourly `daat store prune` (or `daat run-pending --prune`).
 
 Run every CLI command as `www-data` in `/data`, so the SQLite files stay
 owned by the web server.

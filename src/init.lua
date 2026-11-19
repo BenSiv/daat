@@ -57,9 +57,26 @@ function report_examples_written(written)
     end
 end
 
+function has_help_flag(cmd_args)
+    for _, arg in ipairs(cmd_args) do
+        if arg == "-h" or arg == "--help" then
+            return true
+        end
+    end
+    return false
+end
+
 function init.do_init(cmd_args, root)
     if root == nil then
         root = "."
+    end
+    if has_help_flag(cmd_args) then
+        print("Usage: daat init [--with-examples]")
+        print("Initializes a Daat store in the current directory (.store/, schemas/, views/,")
+        print("extensions/, templates/, dropdowns/). Pass --with-examples to also generate")
+        print("working starter schemas, a saved view, an extension, a template, theme.lua,")
+        print("and a documented config.lua.")
+        return 0
     end
     with_examples = has_with_examples_flag(cmd_args)
 
@@ -68,7 +85,7 @@ function init.do_init(cmd_args, root)
         if with_examples then
             report_examples_written(examples.write_all(root))
         end
-        return
+        return 0
     end
 
     paths.create_dir_if_not_exists(config.store_dir(root))
@@ -99,6 +116,22 @@ function init.do_init(cmd_args, root)
     end
 
     print("Initialized store at " .. config.store_dir(root))
+    print("")
+    print("Next steps:")
+    print("  1. Create an admin account:  daat user add admin <password> isa")
+    if with_examples then
+        print("  2. Register & approve examples:")
+        print("       daat schema sync")
+        print("       daat view approve widgets-in-stock")
+        print("       daat extension approve widget-quantity-range")
+        print("  3. Check deployment health:  daat status")
+        print("  4. Open in your browser:     daat serve")
+    else
+        print("  2. (Optional) Add starter examples: daat init --with-examples")
+        print("  3. Check deployment health:         daat status")
+        print("  4. Open in your browser:            daat serve")
+    end
+    return 0
 end
 
 return init
