@@ -96,10 +96,10 @@ function mail_graph.send(message)
     -- This backend's own config.lua settings (config.setting).
     conf = {graph_tenant_id = config.setting("graph_tenant_id"), graph_client_id = config.setting("graph_client_id")}
     if not valid_id(conf.graph_tenant_id) then
-        return nil, "graph_tenant_id is not set (or invalid) in config.lua"
+        return nil, "mail.graph_tenant_id is not set (or invalid) in config.lua"
     end
     if not valid_id(conf.graph_client_id) then
-        return nil, "graph_client_id is not set (or invalid) in config.lua"
+        return nil, "mail.graph_client_id is not set (or invalid) in config.lua"
     end
     secret = os.getenv("DAAT_GRAPH_CLIENT_SECRET")
     if secret == nil or secret == "" then

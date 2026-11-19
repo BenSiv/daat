@@ -19,7 +19,7 @@ credentials, CI) is up to whoever runs it, and lives with them, not here.
 ## What the host provides
 
 - **A volume at `/data`**: the deployment root. It holds `config.lua`, written by the host before the first seed, and the store.
-- **A model**: for local open models via Ollama (or any OpenAI-compatible server), `agent_provider = "ollama"` in `config.lua` (defaults to `qwen3:8b` and `nomic-embed-text` at `http://127.0.0.1:11434/v1`; set `ollama_url` if the server runs elsewhere). For Vertex, `agent_provider = "vertex"` plus `vertex_project` in `config.lua`. Demo and local dev deployments typically set `agent_retention = "full"` (`doc/agent-data.md`, "Retention").
+- **A model**: for local open models via Ollama (or any OpenAI-compatible server), `agent = {provider = "ollama", retention = "full"}` in `config.lua` (defaults to `qwen3:8b` and `nomic-embed-text` at `http://127.0.0.1:11434/v1`; set `agent.ollama_url` if the server runs elsewhere). For Vertex, `agent = {provider = "vertex", vertex_project = "...", retention = "full"}` in `config.lua` (see `doc/configuration.md`).
 - **First boot**:
 
   ```sh

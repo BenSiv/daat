@@ -150,7 +150,7 @@ CLAIM=$'CLAIM: Cocoa cells in medium B reach 12 g/L dry weight\nTEXT: Cocoa cell
 }
 
 @test "a record is embedded as it's written, so the next reference's dedup sees it before the quiet period ends" {
-    write_config ", embedding_quiet_minutes = 10"
+    write_config "knowledge = {embedding_quiet_minutes = 10}"
     ref=$(reference)
     export AGENT_TEST_GENERATE_RESPONSES="$CLAIM"$'\1'"1: PASS"
     "$BIN" repair distill >/dev/null

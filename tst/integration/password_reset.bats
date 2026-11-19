@@ -7,7 +7,7 @@
 
 load test_helper.bash
 
-MAIL_CONFIG=', mail_provider = "test", mail_from = "noreply@example.com", public_url = "https://lims.example.com/"'
+MAIL_CONFIG='mail = {provider = "test", from = "noreply@example.com", public_url = "https://lims.example.com/"}'
 
 setup() {
     setup_test_env
@@ -70,7 +70,7 @@ add_user_with_email() {
 }
 
 @test "mail_provider alone isn't enough -- public_url is required too" {
-    write_config ', mail_provider = "test", mail_from = "noreply@example.com"'
+    write_config 'mail = {provider = "test", from = "noreply@example.com"}'
     run raw_get "/forgot-password"
     [[ "$output" =~ "404 Not Found" ]]
 }

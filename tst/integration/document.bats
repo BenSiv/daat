@@ -419,7 +419,7 @@ EOF
     # (never throws) -- document.create_page must still succeed and
     # never propagate that failure.
     cat > "${TEST_DIR}/config.lua" <<'EOF'
-return {agent_provider = "vertex"}
+return {agent = {provider = "vertex"}}
 EOF
     run save_document "csrf_token=${CSRF}&title=Home&parent_id=&content=hello"
     [[ "$output" =~ "302 Found" ]]
@@ -473,7 +473,7 @@ EOF
     # fact, or after a provider outage silently dropped some
     # best-effort saves.
     cat > "${TEST_DIR}/config.lua" <<'EOF'
-return {agent_provider = "vertex"}
+return {agent = {provider = "vertex"}}
 EOF
     save_document "csrf_token=${CSRF}&title=Home&parent_id=&content=hello" >/dev/null
     run bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db 'SELECT COUNT(*) FROM document_embedding;'"

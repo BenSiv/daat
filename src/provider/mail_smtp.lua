@@ -34,7 +34,7 @@ function mail_smtp.send(message)
         end
     end
     if conf.smtp_url == nil then
-        return nil, "smtp_url is not set in config.lua"
+        return nil, "mail.smtp_url is not set in config.lua"
     end
 
     curl_config = ""

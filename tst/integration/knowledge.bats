@@ -6,7 +6,7 @@ setup() {
     setup_test_env
     # These tests are about the model's judgment of a pair; the passage
     # gate in front of it has its own file (link_passage_gate.bats).
-    write_config ", link_passage_gate = 0"
+    write_config "knowledge = {link_passage_gate = 0}"
     "$BIN" init
     "$BIN" user add alice secret123 i
 
@@ -65,7 +65,7 @@ search_for_bioreactor_extra() {
     # became a link from the chat's transcript -- even "use [[title]]
     # links" -- so a chat turned into a hub in the knowledge graph.
     # Only a deployment that keeps transcripts writes them.
-    write_config ', link_passage_gate = 0, agent_transcript_documents = "whole"'
+    write_config 'agent = {transcript_documents = "whole"}, knowledge = {link_passage_gate = 0}'
     "$BIN" entity create document title="Bioreactor SOP" content="How to run the bioreactor."
     resp=$(start_chat)
     session_id=$(extract_query_param "$resp" "session_id")
@@ -124,7 +124,7 @@ search_for_bioreactor_extra() {
     # ranked by usage, never left out for being a chat (it once was,
     # 99fe276 -- reversed). Only a deployment that keeps transcripts
     # (agent_transcript_documents = "whole") has any to find.
-    write_config ', link_passage_gate = 0, agent_transcript_documents = "whole"'
+    write_config 'agent = {transcript_documents = "whole"}, knowledge = {link_passage_gate = 0}'
     "$BIN" entity create document title="Bioreactor SOP" content="cleaning steps for the bioreactor procedure"
     search_for_bioreactor
     chat_doc_count=$(sqlite3 .store/store.db "SELECT COUNT(*) FROM document WHERE source_type='chat_session' AND content LIKE '%bioreactor%';")

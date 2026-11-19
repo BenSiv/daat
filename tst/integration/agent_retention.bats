@@ -73,7 +73,7 @@ EOF
 }
 
 @test "lean strategy omits storing model_input, keeps uncurated knowledge, and removes curated knowledge past 30 days" {
-    write_config ', agent_retention = "lean", agent_curate_quiet_minutes = 0'
+    write_config 'agent = {retention = "lean", curate_quiet_minutes = 0}'
     read session csrf < <(session_for admin secret123)
 
     # 1. Curated conversation (note exists) -> raw knowledge removed once curation is >30 days old.
@@ -126,7 +126,7 @@ EOF
 }
 
 @test "full strategy keeps everything and writes transcript documents; overrides apply per key" {
-    write_config ', agent_retention = "full"'
+    write_config 'agent = {retention = "full"}'
     read session csrf < <(session_for admin secret123)
     chat=$(start_chat "$session" "$csrf" "Full dev")
     send_message "$session" "$csrf" "$chat" "hello full" "$(done_response "kept whole")" > /dev/null
@@ -144,7 +144,7 @@ EOF
     [[ "$output" =~ "metrics: Removed 0 metrics and control rows (kept forever)" ]]
 
     # Override metrics_days and model_input_days on top of full.
-    write_config ', agent_retention = "full", agent_retention_override = {model_input_days = 10, metrics_days = 365}'
+    write_config 'agent = {retention = "full", retention_override = {model_input_days = 10, metrics_days = 365}}'
     run "$BIN" store prune
     [ "$status" -eq 0 ]
     [ "$(store "SELECT COUNT(*) FROM agent_model_call;")" -eq 0 ]

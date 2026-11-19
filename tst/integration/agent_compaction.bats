@@ -37,7 +37,7 @@ one_turn() {
 }
 
 @test "the trigger uses the last call's recorded prompt tokens" {
-    write_config ", agent_compaction_threshold = 20000"
+    write_config "agent = {compaction_threshold = 20000}"
     AGENT_TEST_PROMPT_TOKENS=50000 one_turn "fields of document" "document"
     send "and tags?" "$(done_response "ok")"
     run summaries
@@ -45,7 +45,7 @@ one_turn() {
 }
 
 @test "a small recorded count doesn't compact, whatever the history's length" {
-    write_config ", agent_compaction_threshold = 20000, agent_context_fixed_tokens = 100000"
+    write_config "agent = {compaction_threshold = 20000, context_fixed_tokens = 100000}"
     AGENT_TEST_PROMPT_TOKENS=100 one_turn "fields of document" "document"
     send "and tags?" "$(done_response "ok")"
     run summaries
@@ -57,7 +57,7 @@ one_turn() {
         sqlite3 "$DB" "INSERT INTO agent_message (session_id, role, content) VALUES ('${CHAT}', 'user', 'question ${i}');"
         sqlite3 "$DB" "INSERT INTO agent_message (session_id, role, content) VALUES ('${CHAT}', 'assistant', '{\"blocks\":[{\"type\":\"text\",\"text\":\"answer ${i}\"}]}');"
     done
-    write_config ", agent_compaction_threshold = 48000, agent_context_fixed_tokens = 0"
+    write_config "agent = {compaction_threshold = 48000, context_fixed_tokens = 0}"
     send "next" "$(done_response "ok")"
     run summaries
     [ "$output" -eq 0 ]
@@ -65,14 +65,14 @@ one_turn() {
     # With that turn's recorded count cleared, the estimate decides
     # again.
     sqlite3 "$DB" "UPDATE agent_model_call SET prompt_tokens = NULL WHERE session_id = '${CHAT}';"
-    write_config ", agent_compaction_threshold = 48000, agent_context_fixed_tokens = 100000"
+    write_config "agent = {compaction_threshold = 48000, context_fixed_tokens = 100000}"
     send "next again" "$(done_response "ok")"
     run summaries
     [ "$output" -eq 1 ]
 }
 
 @test "a long turn compacts between steps, and keeps every tool result with its call" {
-    write_config ", agent_compaction_threshold = 20000"
+    write_config "agent = {compaction_threshold = 20000}"
     scripted="$(tool_call_response "entity.fields" '{"entity_type":"document"}')"$'\1'"$(tool_call_response "entity.fields" '{"entity_type":"tag"}')"$'\1'"$(tool_call_response "entity.fields" '{"entity_type":"document_tag"}')"$'\1'"$(done_response "All listed.")"
     AGENT_TEST_PROMPT_TOKENS=50000 send "list the fields of three types" "$scripted"
 
@@ -91,7 +91,7 @@ one_turn() {
 }
 
 @test "with agent_compaction_mid_turn = false, a turn only compacts when it starts" {
-    write_config ", agent_compaction_threshold = 20000, agent_compaction_mid_turn = false"
+    write_config "agent = {compaction_threshold = 20000, compaction_mid_turn = false}"
     scripted="$(tool_call_response "entity.fields" '{"entity_type":"document"}')"$'\1'"$(tool_call_response "entity.fields" '{"entity_type":"tag"}')"$'\1'"$(tool_call_response "entity.fields" '{"entity_type":"document_tag"}')"$'\1'"$(done_response "All listed.")"
     AGENT_TEST_PROMPT_TOKENS=50000 send "list the fields of three types" "$scripted"
     run summaries
@@ -99,7 +99,7 @@ one_turn() {
 }
 
 @test "a second compaction updates the first summary instead of summarizing it, and only one stays in context" {
-    write_config ", agent_compaction_threshold = 20000"
+    write_config "agent = {compaction_threshold = 20000}"
     AGENT_TEST_PROMPT_TOKENS=50000 one_turn "which sample is the control?" "document"
     AGENT_TEST_PROMPT_TOKENS=50000 one_turn "and the tags?" "tag"
     AGENT_TEST_PROMPT_TOKENS=50000 one_turn "and document_tag?" "document_tag"
@@ -124,7 +124,7 @@ one_turn() {
 }
 
 @test "the summary comes first in the history sent to the model" {
-    write_config ", agent_compaction_threshold = 20000"
+    write_config "agent = {compaction_threshold = 20000}"
     AGENT_TEST_PROMPT_TOKENS=50000 one_turn "fields of document" "document"
     send "and tags?" "$(done_response "ok")"
     run sqlite3 "$DB" "SELECT prompt FROM agent_model_call WHERE session_id = '${CHAT}' AND kind = 'chat' ORDER BY id DESC LIMIT 1;"
@@ -133,7 +133,7 @@ one_turn() {
 }
 
 @test "a summary carries only the last 3 compacted requests, each capped at 800 characters, and the summarizer sees tool arguments capped at 800" {
-    write_config ", agent_compaction_threshold = 1000000"
+    write_config "agent = {compaction_threshold = 1000000}"
     long_text=$(printf 'L%.0s' $(seq 1 1000))
     long_sql="SELECT $(printf 'q%.0s' $(seq 1 1000))"
     one_turn "request one" "document"
@@ -143,7 +143,7 @@ one_turn() {
     # The last turn reports a large prompt, so the next one compacts
     # everything before its kept tail: requests one to four, and five.
     AGENT_TEST_PROMPT_TOKENS=50000 one_turn "request five" "document"
-    write_config ", agent_compaction_threshold = 20000"
+    write_config "agent = {compaction_threshold = 20000}"
     send "continue" "$(done_response "ok")"
 
     summary=$(sqlite3 "$DB" "SELECT content FROM agent_message WHERE session_id = '${CHAT}' AND role = 'compaction_summary' AND in_context = 1;")

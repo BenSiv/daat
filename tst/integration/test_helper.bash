@@ -48,9 +48,42 @@ run_luam() {
 # is always safe -- there's no stale in-process cache to worry about.
 write_config() {
     local extra_lua_fields="${1:-}"
-    cat > "$TEST_DIR/config.lua" <<EOF
-return {agent_provider = "test", search_provider = "test", embedding_quiet_minutes = 0, tag_min_text = 0, agent_turn_mode = "inline", search_review_mode = "inline"${extra_lua_fields}}
+    if [ -z "$extra_lua_fields" ]; then
+        cat > "$TEST_DIR/config.lua" <<'EOF'
+return {
+    agent = {provider = "test", turn_mode = "inline"},
+    search = {provider = "test"},
+    knowledge = {embedding_quiet_minutes = 0, tag_min_text = 0, search_review_mode = "inline"},
+}
 EOF
+        return
+    fi
+    local luam_dir="${LUAM_DIR:-${PROJECT_ROOT}/../luam}"
+    CFG_OUT="$TEST_DIR/config.lua" CFG_OVER="$extra_lua_fields" \
+    LUA_PATH="${luam_dir}/lib/?.lua;${luam_dir}/lib/?/init.lua;;" \
+    LUA_CPATH="${luam_dir}/bin/?.so;${luam_dir}/lib/lfs/?.so;;" \
+    "${luam_dir}/bin/luam" -e '
+        data = require("data")
+        base = {
+            agent = {provider = "test", turn_mode = "inline"},
+            search = {provider = "test"},
+            knowledge = {embedding_quiet_minutes = 0, tag_min_text = 0, search_review_mode = "inline"},
+        }
+        raw = os.getenv("CFG_OVER")
+        if raw == nil then raw = "" end
+        raw = string.gsub(raw, "^[%s,]+", "")
+        if raw != "" then
+            over = data.loads("return {" .. raw .. "}")
+            for sec, tbl in pairs(over) do
+                if type(tbl) == "table" and type(base[sec]) == "table" then
+                    for k, v in pairs(tbl) do base[sec][k] = v end
+                else
+                    base[sec] = tbl
+                end
+            end
+        end
+        data.save(os.getenv("CFG_OUT"), base)
+    '
 }
 
 # Raw content of the most recent tool_result message for a session --

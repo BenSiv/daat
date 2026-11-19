@@ -39,7 +39,7 @@ end
 
 function agent_provider.load()
     if agent_provider.name() == nil then
-        return nil, "no agent_provider is set in config.lua"
+        return nil, "no agent.provider is set in config.lua"
     end
     ok, mod = pcall(require, "provider.agent_" .. agent_provider.name())
     if ok == false or mod == nil then

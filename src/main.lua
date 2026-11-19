@@ -163,6 +163,7 @@ end
 
 const COMMAND_FUNCS = {
     ["init"] = do_init,
+    ["config"] = config.do_config,
     ["schema"] = do_schema,
     ["entity"] = do_entity,
     ["ledger"] = do_ledger,
@@ -197,7 +198,7 @@ function run_main()
     end
 
     if command == nil or command == "-h" or command == "--help" then
-        print("Usage: daat <init|schema|entity|ledger|extension|view|user|api-key|document|knowledge|agent|repair|tag|store> ...")
+        print("Usage: daat <init|config|schema|entity|ledger|extension|view|user|api-key|document|knowledge|agent|repair|tag|store> ...")
         if command == nil then
             return 1
         end
@@ -219,6 +220,10 @@ function run_main()
     if command == "init" then
         func(cmd_args)
         return 0
+    end
+
+    if command == "config" then
+        return func(cmd_args, ".")
     end
 
     -- Usage errors that precede store checks (e.g. `daat agent continue`

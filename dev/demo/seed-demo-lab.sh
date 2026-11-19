@@ -17,10 +17,16 @@ cp -r /app/tst/eval/demo-lab/schemas schemas
 # quiet period; the deployment's own config.lua is restored after.
 cp config.lua config.lua.deployed
 trap 'mv config.lua.deployed config.lua' EXIT
-sed 's/^return {/return {embedding_quiet_minutes = 0,/' config.lua.deployed > config.lua
 
 export LUA_PATH="/app/src/?.lua;/luam/lib/?.lua;/luam/lib/?/init.lua;;"
 export LUA_CPATH="/luam/bin/?.so;/luam/lib/lfs/?.so;/luam/lib/hmac/?.so;/luam/lib/bcrypt/?.so;/luam/lib/mariadb/?.so;;"
+/luam/bin/luam -e '
+    data = require("data")
+    cfg = data.load("config.lua.deployed")
+    if type(cfg.knowledge) != "table" then cfg.knowledge = {} end
+    cfg.knowledge.embedding_quiet_minutes = 0
+    data.save("config.lua", cfg)
+'
 /luam/bin/luam /app/tst/eval/load.lua /app "${1:-20261020}"
 
 # The loader's own account has a fixed password, published in
