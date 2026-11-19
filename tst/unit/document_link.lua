@@ -314,4 +314,43 @@ function tests.parse_link_judgment_is_lenient_about_format()
     check(v == nil, "a word merely starting with YES is not a verdict")
 end
 
+function tests.upsert_link_refreshes_changed_target_and_code_blocks_are_ignored()
+    print("Testing upsert_link refreshes changed/dangling target IDs and sync_links/inline_links skip code blocks/spans")
+    db_path = new_test_db()
+    db.exec(db_path, "INSERT INTO document (id, title) VALUES (2, 'Protocol'), (9, 'Replacement');")
+
+    -- Existing link pointing to #2, then target changes to #9 or nil while preserving raw_strength
+    insert_link(db_path, 1, 2, "Protocol", "raw_strength", "1.75")
+    document.upsert_link(db_path, 1, 9, "Protocol")
+    r1 = link_row(db_path, 1, "Protocol")
+    check(tonumber(r1.to_document_id) == 9 and close_enough(tonumber(r1.raw_strength), 1.75),
+        "expected target refreshed to 9 with strength preserved, got " .. tostring(r1.to_document_id))
+
+    document.upsert_link(db_path, 1, nil, "Protocol")
+    r2 = link_row(db_path, 1, "Protocol")
+    check(is_sql_null(r2.to_document_id) and close_enough(tonumber(r2.raw_strength), 1.75),
+        "expected target cleared to NULL when archived/renamed, got " .. tostring(r2.to_document_id))
+
+    -- Code spans and fenced code blocks are ignored by sync_links and inline_links_to_markdown
+    md = table.concat({
+        "Real prose link to [[Protocol]] and inline `[[Ignored Inline]]` plus `` `[[Ignored Double]]` ``.",
+        "```lua",
+        "-- [[Ignored Fenced]]",
+        "```",
+        "Stray backtick ` in prose still finds [[Replacement]].",
+    }, "\n")
+    document.sync_links(db_path, 10, md)
+    active = db.query(db_path, "SELECT link_text FROM document_link WHERE from_document_id = 10 AND (archived_at IS NULL OR archived_at = '') ORDER BY link_text ASC;")
+    check(#active == 2 and active[1].link_text == "Protocol" and active[2].link_text == "Replacement",
+        "expected only Protocol and Replacement indexed, got count=" .. tostring(#active))
+
+    rewritten = document.inline_links_to_markdown(db_path, md)
+    check(string.find(rewritten, "[Protocol](document?entity_id=2)", 1, true) != nil, "expected real link rewritten")
+    check(string.find(rewritten, "`[[Ignored Inline]]`", 1, true) != nil, "expected inline code span preserved verbatim")
+    check(string.find(rewritten, "-- [[Ignored Fenced]]", 1, true) != nil, "expected fenced code block preserved verbatim")
+    check(string.find(rewritten, "[Replacement](document?entity_id=9)", 1, true) != nil, "expected link after stray backtick rewritten")
+
+    os.remove(db_path)
+end
+
 unit.run(tests)

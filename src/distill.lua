@@ -72,6 +72,16 @@ function distill_record_status(db_path, reference_id, reference_hash, status, re
         tonumber(reference_id), db.quote(reference_hash), db.quote(status), db.literal(reason)))
 end
 
+DISTILL_STALE_CLAIM_SECONDS = 900
+
+function distill_stale_cutoff(db_path)
+    rows = db.query(db_path, "SELECT " .. require("store").ago_expr(db_path, DISTILL_STALE_CLAIM_SECONDS) .. " AS cutoff;")
+    if rows != nil and rows[1] != nil then
+        return rows[1].cutoff
+    end
+    return nil
+end
+
 -- Active references, most retrieved first, whose current text hasn't
 -- been distilled. With `recheck`, references whose last try came to
 -- nothing or failed (or was left running) count too.
@@ -84,10 +94,12 @@ function distill.due_references(db_path, recheck)
     if rows == nil then
         return due
     end
+    stale_cutoff = distill_stale_cutoff(db_path)
     for _, r in ipairs(rows) do
         existing = distill_row(db_path, r.id)
+        stale_running = existing != nil and existing.status == "running" and stale_cutoff != nil and existing.queued_at != nil and tostring(existing.queued_at) < tostring(stale_cutoff)
         retry = recheck == true and existing != nil and existing.status != "distilled" and existing.status != "pending"
-        if existing == nil or existing.reference_hash != tostring(r.content_hash) or retry then
+        if existing == nil or existing.reference_hash != tostring(r.content_hash) or stale_running or retry then
             table.insert(due, r)
         end
     end
@@ -400,9 +412,10 @@ function distill_claim(db_path, reference_id)
     raw = io.read(urandom, 8)
     io.close(urandom)
     token = string.gsub(raw, ".", function(c) return string.format("%02x", string.byte(c)) end)
+    stale_expr = require("store").ago_expr(db_path, DISTILL_STALE_CLAIM_SECONDS)
     db.exec(db_path, string.format(
-        "UPDATE knowledge_distillation SET status = 'running', reason = %s WHERE reference_id = %d AND status = 'pending';",
-        db.quote(token), tonumber(reference_id)))
+        "UPDATE knowledge_distillation SET status = 'running', reason = %s, queued_at = %s WHERE reference_id = %d AND (status = 'pending' OR (status = 'running' AND queued_at IS NOT NULL AND queued_at < %s));",
+        db.quote(token), db.now_expr(db_path), tonumber(reference_id), stale_expr))
     row = distill_row(db_path, reference_id)
     return row != nil and row.status == "running" and row.reason == token
 end
@@ -416,6 +429,7 @@ function distill.repair(db_path, limit, dry_run, author, recheck)
         limit = #due
     end
     queued = {}
+    stale_cutoff = distill_stale_cutoff(db_path)
     for i, r in ipairs(due) do
         if i > limit then
             break
@@ -424,7 +438,8 @@ function distill.repair(db_path, limit, dry_run, author, recheck)
             table.insert(lines, string.format("would distill reference #%d %s", tonumber(r.id), tostring(r.title)))
         else
             existing = distill_row(db_path, r.id)
-            if existing == nil or existing.status != "running" or recheck == true then
+            is_stale = existing != nil and existing.status == "running" and stale_cutoff != nil and existing.queued_at != nil and tostring(existing.queued_at) < tostring(stale_cutoff)
+            if existing == nil or existing.status != "running" or is_stale or recheck == true then
                 distill_record_status(db_path, r.id, tostring(r.content_hash), "pending", nil)
                 table.insert(queued, tonumber(r.id))
             end

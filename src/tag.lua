@@ -48,8 +48,15 @@ ACTIVE = "(archived_at IS NULL OR archived_at = '')"
 TAG_EVIDENCE_MIN_SUPPORT = 3
 TAG_EVIDENCE_PRIOR = 2.0
 
+_tag_schema_ready = {}
+
 function tag.init_schema(db_path)
+    key = db.cache_key(db_path)
+    if _tag_schema_ready[key] == true then
+        return
+    end
     db.exec(db_path, string.format(TAG_CENTRE_SCHEMA, db.now_expr(db_path)))
+    _tag_schema_ready[key] = true
 end
 
 function tag_unit(v, dims)
@@ -99,9 +106,13 @@ function tag.document_vector(db_path, document_id)
     return tag_unit(full, config.platform_config().tag_dims)
 end
 
-function tag_load_centre(db_path, tag_id)
+function tag_load_centre(db_path, tag_id, for_update)
+    lock_clause = ""
+    if for_update == true and db.is_mariadb(db_path) then
+        lock_clause = " FOR UPDATE"
+    end
     rows = db.query(db_path, string.format(
-        "SELECT members, sum_json FROM tag_centre WHERE tag_id = %d;", tonumber(tag_id)))
+        "SELECT members, sum_json FROM tag_centre WHERE tag_id = %d%s;", tonumber(tag_id), lock_clause))
     if rows == nil or #rows == 0 then
         return 0, nil
     end
@@ -127,35 +138,39 @@ function tag.adjust_centre(db_path, tag_id, add, remove)
     if add == nil and remove == nil then
         return
     end
-    members, sum = tag_load_centre(db_path, tag_id)
-    length = 0
-    if add != nil then
-        length = #add
-    else
-        length = #remove
-    end
-    if sum == nil then
-        sum = {}
-        for i = 1, length do
-            sum[i] = 0.0
+    tag.init_schema(db_path)
+    function run_adjust_centre_tx()
+        members, sum = tag_load_centre(db_path, tag_id, true)
+        length = 0
+        if add != nil then
+            length = #add
+        else
+            length = #remove
         end
-    end
-    if #sum != length then
-        return
-    end
-    if add != nil then
-        for i = 1, length do
-            sum[i] = sum[i] + add[i]
+        if sum == nil then
+            sum = {}
+            for i = 1, length do
+                sum[i] = 0.0
+            end
         end
-        members = members + 1
-    end
-    if remove != nil and #remove == length then
-        for i = 1, length do
-            sum[i] = sum[i] - remove[i]
+        if #sum != length then
+            return
         end
-        members = members - 1
+        if add != nil then
+            for i = 1, length do
+                sum[i] = sum[i] + add[i]
+            end
+            members = members + 1
+        end
+        if remove != nil and #remove == length then
+            for i = 1, length do
+                sum[i] = sum[i] - remove[i]
+            end
+            members = members - 1
+        end
+        tag_save_centre(db_path, tag_id, members, sum)
     end
-    tag_save_centre(db_path, tag_id, members, sum)
+    db.transaction(db_path, run_adjust_centre_tx)
 end
 
 -- Every active tag's centre, unit length: {{id=, centre=}, ...}.

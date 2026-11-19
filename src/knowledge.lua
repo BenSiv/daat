@@ -396,16 +396,24 @@ function knowledge.sync_session_document(db_path, author, session_id, title, tra
         document.update_page(db_path, author, existing.id, title, existing.parent_id, transcript, nil)
         return existing.id
     end
-    folder_id = document.ensure_knowledge_pool_folder(db_path)
-    document_id, issues = document.create_page(db_path, author, title, folder_id, transcript, nil)
-    if document_id == nil then
-        return nil
+    function create_or_update_session_doc()
+        locked_existing = knowledge.session_document_for(db_path, session_id)
+        if locked_existing != nil then
+            document.update_page(db_path, author, locked_existing.id, title, locked_existing.parent_id, transcript, nil)
+            return locked_existing.id
+        end
+        folder_id = document.ensure_knowledge_pool_folder(db_path)
+        document_id, _ = document.create_page(db_path, author, title, folder_id, transcript, nil)
+        if document_id == nil then
+            return nil
+        end
+        db.exec(db_path, string.format(
+            "UPDATE document SET source_type = 'chat_session', source_ref = %s WHERE id = %d;",
+            db.quote(session_id), document_id
+        ))
+        return document_id
     end
-    db.exec(db_path, string.format(
-        "UPDATE document SET source_type = 'chat_session', source_ref = %s WHERE id = %d;",
-        db.quote(session_id), document_id
-    ))
-    return document_id
+    return db.with_lock(db_path, "daat_session_doc_" .. tostring(session_id), 30, create_or_update_session_doc)
 end
 
 -- The agent-driven counterpart to knowledge.create_document_note's

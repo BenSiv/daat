@@ -98,6 +98,16 @@ end
 -- Active tags with enough notes, most notes first, whose notes this
 -- reference hasn't seen. With `recheck`, tags whose last try came to
 -- nothing, was rejected or failed (or was left running) count too.
+SYNTHESIZE_STALE_CLAIM_SECONDS = 900
+
+function synthesize_stale_cutoff(db_path)
+    rows = db.query(db_path, "SELECT " .. require("store").ago_expr(db_path, SYNTHESIZE_STALE_CLAIM_SECONDS) .. " AS cutoff;")
+    if rows != nil and rows[1] != nil then
+        return rows[1].cutoff
+    end
+    return nil
+end
+
 function synthesize.due_tags(db_path, recheck)
     rows = db.query(db_path, string.format("""
         SELECT t.id, t.label, t.description, COUNT(DISTINCT d.id) AS notes FROM tag t
@@ -111,11 +121,13 @@ function synthesize.due_tags(db_path, recheck)
     if rows == nil then
         return due
     end
+    stale_cutoff = synthesize_stale_cutoff(db_path)
     for _, t in ipairs(rows) do
         existing = synthesize_row(db_path, t.id)
         hash = synthesize_notes_hash(synthesize.notes(db_path, t.id))
+        stale_running = existing != nil and existing.status == "running" and stale_cutoff != nil and existing.queued_at != nil and tostring(existing.queued_at) < tostring(stale_cutoff)
         retry = recheck == true and existing != nil and existing.status != "referenced" and existing.status != "pending"
-        if existing == nil or existing.notes_hash != hash or retry then
+        if existing == nil or existing.notes_hash != hash or stale_running or retry then
             table.insert(due, t)
         end
     end
@@ -133,9 +145,10 @@ function synthesize_claim(db_path, tag_id)
     raw = io.read(urandom, 8)
     io.close(urandom)
     token = string.gsub(raw, ".", function(c) return string.format("%02x", string.byte(c)) end)
+    stale_expr = require("store").ago_expr(db_path, SYNTHESIZE_STALE_CLAIM_SECONDS)
     db.exec(db_path, string.format(
-        "UPDATE knowledge_reference SET status = 'running', reason = %s WHERE tag_id = %d AND status = 'pending';",
-        db.quote(token), tonumber(tag_id)))
+        "UPDATE knowledge_reference SET status = 'running', reason = %s, queued_at = %s WHERE tag_id = %d AND (status = 'pending' OR (status = 'running' AND queued_at IS NOT NULL AND queued_at < %s));",
+        db.quote(token), db.now_expr(db_path), tonumber(tag_id), stale_expr))
     row = synthesize_row(db_path, tag_id)
     return row != nil and row.status == "running" and row.reason == token
 end
@@ -256,9 +269,10 @@ function synthesize.run_pending(db_path, limit, author)
     if limit == nil then
         limit = 3
     end
+    stale_expr = require("store").ago_expr(db_path, SYNTHESIZE_STALE_CLAIM_SECONDS)
     rows = db.query(db_path, string.format(
-        "SELECT tag_id FROM knowledge_reference WHERE status = 'pending' ORDER BY queued_at, tag_id LIMIT %d;",
-        tonumber(limit)))
+        "SELECT tag_id FROM knowledge_reference WHERE status = 'pending' OR (status = 'running' AND queued_at IS NOT NULL AND queued_at < %s) ORDER BY queued_at, tag_id LIMIT %d;",
+        stale_expr, tonumber(limit)))
     lines = {}
     if rows == nil then
         return lines
@@ -335,7 +349,9 @@ function synthesize.repair(db_path, limit, dry_run, author, recheck)
             if existing != nil then
                 reference_id = tonumber(existing.document_id)
             end
-            if existing == nil or existing.status != "running" or recheck == true then
+            stale_cutoff = synthesize_stale_cutoff(db_path)
+            is_stale = existing != nil and existing.status == "running" and stale_cutoff != nil and existing.queued_at != nil and tostring(existing.queued_at) < tostring(stale_cutoff)
+            if existing == nil or existing.status != "running" or is_stale or recheck == true then
                 synthesize_record(db_path, t.id, synthesize_notes_hash(synthesize.notes(db_path, t.id)), "pending", reference_id, nil)
             end
         end

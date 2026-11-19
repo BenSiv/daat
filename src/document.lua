@@ -790,7 +790,7 @@ end
 -- idempotent -- a second call reuses the existing folder.
 KNOWLEDGE_POOL_FOLDER_TITLE = "Knowledge Pool"
 
-function document.ensure_knowledge_pool_folder(db_path)
+function find_knowledge_pool_folder(db_path)
     rows = db.query(db_path, string.format(
         "SELECT id FROM document WHERE parent_id IS NULL AND title = %s AND (archived_at IS NULL OR archived_at = '') ORDER BY id ASC LIMIT 1;",
         db.quote(KNOWLEDGE_POOL_FOLDER_TITLE)
@@ -798,8 +798,23 @@ function document.ensure_knowledge_pool_folder(db_path)
     if rows != nil and rows[1] != nil then
         return tonumber(rows[1].id)
     end
-    folder_id, _ = document.create_page(db_path, "system", KNOWLEDGE_POOL_FOLDER_TITLE, nil, nil, nil)
-    return folder_id
+    return nil
+end
+
+function document.ensure_knowledge_pool_folder(db_path)
+    existing_id = find_knowledge_pool_folder(db_path)
+    if existing_id != nil then
+        return existing_id
+    end
+    function create_pool_folder_locked()
+        locked_id = find_knowledge_pool_folder(db_path)
+        if locked_id != nil then
+            return locked_id
+        end
+        folder_id, _ = document.create_page(db_path, "system", KNOWLEDGE_POOL_FOLDER_TITLE, nil, nil, nil)
+        return folder_id
+    end
+    return db.with_lock(db_path, "daat_pool_folder", 30, create_pool_folder_locked)
 end
 
 --------------------------------------------------------------------------
@@ -1220,11 +1235,140 @@ function document.clean_link_context(text)
     return text
 end
 
+-- Applies `fn(prose_chunk)` only to Markdown segments outside fenced code
+-- blocks (```...``` / ~~~...~~~) and inline backtick code spans (`...`),
+-- leaving code blocks and code spans untouched.
+function transform_inline_code_spans(text, fn)
+    parts = {}
+    len = string.len(text)
+    pos = 1
+    plain_start = 1
+    while pos <= len do
+        if string.byte(text, pos) == 96 then
+            tick_end = pos
+            while tick_end <= len and string.byte(text, tick_end) == 96 do
+                tick_end = tick_end + 1
+            end
+            tick_len = tick_end - pos
+            close_start = nil
+            search_pos = tick_end
+            blank_pos = string.find(text, "\n\n", tick_end, true)
+            search_limit = len
+            if blank_pos != nil then
+                search_limit = blank_pos - 1
+            end
+            while search_pos <= search_limit do
+                if string.byte(text, search_pos) == 96 then
+                    run_end = search_pos
+                    while run_end <= len and string.byte(text, run_end) == 96 do
+                        run_end = run_end + 1
+                    end
+                    if (run_end - search_pos) == tick_len then
+                        close_start = search_pos
+                        break
+                    end
+                    search_pos = run_end
+                else
+                    search_pos = search_pos + 1
+                end
+            end
+            if close_start != nil then
+                if pos > plain_start then
+                    table.insert(parts, fn(string.sub(text, plain_start, pos - 1)))
+                end
+                close_after = close_start + tick_len
+                table.insert(parts, string.sub(text, pos, close_after - 1))
+                pos = close_after
+                plain_start = pos
+            else
+                pos = tick_end
+            end
+        else
+            pos = pos + 1
+        end
+    end
+    if plain_start <= len then
+        table.insert(parts, fn(string.sub(text, plain_start, len)))
+    end
+    return table.concat(parts)
+end
+
+function transform_outside_code(content, fn)
+    if content == nil or content == "" then
+        return ""
+    end
+    out_parts = {}
+    prose_buf = {}
+    in_fence = false
+    fence_char = nil
+    fence_len = 0
+
+    len = string.len(content)
+    line_start = 1
+    while line_start <= len do
+        nl = string.find(content, "\n", line_start, true)
+        line_end = len
+        if nl != nil then
+            line_end = nl
+        end
+        line = string.sub(content, line_start, line_end)
+        trimmed_line = string.gsub(line, "\r?\n$", "")
+
+        if not in_fence then
+            ticks = string.match(trimmed_line, "^%s*(```+)")
+            if ticks == nil then
+                ticks = string.match(trimmed_line, "^%s*(~~~+)")
+            end
+            if ticks != nil then
+                if #prose_buf > 0 then
+                    table.insert(out_parts, transform_inline_code_spans(table.concat(prose_buf), fn))
+                    prose_buf = {}
+                end
+                in_fence = true
+                fence_char = string.sub(ticks, 1, 1)
+                fence_len = string.len(ticks)
+                table.insert(out_parts, line)
+            else
+                table.insert(prose_buf, line)
+            end
+        else
+            table.insert(out_parts, line)
+            closing = string.match(trimmed_line, "^%s*(" .. fence_char .. "+)%s*$")
+            if closing != nil and string.len(closing) >= fence_len then
+                in_fence = false
+                fence_char = nil
+                fence_len = 0
+            end
+        end
+        line_start = line_end + 1
+    end
+
+    if #prose_buf > 0 then
+        table.insert(out_parts, transform_inline_code_spans(table.concat(prose_buf), fn))
+    end
+    return table.concat(out_parts)
+end
+
+function document.extract_links(content)
+    seen = {}
+    ordered = {}
+    function collect_segment_links(segment)
+        for raw_link in string.gmatch(segment, LINK_PATTERN) do
+            if seen[raw_link] == nil then
+                seen[raw_link] = true
+                table.insert(ordered, raw_link)
+            end
+        end
+        return segment
+    end
+    transform_outside_code(content, collect_segment_links)
+    return ordered
+end
+
 -- Records that `from_id`'s content holds [[link_text]]. A new link text
 -- inserts at BASE_LINK_STRENGTH; one this document already had (active
--- or archived) is unarchived and has its to_document_id healed if it
--- was dangling and now resolves -- a retyped link comes back at its old
--- strength, never reset.
+-- or archived) is unarchived and has its to_document_id refreshed to the
+-- current resolved target (`to_id`) while preserving raw_strength.
 function document.upsert_link(db_path, from_id, to_id, link_text)
     link_hash = document.link_hash(link_text)
     rows = db.query(db_path, string.format(
@@ -1238,13 +1382,9 @@ function document.upsert_link(db_path, from_id, to_id, link_text)
         ))
         return
     end
-    healed_to_id = sql_null_to_nil(rows[1].to_document_id)
-    if healed_to_id == nil then
-        healed_to_id = to_id
-    end
     db.exec(db_path, string.format(
         "UPDATE document_link SET archived_at = NULL, to_document_id = %s WHERE id = %d;",
-        db.literal(healed_to_id), tonumber(rows[1].id)
+        db.literal(to_id), tonumber(rows[1].id)
     ))
 end
 
@@ -1256,13 +1396,10 @@ function document.sync_links(db_path, document_id, content)
     if content == nil then
         content = ""
     end
+    ordered = document.extract_links(content)
     seen = {}
-    ordered = {}
-    for raw_link in string.gmatch(content, LINK_PATTERN) do
-        if seen[raw_link] == nil then
-            seen[raw_link] = true
-            table.insert(ordered, raw_link)
-        end
+    for _, raw_link in ipairs(ordered) do
+        seen[raw_link] = true
     end
 
     existing = db.query(db_path, string.format(
@@ -1502,13 +1639,16 @@ end
 -- ordinary Markdown either way, so cmark itself needs no special
 -- handling for this project's own link syntax.
 function document.inline_links_to_markdown(db_path, content)
-    return (string.gsub(content, LINK_PATTERN, function(raw_link)
-        target_id = document.resolve_link_text(db_path, raw_link)
-        if target_id != nil then
-            return "[" .. raw_link .. "](document?entity_id=" .. tostring(target_id) .. ")"
-        end
-        return "*" .. raw_link .. "* _(not created yet)_"
-    end))
+    function replace_segment_links(segment)
+        return (string.gsub(segment, LINK_PATTERN, function(raw_link)
+            target_id = document.resolve_link_text(db_path, raw_link)
+            if target_id != nil then
+                return "[" .. raw_link .. "](document?entity_id=" .. tostring(target_id) .. ")"
+            end
+            return "*" .. raw_link .. "* _(not created yet)_"
+        end))
+    end
+    return transform_outside_code(content, replace_segment_links)
 end
 
 -- Shells out to cmark-gfm (CommonMark + GitHub's table/strikethrough/

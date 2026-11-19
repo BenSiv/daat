@@ -707,17 +707,44 @@ function extension.enqueue_after_hooks(db_path, ext_dir, event_name, entity_type
     end
 end
 
+JOB_STALE_CLAIM_SECONDS = 900
+
+function new_job_claim_token()
+    urandom = io.open("/dev/urandom", "rb")
+    if urandom == nil then
+        return tostring(os.time()) .. "_" .. tostring(math.random(100000, 999999))
+    end
+    raw = io.read(urandom, 8)
+    io.close(urandom)
+    function byte_to_hex(c)
+        return string.format("%02x", string.byte(c))
+    end
+    return (string.gsub(raw, ".", byte_to_hex))
+end
+
 function extension.pending_jobs(db_path, limit)
     extension.init_schema(db_path)
     if limit == nil then limit = 50 end
+    stale_expr = require("store").ago_expr(db_path, JOB_STALE_CLAIM_SECONDS)
     rows = db.query(db_path, string.format(
-        "SELECT * FROM system_job WHERE status = 'pending' AND attempts < %d ORDER BY job_id ASC LIMIT %d;",
-        config.platform_config().extension_max_job_attempts, limit
+        "SELECT * FROM system_job WHERE (status = 'pending' OR (status LIKE 'running:%%' AND updated_at IS NOT NULL AND updated_at < %s)) AND attempts < %d ORDER BY job_id ASC LIMIT %d;",
+        stale_expr, config.platform_config().extension_max_job_attempts, limit
     ))
     if rows == nil then
         return {}
     end
     return rows
+end
+
+function extension.claim_job(db_path, job_id)
+    extension.init_schema(db_path)
+    claim_status = "running:" .. new_job_claim_token()
+    stale_expr = require("store").ago_expr(db_path, JOB_STALE_CLAIM_SECONDS)
+    _, _, changed = db.exec(db_path, string.format(
+        "UPDATE system_job SET status = %s, updated_at = %s WHERE job_id = %d AND (status = 'pending' OR (status LIKE 'running:%%' AND updated_at IS NOT NULL AND updated_at < %s));",
+        db.quote(claim_status), db.now_expr(db_path), tonumber(job_id), stale_expr
+    ))
+    return changed != nil and changed > 0
 end
 
 function extension.mark_job_done(db_path, job)

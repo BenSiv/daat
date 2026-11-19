@@ -496,7 +496,7 @@ function verify.derived_indexes(db_path)
                 if dr.content != nil then
                     content_str = tostring(dr.content)
                 end
-                for raw_link in string.gmatch(content_str, VERIFY_LINK_PATTERN) do
+                for _, raw_link in ipairs(document.extract_links(content_str)) do
                     seen_lt[raw_link] = true
                 end
                 active_doc_links[did] = seen_lt

@@ -1173,11 +1173,14 @@ function entity.counts_by_type(db_path, entity_types)
                         counts[k] = v
                     end
                 end
-                pcall(store_mod.set_text, db_path, ACTIVE_COUNTS_STATE_KEY, json.encode({
-                    max_event_id = current_max_id,
-                    types_sig = types_sig,
-                    counts = counts,
-                }))
+                post_ok, post_rows = pcall(db.query, db_path, "SELECT COALESCE(MAX(event_id), 0) AS max_id FROM entity_event;")
+                if post_ok == true and post_rows != nil and post_rows[1] != nil and to_int_or_zero(post_rows[1].max_id) == current_max_id then
+                    pcall(store_mod.set_text, db_path, ACTIVE_COUNTS_STATE_KEY, json.encode({
+                        max_event_id = current_max_id,
+                        types_sig = types_sig,
+                        counts = counts,
+                    }))
+                end
                 return counts
             end
         end
@@ -1185,11 +1188,14 @@ function entity.counts_by_type(db_path, entity_types)
 
     counts = run_batched_active_counts(db_path, type_names, existing_tables_set(db_path))
     if cache_usable then
-        pcall(store_mod.set_text, db_path, ACTIVE_COUNTS_STATE_KEY, json.encode({
-            max_event_id = current_max_id,
-            types_sig = types_sig,
-            counts = counts,
-        }))
+        post_ok, post_rows = pcall(db.query, db_path, "SELECT COALESCE(MAX(event_id), 0) AS max_id FROM entity_event;")
+        if post_ok == true and post_rows != nil and post_rows[1] != nil and to_int_or_zero(post_rows[1].max_id) == current_max_id then
+            pcall(store_mod.set_text, db_path, ACTIVE_COUNTS_STATE_KEY, json.encode({
+                max_event_id = current_max_id,
+                types_sig = types_sig,
+                counts = counts,
+            }))
+        end
     end
     return counts
 end
@@ -1379,32 +1385,34 @@ function entity.run_pending_jobs(db_path, limit)
     ran = 0
     failed = 0
     for _, job in ipairs(extension.pending_jobs(db_path, limit)) do
-        manifest, err = extension.load_manifest(ext_dir, job.extension_name)
-        if manifest == nil then
-            extension.mark_job_failed(db_path, job, "manifest error: " .. tostring(err))
-            failed = failed + 1
-        elseif extension.is_approved(db_path, manifest) == false then
-            extension.mark_job_failed(db_path, job,
-                "extension not approved (or capabilities changed since approval)")
-            failed = failed + 1
-        else
-            new_values = nil
-            if job.new_values_json != nil then
-                new_values = json.decode(job.new_values_json)
-            end
-            old_values = nil
-            if job.old_values_json != nil then
-                old_values = json.decode(job.old_values_json)
-            end
-            ctx = entity.build_ctx(db_path, manifest)
-            invoke_ok, result = extension.invoke(ext_dir, job.extension_name, manifest, "on_after",
-                new_values, old_values, ctx)
-            if invoke_ok then
-                extension.mark_job_done(db_path, job)
-                ran = ran + 1
-            else
-                extension.mark_job_failed(db_path, job, tostring(result))
+        if extension.claim_job(db_path, job.job_id) then
+            manifest, err = extension.load_manifest(ext_dir, job.extension_name)
+            if manifest == nil then
+                extension.mark_job_failed(db_path, job, "manifest error: " .. tostring(err))
                 failed = failed + 1
+            elseif extension.is_approved(db_path, manifest) == false then
+                extension.mark_job_failed(db_path, job,
+                    "extension not approved (or capabilities changed since approval)")
+                failed = failed + 1
+            else
+                new_values = nil
+                if job.new_values_json != nil then
+                    new_values = json.decode(job.new_values_json)
+                end
+                old_values = nil
+                if job.old_values_json != nil then
+                    old_values = json.decode(job.old_values_json)
+                end
+                ctx = entity.build_ctx(db_path, manifest)
+                invoke_ok, result = extension.invoke(ext_dir, job.extension_name, manifest, "on_after",
+                    new_values, old_values, ctx)
+                if invoke_ok then
+                    extension.mark_job_done(db_path, job)
+                    ran = ran + 1
+                else
+                    extension.mark_job_failed(db_path, job, tostring(result))
+                    failed = failed + 1
+                end
             end
         end
     end

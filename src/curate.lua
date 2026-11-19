@@ -409,14 +409,17 @@ end
 -- (curate-pending every 2 minutes) took the same pending rows as a
 -- `repair curate` batch and wrote a second note for one source. A row
 -- left running by a process that died is retried by `--recheck`.
+CURATE_STALE_CLAIM_SECONDS = 900
+
 function curate_claim(db_path, document_id)
     token = new_claim_token()
     if token == nil then
         return false
     end
+    stale_expr = require("store").ago_expr(db_path, CURATE_STALE_CLAIM_SECONDS)
     db.exec(db_path, string.format(
-        "UPDATE knowledge_curation SET status = 'running', reason = %s WHERE document_id = %d AND status = 'pending';",
-        db.quote(token), document_id))
+        "UPDATE knowledge_curation SET status = 'running', reason = %s, queued_at = %s WHERE document_id = %d AND (status = 'pending' OR (status = 'running' AND queued_at IS NOT NULL AND queued_at < %s));",
+        db.quote(token), db.now_expr(db_path), document_id, stale_expr))
     row = curate_row(db_path, document_id)
     return row != nil and row.status == "running" and row.reason == token
 end
@@ -427,9 +430,10 @@ function aspect_curate_claim(db_path, document_id, n)
     if token == nil then
         return false
     end
+    stale_expr = require("store").ago_expr(db_path, CURATE_STALE_CLAIM_SECONDS)
     db.exec(db_path, string.format(
-        "UPDATE knowledge_aspect_curation SET status = 'running', reason = %s WHERE document_id = %d AND aspect = %d AND status = 'pending';",
-        db.quote(token), document_id, n))
+        "UPDATE knowledge_aspect_curation SET status = 'running', reason = %s, queued_at = %s WHERE document_id = %d AND aspect = %d AND (status = 'pending' OR (status = 'running' AND queued_at IS NOT NULL AND queued_at < %s));",
+        db.quote(token), db.now_expr(db_path), document_id, n, stale_expr))
     row = aspect_curate_row(db_path, document_id, n)
     return row != nil and row.status == "running" and row.reason == token
 end
@@ -442,9 +446,10 @@ function curate.run_pending(db_path, limit, author)
         limit = 5
     end
     curate.queue_due_conversations(db_path)
+    stale_expr = require("store").ago_expr(db_path, CURATE_STALE_CLAIM_SECONDS)
     rows = db.query(db_path, string.format(
-        "SELECT document_id FROM knowledge_curation WHERE status = 'pending' ORDER BY queued_at, document_id LIMIT %d;",
-        tonumber(limit)))
+        "SELECT document_id FROM knowledge_curation WHERE status = 'pending' OR (status = 'running' AND queued_at IS NOT NULL AND queued_at < %s) ORDER BY queued_at, document_id LIMIT %d;",
+        stale_expr, tonumber(limit)))
     lines = {}
     if rows == nil then
         rows = {}
@@ -464,8 +469,8 @@ function curate.run_pending(db_path, limit, author)
         return lines
     end
     conversation_rows = db.query(db_path, string.format(
-        "SELECT session_id FROM knowledge_conversation_curation WHERE status = 'pending' ORDER BY queued_at, session_id LIMIT %d;",
-        left))
+        "SELECT session_id FROM knowledge_conversation_curation WHERE status = 'pending' OR (status = 'running' AND queued_at IS NOT NULL AND queued_at < %s) ORDER BY queued_at, session_id LIMIT %d;",
+        stale_expr, left))
     if conversation_rows == nil then
         conversation_rows = {}
     end
@@ -484,8 +489,8 @@ function curate.run_pending(db_path, limit, author)
         return lines
     end
     aspect_rows = db.query(db_path, string.format(
-        "SELECT document_id, aspect FROM knowledge_aspect_curation WHERE status = 'pending' ORDER BY queued_at, document_id, aspect LIMIT %d;",
-        left))
+        "SELECT document_id, aspect FROM knowledge_aspect_curation WHERE status = 'pending' OR (status = 'running' AND queued_at IS NOT NULL AND queued_at < %s) ORDER BY queued_at, document_id, aspect LIMIT %d;",
+        stale_expr, left))
     if aspect_rows == nil then
         return lines
     end
@@ -832,9 +837,10 @@ function curate.claim_conversation(db_path, session_id)
     if token == nil then
         return false
     end
+    stale_expr = require("store").ago_expr(db_path, CURATE_STALE_CLAIM_SECONDS)
     db.exec(db_path, string.format(
-        "UPDATE knowledge_conversation_curation SET status = 'running', reason = %s WHERE session_id = %s AND status = 'pending';",
-        db.quote(token), db.quote(session_id)))
+        "UPDATE knowledge_conversation_curation SET status = 'running', reason = %s, queued_at = %s WHERE session_id = %s AND (status = 'pending' OR (status = 'running' AND queued_at IS NOT NULL AND queued_at < %s));",
+        db.quote(token), db.now_expr(db_path), db.quote(session_id), stale_expr))
     row = conversation_row(db_path, session_id)
     return row != nil and row.status == "running" and row.reason == token
 end
