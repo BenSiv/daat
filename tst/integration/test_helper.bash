@@ -197,12 +197,12 @@ start_chat() {
     elif [[ "$1" == session=* ]]; then
         cookie="$1"
         csrf="$2"
-        title="${3:-Chat}"
+        title="${3-Chat}"
         emit_kv=1
     else
         cookie="session=$1; csrf=$2"
         csrf="$2"
-        title="${3:-Chat}"
+        title="${3-Chat}"
     fi
     resp=$(raw_post_json "/api/chat-widget-start" "{\"title\":\"${title}\"}" "$cookie" "$csrf" "")
     sid=$(json_body "$resp" | jq -r '.session_id')
