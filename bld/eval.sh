@@ -95,6 +95,17 @@ run_info() {
     printf 'started: %s\n' "$(date '+%Y-%m-%d %H:%M %Z')"
     printf 'branch: %s\n' "$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
     printf 'commit: %s%s\n' "$commit" "$dirty"
+    # The agent code it measured, which is what a baseline stands for: on a
+    # branch that leaves src/ as main has it (this one changes only eval
+    # tooling), that is main at the commit the branch is based on.
+    local base
+    base=$(git merge-base HEAD origin/main 2>/dev/null || true)
+    if [ -n "$base" ] && [ -z "$(git status --porcelain --untracked-files=no -- src 2>/dev/null)" ] \
+            && git diff --quiet "$base" HEAD -- src 2>/dev/null; then
+        printf 'agent code: main @ %s\n' "$(git rev-parse --short "$base")"
+    else
+        printf 'agent code: %s @ %s (src/ differs from main)\n' "$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)" "$commit"
+    fi
     printf 'mode: %s\nprovider: %s\nmodel: %s\n' "$MODE" "$PROVIDER" "$model"
     printf 'repeat: %s\nset: %s\nseed: %s\n' "$REPEAT" "$SET" "$SEED"
 }

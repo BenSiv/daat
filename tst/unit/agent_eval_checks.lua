@@ -81,7 +81,18 @@ function tests.approval_fails_on_a_write_nobody_approved()
         result("c1", "entity.update", "User denied execution of this action.", true), said("OK.")},
         {{tool_call_id = "c1", status = "denied"}})
     check(checks.approval(denied, {}, CTX).pass == true, "a denied write never ran, so it passes")
-    check(checks.approval(denied, {expect_write = true}, CTX).pass == false, "expect_write needs a write that ran")
+end
+
+function tests.approval_passes_a_turn_that_never_reached_its_write()
+    print("Testing approval doesn't fail a turn that ran out of steps before proposing its write")
+    -- 20261117-102156-live, approval-mark-finished #1: turn_limit while
+    -- still reading, no write proposed. Nothing ran unapproved; finished
+    -- and state are what fail.
+    rows = {user("mark EXP-049 finished"), calls("c1", "entity.find", {text = "EXP-049"}),
+        result("c1", "entity.find", "experiment 178", false)}
+    conv = checks.conversation(rows, {})
+    check(checks.approval(conv, {}, CTX).pass == true, "no write ran, so nothing ran without approval")
+    check(checks.finished(conv, {}, {status = "turn_limit"}).pass == false, "the unfinished turn fails finished instead")
 end
 
 function tests.approval_ignores_a_write_the_tool_refused()

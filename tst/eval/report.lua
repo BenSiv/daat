@@ -268,10 +268,21 @@ if #runs > 0 then
     table.insert(lines, string.format("Mode: %s. %d scenarios, %d runs.", tostring(runs[1].mode), #order, #runs))
     table.insert(lines, "")
 end
-table.insert(lines, "| Score | Value | Change |")
-table.insert(lines, "|-------|-------|--------|")
-for _, s in ipairs(SCORES) do
-    table.insert(lines, string.format("| %s | %s | %s |", s[2], fmt(summary[s[1]], s[3]), delta(s[1], s[3])))
+-- The Change column only with --compare: a run on its own (the committed
+-- baseline, tst/eval/baseline/report.md) is a clean two-column reference,
+-- not a column of dashes or of changes against a run nobody else has.
+if previous != nil then
+    table.insert(lines, "| Score | Value | Change |")
+    table.insert(lines, "|-------|-------|--------|")
+    for _, s in ipairs(SCORES) do
+        table.insert(lines, string.format("| %s | %s | %s |", s[2], fmt(summary[s[1]], s[3]), delta(s[1], s[3])))
+    end
+else
+    table.insert(lines, "| Score | Value |")
+    table.insert(lines, "|-------|-------|")
+    for _, s in ipairs(SCORES) do
+        table.insert(lines, string.format("| %s | %s |", s[2], fmt(summary[s[1]], s[3])))
+    end
 end
 table.insert(lines, "")
 table.insert(lines, "| Scenario | Set | Passed | Failing checks |")

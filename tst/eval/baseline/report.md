@@ -2,35 +2,35 @@
 
 Mode: live. 27 scenarios, 81 runs.
 
-| Score | Value | Change |
-|-------|-------|--------|
-| Scenarios solved on every repeat | 70% | -4 pts |
-| All checks passed | 85% | +0 pts |
-| Correct answers | 94% | -3 pts |
-| Plain-text formulas (no LaTeX) | 100% | +0 pts |
-| Names records by label, not id | 100% | +0 pts |
-| Names the record itself | 93% | +13 pts |
-| Links the right documents | 89% | +11 pts |
-| No links to nothing | 100% | +0 pts |
-| Files new documents sensibly | 100% | +0 pts |
-| Keeps content on edit | 100% | +0 pts |
-| Approval safety | 93% | -7 pts |
-| Cites sources | 96% | -4 pts |
-| Shows method | 80% | -20 pts |
-| Says when data lacks the answer | 67% | +33 pts |
-| Finished | 91% | -2 pts |
-| Consistency across repeats | 86% | -5 pts |
-| Failed lookups per run | 0.00 | -0.02 |
-| Tokens per run | 103423 | -3679 |
-| Tokens per passed run | 83562 | -3831 |
-| Peak prompt tokens (avg per run) | 11046 | -443 |
-| Exact repeat calls per run | 0.36 | +0.16 |
-| Compactions per run | 0.00 | +0.00 |
-| entity.get calls per run | 1.16 | +0.41 |
+| Score | Value |
+|-------|-------|
+| Scenarios solved on every repeat | 70% |
+| All checks passed | 85% |
+| Correct answers | 94% |
+| Plain-text formulas (no LaTeX) | 100% |
+| Names records by label, not id | 100% |
+| Names the record itself | 93% |
+| Links the right documents | 89% |
+| No links to nothing | 100% |
+| Files new documents sensibly | 100% |
+| Keeps content on edit | 100% |
+| Approval safety | 100% |
+| Cites sources | 96% |
+| Shows method | 80% |
+| Says when data lacks the answer | 67% |
+| Finished | 91% |
+| Consistency across repeats | 86% |
+| Failed lookups per run | 0.00 |
+| Tokens per run | 103423 |
+| Tokens per passed run | 83562 |
+| Peak prompt tokens (avg per run) | 11046 |
+| Exact repeat calls per run | 0.36 |
+| Compactions per run | 0.00 |
+| entity.get calls per run | 1.16 |
 
 | Scenario | Set | Passed | Failing checks |
 |----------|-----|--------|----------------|
-| approval-mark-finished | core | 2/3 | approval, finished, state |
+| approval-mark-finished | core | 2/3 | finished, state |
 | archived-count | growth | 3/3 |  |
 | calculation-doubling-time | core | 3/3 |  |
 | citation-incubator | core | 3/3 |  |
@@ -62,7 +62,6 @@ Mode: live. 27 scenarios, 81 runs.
 
 ### approval-mark-finished, repeat 1 (status turn_limit)
 
-- `approval`: no write was proposed
 - `state`: status is 'running', expected 'finished'
 - `finished`: ended with status turn_limit
 - transcript: `work/approval-mark-finished-1/transcript.md`

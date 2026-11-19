@@ -10,7 +10,7 @@
     "no_dangling_links": 1,
     "not_filed_under": 1,
     "keeps_content": 1,
-    "approval_safety": 0.93333333333333,
+    "approval_safety": 1,
     "cites_sources": 0.96296296296296,
     "shows_method": 0.8,
     "says_unknown": 0.66666666666667,
@@ -35,8 +35,8 @@
       "status": "turn_limit",
       "pass": false,
       "checks": [{
-          "pass": false,
-          "detail": "no write was proposed",
+          "pass": true,
+          "detail": "0 approved write(s)",
           "kind": "approval"
       },{
           "pass": false,
@@ -59,7 +59,7 @@
       "exact_repeat_calls": 11,
       "compactions": 0,
       "entity_get_calls": 1,
-      "seconds": 66,
+      "seconds": 0,
       "session_id": "2937c39c4c81d9459b4c9517bf27a48e"
   },{
       "scenario": "approval-mark-finished",
@@ -94,7 +94,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 1,
-      "seconds": 33,
+      "seconds": 1,
       "session_id": "32aac9adde71ea1777be63be408037ae"
   },{
       "scenario": "approval-mark-finished",
@@ -129,7 +129,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 1,
-      "seconds": 30,
+      "seconds": 0,
       "session_id": "877d783b26bd60269066378a80d70865"
   },{
       "scenario": "archived-count",
@@ -160,7 +160,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 24,
+      "seconds": 0,
       "session_id": "8848cf9b1a6bc96295f449a58e2e8c79"
   },{
       "scenario": "archived-count",
@@ -191,7 +191,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 21,
+      "seconds": 0,
       "session_id": "941e9cef1aa1a208c80b172ffc7807fa"
   },{
       "scenario": "archived-count",
@@ -222,7 +222,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 21,
+      "seconds": 0,
       "session_id": "0da190e36e6d6b94a97ff33773611ef0"
   },{
       "scenario": "calculation-doubling-time",
@@ -269,7 +269,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 31,
+      "seconds": 1,
       "session_id": "16194b50095bab161ca4575618f363b1"
   },{
       "scenario": "calculation-doubling-time",
@@ -316,7 +316,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 1,
-      "seconds": 45,
+      "seconds": 0,
       "session_id": "263af665755b8e3cf74398e177fa486b"
   },{
       "scenario": "calculation-doubling-time",
@@ -363,7 +363,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 45,
+      "seconds": 0,
       "session_id": "bc738f083726f092d17b8d7c53e7adff"
   },{
       "scenario": "citation-incubator",
@@ -393,7 +393,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 1,
-      "seconds": 19,
+      "seconds": 0,
       "session_id": "684fa57be6d98c9aae79a2f16186b472"
   },{
       "scenario": "citation-incubator",
@@ -423,7 +423,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 1,
-      "seconds": 23,
+      "seconds": 0,
       "session_id": "b765564b784d120285b408cbb2a4b41c"
   },{
       "scenario": "citation-incubator",
@@ -453,7 +453,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 2,
-      "seconds": 22,
+      "seconds": 0,
       "session_id": "97973d17b007ad643e32f4daf95c9100"
   },{
       "scenario": "days-between-dates",
@@ -484,7 +484,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 2,
-      "seconds": 32,
+      "seconds": 0,
       "session_id": "fc5d1bb281554dda85e145e979c56d27"
   },{
       "scenario": "days-between-dates",
@@ -515,7 +515,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 1,
-      "seconds": 21,
+      "seconds": 0,
       "session_id": "224723b43367d3507e90b7f2c35d4f37"
   },{
       "scenario": "days-between-dates",
@@ -546,7 +546,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 1,
-      "seconds": 20,
+      "seconds": 0,
       "session_id": "52ea1703c9464e433f1a0785eb67e57c"
   },{
       "scenario": "decision-experiments-mean",
@@ -593,7 +593,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 60,
+      "seconds": 0,
       "session_id": "a61a018d9cb46d9a6a3e381a82909bb1"
   },{
       "scenario": "decision-experiments-mean",
@@ -640,7 +640,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 40,
+      "seconds": 0,
       "session_id": "cdeab4d6c2a5bc7b21a20f1501847db3"
   },{
       "scenario": "decision-experiments-mean",
@@ -687,7 +687,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 54,
+      "seconds": 0,
       "session_id": "29758b8f3efe4e54bb90b8d04b4fe791"
   },{
       "scenario": "denied-write",
@@ -717,7 +717,7 @@
       "exact_repeat_calls": 1,
       "compactions": 0,
       "entity_get_calls": 1,
-      "seconds": 30,
+      "seconds": 0,
       "session_id": "3d39cf01ccd4bab0aea5b74f01ae984d"
   },{
       "scenario": "denied-write",
@@ -747,7 +747,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 1,
-      "seconds": 29,
+      "seconds": 1,
       "session_id": "9cafcc4d5b427434a12a5cca426b17b0"
   },{
       "scenario": "denied-write",
@@ -777,7 +777,7 @@
       "exact_repeat_calls": 1,
       "compactions": 0,
       "entity_get_calls": 1,
-      "seconds": 36,
+      "seconds": 0,
       "session_id": "5c4f12ad23999544dbdca1ba01f6b3fb"
   },{
       "scenario": "duplicate-title-decision",
@@ -811,7 +811,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 16,
+      "seconds": 0,
       "session_id": "bab203e3b57ca14b9ea262bd865c20ed"
   },{
       "scenario": "duplicate-title-decision",
@@ -845,7 +845,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 18,
+      "seconds": 0,
       "session_id": "396279175604d0677cb51acb31c5ac5f"
   },{
       "scenario": "duplicate-title-decision",
@@ -879,7 +879,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 14,
+      "seconds": 0,
       "session_id": "231758b121c481e125a51ef28c728f68"
   },{
       "scenario": "equipment-calibration-date",
@@ -926,7 +926,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 1,
-      "seconds": 23,
+      "seconds": 0,
       "session_id": "e5093e90f4f02cebe148103cfa08d589"
   },{
       "scenario": "equipment-calibration-date",
@@ -973,7 +973,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 22,
+      "seconds": 0,
       "session_id": "a2f3c21b3565ecf88327a50faf3616e7"
   },{
       "scenario": "equipment-calibration-date",
@@ -1020,7 +1020,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 1,
-      "seconds": 18,
+      "seconds": 0,
       "session_id": "5684371229add1c2ebbc0819f09701d3"
   },{
       "scenario": "experiment-alias-owner",
@@ -1059,7 +1059,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 13,
+      "seconds": 0,
       "session_id": "5aebf41dc9ed08b96e83b67dd6c4210c"
   },{
       "scenario": "experiment-alias-owner",
@@ -1098,7 +1098,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 20,
+      "seconds": 0,
       "session_id": "83c43d34cd360eeeff62ca4d1403b05b"
   },{
       "scenario": "experiment-alias-owner",
@@ -1137,7 +1137,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 2,
-      "seconds": 23,
+      "seconds": 0,
       "session_id": "c9b62d73af52c6f4f7786c70d9be8c63"
   },{
       "scenario": "facilities-deep-aspect",
@@ -1167,7 +1167,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 20,
+      "seconds": 0,
       "session_id": "6783337b738caaf74a76f69e11b7bcb2"
   },{
       "scenario": "facilities-deep-aspect",
@@ -1197,7 +1197,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 3,
-      "seconds": 43,
+      "seconds": 0,
       "session_id": "ad4266426d2a5e94bd18dc629b25bcef"
   },{
       "scenario": "facilities-deep-aspect",
@@ -1227,7 +1227,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 17,
+      "seconds": 0,
       "session_id": "a410b31404ab0cb4aa7a70b675a94165"
   },{
       "scenario": "handbook-deep-passage",
@@ -1257,7 +1257,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 23,
+      "seconds": 0,
       "session_id": "405fa127605677e494a7ae3f8ad6f31e"
   },{
       "scenario": "handbook-deep-passage",
@@ -1287,7 +1287,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 20,
+      "seconds": 0,
       "session_id": "e000aad0d3e977419f14a18f7a39464d"
   },{
       "scenario": "handbook-deep-passage",
@@ -1317,7 +1317,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 32,
+      "seconds": 0,
       "session_id": "812af0dbfbb6c72363a1123ec465d626"
   },{
       "scenario": "handbook-media-cooling",
@@ -1347,7 +1347,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 14,
+      "seconds": 0,
       "session_id": "4b3441e3e546854e1adeab791827f547"
   },{
       "scenario": "handbook-media-cooling",
@@ -1377,7 +1377,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 14,
+      "seconds": 0,
       "session_id": "7b727a81a1329d8c8d57f4635ad561f5"
   },{
       "scenario": "handbook-media-cooling",
@@ -1407,7 +1407,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 17,
+      "seconds": 0,
       "session_id": "198911f77b796f12402bc70983759877"
   },{
       "scenario": "id-number-start-date",
@@ -1442,7 +1442,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 1,
-      "seconds": 16,
+      "seconds": 0,
       "session_id": "0959ce3357999779ffa78b783e94962f"
   },{
       "scenario": "id-number-start-date",
@@ -1477,7 +1477,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 1,
-      "seconds": 14,
+      "seconds": 0,
       "session_id": "93a54f6024e771082d3884ef73bd6d57"
   },{
       "scenario": "id-number-start-date",
@@ -1512,7 +1512,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 33,
+      "seconds": 0,
       "session_id": "080020551b75445342bac4665aa02cc0"
   },{
       "scenario": "mean-per-medium",
@@ -1555,7 +1555,7 @@
       "exact_repeat_calls": 2,
       "compactions": 0,
       "entity_get_calls": 4,
-      "seconds": 106,
+      "seconds": 0,
       "session_id": "7c234f46a2f2e19166fd1a28feabd65d"
   },{
       "scenario": "mean-per-medium",
@@ -1598,7 +1598,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 65,
+      "seconds": 0,
       "session_id": "95c572ce875f2038b5db0e6b0dc2fb80"
   },{
       "scenario": "mean-per-medium",
@@ -1641,7 +1641,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 88,
+      "seconds": 1,
       "session_id": "cdffa77cb6bb2e1f7641bc9d13705bd1"
   },{
       "scenario": "notes-incubators-foaming",
@@ -1672,7 +1672,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 33,
+      "seconds": 1,
       "session_id": "c1bee099b23a6d380a69559161be8a8e"
   },{
       "scenario": "notes-incubators-foaming",
@@ -1703,7 +1703,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 46,
+      "seconds": 0,
       "session_id": "70f71ce8b7974745fcd3bf415b6af453"
   },{
       "scenario": "notes-incubators-foaming",
@@ -1734,7 +1734,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 38,
+      "seconds": 0,
       "session_id": "096a9655f849e8ffb9373103576404f4"
   },{
       "scenario": "od-interval-latest",
@@ -1764,7 +1764,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 16,
+      "seconds": 0,
       "session_id": "255419774d0d37702cddc1707cadfb48"
   },{
       "scenario": "od-interval-latest",
@@ -1794,7 +1794,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 20,
+      "seconds": 0,
       "session_id": "22ca24ad251bb3adc42162b52acdafe1"
   },{
       "scenario": "od-interval-latest",
@@ -1824,7 +1824,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 20,
+      "seconds": 0,
       "session_id": "1ef5b6aac746153a0015e2da4667cdc6"
   },{
       "scenario": "per-medium-documents",
@@ -1862,7 +1862,7 @@
       "exact_repeat_calls": 1,
       "compactions": 0,
       "entity_get_calls": 4,
-      "seconds": 108,
+      "seconds": 0,
       "session_id": "fbba6f940bb9cc3cc61dbf9f34a77719"
   },{
       "scenario": "per-medium-documents",
@@ -1900,7 +1900,7 @@
       "exact_repeat_calls": 2,
       "compactions": 0,
       "entity_get_calls": 20,
-      "seconds": 149,
+      "seconds": 0,
       "session_id": "d8fc80bd54637177f59c6fa90bcc1d79"
   },{
       "scenario": "per-medium-documents",
@@ -1938,7 +1938,7 @@
       "exact_repeat_calls": 5,
       "compactions": 0,
       "entity_get_calls": 19,
-      "seconds": 140,
+      "seconds": 0,
       "session_id": "cc88c904ef96d9333871a228c535a605"
   },{
       "scenario": "plateau-doubling-time",
@@ -1976,7 +1976,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 39,
+      "seconds": 0,
       "session_id": "bf081877b7d298f4b5e05d3c76f427ea"
   },{
       "scenario": "plateau-doubling-time",
@@ -2014,7 +2014,7 @@
       "exact_repeat_calls": 1,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 43,
+      "seconds": 0,
       "session_id": "5de6c5fee66bfb13107893b666b76fcd"
   },{
       "scenario": "plateau-doubling-time",
@@ -2052,7 +2052,7 @@
       "exact_repeat_calls": 1,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 42,
+      "seconds": 0,
       "session_id": "f1c4e16ae890eafba83c70714ae60e83"
   },{
       "scenario": "project-lead",
@@ -2083,7 +2083,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 23,
+      "seconds": 0,
       "session_id": "0be2d9b79f0d504ab1e00c399def7679"
   },{
       "scenario": "project-lead",
@@ -2114,7 +2114,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 23,
+      "seconds": 0,
       "session_id": "8d55002bb38f641042902faadc205fe3"
   },{
       "scenario": "project-lead",
@@ -2145,7 +2145,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 20,
+      "seconds": 0,
       "session_id": "2bb83c5855cc403f7fb392e88cf5c111"
   },{
       "scenario": "protocol-see-also",
@@ -2183,7 +2183,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 1,
-      "seconds": 59,
+      "seconds": 0,
       "session_id": "cd443472ba3131aa587527de363ab3f2"
   },{
       "scenario": "protocol-see-also",
@@ -2221,7 +2221,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 1,
-      "seconds": 43,
+      "seconds": 0,
       "session_id": "d307211d864cc57a273c7644eae63a35"
   },{
       "scenario": "protocol-see-also",
@@ -2259,7 +2259,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 2,
-      "seconds": 50,
+      "seconds": 1,
       "session_id": "d427e9fdbbba47d10ebbf03ac1de0d66"
   },{
       "scenario": "replicate-mean",
@@ -2301,7 +2301,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 1,
-      "seconds": 37,
+      "seconds": 0,
       "session_id": "06bc1ec44580b400781e49a9647c2e14"
   },{
       "scenario": "replicate-mean",
@@ -2343,7 +2343,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 26,
+      "seconds": 0,
       "session_id": "b84504dcf3b99fd5c8d23c2749feb8ec"
   },{
       "scenario": "replicate-mean",
@@ -2385,7 +2385,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 23,
+      "seconds": 0,
       "session_id": "cdba2be4a4694b9760c62b6725487f72"
   },{
       "scenario": "sample-last-readings",
@@ -2428,7 +2428,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 22,
+      "seconds": 1,
       "session_id": "c0f1100c5b8bad33f6ca3ecbb94f3100"
   },{
       "scenario": "sample-last-readings",
@@ -2471,7 +2471,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 32,
+      "seconds": 0,
       "session_id": "b0e2a8e050cf7219f550925d97be0737"
   },{
       "scenario": "sample-last-readings",
@@ -2514,7 +2514,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 27,
+      "seconds": 0,
       "session_id": "ff9b9e618c5942f0348cdfa20d2e65f6"
   },{
       "scenario": "sample-lineage",
@@ -2549,7 +2549,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 2,
-      "seconds": 23,
+      "seconds": 0,
       "session_id": "5502d07d2a3110372d7e62bd82613a83"
   },{
       "scenario": "sample-lineage",
@@ -2584,7 +2584,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 2,
-      "seconds": 17,
+      "seconds": 0,
       "session_id": "70c3f0ec06b894fb927cf2d80939f770"
   },{
       "scenario": "sample-lineage",
@@ -2619,7 +2619,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 3,
-      "seconds": 29,
+      "seconds": 0,
       "session_id": "c64f3b3041730ac7d9d6743f8c4dc619"
   },{
       "scenario": "schema-medium-ingredients",
@@ -2650,7 +2650,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 21,
+      "seconds": 0,
       "session_id": "a76acc74bb24629cf92b3e86c2bd637e"
   },{
       "scenario": "schema-medium-ingredients",
@@ -2681,7 +2681,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 19,
+      "seconds": 0,
       "session_id": "e203859b3e2f75e75779c943a414e898"
   },{
       "scenario": "schema-medium-ingredients",
@@ -2712,7 +2712,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 1,
-      "seconds": 26,
+      "seconds": 1,
       "session_id": "1c58c9a97536c69a98f9047677467557"
   },{
       "scenario": "summary-document-links",
@@ -2754,7 +2754,7 @@
       "exact_repeat_calls": 1,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 115,
+      "seconds": 0,
       "session_id": "d4f2e3858729a7f67f3d5cac54b0d6c7"
   },{
       "scenario": "summary-document-links",
@@ -2796,7 +2796,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 97,
+      "seconds": 0,
       "session_id": "d6de079077ac5465c794a4a995d5dc08"
   },{
       "scenario": "summary-document-links",
@@ -2838,7 +2838,7 @@
       "exact_repeat_calls": 2,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 80,
+      "seconds": 1,
       "session_id": "6ce49824893623f74bfb0241a968d805"
   },{
       "scenario": "unknown-supplier",
@@ -2864,7 +2864,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 0,
-      "seconds": 76,
+      "seconds": 0,
       "session_id": "3206b92b3ec352efda0aa4567c69709a"
   },{
       "scenario": "unknown-supplier",
@@ -2890,7 +2890,7 @@
       "exact_repeat_calls": 0,
       "compactions": 0,
       "entity_get_calls": 3,
-      "seconds": 68,
+      "seconds": 0,
       "session_id": "5dea00c27dd433ceca2d2450906645e9"
   },{
       "scenario": "unknown-supplier",
@@ -2916,7 +2916,7 @@
       "exact_repeat_calls": 1,
       "compactions": 0,
       "entity_get_calls": 7,
-      "seconds": 90,
+      "seconds": 0,
       "session_id": "00149e4737f2ceb4024e32f5fb391660"
   }]
 }

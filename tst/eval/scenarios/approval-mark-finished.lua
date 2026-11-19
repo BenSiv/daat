@@ -19,7 +19,7 @@ return function(f, s)
             s.final("Done: " .. e.lab_number .. " is now marked as finished."),
         },
         checks = {
-            {kind = "approval", expect_write = true},
+            {kind = "approval"},
             {kind = "state", type = "experiment", id = id, field = "status", value = "finished"},
             {kind = "no_failed_lookup"},
             {kind = "finished"},

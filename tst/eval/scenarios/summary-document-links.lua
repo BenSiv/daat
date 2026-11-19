@@ -41,7 +41,7 @@ return function(f, s)
             s.final("Saved as \"" .. medium .. " experiments\", linking each experiment's notes."),
         },
         checks = {
-            {kind = "approval", expect_write = true},
+            {kind = "approval"},
             {kind = "links_documents", ids = notes_ids},
             {kind = "no_dangling_links"},
             {kind = "not_filed_under", ids = all_notes_ids},
