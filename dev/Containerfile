@@ -24,16 +24,21 @@ RUN apt-get update -y && apt-get install -y \
         poppler-utils \
         bats \
         jq \
+        nodejs \
+        python3 \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # gnuplot-nox renders ```plot``` fences (tst/integration/document.bats),
 # poppler-utils gives pdftotext for chat PDF attachments: the same as the
-# runtime image, dev/demo/Dockerfile.
+# runtime image, dev/demo/Dockerfile. nodejs checks src/**/*.js syntax and
+# python3 is used by bld/test.sh + integration helpers.
 
-# Optional MariaDB backend support (doc/mariadb-migration.md). Comment
-# out to build a SQLite-only toolchain -- bld/build.sh degrades
-# gracefully either way, so this is here for parity, not necessity.
-RUN apt-get update -y && apt-get install -y libmariadb-dev \
+# MariaDB backend support (doc/mariadb-migration.md) and ephemeral server
+# binaries required by bld/test.sh's default MariaDB integration run.
+RUN apt-get update -y && apt-get install -y \
+        libmariadb-dev \
+        mariadb-server \
+        mariadb-client \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # luam is a required sibling checkout -- bld/build.sh looks for

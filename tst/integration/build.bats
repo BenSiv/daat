@@ -119,3 +119,9 @@ EOF
     grep -q '^\.store/' "$PROJECT_ROOT/.dockerignore"
     grep -q '^bin/' "$PROJECT_ROOT/.dockerignore"
 }
+
+@test "dev/Containerfile installs mariadb-server, mariadb-client, nodejs, and python3 required by bld/test.sh" {
+    for pkg in mariadb-server mariadb-client nodejs python3; do
+        grep -q "[[:space:]]${pkg}\\b" "$PROJECT_ROOT/dev/Containerfile"
+    done
+}

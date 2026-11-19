@@ -20,23 +20,24 @@ It also ships an extensible entity-tracking layer: an **entity type is data, not
 cd dev && ./deploy.sh
 ```
 
-`dev/Containerfile` installs the C toolchain, `cmark-gfm`, `bats`, and a built sibling `luam` checkout (see "Option B: manual" below for what each is for); `dev/deploy.sh` builds that image and drops you into a shell with the repo root bind-mounted at `/root/daat` -- edits you make on the host are what actually gets built and tested inside the container. The container is removed on exit (`--rm`); nothing but the image persists between runs. Re-run `./deploy.sh` after changing `Containerfile` to rebuild it.
+`dev/Containerfile` installs the C toolchain, `cmark-gfm`, `bats`, `jq`, `nodejs`, `python3`, `mariadb-server`/`mariadb-client`, and a built sibling `luam` checkout (see "Option B: manual" below for what each is for); `dev/deploy.sh` builds that image and drops you into a shell with the repo root bind-mounted at `/root/daat` -- edits you make on the host are what actually gets built and tested inside the container. The container is removed on exit (`--rm`); nothing but the image persists between runs. Re-run `./deploy.sh` after changing `Containerfile` to rebuild it.
 
 ### Option B: manual
 
-**Required** to build, run, and run most tests:
+**Required** to build, run, and run `./bld/test.sh`:
 
 - A sibling `luam` checkout, built (`../luam` with `obj/liblua.a` present, at or past the minimum commit in `bld/luam.commit`; optional exact pinning lives in `bld/luam.pin`) -- `bld/build.sh` looks there by default and verifies the commit; override the path with the `LUAM_DIR` env var.
 - A C toolchain (`cc`/`make`) and the dev headers `bld/build.sh` compiles against: `libsqlite3-dev`, `libreadline-dev`, `libssl-dev`, `libcrypt-dev`.
 - `cmark-gfm` on `PATH` **at runtime** (`apt install cmark-gfm` / `brew install cmark-gfm`) -- Document rendering shells out to it; it is not compiled in. Not plain `cmark` -- a separate package/binary (GitHub's own fork, needed for the table/strikethrough/autolink extensions `document.lua` renders with); installing the wrong one is a real, previously-hit failure mode (missing `cmark-gfm` produces empty rendered content, not an error at install time).
 - `bats` on `PATH` (`apt install bats` / `brew install bats-core`) -- required to run `tst/integration/*.bats`.
-- `jq` on `PATH` (`apt install jq` / `brew install jq`) -- required by `tst/integration/agent.bats`, `knowledge.bats`, and `agent_model_call.bats`, which parse JSON responses through it.
+- `jq` and `python3` on `PATH` -- required by integration tests and `bld/test.sh`.
+- `node` (`nodejs`) on `PATH` -- `bld/test.sh` runs `node --check` on every `src/**/*.js` asset (set `DAAT_SKIP_JS_CHECK=1` to opt out).
+- `libmariadb-dev`, `mariadb-server`, and `mariadb-client` -- `bld/test.sh` starts an isolated ephemeral `mariadbd` by default so `tst/integration/mariadb_backend.bats` runs deterministically on every test pass (set `DAAT_SKIP_MARIADB=1` to run a SQLite-only pass; `bld/build.sh` itself still degrades gracefully without `libmariadb-dev`).
 - SQLite itself needs no setup; it's the default storage backend.
 
 **Optional** -- you do not need any of this to build, test, or run the app or its chat UI, because tests default to a deterministic stub LLM provider (see "Testing conventions"):
 
 - `curl` and `gcloud` (`gcloud auth application-default login` plus a `vertex_project` in `platform.lua`) -- only if you want to actually exercise the real Google Vertex AI chat backend.
-- `libmariadb-dev` -- only if you want the optional MariaDB storage backend compiled in; without it `bld/build.sh` silently builds a SQLite-only binary. `tst/integration/mariadb_backend.bats` skips itself (doesn't fail) when no real MariaDB server is configured.
 
 ### Build & test
 

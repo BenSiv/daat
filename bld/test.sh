@@ -140,7 +140,14 @@ ensure_mariadb_test_server() {
 echo "Building"
 LUAM_DIR="$LUAM_DIR" ./bld/build.sh
 
-if command -v node > /dev/null 2>&1; then
+if [ "${DAAT_SKIP_JS_CHECK:-0}" = "1" ]; then
+    echo
+    echo "Skipping JS syntax check (DAAT_SKIP_JS_CHECK=1)"
+else
+    if ! command -v node > /dev/null 2>&1; then
+        echo "Error: node not found on PATH (needed to syntax-check src/**/*.js). Install nodejs or set DAAT_SKIP_JS_CHECK=1 to skip." >&2
+        exit 1
+    fi
     echo
     echo "Checking extracted JS syntax (src/**/*.js)"
     while IFS= read -r -d '' js_file; do
