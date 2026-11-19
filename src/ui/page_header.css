@@ -1,0 +1,5 @@
+.platform-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px; margin-bottom: 20px; border-bottom: 1px solid var(--platform-bg-2, #f1f5f9); padding-bottom: 16px; }
+.platform-header h2 { margin: 0 0 6px 0; font-size: 1.6rem; font-weight: 700; color: var(--platform-heading, #0f172a); letter-spacing: -0.02em; }
+.platform-header p { color: var(--platform-muted, #64748b); margin: 0; font-size: 0.95rem; }
+.platform-header p a { color: var(--platform-accent, #4f46e5); }
+.platform-header > div:first-child { min-width: 0; }

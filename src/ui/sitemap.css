@@ -1,0 +1,7 @@
+.platform-sitemap { list-style: none !important; margin: 16px 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+.platform-sitemap li { list-style: none !important; background: var(--platform-bg, #f8fafc); border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-item, 10px); overflow: hidden; transition: var(--platform-transition, all 0.2s cubic-bezier(0.4, 0, 0.2, 1)); }
+.platform-sitemap li:hover { border-color: var(--platform-accent, #4f46e5); box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
+.platform-sitemap a { display: block; padding: 16px 18px; text-decoration: none !important; }
+.platform-sitemap a strong { display: block; font-weight: 700; color: var(--platform-accent, #4f46e5); font-size: 1.05rem; }
+.platform-sitemap a:hover strong { text-decoration: underline; }
+.platform-sitemap p { margin: 6px 0 0 0; color: var(--platform-muted, #64748b); font-size: 0.9rem; }

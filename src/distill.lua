@@ -21,10 +21,12 @@
 const db = require("database")
 const entity = require("entity")
 const document = require("document")
-const knowledge = require("knowledge")
+const knowledge = require("knowledge_store")
 const config = require("config")
 const json = require("dkjson")
 const vector_lib = require("vector")
+const store_lib = require("store")
+const agent_provider_lib = require("agent_provider")
 
 const distill = {}
 
@@ -76,7 +78,7 @@ end
 const DISTILL_STALE_CLAIM_SECONDS = 900
 
 function distill_stale_cutoff(db_path)
-    rows = db.query(db_path, "SELECT " .. require("store").ago_expr(db_path, DISTILL_STALE_CLAIM_SECONDS) .. " AS cutoff;")
+    rows = db.query(db_path, "SELECT " .. store_lib.ago_expr(db_path, DISTILL_STALE_CLAIM_SECONDS) .. " AS cutoff;")
     if rows != nil and rows[1] != nil then
         return rows[1].cutoff
     end
@@ -217,7 +219,7 @@ end
 
 -- "SAME 2" -> "same", entry; "NEW" -> "new", nil.
 function distill_judge(candidate, near)
-    agent_provider = require("agent_provider")
+    agent_provider = agent_provider_lib
     lines = {"New claim: " .. candidate.title .. "\n" .. candidate.text, "", "Existing records:"}
     for i, m in ipairs(near) do
         body = string.gsub(distill_note_text(m.entry.content), "\n*Notes: [^\n]*%s*$", "")
@@ -259,7 +261,7 @@ end
 -- "nothing", "failed", "skipped") and counts {new, updated, same,
 -- rejected, absorbed}.
 function distill.run(db_path, reference_id, author)
-    agent_provider = require("agent_provider")
+    agent_provider = agent_provider_lib
     counts = {new = 0, updated = 0, same = 0, rejected = 0, absorbed = 0}
     ref = knowledge.get_document(db_path, tonumber(reference_id))
     if ref == nil or (ref.archived_at != nil and ref.archived_at != "") or ref.source_type != "reference" then
@@ -404,7 +406,7 @@ function distill_claim(db_path, reference_id)
     raw = io.read(urandom, 8)
     io.close(urandom)
     token = string.gsub(raw, ".", function(c) return string.format("%02x", string.byte(c)) end)
-    stale_expr = require("store").ago_expr(db_path, DISTILL_STALE_CLAIM_SECONDS)
+    stale_expr = store_lib.ago_expr(db_path, DISTILL_STALE_CLAIM_SECONDS)
     db.exec(db_path, string.format(
         "UPDATE knowledge_distillation SET status = 'running', reason = %s, queued_at = %s WHERE reference_id = %d AND (status = 'pending' OR (status = 'running' AND queued_at IS NOT NULL AND queued_at < %s));",
         db.quote(token), db.now_expr(db_path), tonumber(reference_id), stale_expr))

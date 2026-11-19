@@ -28,293 +28,26 @@ const db = require("database")
 const document = require("document")
 const entity = require("entity")
 const config = require("config")
+const knowledge_store = require("knowledge_store")
+const curate_lib = require("curate")
+const synthesize_lib = require("synthesize")
+const distill_lib = require("distill")
+const passage_lib = require("passage")
+const agent_provider_lib = require("agent_provider")
 
 const knowledge = {}
 
-const KNOWLEDGE_SCHEMA = """
-CREATE TABLE IF NOT EXISTS knowledge_retrieval (
-    id INTEGER PRIMARY KEY {{AUTOINC}},
-    session_id TEXT,
-    author VARCHAR(255),
-    query_text TEXT,
-    hit_count INTEGER NOT NULL DEFAULT 0,
-    status VARCHAR(32) NOT NULL DEFAULT 'reviewed',
-    claim_token VARCHAR(64),
-    claimed_at TEXT,
-    reviewed_at TEXT,
-    created_at TEXT DEFAULT ({{NOW}})
-);
-
-CREATE TABLE IF NOT EXISTS knowledge_retrieval_hit (
-    retrieval_id INTEGER NOT NULL,
-    document_id INTEGER NOT NULL,
-    `rank` INTEGER,
-    score REAL,
-    tier_weight REAL,
-    reinforcement_delta REAL,
-    atomicity_status VARCHAR(32),
-    connectivity_status VARCHAR(32),
-    duplication_status VARCHAR(32),
-    title_status VARCHAR(32),
-    reviewed_at TEXT,
-    aspect INTEGER DEFAULT NULL,
-    PRIMARY KEY (retrieval_id, document_id)
-);
-
-CREATE TABLE IF NOT EXISTS knowledge_link_review (
-    document_a_id INTEGER NOT NULL,
-    document_b_id INTEGER NOT NULL,
-    last_co_count INTEGER NOT NULL,
-    decision VARCHAR(32) NOT NULL,
-    reason TEXT DEFAULT NULL,
-    evaluated_at TEXT DEFAULT ({{NOW}}),
-    PRIMARY KEY (document_a_id, document_b_id)
-);
-
-CREATE TABLE IF NOT EXISTS document_tier_judgment (
-    document_id INTEGER PRIMARY KEY,
-    judged_hash TEXT NOT NULL,
-    judged_tier INTEGER NOT NULL,
-    evaluated_at TEXT DEFAULT ({{NOW}})
-);
-
-CREATE TABLE IF NOT EXISTS knowledge_curation (
-    document_id INTEGER PRIMARY KEY,
-    source_hash VARCHAR(64) NOT NULL,
-    status VARCHAR(32) NOT NULL,
-    note_id INTEGER,
-    reason TEXT,
-    queued_at TEXT DEFAULT ({{NOW}})
-);
-
-CREATE TABLE IF NOT EXISTS knowledge_aspect_curation (
-    document_id INTEGER NOT NULL,
-    aspect INTEGER NOT NULL,
-    source_hash VARCHAR(64) NOT NULL,
-    status VARCHAR(32) NOT NULL,
-    note_id INTEGER,
-    reason TEXT,
-    queued_at TEXT DEFAULT ({{NOW}}),
-    PRIMARY KEY (document_id, aspect)
-);
-
-CREATE TABLE IF NOT EXISTS knowledge_conversation_curation (
-    session_id VARCHAR(255) PRIMARY KEY,
-    source_hash VARCHAR(64) NOT NULL,
-    status VARCHAR(32) NOT NULL,
-    note_id INTEGER,
-    reason TEXT,
-    queued_at TEXT DEFAULT ({{NOW}}),
-    checked_at TEXT
-);
-
-CREATE TABLE IF NOT EXISTS knowledge_distillation (
-    reference_id INTEGER PRIMARY KEY,
-    reference_hash VARCHAR(64) NOT NULL,
-    status VARCHAR(32) NOT NULL,
-    reason TEXT,
-    queued_at TEXT DEFAULT ({{NOW}})
-);
-
-CREATE TABLE IF NOT EXISTS knowledge_tag_definition (
-    tag_id INTEGER PRIMARY KEY,
-    input_hash VARCHAR(64) NOT NULL,
-    status VARCHAR(32) NOT NULL,
-    document_id INTEGER,
-    reason TEXT,
-    defined_at TEXT DEFAULT ({{NOW}})
-);
-
-CREATE TABLE IF NOT EXISTS knowledge_reference (
-    tag_id INTEGER PRIMARY KEY,
-    notes_hash VARCHAR(64) NOT NULL,
-    status VARCHAR(32) NOT NULL,
-    document_id INTEGER,
-    reason TEXT,
-    queued_at TEXT DEFAULT ({{NOW}})
-);
-
-"""
-
-function knowledge_schema_sql(db_path)
-    sql = string.gsub(KNOWLEDGE_SCHEMA, "{{AUTOINC}}", db.autoincrement_keyword(db_path))
-    sql = string.gsub(sql, "{{NOW}}", db.now_expr(db_path))
-    return sql
-end
-
-function ensure_knowledge_indexes(db_path)
-    store_mod = require("store")
-    store_mod.ensure_index(db_path, "knowledge_retrieval_hit", "knowledge_retrieval_document_document_idx",
-        "CREATE INDEX knowledge_retrieval_document_document_idx ON knowledge_retrieval_hit(document_id);")
-    store_mod.ensure_index(db_path, "knowledge_retrieval", "knowledge_retrieval_status_id_idx",
-        "CREATE INDEX knowledge_retrieval_status_id_idx ON knowledge_retrieval(status, id);")
-end
-
-function knowledge.ensure_retrieval_review_columns(db_path)
-    require("store").ensure_columns(db_path, "knowledge_retrieval", {
-        {"author", "VARCHAR(255) DEFAULT NULL"},
-        {"status", "VARCHAR(32) NOT NULL DEFAULT 'reviewed'"},
-        {"claim_token", "VARCHAR(64) DEFAULT NULL"},
-        {"claimed_at", "TEXT DEFAULT NULL"},
-        {"reviewed_at", "TEXT DEFAULT NULL"},
-    })
-end
-
-function ensure_link_review_reason_column(db_path)
-    require("store").ensure_column(db_path, "knowledge_link_review", "reason", "TEXT DEFAULT NULL")
-end
-
-function ensure_retrieval_hit_aspect_column(db_path)
-    require("store").ensure_column(db_path, "knowledge_retrieval_hit", "aspect", "INTEGER DEFAULT NULL")
-end
-
-function knowledge.init_schema(db_path)
-    db.exec(db_path, knowledge_schema_sql(db_path))
-    knowledge.ensure_retrieval_review_columns(db_path)
-    ensure_link_review_reason_column(db_path)
-    ensure_retrieval_hit_aspect_column(db_path)
-    ensure_knowledge_indexes(db_path)
-end
-
--- Same treatment as document.lua's KNOWLEDGE_POOL_SQL_COLUMNS: these are
--- hand-rolled event-log tables, not schema.register()'d, so
--- entity.fields would otherwise fall through to "unknown entity type"
--- for any of them -- a console request like "average messages per chat
--- session" hits the identical invented-table-name risk, just against
--- these instead of document.
-const HAND_ROLLED_TABLE_COLUMNS = {
-    knowledge_retrieval = {
-        {name = "id", note = "primary key"},
-        {name = "session_id", note = "agent_session.id this retrieval happened within"},
-        {name = "author", note = "login whose search triggered this retrieval"},
-        {name = "query_text", note = "the search query text"},
-        {name = "hit_count", note = "number of documents this retrieval matched"},
-        {name = "status", note = "deferred review state: pending, running, or reviewed"},
-        {name = "claim_token", note = "worker token claiming a running deferred review (NULL unless status = 'running')"},
-        {name = "claimed_at", note = "when the running review was claimed (NULL unless status = 'running')"},
-        {name = "reviewed_at", note = "when reinforcement and review finished (NULL while pending)"},
-        {name = "created_at", note = "timestamp of the retrieval event"},
-    },
-    knowledge_retrieval_hit = {
-        {name = "retrieval_id", note = "FK to knowledge_retrieval.id"},
-        {name = "document_id", note = "FK to document.id"},
-        {name = "rank", note = "position of this document in the retrieval's results (backtick-quoted in SQL -- a reserved word in MySQL 8.0)"},
-        {name = "score", note = "raw retrieval score for this hit"},
-        {name = "tier_weight", note = "weight applied for the document's tier at retrieval time"},
-        {name = "reinforcement_delta", note = "heat/tier reinforcement this hit produced"},
-        {name = "atomicity_status", note = "rule-based review outcome: is this document one coherent idea"},
-        {name = "connectivity_status", note = "rule-based review outcome: is this document linked to related documents"},
-        {name = "duplication_status", note = "rule-based review outcome: does this document duplicate another"},
-        {name = "title_status", note = "rule-based review outcome: is the title specific, not generic"},
-        {name = "reviewed_at", note = "when the hit was reviewed (NULL: not reviewed)"},
-        {name = "aspect", note = "which of the document's aspects found it (document_aspect.aspect; NULL: its own vector or its words)"},
-    },
-}
-
-function knowledge.hand_rolled_sql_columns_text(table_name)
-    columns = HAND_ROLLED_TABLE_COLUMNS[table_name]
-    if columns == nil then
-        return nil
-    end
-    lines = {}
-    for _, col in ipairs(columns) do
-        table.insert(lines, string.format("%s -- %s", col.name, col.note))
-    end
-    return table.concat(lines, "\n")
-end
-
--- A document counts as "in the pool" for stats/listing once it's
--- actually been retrieved, or was created as system/agent-derived
--- content in the first place -- distinguishing that from every other
--- ordinary, never-touched document.
-const KNOWLEDGE_MEMBER_WHERE = "(retrieval_count > 0 OR (source_type IS NOT NULL AND source_type != ''))"
-
---------------------------------------------------------------------------
--- Documents as the pool's own records
---------------------------------------------------------------------------
-
-function knowledge.get_document(db_path, document_id)
-    doc = entity.get(db_path, "document", document_id)
-    if doc == nil then
-        return nil
-    end
-    -- Phase 3 cutover (see doc/heat-decay-redesign.md): effective_heat
-    -- is now the conserved-pool view, not the old wall-clock decay.
-    document.ensure_pool_state(db_path)
-    state_rows = db.query(db_path, "SELECT log_pool_scale FROM knowledge_pool_state WHERE id = 1;")
-    log_pool_scale = 0.0
-    if state_rows != nil and state_rows[1] != nil then
-        log_pool_scale = tonumber(state_rows[1].log_pool_scale)
-    end
-    doc.effective_heat = document.pool_effective_heat(doc.raw_heat, doc.log_scale_at_write, log_pool_scale)
-    return doc
-end
-
--- Creates a genuinely new document (chat reasoning, a distilled note)
--- under the Knowledge Pool folder -- there's no existing document to
--- attach this content to, unlike a search hit against a document that
--- already exists. Attributed to the real logged-in user, same as any
--- other document, not a synthetic actor -- the Knowledge Pool folder
--- itself is the only thing authored as "system" (see
--- document.ensure_knowledge_pool_folder).
-function knowledge.create_document_note(db_path, author, title, body, source_type, source_id, source_ref)
-    folder_id = document.ensure_knowledge_pool_folder(db_path)
-    document_id, issues = document.create_page(db_path, author, title, folder_id, body, nil)
-    if document_id == nil then
-        return nil, issues
-    end
-    db.exec(db_path, string.format(
-        "UPDATE document SET source_type = %s, source_id = %s, source_ref = %s, content_hash = %s WHERE id = %d;",
-        db.literal(source_type), db.literal(source_id), db.literal(source_ref),
-        db.quote(document.content_hash(body)), document_id
-    ))
-    return document_id
-end
-
-function knowledge.session_document_for(db_path, session_id)
-    rows = db.query(db_path, string.format(
-        "SELECT * FROM document WHERE source_type = 'chat_session' AND source_ref = %s LIMIT 1;",
-        db.quote(session_id)
-    ))
-    if rows == nil or rows[1] == nil then
-        return nil
-    end
-    return rows[1]
-end
-
--- One document per chat session, kept in sync with its own transcript
--- rather than a one-time snapshot -- find-or-create, then update in
--- place on every call (agent.lua's sync_session_document calls this at
--- the end of every real turn). Filed under the Knowledge Pool folder,
--- tagged source_type = 'chat_session' / source_ref = the session's own
--- id (not source_id -- agent_session ids are opaque hex text, not the
--- integer source_id column). See doc/architecture.md's "Whole chat
--- sessions are themselves documents" for the full design and why.
-function knowledge.sync_session_document(db_path, author, session_id, title, transcript)
-    existing = knowledge.session_document_for(db_path, session_id)
-    if existing != nil then
-        document.update_page(db_path, author, existing.id, title, existing.parent_id, transcript, nil)
-        return existing.id
-    end
-    function create_or_update_session_doc()
-        locked_existing = knowledge.session_document_for(db_path, session_id)
-        if locked_existing != nil then
-            document.update_page(db_path, author, locked_existing.id, title, locked_existing.parent_id, transcript, nil)
-            return locked_existing.id
-        end
-        folder_id = document.ensure_knowledge_pool_folder(db_path)
-        document_id, _ = document.create_page(db_path, author, title, folder_id, transcript, nil)
-        if document_id == nil then
-            return nil
-        end
-        db.exec(db_path, string.format(
-            "UPDATE document SET source_type = 'chat_session', source_ref = %s WHERE id = %d;",
-            db.quote(session_id), document_id
-        ))
-        return document_id
-    end
-    return db.with_lock(db_path, "daat_session_doc_" .. tostring(session_id), 30, create_or_update_session_doc)
-end
+const KNOWLEDGE_SCHEMA = knowledge_store.KNOWLEDGE_SCHEMA
+knowledge.ensure_retrieval_review_columns = knowledge_store.ensure_retrieval_review_columns
+knowledge.init_schema = knowledge_store.init_schema
+const HAND_ROLLED_TABLE_COLUMNS = knowledge_store.HAND_ROLLED_TABLE_COLUMNS
+knowledge.hand_rolled_sql_columns_text = knowledge_store.hand_rolled_sql_columns_text
+const KNOWLEDGE_MEMBER_WHERE = knowledge_store.KNOWLEDGE_MEMBER_WHERE
+knowledge.get_document = knowledge_store.get_document
+knowledge.create_document_note = knowledge_store.create_document_note
+knowledge.session_document_for = knowledge_store.session_document_for
+knowledge.sync_session_document = knowledge_store.sync_session_document
+knowledge.set_tier = knowledge_store.set_tier
 
 -- The agent-driven counterpart to knowledge.create_document_note's
 -- reasoning-note path -- a genuinely new, concise, single-idea document
@@ -479,7 +212,7 @@ function knowledge.review_retrieval(db_path, retrieval_id, author)
     if rows == nil then
         return
     end
-    curate_aspects = require("config").platform_config().curate_aspects == true
+    curate_aspects = config.platform_config().curate_aspects == true
     peer_count = #rows - 1
     if peer_count < 0 then
         peer_count = 0
@@ -533,7 +266,7 @@ function knowledge.review_retrieval(db_path, retrieval_id, author)
                     target_tier = 0
                     -- A source in use is curated into a tier-1 note by the
                     -- jobs worker, not here (src/curate.lua).
-                    require("curate").queue(db_path, doc)
+                    curate_lib.queue(db_path, doc)
                 end
                 -- A document the curation wrote keeps the tier its step
                 -- gave it (curate: 1, synthesize: 2). Found 2026-10-29:
@@ -553,7 +286,7 @@ function knowledge.review_retrieval(db_path, retrieval_id, author)
                     "SELECT COUNT(*) AS n FROM knowledge_retrieval_hit WHERE document_id = %d AND aspect = %d AND reinforcement_delta IS NOT NULL;",
                     tonumber(doc.id), hit_aspect))
                 if aspect_hits != nil and aspect_hits[1] != nil and knowledge.due_for_review(tonumber(aspect_hits[1].n), 0) then
-                    require("curate").queue_aspect(db_path, doc, hit_aspect)
+                    curate_lib.queue_aspect(db_path, doc, hit_aspect)
                 end
             end
 
@@ -917,13 +650,9 @@ end
 -- heat without ever bumping its retrieval_count -- without it, a
 -- document that only ever accrues heat by spreading activation would
 -- never become due for review.
-const DUE_FOR_REVIEW_RETRIEVAL_COUNT = 2
-const DUE_FOR_REVIEW_HEAT = 1.15
-
-function knowledge.due_for_review(retrieval_count, effective_heat)
-    return tonumber(retrieval_count) >= DUE_FOR_REVIEW_RETRIEVAL_COUNT
-        or tonumber(effective_heat) >= DUE_FOR_REVIEW_HEAT
-end
+const DUE_FOR_REVIEW_RETRIEVAL_COUNT = knowledge_store.DUE_FOR_REVIEW_RETRIEVAL_COUNT
+const DUE_FOR_REVIEW_HEAT = knowledge_store.DUE_FOR_REVIEW_HEAT
+knowledge.due_for_review = knowledge_store.due_for_review
 
 -- Whether a pair due a fresh look right now -- no prior review at all
 -- (first time crossing the threshold), or a prior decline whose
@@ -1134,8 +863,7 @@ end
 -- an invented connection, not a found one). nil when the model call
 -- failed. -> decision, reason
 function knowledge.judge_link(doc_a, doc_b)
-    agent_provider = require("agent_provider")
-    answer, err = agent_provider.generate(nil, LINK_EVALUATION_SYSTEM_PROMPT, knowledge.link_pair_prompt(doc_a, doc_b))
+    answer, err = agent_provider_lib.generate(nil, LINK_EVALUATION_SYSTEM_PROMPT, knowledge.link_pair_prompt(doc_a, doc_b))
     if answer == nil then
         return nil, err
     end
@@ -1159,8 +887,8 @@ end
 -- `every_passage` lifts the per-pair caps (a one-off repair over
 -- existing connections, where a slow first look doesn't hold up a page).
 function knowledge.link_similarity(db_path, doc_a, doc_b, every_passage)
-    passage = require("passage")
-    agent_provider = require("agent_provider")
+    passage = passage_lib
+    agent_provider = agent_provider_lib
     conf = config.platform_config()
     per_document = conf.link_gate_passages_per_document
     max_new = conf.link_gate_max_embeds
@@ -1702,7 +1430,7 @@ function knowledge.search_for_display(db_path, query_text, limit, session_id, au
     end
     excerpts = {}
     if conf.search_passages == true then
-        excerpts = require("passage").excerpts(db_path, results, query_text, query_vector, query_model, budget, full == true)
+        excerpts = passage_lib.excerpts(db_path, results, query_text, query_vector, query_model, budget, full == true)
     end
     title_counts = {}
     for _, r in ipairs(results) do
@@ -1923,13 +1651,6 @@ function knowledge.document_tag_labels(db_path)
     return labels, groups
 end
 
-function knowledge.set_tier(db_path, document_id, tier)
-    db.exec(db_path, string.format(
-        "UPDATE document SET tier = %d, updated_at = %s WHERE id = %d;",
-        tonumber(tier), db.now_expr(db_path), tonumber(document_id)
-    ))
-end
-
 --------------------------------------------------------------------------
 -- CLI: `daat knowledge <stats|list|show|promote>`
 --------------------------------------------------------------------------
@@ -1996,7 +1717,7 @@ function knowledge.do_knowledge(cmd_args, db_path)
     -- The curate step's queue (src/curate.lua), run by the jobs worker.
     if action == "curate-pending" then
         limit = tonumber(cmd_args[2])
-        for _, line in ipairs(require("curate").run_pending(db_path, limit, "system")) do
+        for _, line in ipairs(curate_lib.run_pending(db_path, limit, "system")) do
             print(line)
         end
         return
@@ -2010,7 +1731,7 @@ function knowledge.do_knowledge(cmd_args, db_path)
         if limit == nil then
             limit = 1
         end
-        for _, line in ipairs(require("synthesize").repair(db_path, limit, false, "system", false)) do
+        for _, line in ipairs(synthesize_lib.repair(db_path, limit, false, "system", false)) do
             print(line)
         end
         return
@@ -2023,7 +1744,7 @@ function knowledge.do_knowledge(cmd_args, db_path)
         if limit == nil then
             limit = 1
         end
-        for _, line in ipairs(require("distill").repair(db_path, limit, false, "system", false)) do
+        for _, line in ipairs(distill_lib.repair(db_path, limit, false, "system", false)) do
             print(line)
         end
         return

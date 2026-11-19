@@ -26,11 +26,74 @@
 
 const db = require("database")
 const entity = require("entity")
+const schema_lib = require("schema")
 const config = require("config")
 const json = require("dkjson")
 const vector_lib = require("vector")
+const document_text = require("document_text")
+const store_lib = require("store")
 
 const tag = {}
+
+const TAG_SCHEMA = {
+    name = "tag",
+    fields = {
+        {name = "label", type = "text", required = true, display = true},
+        {name = "description", type = "text", required = false},
+        {name = "terms", type = "text", required = false},
+        {name = "source", type = "select", required = true, values = {"computed", "manual", "broader"}},
+        {name = "computed_at", type = "text", required = false},
+        {name = "parent", type = "reference", required = false, entity_type = "tag"},
+    },
+}
+
+const DOCUMENT_TAG_SCHEMA = {
+    name = "document_tag",
+    fields = {
+        {name = "document", type = "reference", required = true, entity_type = "document"},
+        {name = "tag", type = "reference", required = true, entity_type = "tag"},
+        {name = "score", type = "number", required = false},
+        {name = "decision", type = "select", required = true, values = {"computed", "pinned", "excluded"}},
+        {name = "via", type = "select", required = false, values = {"text"}},
+    },
+}
+
+const TAG_RELATION_SCHEMA = {
+    name = "tag_relation",
+    fields = {
+        {name = "tag_a", type = "reference", required = true, entity_type = "tag"},
+        {name = "tag_b", type = "reference", required = true, entity_type = "tag"},
+        {name = "decision", type = "select", required = true, values = {"computed", "pinned", "excluded"}},
+        {name = "score", type = "number", required = false},
+        {name = "reason", type = "text", required = false},
+        {name = "evidence", type = "text", required = false},
+    },
+}
+
+const TAG_EVIDENCE_SCHEMA = {
+    name = "tag_evidence",
+    fields = {
+        {name = "tag_a", type = "reference", required = true, entity_type = "tag"},
+        {name = "tag_b", type = "reference", required = true, entity_type = "tag"},
+        {name = "kind", type = "text", required = true},
+        {name = "direction", type = "select", required = true, values = {"directed", "undirected"}},
+        {name = "weight", type = "number", required = true},
+        {name = "support", type = "number", required = false},
+        {name = "producer", type = "text", required = true},
+    },
+}
+
+tag.TAG_SCHEMA = TAG_SCHEMA
+tag.DOCUMENT_TAG_SCHEMA = DOCUMENT_TAG_SCHEMA
+tag.TAG_RELATION_SCHEMA = TAG_RELATION_SCHEMA
+tag.TAG_EVIDENCE_SCHEMA = TAG_EVIDENCE_SCHEMA
+
+function tag.register_schemas(db_path)
+    schema_lib.register(db_path, TAG_SCHEMA)
+    schema_lib.register(db_path, DOCUMENT_TAG_SCHEMA)
+    schema_lib.register(db_path, TAG_RELATION_SCHEMA)
+    schema_lib.register(db_path, TAG_EVIDENCE_SCHEMA)
+end
 
 const TAG_CENTRE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS tag_centre (
@@ -576,7 +639,6 @@ end
 -- two documents) is one undirected edge between the two; it's an edge,
 -- so its own links aren't counted as links.
 function tag_core_evidence(db_path)
-    document = require("document")
     tags_of = tag_document_tags(db_path)
     rows = db.query(db_path, """
         SELECT l.from_document_id, l.to_document_id, f.title AS from_title
@@ -590,7 +652,7 @@ function tag_core_evidence(db_path)
     end
     for _, row in ipairs(rows) do
         from_id, to_id = tonumber(row.from_document_id), tonumber(row.to_document_id)
-        if document.is_connection_title(row.from_title) then
+        if document_text.is_connection_title(row.from_title) then
             if ends[from_id] == nil then
                 ends[from_id] = {}
             end
@@ -690,7 +752,7 @@ function tag.refresh_evidence(db_path)
         end
     end
     -- The fingerprint of core evidence's inputs when it was last computed.
-    require("store").set_text(db_path, "tag.evidence_fingerprint", tag_evidence_fingerprint(db_path))
+    store_lib.set_text(db_path, "tag.evidence_fingerprint", tag_evidence_fingerprint(db_path))
     return written
 end
 

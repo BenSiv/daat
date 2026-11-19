@@ -13,7 +13,7 @@ const paths = require("paths")
 const lfs = require("lfs")
 const sandbox = require("sandbox")
 const config = require("config")
-const schema = require("schema")
+const store_lib = require("store")
 
 const extension = {}
 
@@ -71,7 +71,7 @@ function extension.init_schema(db_path)
     if extension_schema_ready[key] == true then
         return true
     end
-    require("store").ensure_system_tables(db_path)
+    store_lib.ensure_system_tables(db_path)
     result = db.exec(db_path, extension_schema_sql(db_path))
     extension_schema_ready[key] = true
     return result
@@ -125,7 +125,7 @@ function extension.validate_manifest(manifest)
     if type(manifest.name) != "string" or manifest.name == "" then
         return "manifest must have a non-empty string 'name'"
     end
-    if not schema.valid_resource_name(manifest.name) then
+    if not config.valid_resource_name(manifest.name) then
         return "manifest '" .. tostring(manifest.name) .. "' has an invalid extension name"
     end
     if type(manifest.events) != "table" then
@@ -240,7 +240,7 @@ end
 -- Loads a manifest from extensions/<name>/manifest.lua, sandboxed the
 -- same data-only way a schema file is (see doc/schema.md).
 function extension.load_manifest(ext_dir, name)
-    if not schema.valid_resource_name(name) then
+    if not config.valid_resource_name(name) then
         return nil, "invalid extension name: " .. tostring(name)
     end
     manifest_path = paths.joinpath(ext_dir, name, "manifest.lua")
@@ -260,7 +260,7 @@ function extension.load_manifest(ext_dir, name)
 end
 
 function extension.load_main_source(ext_dir, name)
-    if not schema.valid_resource_name(name) then
+    if not config.valid_resource_name(name) then
         return nil, "invalid extension name: " .. tostring(name)
     end
     main_path = paths.joinpath(ext_dir, name, "main.lua")
@@ -589,7 +589,7 @@ end
 
 function extension.approved_capabilities(db_path, name)
     extension.init_schema(db_path)
-    approved = require("store").approved_content(db_path, "extension", name)
+    approved = store_lib.approved_content(db_path, "extension", name)
     if approved == nil then
         return nil
     end
@@ -609,12 +609,12 @@ function extension.approve(db_path, manifest, approved_by)
     caps = manifest.capabilities
     if caps == nil then caps = {} end
     caps_json = json.encode(caps)
-    require("store").approve(db_path, "extension", manifest.name, caps_json, approved_by)
+    store_lib.approve(db_path, "extension", manifest.name, caps_json, approved_by)
 end
 
 function extension.revoke(db_path, name)
     extension.init_schema(db_path)
-    require("store").revoke(db_path, "extension", name)
+    store_lib.revoke(db_path, "extension", name)
 end
 
 -- ---- Sandboxed invocation ----
@@ -725,7 +725,7 @@ end
 function extension.pending_jobs(db_path, limit)
     extension.init_schema(db_path)
     if limit == nil then limit = 50 end
-    stale_expr = require("store").ago_expr(db_path, JOB_STALE_CLAIM_SECONDS)
+    stale_expr = store_lib.ago_expr(db_path, JOB_STALE_CLAIM_SECONDS)
     rows = db.query(db_path, string.format(
         "SELECT * FROM system_job WHERE (status = 'pending' OR (status LIKE 'running:%%' AND updated_at IS NOT NULL AND updated_at < %s)) AND attempts < %d ORDER BY job_id ASC LIMIT %d;",
         stale_expr, config.platform_config().extension_max_job_attempts, limit
@@ -739,7 +739,7 @@ end
 function extension.claim_job(db_path, job_id)
     extension.init_schema(db_path)
     claim_status = "running:" .. new_job_claim_token()
-    stale_expr = require("store").ago_expr(db_path, JOB_STALE_CLAIM_SECONDS)
+    stale_expr = store_lib.ago_expr(db_path, JOB_STALE_CLAIM_SECONDS)
     _, _, changed = db.exec(db_path, string.format(
         "UPDATE system_job SET status = %s, updated_at = %s WHERE job_id = %d AND (status = 'pending' OR (status LIKE 'running:%%' AND updated_at IS NOT NULL AND updated_at < %s));",
         db.quote(claim_status), db.now_expr(db_path), tonumber(job_id), stale_expr

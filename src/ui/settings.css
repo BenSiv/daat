@@ -1,0 +1,12 @@
+.platform-settings-section { margin-bottom: 28px; padding: 16px; background: var(--platform-bg, #f8fafc); border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); }
+.platform-settings-section h3 { margin: 0 0 12px 0; font-size: 1.05rem; }
+.platform-settings-section label { display: block; font-size: 0.85rem; color: var(--platform-muted, #64748b); margin-bottom: 4px; }
+.platform-settings-section input[type=text], .platform-settings-section textarea, .platform-settings-section input[type=file] {
+    width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-sm, 8px); font-size: 0.9rem; margin-bottom: 14px;
+}
+.platform-settings-section textarea { min-height: 90px; font-family: inherit; }
+.platform-settings-checkbox { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+.platform-settings-checkbox label { margin-bottom: 0; }
+.platform-settings-colors { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px 16px; }
+.platform-settings-color label { text-transform: capitalize; }
+.platform-settings-color input { margin-bottom: 0; }

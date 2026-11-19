@@ -8,7 +8,7 @@
 -- from its neighbours.
 
 const db = require("database")
-const document = require("document")
+const document_text = require("document_text")
 
 const tag_terms = {}
 
@@ -33,7 +33,7 @@ end
 
 function terms_words(text, out)
     for word in string.gmatch(string.lower(text), "%a+") do
-        if string.len(word) >= 3 and document.search_stopwords[word] == nil and TERMS_STOPWORDS[word] == nil then
+        if string.len(word) >= 3 and document_text.SEARCH_STOPWORDS[word] == nil and TERMS_STOPWORDS[word] == nil then
             out[word] = true
         end
     end
@@ -69,7 +69,7 @@ function tag_terms.distinctive(db_path, groups, per_tag)
         if rows != nil then
             for _, row in ipairs(rows) do
                 text = tostring(row.head)
-                text = string.sub(text, document.preamble_end(text), document.preamble_end(text) + TERMS_CHARS_PER_DOCUMENT)
+                text = string.sub(text, document_text.preamble_end(text), document_text.preamble_end(text) + TERMS_CHARS_PER_DOCUMENT)
                 set = {}
                 terms_words(tostring(row.title) .. " " .. text, set)
                 words_of[tostring(tonumber(row.id))] = set

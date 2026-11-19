@@ -31,8 +31,8 @@ const knowledge = require("knowledge")
 const do_knowledge = knowledge.do_knowledge
 const repair = require("repair")
 const do_repair = repair.do_repair
-const tag_upkeep = require("tag_upkeep")
-const do_tag = tag_upkeep.do_tag
+const tag_cli = require("tag_cli")
+const do_tag = tag_cli.do_tag
 
 -- Required explicitly here since knowledge.lua does not require agent.lua
 -- (`daat knowledge distill` bridges both).

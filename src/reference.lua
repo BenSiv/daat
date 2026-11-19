@@ -41,6 +41,7 @@ const db = require("database")
 const entity = require("entity")
 const schema = require("schema")
 const config = require("config")
+const store_lib = require("store")
 
 const reference = {}
 
@@ -92,7 +93,7 @@ const REFERENCE_INSERT_BATCH = 200
 const REFERENCE_MAX_NAME_TOKENS = 8
 
 function reference.init_schema(db_path)
-    store_mod = require("store")
+    store_mod = store_lib
     db.exec(db_path, REFERENCE_NAME_SCHEMA)
     db.exec(db_path, DOCUMENT_REFERENCE_SCHEMA)
     db.exec(db_path, REFERENCE_PREFIX_SCHEMA)

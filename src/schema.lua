@@ -7,6 +7,10 @@ const db = require("database")
 const sandbox = require("sandbox")
 const paths = require("paths")
 const lfs = require("lfs")
+const config_lib = require("config")
+const extension_lib = require("extension")
+const store_lib = require("store")
+const json_lib = require("dkjson")
 
 const schema = {}
 
@@ -419,7 +423,7 @@ end
 -- migrates it the same way sync_table() already migrates per-type
 -- tables: additive, idempotent, safe to re-run on every sync.
 function ensure_entity_field_display_column(db_path)
-    require("store").ensure_columns(db_path, "entity_field", {
+    store_lib.ensure_columns(db_path, "entity_field", {
         {"display", "INTEGER DEFAULT 0"},
         {"allowed_entity_types", "LONGTEXT"},
         {"identifier", "INTEGER DEFAULT 0"},
@@ -427,7 +431,7 @@ function ensure_entity_field_display_column(db_path)
 end
 
 function ensure_entity_type_reason_flag_columns(db_path)
-    require("store").ensure_columns(db_path, "entity_type", {
+    store_lib.ensure_columns(db_path, "entity_type", {
         {"require_reason_on_update", "INTEGER DEFAULT 0"},
         {"require_reason_on_archive", "INTEGER DEFAULT 0"},
         {"admin_write_only", "INTEGER DEFAULT 0"},
@@ -468,13 +472,11 @@ function schema.register(db_path, def)
         for i, field in ipairs(def.fields) do
             enum_json = nil
             if field.type == "select" or field.type == "multi_select" then
-                json = require("dkjson")
-                enum_json = json.encode(resolve_field_values(db_path, field))
+                enum_json = json_lib.encode(resolve_field_values(db_path, field))
             end
             allowed_types_json = nil
             if is_polymorphic_field_type(field.type) then
-                json = require("dkjson")
-                allowed_types_json = json.encode(field.allowed_entity_types)
+                allowed_types_json = json_lib.encode(field.allowed_entity_types)
             end
             required_flag = 0
             if field.required == true then
@@ -1019,10 +1021,8 @@ end
 -- its files from extension.owned_definitions, so the signature changes
 -- and the next request re-syncs.
 function schema.content_signature(db_path, root)
-    config = require("config")
-    extension = require("extension")
     paths_to_stat = {}
-    for _, dir in ipairs({config.dropdowns_dir(root), config.schemas_dir(root)}) do
+    for _, dir in ipairs({config_lib.dropdowns_dir(root), config_lib.schemas_dir(root)}) do
         attr = lfs.attributes(dir)
         if attr != nil and attr.mode == "directory" then
             for file_name in lfs.dir(dir) do
@@ -1032,7 +1032,7 @@ function schema.content_signature(db_path, root)
             end
         end
     end
-    for _, owned in ipairs(extension.owned_definitions(db_path, config.extensions_dir(root), "schemas")) do
+    for _, owned in ipairs(extension_lib.owned_definitions(db_path, config_lib.extensions_dir(root), "schemas")) do
         table.insert(paths_to_stat, owned.path)
     end
     table.sort(paths_to_stat)
@@ -1052,17 +1052,14 @@ end
 -- plus the ones approved extensions own (see
 -- extension.definition_files). Each is {name, path, extension?}.
 function schema.definition_files(db_path, root)
-    config = require("config")
-    extension = require("extension")
-    return extension.definition_files(db_path, config.schemas_dir(root), config.extensions_dir(root), "schemas", true)
+    return extension_lib.definition_files(db_path, config_lib.schemas_dir(root), config_lib.extensions_dir(root), "schemas", true)
 end
 
 -- The file defining entity type `name`, or nil. schemas/<name>.lua is
 -- checked first, without touching extensions at all, since every
 -- /browse, /detail and /register request comes through here.
 function schema.definition_path(db_path, name, root)
-    config = require("config")
-    path = paths.joinpath(config.schemas_dir(root), name .. ".lua")
+    path = paths.joinpath(config_lib.schemas_dir(root), name .. ".lua")
     if paths.file_exists(path) then
         return path
     end
@@ -1082,11 +1079,11 @@ end
 -- of the last real schema.sync_all pass (see schema.content_signature
 -- for why it exists), kept in system_state.
 function schema.stored_sync_signature(db_path)
-    return require("store").get_text(db_path, "schema.sync_signature")
+    return store_lib.get_text(db_path, "schema.sync_signature")
 end
 
 function schema.store_sync_signature(db_path, signature)
-    require("store").set_text(db_path, "schema.sync_signature", signature)
+    store_lib.set_text(db_path, "schema.sync_signature", signature)
 end
 
 -- Scans the schemas directory, registers any schema files found,
@@ -1102,7 +1099,7 @@ end
 -- Skipped entirely when content_signature matches what was
 -- stored after the last real pass -- see that function's own comment.
 function schema.sync_all(db_path, root)
-    config = require("config")
+    config = config_lib
 
     signature = schema.content_signature(db_path, root)
     if signature == schema.stored_sync_signature(db_path) then
@@ -1225,7 +1222,7 @@ function schema.layout(db_path, name)
         -- the whole batch-entry table for any entity type with a
         -- dropdown-based select (e.g. cell_line's required
         -- `tissue_code`), not just that one field.
-        dkjson = require("dkjson")
+        dkjson = json_lib
         db_fields_by_name = {}
         for _, f in ipairs(schema.fields(db_path, name)) do
             db_fields_by_name[f.name] = f
@@ -1271,7 +1268,7 @@ function schema.layout(db_path, name)
         end
         return result
     else
-        dkjson = require("dkjson")
+        dkjson = json_lib
         if schema.is_registered(db_path, name) == false then
             return nil, "unknown entity type: " .. name
         end
@@ -1310,8 +1307,7 @@ function schema.show_json(db_path, name)
     if layout == nil then
         return nil, err
     end
-    dkjson = require("dkjson")
-    return dkjson.encode(layout)
+    return json_lib.encode(layout)
 end
 
 -- Whether `name` has the shape a real registered entity-type name could
@@ -1339,9 +1335,7 @@ end
 -- entity-type names, while still rejecting path separators, "..", leading
 -- dots/hyphens, whitespace, quotes, and HTML metacharacters before any
 -- paths.joinpath or sandbox.run call.
-function schema.valid_resource_name(name)
-    return type(name) == "string" and string.match(name, "^[A-Za-z0-9_][A-Za-z0-9_%-]*$") != nil
-end
+schema.valid_resource_name = config_lib.valid_resource_name
 
 -- Whether `entity_type` has been registered at all. A registered type
 -- can legitimately have zero custom fields (e.g. a schema whose only
@@ -1570,8 +1564,7 @@ function schema.relationships(db_path, entity_types)
                 -- existed at all, since there was nowhere for it to show
                 -- up in this list -- don't repeat that gap now that
                 -- there is one.
-                json = require("dkjson")
-                allowed_types = json.decode(field.allowed_entity_types)
+                allowed_types = json_lib.decode(field.allowed_entity_types)
                 if allowed_types != nil then
                     for _, to_type in ipairs(allowed_types) do
                         table.insert(edges, {from_type = t.name, to_type = to_type, field_name = field.name, field_type = field.type})

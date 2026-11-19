@@ -18,8 +18,11 @@
 
 const db = require("database")
 const document = require("document")
-const knowledge = require("knowledge")
+const knowledge = require("knowledge_store")
 const config = require("config")
+const store_lib = require("store")
+const agent_provider_lib = require("agent_provider")
+const entity_lib = require("entity")
 
 const synthesize = {}
 
@@ -105,7 +108,7 @@ end
 const SYNTHESIZE_STALE_CLAIM_SECONDS = 900
 
 function synthesize_stale_cutoff(db_path)
-    rows = db.query(db_path, "SELECT " .. require("store").ago_expr(db_path, SYNTHESIZE_STALE_CLAIM_SECONDS) .. " AS cutoff;")
+    rows = db.query(db_path, "SELECT " .. store_lib.ago_expr(db_path, SYNTHESIZE_STALE_CLAIM_SECONDS) .. " AS cutoff;")
     if rows != nil and rows[1] != nil then
         return rows[1].cutoff
     end
@@ -149,7 +152,7 @@ function synthesize_claim(db_path, tag_id)
     raw = io.read(urandom, 8)
     io.close(urandom)
     token = string.gsub(raw, ".", function(c) return string.format("%02x", string.byte(c)) end)
-    stale_expr = require("store").ago_expr(db_path, SYNTHESIZE_STALE_CLAIM_SECONDS)
+    stale_expr = store_lib.ago_expr(db_path, SYNTHESIZE_STALE_CLAIM_SECONDS)
     db.exec(db_path, string.format(
         "UPDATE knowledge_reference SET status = 'running', reason = %s, queued_at = %s WHERE tag_id = %d AND (status = 'pending' OR (status = 'running' AND queued_at IS NOT NULL AND queued_at < %s));",
         db.quote(token), db.now_expr(db_path), tonumber(tag_id), stale_expr))
@@ -179,7 +182,7 @@ end
 -- "referenced", "nothing", "rejected", "failed" or "skipped" (the tag is
 -- gone or has too few notes), and the reference's id when one was written.
 function synthesize.run(db_path, tag_id, author)
-    agent_provider = require("agent_provider")
+    agent_provider = agent_provider_lib
     tags = db.query(db_path, string.format(
         "SELECT id, label, description FROM tag WHERE id = %d AND (archived_at IS NULL OR archived_at = '');", tonumber(tag_id)))
     notes = synthesize.notes(db_path, tag_id)
@@ -273,7 +276,7 @@ function synthesize.run_pending(db_path, limit, author)
     if limit == nil then
         limit = 3
     end
-    stale_expr = require("store").ago_expr(db_path, SYNTHESIZE_STALE_CLAIM_SECONDS)
+    stale_expr = store_lib.ago_expr(db_path, SYNTHESIZE_STALE_CLAIM_SECONDS)
     rows = db.query(db_path, string.format(
         "SELECT tag_id FROM knowledge_reference WHERE status = 'pending' OR (status = 'running' AND queued_at IS NOT NULL AND queued_at < %s) ORDER BY queued_at, tag_id LIMIT %d;",
         stale_expr, tonumber(limit)))
@@ -308,7 +311,7 @@ function synthesize.archive_orphans(db_path, author, dry_run)
     if dry_run then
         return #rows
     end
-    entity = require("entity")
+    entity = entity_lib
     archived = 0
     for _, row in ipairs(rows) do
         if row.document_id != nil and row.document_id != "" then

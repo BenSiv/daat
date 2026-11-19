@@ -6,8 +6,13 @@
 
 const paths = require("paths")
 const sandbox = require("sandbox")
+const db_lib = require("database")
 
 const config = {}
+
+function config.valid_resource_name(name)
+    return type(name) == "string" and string.match(name, "^[A-Za-z0-9_][A-Za-z0-9_%-]*$") != nil
+end
 
 const STORE_DIR = ".store"
 const DB_FILE = "store.db"
@@ -158,9 +163,8 @@ end
 -- that cycle from the other direction either.
 function config.is_initialized(root)
     if config.db_backend() == "mariadb" then
-        db_mod = require("database")
         descriptor = config.mariadb_descriptor()
-        ok_init, exists_init = pcall(db_mod.table_exists, descriptor, "entity_event")
+        ok_init, exists_init = pcall(db_lib.table_exists, descriptor, "entity_event")
         return ok_init == true and exists_init == true
     end
     return paths.file_exists(config.db_path(root))

@@ -13,8 +13,15 @@ const config = require("config")
 const extension = require("extension")
 const json = require("dkjson")
 const view = require("view")
+const store_lib = require("store")
 
 const entity = {}
+
+const lifecycle_listeners = {}
+
+function entity.register_lifecycle_listener(listener)
+    table.insert(lifecycle_listeners, listener)
+end
 
 -- has_error used before its own definition below -- pre-declared,
 -- see ../../luam/doc/forward_references.md
@@ -342,8 +349,10 @@ function settle_entity_write_ddl(db_path, entity_type, multi_fields, polymorphic
     if polymorphic_fields != nil and next(polymorphic_fields) != nil then
         schema.ensure_entity_source_table(db_path)
     end
-    if entity_type == "document" then
-        require("document").ensure_pool_state(db_path)
+    for _, listener in ipairs(lifecycle_listeners) do
+        if listener.on_settle_write_ddl != nil then
+            listener.on_settle_write_ddl(db_path, entity_type)
+        end
     end
 end
 
@@ -480,11 +489,11 @@ function entity.create(db_path, entity_type, values, author, source)
         extension.enqueue_after_hooks(db_path, config.extensions_dir(),
             "entity.after_create", entity_type, new_entity_id, values, nil)
 
-        -- Lazy require, not a module-top-level one: entity.lua must never
-        -- require document.lua (document.lua already requires entity.lua;
-        -- the reverse would be circular).
-        document_pool_hook = require("document")
-        document_pool_hook.on_entity_created(db_path, entity_type, new_entity_id)
+        for _, listener in ipairs(lifecycle_listeners) do
+            if listener.on_created != nil then
+                listener.on_created(db_path, entity_type, new_entity_id)
+            end
+        end
 
         return new_entity_id
     end
@@ -661,8 +670,11 @@ function entity.update(db_path, entity_type, entity_id, values, author, source, 
         extension.enqueue_after_hooks(db_path, config.extensions_dir(),
             "entity.after_update", entity_type, entity_id, tx_merged, current)
 
-        document_update_hook = require("document")
-        document_update_hook.on_entity_updated(db_path, entity_type, entity_id, field_changes)
+        for _, listener in ipairs(lifecycle_listeners) do
+            if listener.on_updated != nil then
+                listener.on_updated(db_path, entity_type, entity_id, field_changes)
+            end
+        end
 
         return entity_id, tx_issues
     end
@@ -723,8 +735,11 @@ function entity.archive(db_path, entity_type, entity_id, author, source, reason)
         extension.enqueue_after_hooks(db_path, config.extensions_dir(),
             "entity.after_archive", entity_type, entity_id, current, current)
 
-        document_archive_hook = require("document")
-        document_archive_hook.on_entity_archived(db_path, entity_type, entity_id)
+        for _, listener in ipairs(lifecycle_listeners) do
+            if listener.on_archived != nil then
+                listener.on_archived(db_path, entity_type, entity_id)
+            end
+        end
 
         return entity_id, {}
     end
@@ -771,8 +786,11 @@ function entity.unarchive(db_path, entity_type, entity_id, author, source)
             error("concurrent unarchive conflict on " .. entity_type .. " #" .. tostring(entity_id))
         end
 
-        document_unarchive_hook = require("document")
-        document_unarchive_hook.on_entity_unarchived(db_path, entity_type, entity_id)
+        for _, listener in ipairs(lifecycle_listeners) do
+            if listener.on_unarchived != nil then
+                listener.on_unarchived(db_path, entity_type, entity_id)
+            end
+        end
 
         return entity_id, {}
     end
@@ -1117,7 +1135,7 @@ function entity.counts_by_type(db_path, entity_types)
     table.sort(sorted_names)
     types_sig = table.concat(sorted_names, ",")
 
-    store_mod = require("store")
+    store_mod = store_lib
     max_ok, max_rows = pcall(db.query, db_path, "SELECT COALESCE(MAX(event_id), 0) AS max_id FROM entity_event;")
     cache_usable = (max_ok == true and max_rows != nil and max_rows[1] != nil)
     current_max_id = 0

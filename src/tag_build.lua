@@ -44,6 +44,7 @@ const tag_upkeep = require("tag_upkeep")
 const agent_provider = require("agent_provider")
 const document = require("document")
 const vector_lib = require("vector")
+const tag_terms_lib = require("tag_terms")
 
 const tag_build = {}
 
@@ -704,7 +705,7 @@ function build_name(db_path, plan, report)
         end
         groups[t] = docs
     end
-    words = require("tag_terms").distinctive(db_path, groups)
+    words = tag_terms_lib.distinctive(db_path, groups)
     for t, tg in ipairs(plan.tags) do
         titles = tag_upkeep.titles(db_path, build_members_for_titles(plan, t), tg.centre, false)
         if words[t] != nil and #words[t] > 0 then

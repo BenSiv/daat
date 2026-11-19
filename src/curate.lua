@@ -26,7 +26,12 @@
 
 const db = require("database")
 const document = require("document")
-const knowledge = require("knowledge")
+const knowledge = require("knowledge_store")
+const config_lib = require("config")
+const agent_provider_lib = require("agent_provider")
+const aspect_lib = require("aspect")
+const store_lib = require("store")
+const entity_lib = require("entity")
 
 const curate = {}
 
@@ -62,8 +67,7 @@ Judge relevance by the team's field and subject matter, not only its own data: p
 -- The curate prompt, with the deployment's description of its work when
 -- it has one.
 function curate.system_prompt()
-    config = require("config")
-    theme = config.load_theme(config.find_root())
+    theme = config_lib.load_theme(config_lib.find_root())
     if theme.system_prompt_extra == nil or theme.system_prompt_extra == "" then
         return CURATE_SYSTEM_PROMPT
     end
@@ -198,7 +202,7 @@ end
 -- the status ("curated", "nothing", "rejected", "failed"), the note id,
 -- and the reason when there is one.
 function write_note(db_path, author, doc, text, system_prompt, check_prompt, note_id, source_line, source_ref)
-    agent_provider = require("agent_provider")
+    agent_provider = agent_provider_lib
     draft, err = agent_provider.generate(nil, system_prompt, "Title: " .. tostring(doc.title) .. "\n\n" .. text)
     if draft == nil then
         return "failed", note_id, tostring(err)
@@ -294,7 +298,7 @@ end
 -- between them; cut to the input cap. Returns the text and where the
 -- aspect's most central passage starts, or nil when the aspect is gone.
 function curate.aspect_text(db_path, document_id, n)
-    part = require("aspect").passages(db_path, document_id, n)
+    part = aspect_lib.passages(db_path, document_id, n)
     if part == nil then
         return nil
     end
@@ -420,7 +424,7 @@ function curate_claim(db_path, document_id)
     if token == nil then
         return false
     end
-    stale_expr = require("store").ago_expr(db_path, CURATE_STALE_CLAIM_SECONDS)
+    stale_expr = store_lib.ago_expr(db_path, CURATE_STALE_CLAIM_SECONDS)
     db.exec(db_path, string.format(
         "UPDATE knowledge_curation SET status = 'running', reason = %s, queued_at = %s WHERE document_id = %d AND (status = 'pending' OR (status = 'running' AND queued_at IS NOT NULL AND queued_at < %s));",
         db.quote(token), db.now_expr(db_path), document_id, stale_expr))
@@ -434,7 +438,7 @@ function aspect_curate_claim(db_path, document_id, n)
     if token == nil then
         return false
     end
-    stale_expr = require("store").ago_expr(db_path, CURATE_STALE_CLAIM_SECONDS)
+    stale_expr = store_lib.ago_expr(db_path, CURATE_STALE_CLAIM_SECONDS)
     db.exec(db_path, string.format(
         "UPDATE knowledge_aspect_curation SET status = 'running', reason = %s, queued_at = %s WHERE document_id = %d AND aspect = %d AND (status = 'pending' OR (status = 'running' AND queued_at IS NOT NULL AND queued_at < %s));",
         db.quote(token), db.now_expr(db_path), document_id, n, stale_expr))
@@ -450,7 +454,7 @@ function curate.run_pending(db_path, limit, author)
         limit = 5
     end
     curate.queue_due_conversations(db_path)
-    stale_expr = require("store").ago_expr(db_path, CURATE_STALE_CLAIM_SECONDS)
+    stale_expr = store_lib.ago_expr(db_path, CURATE_STALE_CLAIM_SECONDS)
     rows = db.query(db_path, string.format(
         "SELECT document_id FROM knowledge_curation WHERE status = 'pending' OR (status = 'running' AND queued_at IS NOT NULL AND queued_at < %s) ORDER BY queued_at, document_id LIMIT %d;",
         stale_expr, tonumber(limit)))
@@ -807,9 +811,9 @@ end
 -- Nothing queued or running is due.
 function curate.due_conversations(db_path, quiet_minutes)
     if quiet_minutes == nil then
-        quiet_minutes = require("config").platform_config().agent_curate_quiet_minutes
+        quiet_minutes = config_lib.platform_config().agent_curate_quiet_minutes
     end
-    cutoff_expr = require("store").ago_expr(db_path, math.floor(quiet_minutes * 60))
+    cutoff_expr = store_lib.ago_expr(db_path, math.floor(quiet_minutes * 60))
     rows = db.query(db_path, string.format(
         "SELECT s.id, s.login, s.title, c.source_hash, c.status FROM agent_session s " ..
         "LEFT JOIN knowledge_conversation_curation c ON c.session_id = s.id " ..
@@ -845,7 +849,7 @@ function curate.claim_conversation(db_path, session_id)
     if token == nil then
         return false
     end
-    stale_expr = require("store").ago_expr(db_path, CURATE_STALE_CLAIM_SECONDS)
+    stale_expr = store_lib.ago_expr(db_path, CURATE_STALE_CLAIM_SECONDS)
     db.exec(db_path, string.format(
         "UPDATE knowledge_conversation_curation SET status = 'running', reason = %s, queued_at = %s WHERE session_id = %s AND (status = 'pending' OR (status = 'running' AND queued_at IS NOT NULL AND queued_at < %s));",
         db.quote(token), db.now_expr(db_path), db.quote(session_id), stale_expr))
@@ -969,10 +973,10 @@ end
 -- turns would keep writing them. Archived, never deleted: each line
 -- "archived #N" is what --undo reads back.
 function curate.retire_transcripts(db_path, dry_run, author)
-    if require("config").platform_config().agent_transcript_documents == "whole" then
+    if config_lib.platform_config().agent_transcript_documents == "whole" then
         return {"Transcript documents are still kept (agent_transcript_documents = \"whole\"); set it to \"off\" first."}
     end
-    entity = require("entity")
+    entity = entity_lib
     rows = db.query(db_path,
         "SELECT d.id, d.title, d.source_ref, c.status FROM document d " ..
         "LEFT JOIN knowledge_conversation_curation c ON c.session_id = d.source_ref " ..
@@ -1010,7 +1014,7 @@ end
 -- `daat repair retire-transcripts --undo <log>`: brings back the
 -- transcripts a run archived, from its output ("archived #N" lines).
 function curate.unretire_transcripts(db_path, log_path, author)
-    entity = require("entity")
+    entity = entity_lib
     file = io.open(log_path, "r")
     if file == nil then
         return {"Cannot read " .. tostring(log_path)}

@@ -46,6 +46,12 @@ const gnuplot = require("gnuplot")
 const hmac = require("hmac")
 const config = require("config")
 const vector_lib = require("vector")
+const document_text = require("document_text")
+const store_lib = require("store")
+const passage_lib = require("passage")
+const aspect_lib = require("aspect")
+const tag_upkeep_lib = require("tag_upkeep")
+const agent_provider_lib = require("agent_provider")
 
 const document = {}
 
@@ -62,93 +68,10 @@ const DOCUMENT_SCHEMA = {
     },
 }
 
--- Derived subject tags (doc/structure-layers.md): computed outside daat
--- by a clustering job that writes these through the API, with manual
--- overrides that a recompute never touches. Ordinary entity types, so
--- they're browsable, editable and ledgered like any other.
---   tag.source: "computed" (the job's), "manual" (a person's) or
---   "broader" (tag_broader.lua's: a group of tags, the parent level; it
---   holds no documents of its own).
---   document_tag.decision: "computed" (the job replaces it freely),
---   "pinned" (a person put the document in the tag; never removed by
---   the job) or "excluded" (a person took it out; never re-added, and
---   treated as absent everywhere).
-const TAG_SCHEMA = {
-    name = "tag",
-    fields = {
-        -- "label", not "name": every entity table already has a
-        -- bookkeeping `name` column (schema.sync_table).
-        {name = "label", type = "text", required = true, display = true},
-        -- The tag's definition (doc/tag-ontology.md): what it covers and
-        -- how it differs from the tags beside it.
-        {name = "description", type = "text", required = false},
-        {name = "terms", type = "text", required = false},
-        {name = "source", type = "select", required = true, values = {"computed", "manual", "broader"}},
-        {name = "computed_at", type = "text", required = false},
-        -- Optional broader tag this one sits under (one level: broad >
-        -- specific). Documents carry the specific tag; the broad one
-        -- follows from it, e.g. for the graph's colour-by.
-        {name = "parent", type = "reference", required = false, entity_type = "tag"},
-    },
-}
-
-const DOCUMENT_TAG_SCHEMA = {
-    name = "document_tag",
-    fields = {
-        {name = "document", type = "reference", required = true, entity_type = "document"},
-        {name = "tag", type = "reference", required = true, entity_type = "tag"},
-        {name = "score", type = "number", required = false},
-        {name = "decision", type = "select", required = true, values = {"computed", "pinned", "excluded"}},
-        -- "text": the membership is a #tag in the document's content
-        -- (tag.sync_text_tags), kept while the text has it.
-        {name = "via", type = "select", required = false, values = {"text"}},
-    },
-}
-
--- "See also" between two tags (doc/tag-ontology.md). Broader is not a
--- relation here: it's tag.parent, the one place a tag's broader tag is
--- kept. A pair is stored once, tag_a the smaller id.
---   decision: "computed" (proposed from evidence or by the agent;
---   replaced freely), "pinned" (a person asserted it; never removed) or
---   "excluded" (a person rejected it; never proposed again) -- the same
---   words as document_tag.decision.
---   reason: why the two are related, in words; evidence: what it was
---   derived from (JSON), so it can be checked.
-const TAG_RELATION_SCHEMA = {
-    name = "tag_relation",
-    fields = {
-        {name = "tag_a", type = "reference", required = true, entity_type = "tag"},
-        {name = "tag_b", type = "reference", required = true, entity_type = "tag"},
-        {name = "decision", type = "select", required = true, values = {"computed", "pinned", "excluded"}},
-        {name = "score", type = "number", required = false},
-        {name = "reason", type = "text", required = false},
-        {name = "evidence", type = "text", required = false},
-    },
-}
-
--- Edges between documents, lifted onto their tags: one row per pair,
--- kind and producer, holding raw totals only (lift is computed on read,
--- so a row changes only when its underlying edges do). Like a
--- document's content, the rows can carry deployment-specific meaning:
--- `kind` is an open string ("link", "connection", or whatever an
--- extension produces), and core never branches on its value.
---   direction: "directed" (tag_a -> tag_b) or "undirected" (tag_a the
---   smaller id; tag_a = tag_b is evidence inside one tag).
---   weight: the pair's total; support: how many distinct underlying
---   things (documents, entities) it rests on.
---   producer: "core", or the extension that wrote the row.
-const TAG_EVIDENCE_SCHEMA = {
-    name = "tag_evidence",
-    fields = {
-        {name = "tag_a", type = "reference", required = true, entity_type = "tag"},
-        {name = "tag_b", type = "reference", required = true, entity_type = "tag"},
-        {name = "kind", type = "text", required = true},
-        {name = "direction", type = "select", required = true, values = {"directed", "undirected"}},
-        {name = "weight", type = "number", required = true},
-        {name = "support", type = "number", required = false},
-        {name = "producer", type = "text", required = true},
-    },
-}
+document.TAG_SCHEMA = tag.TAG_SCHEMA
+document.DOCUMENT_TAG_SCHEMA = tag.DOCUMENT_TAG_SCHEMA
+document.TAG_RELATION_SCHEMA = tag.TAG_RELATION_SCHEMA
+document.TAG_EVIDENCE_SCHEMA = tag.TAG_EVIDENCE_SCHEMA
 
 -- One row per distinct [[link]] text in a document's content. Keyed by
 -- its own id rather than by link_text: link text is whatever a title
@@ -403,7 +326,7 @@ CREATE TABLE IF NOT EXISTS document_link_sync (
 -- wrongly expose them as user-editable/required form fields) -- same
 -- pattern as ledger.lua's ensure_entity_event_reason_column.
 function ensure_document_knowledge_columns(db_path)
-    store_mod = require("store")
+    store_mod = store_lib
     store_mod.ensure_columns(db_path, "document", {
         {"tier", "INTEGER DEFAULT 0"},
         {"heat", "REAL DEFAULT 1.0"},
@@ -428,7 +351,7 @@ const ACTIVE_POOL_DOCUMENT_WHERE = "(archived_at IS NULL OR archived_at = '') AN
 -- Kept callable standalone so minimal test tables (tst/unit/document_pool.lua)
 -- and store migration 11 both pick up the exact same schema and backfill.
 function document.ensure_document_pool_columns(db_path, existing_map)
-    store_mod = require("store")
+    store_mod = store_lib
     have = existing_map
     if have == nil then
         if not db.table_exists(db_path, "document") then
@@ -530,7 +453,7 @@ const DOCUMENT_EMBEDDING_SQL_COLUMNS = {
 -- DOCUMENT_EMBEDDING_SCHEMA -- one path for new and existing installs
 -- alike.
 function ensure_document_embedding_columns(db_path)
-    require("store").ensure_columns(db_path, "document_embedding", {
+    store_lib.ensure_columns(db_path, "document_embedding", {
         {"vector_packed", "BLOB"},
         {"text_hash", "VARCHAR(64)"},
         {"body_chars", "INTEGER"},
@@ -549,7 +472,7 @@ end
 -- no-op, unlike MariaDB) -- same reasoning as knowledge.lua's own
 -- ensure_knowledge_indexes (now folded in here).
 function ensure_document_knowledge_indexes(db_path)
-    store_mod = require("store")
+    store_mod = store_lib
     store_mod.ensure_index(db_path, "document", "document_tier_idx",
         "CREATE INDEX document_tier_idx ON document(tier, heat DESC, retrieval_count DESC);")
     store_mod.ensure_index(db_path, "document", "document_hash_idx",
@@ -593,7 +516,7 @@ const BASE_HEAT = 1.0
 -- first, and for a fresh install where the column already came from
 -- the CREATE TABLE itself.
 function ensure_knowledge_pool_state_log_scale_column(db_path)
-    store_mod = require("store")
+    store_mod = store_lib
     if store_mod.has_column(db_path, "knowledge_pool_state", "log_pool_scale") then
         return
     end
@@ -719,10 +642,7 @@ end
 
 function document.init_schema(db_path)
     schema.register(db_path, DOCUMENT_SCHEMA)
-    schema.register(db_path, TAG_SCHEMA)
-    schema.register(db_path, DOCUMENT_TAG_SCHEMA)
-    schema.register(db_path, TAG_RELATION_SCHEMA)
-    schema.register(db_path, TAG_EVIDENCE_SCHEMA)
+    tag.register_schemas(db_path)
     migrate_document_link_layout(db_path)
     create_document_link_table(db_path, "document_link")
     ensure_document_link_indexes(db_path)
@@ -731,9 +651,9 @@ function document.init_schema(db_path)
     db.exec(db_path, DOCUMENT_EMBEDDING_DUE_SCHEMA)
     db.exec(db_path, DOCUMENT_LINK_SYNC_SCHEMA)
     tag.init_schema(db_path)
-    require("tag_upkeep").init_schema(db_path)
-    require("passage").init_schema(db_path)
-    require("aspect").init_schema(db_path)
+    tag_upkeep_lib.init_schema(db_path)
+    passage_lib.init_schema(db_path)
+    aspect_lib.init_schema(db_path)
     reference.init_schema(db_path)
     ensure_document_knowledge_columns(db_path)
     ensure_document_knowledge_indexes(db_path)
@@ -1539,34 +1459,10 @@ end
 -- each side's Connections list. Filed under the Knowledge Pool folder,
 -- where other notes about the pool live. nil if either document can't
 -- be written as a link (document.link_ref).
-const CONNECTION_TITLE_SEPARATOR = " ↔ "
+const CONNECTION_TITLE_SEPARATOR = document_text.CONNECTION_TITLE_SEPARATOR
 document.CONNECTION_TITLE_SEPARATOR = CONNECTION_TITLE_SEPARATOR
-
--- Whether a title has a connection document's shape; tag.lua counts such
--- a document as one edge between the two it links, not as two links.
-function document.is_connection_title(title)
-    if title == nil then
-        return false
-    end
-    return string.find(title, CONNECTION_TITLE_SEPARATOR, 1, true) != nil
-end
-
--- How many " ↔ " a title holds: a chain of connections has more than one.
-function document.connection_title_count(title)
-    if title == nil then
-        return 0
-    end
-    count = 0
-    start = 1
-    while true do
-        found = string.find(title, CONNECTION_TITLE_SEPARATOR, start, true)
-        if found == nil then
-            return count
-        end
-        count = count + 1
-        start = found + 1
-    end
-end
+document.is_connection_title = document_text.is_connection_title
+document.connection_title_count = document_text.connection_title_count
 
 function document.connection_draft(db_path, document_a_id, document_b_id, reason)
     ref_a = document.link_ref(db_path, document_a_id)
@@ -2437,110 +2333,26 @@ end
 
 -- Binary as a hex literal (X'...'), which both backends read as raw
 -- bytes -- never through db.quote, whose string escaping is for text.
-function hex_literal(bytes)
-    return "X'" .. string.gsub(bytes, ".", function(c) return string.format("%02x", string.byte(c)) end) .. "'"
-end
+const hex_literal = vector_lib.hex_literal
 document.hex_literal = hex_literal
-
--- The text a document's embedding was made from before the rules below
--- -- what a row with no text_hash (made before it existed) was made from.
-function legacy_embedding_text(doc)
-    text = doc.title
-    if doc.content != nil and doc.content != "" then
-        text = text .. "\n" .. doc.content
-    end
-    return text
-end
-
--- A chat transcript's conversation: what the people and the agent said,
--- without tool calls or raw tool results (agent.all_messages(..., false),
--- the live chat view's own rendering). nil when it isn't a transcript.
-function transcript_conversation(db_path, document_id)
-    rows = db.query(db_path, string.format(
-        "SELECT source_type, source_ref FROM document WHERE id = %d;", tonumber(document_id)))
-    if rows == nil or rows[1] == nil or rows[1].source_type != "chat_session" or sql_null_to_nil(rows[1].source_ref) == nil then
-        return nil
-    end
-    agent = require("agent")
-    parts = {}
-    for _, msg in ipairs(agent.all_messages(db_path, rows[1].source_ref, false)) do
-        if (msg.role == "user" or msg.role == "assistant") and msg.content != nil and msg.content != "" then
-            label = "User"
-            if msg.role == "assistant" then
-                label = "Assistant"
-            end
-            table.insert(parts, label .. ": " .. msg.content)
-        end
-    end
-    return table.concat(parts, "\n\n")
-end
+const legacy_embedding_text = document_text.legacy_embedding_text
+const transcript_conversation = document_text.transcript_conversation
 document.transcript_conversation = transcript_conversation
-
--- The text a document's embedding is made from: what the document is
--- about, not where it came from. Its title and content, less every line
--- one of platform.lua's embedding_skip patterns matches (a sync's own
--- header, a template's boilerplate) -- a SharePoint path and author in
--- every synced file drew documents together by folder, not subject
--- (2026-10-07). A chat transcript is embedded from its conversation
--- alone (transcript_conversation). Also returns the length of that text
--- besides the title (document_embedding.body_chars): a document with
--- too little of its own isn't tagged (tag_min_text).
-function embedding_text(db_path, doc)
-    body = transcript_conversation(db_path, doc.id)
-    if body == nil then
-        body = doc.content
-    end
-    if body == nil then
-        body = ""
-    end
-    patterns = config.platform_config().embedding_skip
-    if patterns != nil and #patterns > 0 then
-        kept = {}
-        for line in string.gmatch(body .. "\n", "(.-)\n") do
-            skip = false
-            for _, pattern in ipairs(patterns) do
-                if string.find(line, pattern) != nil then
-                    skip = true
-                    break
-                end
-            end
-            if skip == false then
-                table.insert(kept, line)
-            end
-        end
-        body = table.concat(kept, "\n")
-    end
-    body = string.gsub(body, "^%s+", "")
-    body = string.gsub(body, "%s+$", "")
-    if body == "" then
-        return doc.title, 0
-    end
-    return doc.title .. "\n" .. body, string.len(body)
-end
-
-function document.embedding_text(db_path, document_id)
-    doc = entity.get(db_path, "document", document_id)
-    if doc == nil then
-        return nil
-    end
-    text, _ = embedding_text(db_path, doc)
-    return text
-end
+const embedding_text = document_text.compute_embedding_text
+document.embedding_text = document_text.embedding_text
 
 -- Computes and caches one document's embedding -- best-effort (see
 -- DOCUMENT_EMBEDDING_SCHEMA's own comment). With if_changed, a document
 -- whose stored vector was made from the same text by the same model is
 -- left alone. -> true (embedded), false (unchanged), or nil, err.
 function document.reindex_embedding(db_path, document_id, if_changed)
-    agent_provider = require("agent_provider")
-
     doc = entity.get(db_path, "document", document_id)
     if doc == nil then
         return nil, "no such document"
     end
     text, body_chars = embedding_text(db_path, doc)
 
-    model = agent_provider.embedding_model()
+    model = agent_provider_lib.embedding_model()
     if model == nil then
         return nil, "no embedding model: no agent_provider, or it has no embeddings"
     end
@@ -2556,7 +2368,7 @@ function document.reindex_embedding(db_path, document_id, if_changed)
             return false
         end
     end
-    vector, err = agent_provider.embeddings(model, text)
+    vector, err = agent_provider_lib.embeddings(model, text)
     if vector == nil then
         return nil, err
     end
@@ -2590,7 +2402,7 @@ function document.refresh_embedding(db_path, document_id)
         tag.place_document(db_path, document_id)
     end
     if embedded != nil and config.platform_config().build_aspects == true then
-        outcome, aspect_err = require("aspect").refresh(db_path, document_id)
+        outcome, aspect_err = aspect_lib.refresh(db_path, document_id)
         if outcome == nil then
             return nil, "aspects: " .. tostring(aspect_err)
         end
@@ -2663,7 +2475,7 @@ function document.embed_pending(db_path)
     -- failure there mustn't undo the embedding work reported above.
     counts.upkeep = {}
     if counts.embedded > 0 and config.platform_config().tag_restructure == true then
-        ok, report = pcall(require("tag_upkeep").run, db_path, {judge = true, apply = true})
+        ok, report = pcall(tag_upkeep_lib.run, db_path, {judge = true, apply = true})
         if ok then
             counts.upkeep = report
         else
@@ -2762,8 +2574,7 @@ end
 -- current, and only its hash is filled in (no provider call).
 -- -> reindexed, failed, unchanged.
 function document.reindex_all_embeddings(db_path, all)
-    agent_provider = require("agent_provider")
-    model = agent_provider.embedding_model()
+    model = agent_provider_lib.embedding_model()
     stored = {}
     rows = db.query(db_path, "SELECT document_id, model, text_hash FROM document_embedding;")
     if rows == nil then
@@ -2811,42 +2622,10 @@ end
 -- degradation" -- every "or" then matched as a substring of nearly every
 -- document ("for", "work", "procedure"), thousands of times in a long
 -- PDF, and buried the real hits under whichever documents were longest.
-const SEARCH_STOPWORDS = {}
-for _, word in ipairs({
-    "a", "an", "and", "or", "not", "the", "of", "in", "on", "at", "to", "for", "from", "by", "with",
-    "into", "about", "as", "is", "are", "was", "were", "be", "been", "it", "its", "this", "that",
-    "these", "those", "what", "which", "who", "how", "when", "where", "why", "do", "does", "did",
-    "we", "our", "you", "your", "any", "all", "there", "their", "than", "then", "vs",
-}) do
-    SEARCH_STOPWORDS[word] = true
-end
-
--- For tag_terms.lua's distinctive words.
+const SEARCH_STOPWORDS = document_text.SEARCH_STOPWORDS
 document.search_stopwords = SEARCH_STOPWORDS
-
-const SEARCH_MAX_TERMS = 8
-
--- Lowercased query words, edge punctuation stripped (quotes, brackets,
--- a trailing comma or '?', the '*' a model sometimes sends as "match
--- anything") but inner punctuation kept, since identifiers like
--- "rt-qpcr" or "c.cot.m-1d" are exactly what people search for here.
--- Stopwords, one-character fragments and repeats are dropped.
-function document.query_terms(query_text)
-    terms = {}
-    if query_text == nil then
-        return terms
-    end
-    seen = {}
-    for word in string.gmatch(string.lower(query_text), "%S+") do
-        word = string.gsub(word, "^[%p]+", "")
-        word = string.gsub(word, "[%p]+$", "")
-        if string.len(word) > 1 and SEARCH_STOPWORDS[word] == nil and seen[word] == nil and #terms < SEARCH_MAX_TERMS then
-            seen[word] = true
-            table.insert(terms, word)
-        end
-    end
-    return terms
-end
+const SEARCH_MAX_TERMS = document_text.SEARCH_MAX_TERMS
+document.query_terms = document_text.query_terms
 
 -- A LIKE pattern matching `term` anywhere, with LIKE's own wildcards
 -- escaped -- paired with ESCAPE '!' at the call site, which both
@@ -3094,7 +2873,7 @@ function semantic_ranking(db_path, query_vector, model)
         best[id] = {id = id, similarity = dot_product(query_unit, unit)}
     end
     if config.platform_config().search_aspects == true then
-        for id, match in pairs(require("aspect").best_matches(db_path, query_unit, model, SEARCHABLE_DOCUMENT_WHERE)) do
+        for id, match in pairs(aspect_lib.best_matches(db_path, query_unit, model, SEARCHABLE_DOCUMENT_WHERE)) do
             if best[id] == nil or match.similarity > best[id].similarity then
                 best[id] = {id = id, similarity = match.similarity, aspect = match.aspect, aspect_offset = match.passage_offset}
             end
@@ -3152,11 +2931,10 @@ function document.search(db_path, query_text, limit, use_semantic)
     query_vector = nil
     query_model = nil
     if use_semantic == true and query_text != nil and query_text != "" then
-        agent_provider = require("agent_provider")
-        model = agent_provider.embedding_model()
+        model = agent_provider_lib.embedding_model()
         if model != nil then
             query_model = model
-            query_vector, _ = agent_provider.embeddings(model, query_text)
+            query_vector, _ = agent_provider_lib.embeddings(model, query_text)
             if query_vector != nil then
                 semantic = semantic_ranking(db_path, query_vector, model)
             end
@@ -3276,21 +3054,7 @@ end
 -- daily" -- closed by a "---" rule), else 1. Only a preamble closed by
 -- a rule counts, so a document that merely opens with a quote keeps it.
 -- Shared by search excerpts and passage splitting (src/passage.lua).
-function document.preamble_end(content)
-    position = 1
-    while string.sub(content, position, position) == ">" or string.sub(content, position, position) == "\n" do
-        line_end = string.find(content, "\n", position, true)
-        if line_end == nil then
-            break
-        end
-        position = line_end + 1
-    end
-    rule_end = string.match(content, "^%-%-%-+\n+()", position)
-    if position > 1 and rule_end != nil then
-        return rule_end
-    end
-    return 1
-end
+document.preamble_end = document_text.preamble_end
 
 -- The passage of `content` most worth showing for a search: the window
 -- of `max_length` characters holding the most distinct query terms
@@ -3435,8 +3199,7 @@ function document.prune_derived(db_path, dry_run)
         table.insert(results, {label = check.label, action = check.action, count = count})
     end
 
-    agent_provider = require("agent_provider")
-    model = agent_provider.embedding_model()
+    model = agent_provider_lib.embedding_model()
     if model != nil then
         rows = db.query(db_path, string.format("SELECT COUNT(*) AS n FROM document_embedding WHERE model != %s;", db.quote(model)))
         if rows != nil and rows[1] != nil then
@@ -3512,5 +3275,25 @@ function document.do_document(cmd_args, db_path)
 
     print("Usage: daat document <create-json|embed-pending|embedding-text>")
 end
+
+entity.register_lifecycle_listener({
+    on_settle_write_ddl = function(db_path, entity_type)
+        if entity_type == "document" then
+            document.ensure_pool_state(db_path)
+        end
+    end,
+    on_created = function(db_path, entity_type, new_entity_id)
+        document.on_entity_created(db_path, entity_type, new_entity_id)
+    end,
+    on_updated = function(db_path, entity_type, entity_id, field_changes)
+        document.on_entity_updated(db_path, entity_type, entity_id, field_changes)
+    end,
+    on_archived = function(db_path, entity_type, entity_id)
+        document.on_entity_archived(db_path, entity_type, entity_id)
+    end,
+    on_unarchived = function(db_path, entity_type, entity_id)
+        document.on_entity_unarchived(db_path, entity_type, entity_id)
+    end,
+})
 
 return document

@@ -14,12 +14,15 @@ const paths = require("paths")
 const lfs = require("lfs")
 const sandbox = require("sandbox")
 const schema = require("schema")
+const store_lib = require("store")
+const config_lib = require("config")
+const extension_lib = require("extension")
 
 const view = {}
 
 -- Approvals live in system_approval (store.lua), kind 'view'.
 function view.init_schema(db_path)
-    require("store").ensure_system_tables(db_path)
+    store_lib.ensure_system_tables(db_path)
 end
 
 -- Rejects anything but a single, plain SELECT statement: no stacked
@@ -336,9 +339,7 @@ end
 -- Every view definition file this deployment loads: views/*.lua plus
 -- the ones approved extensions own (see extension.definition_files).
 function view.definition_files(db_path, root)
-    config = require("config")
-    extension = require("extension")
-    return extension.definition_files(db_path, config.views_dir(root), config.extensions_dir(root), "views", false)
+    return extension_lib.definition_files(db_path, config_lib.views_dir(root), config_lib.extensions_dir(root), "views", false)
 end
 
 -- An extension-owned view must define the name it declared, since
@@ -359,7 +360,7 @@ function view.load(db_path, name, root)
     if not schema.valid_resource_name(name) then
         return nil, "invalid view name: " .. tostring(name)
     end
-    config = require("config")
+    config = config_lib
     path = paths.joinpath(config.views_dir(root), name .. ".lua")
     if paths.file_exists(path) then
         return view.load_file(path)
@@ -414,7 +415,7 @@ end
 
 function view.approved_sql(db_path, name)
     view.init_schema(db_path)
-    return require("store").approved_content(db_path, "view", name)
+    return store_lib.approved_content(db_path, "view", name)
 end
 
 function view.is_approved(db_path, def)
@@ -427,12 +428,12 @@ end
 
 function view.approve(db_path, def, approved_by)
     view.init_schema(db_path)
-    require("store").approve(db_path, "view", def.name, view.approval_identity(def), approved_by)
+    store_lib.approve(db_path, "view", def.name, view.approval_identity(def), approved_by)
 end
 
 function view.revoke(db_path, name)
     view.init_schema(db_path)
-    require("store").revoke(db_path, "view", name)
+    store_lib.revoke(db_path, "view", name)
 end
 
 -- Runs an approved view's query. `param_value` is required iff the
@@ -604,7 +605,7 @@ function view.run_adhoc(db_path, sql_text)
         return nil, nil, "refusing to run: not a plain SELECT -- " .. problem
     end
 
-    config = require("config")
+    config = config_lib
     row_cap = config.platform_config().platform_adhoc_row_cap
     query_text = sql_text
     body = string.gsub(sql_text, "%s+$", "")
@@ -990,7 +991,7 @@ function view.run_agent_query(db_path, sql_text)
         return nil, nil, "refusing to run: not a plain SELECT -- " .. problem
     end
 
-    config = require("config")
+    config = config_lib
     row_cap = config.platform_config().agent_query_row_cap
     referenced = referenced_table_names(sql_text)
     if #referenced == 0 then
@@ -1020,7 +1021,7 @@ function view.run_agent_query(db_path, sql_text)
             message = "refusing to run: '" .. name .. "' is not a registered entity type -- only registered entity tables can be queried this way"
             -- SQL written before daat's schema revision (in chat history
             -- or a compaction summary) can still use an old table name.
-            renamed = require("store").RENAMED_TABLES[name]
+            renamed = store_lib.RENAMED_TABLES[name]
             if renamed != nil then
                 message = message .. " ('" .. name .. "' was renamed to '" .. renamed .. "')"
             end
@@ -1083,7 +1084,7 @@ end
 -- doesn't guess (seen in prod: sqlite_master/julianday tried ~15 times
 -- against MariaDB).
 function view.sql_dialect_name()
-    config = require("config")
+    config = config_lib
     if config.db_backend() == "mariadb" then
         return "MariaDB/MySQL dialect: use DATEDIFF/TIMESTAMPDIFF, LN, window functions; ONLY_FULL_GROUP_BY applies; no sqlite_master/julianday"
     end

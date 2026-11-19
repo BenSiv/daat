@@ -1,0 +1,26 @@
+.platform-header-actions { display: flex; align-items: center; gap: 12px; }
+.platform-document-breadcrumbs { margin-bottom: 12px; font-size: 0.88rem; color: var(--platform-muted, #64748b); }
+.platform-document-breadcrumbs a { color: var(--platform-accent, #4f46e5); text-decoration: none; }
+.platform-document-breadcrumbs a:hover { text-decoration: underline; }
+.platform-document-content { line-height: 1.6; }
+.platform-document-content h1, .platform-document-content h2, .platform-document-content h3 { margin-top: 1.2em; }
+.platform-document-content a { color: var(--platform-accent, #4f46e5); text-decoration: none; }
+.platform-document-content a:hover { text-decoration: underline; }
+.platform-document-content a.platform-tag-chip { display: inline-block; padding: 0 8px; border-radius: 999px; background: var(--platform-bg-2, #f1f5f9); font-size: 0.85em; line-height: 1.6; }
+.platform-document-content a.platform-tag-chip:hover { text-decoration: none; filter: brightness(0.96); }
+.platform-document-children, .platform-document-connections, .platform-document-related { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--platform-border, #e2e8f0); }
+.platform-document-related .platform-subheading { font-size: 0.95rem; color: var(--platform-muted, #64748b); margin: 0 0 8px 0; }
+.platform-document-children h4, .platform-document-connections h4 { margin: 0 0 8px 0; font-size: 0.95rem; color: var(--platform-muted, #64748b); }
+.platform-document-children ul { list-style: none; padding: 0; margin: 0; }
+.platform-document-children li { padding: 2px 0 2px 16px; }
+.platform-document-children a { color: var(--platform-accent, #4f46e5); text-decoration: none; font-weight: 600; }
+.platform-document-children a:hover { text-decoration: underline; }
+.platform-document-connections ul { list-style: none; padding: 0; margin: 0; }
+.platform-document-connections li { padding: 8px 0; border-bottom: 1px solid var(--platform-border, #e2e8f0); }
+.platform-document-connections li:last-child { border-bottom: none; }
+.platform-document-connections a { color: var(--platform-accent, #4f46e5); text-decoration: none; font-weight: 500; }
+.platform-document-connections a:hover { text-decoration: underline; }
+.platform-connection-arrow { color: var(--platform-muted, #64748b); }
+.platform-connection-detail { margin: 2px 0 0 1.4em; font-size: 0.9rem; }
+.platform-connection-context-empty { color: var(--platform-muted, #64748b); font-style: italic; }
+.platform-document-connections a.platform-connection-explain { font-weight: 400; font-size: 0.85rem; margin-left: 6px; white-space: nowrap; }

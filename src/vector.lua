@@ -59,4 +59,8 @@ function vector.unpack(packed)
     return values
 end
 
+function vector.hex_literal(bytes)
+    return "X'" .. string.gsub(bytes, ".", function(c) return string.format("%02x", string.byte(c)) end) .. "'"
+end
+
 return vector

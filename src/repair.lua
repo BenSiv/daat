@@ -18,6 +18,12 @@ const document = require("document")
 const tag = require("tag")
 const tag_upkeep = require("tag_upkeep")
 const reference = require("reference")
+const aspect_lib = require("aspect")
+const duplicate_lib = require("duplicate")
+const curate_lib = require("curate")
+const synthesize_lib = require("synthesize")
+const distill_lib = require("distill")
+const knowledge_lib = require("knowledge")
 
 const repair = {}
 
@@ -54,7 +60,7 @@ end
 -- Builds aspects whatever build_aspects says: the backfill runs before
 -- the embedding job is told to keep them current.
 function repair_aspects(cmd_args, db_path)
-    aspect = require("aspect")
+    aspect = aspect_lib
     entity_id = tonumber(cmd_args[2])
     if entity_id != nil then
         outcome, detail = aspect.refresh(db_path, entity_id)
@@ -186,14 +192,14 @@ function repair_references(cmd_args, db_path)
 end
 
 function repair_duplicates(cmd_args, db_path)
-    duplicate = require("duplicate")
+    duplicate = duplicate_lib
     for _, line in ipairs(duplicate.repair(db_path, cmd_args[2] == "--dry-run")) do
         print(line)
     end
 end
 
 function repair_curate(cmd_args, db_path)
-    curate = require("curate")
+    curate = curate_lib
     limit = nil
     dry_run = false
     recheck = false
@@ -215,7 +221,7 @@ function repair_curate(cmd_args, db_path)
 end
 
 function repair_curate_chats(cmd_args, db_path)
-    curate = require("curate")
+    curate = curate_lib
     limit = nil
     dry_run = false
     skip = {}
@@ -238,7 +244,7 @@ function repair_curate_chats(cmd_args, db_path)
 end
 
 function repair_retire_transcripts(cmd_args, db_path)
-    curate = require("curate")
+    curate = curate_lib
     lines = nil
     if cmd_args[2] == "--undo" then
         if cmd_args[3] == nil then
@@ -255,7 +261,7 @@ function repair_retire_transcripts(cmd_args, db_path)
 end
 
 function repair_synthesize(cmd_args, db_path)
-    synthesize = require("synthesize")
+    synthesize = synthesize_lib
     limit = nil
     dry_run = false
     recheck = false
@@ -277,7 +283,7 @@ function repair_synthesize(cmd_args, db_path)
 end
 
 function repair_distill(cmd_args, db_path)
-    distill = require("distill")
+    distill = distill_lib
     limit = nil
     dry_run = false
     recheck = false
@@ -299,7 +305,7 @@ function repair_distill(cmd_args, db_path)
 end
 
 function repair_connections(cmd_args, db_path)
-    knowledge = require("knowledge")
+    knowledge = knowledge_lib
     flags = {}
     for i = 2, #cmd_args do
         flags[cmd_args[i]] = true

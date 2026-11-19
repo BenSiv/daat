@@ -16,10 +16,11 @@
 const config = require("config")
 const db = require("database")
 const entity = require("entity")
-const document = require("document")
+const document_text = require("document_text")
 const passage = require("passage")
 const hmac = require("hmac")
 const vector_lib = require("vector")
+const agent_provider_lib = require("agent_provider")
 
 const aspect = {}
 
@@ -263,7 +264,7 @@ function own_vector(db_path, document_id, model)
     if rows == nil or rows[1] == nil then
         return nil
     end
-    return document.unpack_vector(rows[1].vector_packed)
+    return vector_lib.unpack(rows[1].vector_packed)
 end
 
 -- aspect.refresh(db_path, document_id) -> outcome, count | nil, err
@@ -275,8 +276,7 @@ end
 function aspect.refresh(db_path, document_id)
     document_id = tonumber(document_id)
     conf = config.platform_config()
-    agent_provider = require("agent_provider")
-    model = agent_provider.embedding_model()
+    model = agent_provider_lib.embedding_model()
     if model == nil then
         return nil, "no embedding model"
     end
@@ -284,7 +284,7 @@ function aspect.refresh(db_path, document_id)
     if doc == nil then
         return nil, "no such document"
     end
-    text = document.embedding_text(db_path, document_id)
+    text = document_text.embedding_text(db_path, document_id)
     content = doc.content
     if content == nil then
         content = ""
@@ -334,7 +334,7 @@ function aspect.refresh(db_path, document_id)
                 table.insert(offsets, tostring(kept[m].offset - 1))
             end
             table.insert(values, string.format("(%d, %s, %d, %s, %d, %d, %s, %s, %s)",
-                document_id, db.quote(model), i, document.hex_literal(packed), kept[g.medoid].offset - 1,
+                document_id, db.quote(model), i, vector_lib.hex_literal(packed), kept[g.medoid].offset - 1,
                 #g.members, db.quote(table.concat(offsets, ",")), db.quote(hash), db.now_expr(db_path)))
         end
     end

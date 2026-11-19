@@ -12,9 +12,11 @@
 
 const config = require("config")
 const db = require("database")
-const document = require("document")
+const document_text = require("document_text")
 const hmac = require("hmac")
 const vector_lib = require("vector")
+const store_lib = require("store")
+const agent_provider_lib = require("agent_provider")
 
 const passage = {}
 
@@ -69,7 +71,7 @@ function passage.cache_get(db_path, model, hashes)
         rows = {}
     end
     for _, row in ipairs(rows) do
-        vector = document.unpack_vector(row.vector_packed)
+        vector = vector_lib.unpack(row.vector_packed)
         if vector != nil then
             found[row.text_hash] = vector
             table.insert(hit, row.text_hash)
@@ -90,11 +92,11 @@ function passage.cache_put(db_path, model, entries)
     stored = {}
     values = {}
     for _, entry in ipairs(entries) do
-        packed = document.pack_vector(entry[2])
+        packed = vector_lib.pack(entry[2])
         if packed != nil then
             table.insert(values, string.format("(%s, %s, %s, %s, %s)", db.quote(entry[1]), db.quote(model),
-                document.hex_literal(packed), db.now_expr(db_path), db.now_expr(db_path)))
-            stored[entry[1]] = document.unpack_vector(packed)
+                vector_lib.hex_literal(packed), db.now_expr(db_path), db.now_expr(db_path)))
+            stored[entry[1]] = vector_lib.unpack(packed)
         end
     end
     if #values > 0 then
@@ -113,7 +115,7 @@ function passage.prune_cache(db_path, days)
     if days == nil or days <= 0 then
         return 0
     end
-    cutoff_expr = require("store").ago_expr(db_path, math.floor(days * 86400))
+    cutoff_expr = store_lib.ago_expr(db_path, math.floor(days * 86400))
     rows = db.query(db_path, string.format(
         "SELECT COUNT(*) AS n FROM document_passage_cache WHERE last_used_at < %s;", cutoff_expr))
     count = 0
@@ -213,7 +215,7 @@ function passage.split(content, max_chars, min_chars)
     if content == nil or content == "" then
         return {}
     end
-    first = document.preamble_end(content)
+    first = document_text.preamble_end(content)
     last = string.len(content)
     if first > last then
         return {}
@@ -395,12 +397,11 @@ function passage.vectors(db_path, model, passages, max_new)
         end
     end
     if #missing > 0 then
-        agent_provider = require("agent_provider")
         texts = {}
         for _, h in ipairs(missing) do
             table.insert(texts, missing_text[h])
         end
-        new_vectors, err = agent_provider.embeddings_batch(model, texts)
+        new_vectors, err = agent_provider_lib.embeddings_batch(model, texts)
         if new_vectors == nil then
             return nil, err
         end
@@ -546,19 +547,19 @@ function passage.excerpts(db_path, results, query_text, query_vector, model, bud
     if query_vector == nil or model == nil then
         return excerpts
     end
-    query_packed = document.pack_vector(query_vector)
+    query_packed = vector_lib.pack(query_vector)
     if query_packed == nil then
         return excerpts
     end
-    query_unit = document.unpack_vector(query_packed)
-    terms = document.query_terms(query_text)
+    query_unit = vector_lib.unpack(query_packed)
+    terms = document_text.query_terms(query_text)
 
     -- Split every result; documents that fit whole need nothing more.
     work = {}
     for _, r in ipairs(results) do
         content = r.content
         if content != nil and content != "" then
-            body_start = document.preamble_end(content)
+            body_start = document_text.preamble_end(content)
             if string.len(content) - body_start + 1 <= budget then
                 excerpts[tonumber(r.id)] = string.sub(content, body_start)
             else

@@ -12,6 +12,7 @@ const document = require("document")
 const knowledge = require("knowledge")
 const agent = require("agent")
 const examples = require("examples")
+const store_lib = require("store")
 
 const init = {}
 
@@ -79,7 +80,7 @@ function init.do_init(cmd_args, root)
 
     db_path = config.db_path(root)
     -- A fresh store has nothing to migrate; this records it as current.
-    require("store").migrate(db_path)
+    store_lib.migrate(db_path)
     ledger.init_schema(db_path)
     schema.init_schema(db_path)
     extension.init_schema(db_path)

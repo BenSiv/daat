@@ -10,6 +10,7 @@
 
 const db = require("database")
 const json = require("dkjson")
+const store_lib = require("store")
 
 const ledger = {}
 
@@ -70,7 +71,7 @@ CREATE TABLE IF NOT EXISTS entity_event (
 -- straight from ledger.SCHEMA above; an existing one needs this to
 -- pick it up.
 function ensure_entity_event_reason_column(db_path)
-    require("store").ensure_column(db_path, "entity_event", "reason", "TEXT")
+    store_lib.ensure_column(db_path, "entity_event", "reason", "TEXT")
 end
 
 function ledger.init_schema(db_path)

@@ -415,4 +415,18 @@ function tests.page_shell_renders_extracted_shell_nav_and_escapes_context()
         "page_shell should render nav.css with PLATFORM_LAYOUT width")
 end
 
+function tests.admin_api_keys_renders_unarchive_for_archived_key_and_no_users_toggle()
+    print("Testing render_admin_api_keys renders Unarchive for archived keys and omits stray admin-users form")
+    rendered = html.render_admin_api_keys({
+        {label = "live-key", cap = "i", archived_at = nil},
+        {label = "old-key", cap = "i", archived_at = "2026-01-01 00:00:00"},
+    }, "csrf-tok", nil, false, nil)
+    check(string.contains(rendered, "admin-api-keys-archive"),
+        "active key should render Archive form")
+    check(string.contains(rendered, "admin-api-keys-unarchive") and string.contains(rendered, "Unarchive"),
+        "archived key should render Unarchive form")
+    check(not string.contains(rendered, "action=\"admin-users\"") and not string.contains(rendered, "archived users"),
+        "render_admin_api_keys must not emit stray admin-users toggle form")
+end
+
 unit.run(tests)

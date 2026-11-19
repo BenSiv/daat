@@ -23,6 +23,8 @@ const paths = require("paths")
 const bcrypt = require("bcrypt")
 const hmac = require("hmac")
 const mail_provider = require("mail_provider")
+const store_lib = require("store")
+const config_lib = require("config")
 
 const auth = {}
 
@@ -105,7 +107,7 @@ CREATE TABLE IF NOT EXISTS auth_api_key (
 -- can't set one). auth_email_link.email: the address the link went to.
 -- A link only works while that is still the account's address.
 function ensure_auth_columns(db_path)
-    store_mod = require("store")
+    store_mod = store_lib
     store_mod.ensure_columns(db_path, "auth_user", {
         {"email", "VARCHAR(255) DEFAULT NULL"},
         {"email_verified_at", "INTEGER DEFAULT NULL"},
@@ -128,7 +130,7 @@ end
 -- session cookie, so that's an explicit operator action, not implicit
 -- request-time behavior).
 function auth.ensure_session_secret(root)
-    config = require("config")
+    config = config_lib
     path = config.session_secret_path(root)
     if paths.file_exists(path) then
         return true
@@ -155,7 +157,7 @@ function auth.ensure_session_secret(root)
 end
 
 function auth.session_secret(root)
-    config = require("config")
+    config = config_lib
     path = config.session_secret_path(root)
     file = io.open(path, "r")
     if file == nil then
@@ -696,7 +698,7 @@ const SETUP_TTL_SECONDS = 7 * 24 * 60 * 60
 -- sends it. -> true | nil, err. The link is the same /reset-password
 -- page either way; only its lifetime and the email's wording differ.
 function send_account_link(root, db_path, user, purpose, site_name)
-    config = require("config")
+    config = config_lib
     secret, err = auth.session_secret(root)
     if secret == nil then
         return nil, err
@@ -858,7 +860,7 @@ end
 -- The caller must show the same response for true and false alike, so
 -- the form never reveals whether an account exists.
 function auth.request_password_reset(root, db_path, identifier, site_name)
-    config = require("config")
+    config = config_lib
     user = find_reset_account(db_path, identifier)
     if user == nil then
         return false
@@ -1014,7 +1016,7 @@ function auth.do_user(cmd_args, db_path)
 
     -- Run from the store root, like every other CLI command ("." below).
     if action == "invite" then
-        config = require("config")
+        config = config_lib
         login = cmd_args[2]
         email = cmd_args[3]
         cap = cmd_args[4]
@@ -1064,7 +1066,7 @@ function auth.do_user(cmd_args, db_path)
             return
         end
         print("Email updated for " .. login)
-        config = require("config")
+        config = config_lib
         user = auth.get_user(db_path, login)
         if config.password_reset_enabled() and user.email != nil and not auth.email_verified(user) then
             sent, send_err = auth.send_setup_link(".", db_path, login, config.load_theme(".").site_name)
