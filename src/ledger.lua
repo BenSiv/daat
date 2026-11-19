@@ -25,7 +25,10 @@ ledger.SCHEMA = """
 -- columns elsewhere in this file are untouched.
 CREATE TABLE IF NOT EXISTS entity_type (
     name VARCHAR(255) PRIMARY KEY,
-    created_at TEXT DEFAULT (%s)
+    created_at TEXT DEFAULT (%s),
+    require_reason_on_update INTEGER DEFAULT 0,
+    require_reason_on_archive INTEGER DEFAULT 0,
+    admin_write_only INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS entity_field (
@@ -36,6 +39,9 @@ CREATE TABLE IF NOT EXISTS entity_field (
     enum_values TEXT,
     ref_entity_type TEXT,
     field_order INTEGER NOT NULL,
+    display INTEGER DEFAULT 0,
+    allowed_entity_types LONGTEXT,
+    identifier INTEGER DEFAULT 0,
     PRIMARY KEY (entity_type, name)
 );
 
@@ -64,14 +70,7 @@ CREATE TABLE IF NOT EXISTS entity_event (
 -- straight from ledger.SCHEMA above; an existing one needs this to
 -- pick it up.
 function ensure_entity_event_reason_column(db_path)
-    existing = db.get_columns(db_path, "entity_event")
-    have = {}
-    for _, name in ipairs(existing) do
-        have[name] = true
-    end
-    if have["reason"] == nil then
-        db.exec(db_path, "ALTER TABLE entity_event ADD COLUMN reason TEXT;")
-    end
+    require("store").ensure_column(db_path, "entity_event", "reason", "TEXT")
 end
 
 function ledger.init_schema(db_path)

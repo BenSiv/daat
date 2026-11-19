@@ -367,6 +367,9 @@ CREATE TABLE IF NOT EXISTS document_embedding (
     document_id INTEGER PRIMARY KEY,
     model TEXT NOT NULL,
     vector_json TEXT NOT NULL,
+    vector_packed BLOB,
+    text_hash VARCHAR(64),
+    body_chars INTEGER,
     updated_at TEXT DEFAULT (%s)
 );
 """
@@ -399,52 +402,22 @@ CREATE TABLE IF NOT EXISTS document_link_sync (
 -- wrongly expose them as user-editable/required form fields) -- same
 -- pattern as ledger.lua's ensure_entity_event_reason_column.
 function ensure_document_knowledge_columns(db_path)
-    existing = db.get_columns(db_path, "document")
-    have = {}
-    for _, name in ipairs(existing) do
-        have[name] = true
-    end
-    if have["tier"] == nil then
-        db.exec(db_path, "ALTER TABLE document ADD COLUMN tier INTEGER DEFAULT 0;")
-    end
-    if have["heat"] == nil then
-        db.exec(db_path, "ALTER TABLE document ADD COLUMN heat REAL DEFAULT 1.0;")
-    end
-    if have["retrieval_count"] == nil then
-        db.exec(db_path, "ALTER TABLE document ADD COLUMN retrieval_count INTEGER DEFAULT 0;")
-    end
-    if have["last_retrieved_at"] == nil then
-        db.exec(db_path, "ALTER TABLE document ADD COLUMN last_retrieved_at TEXT;")
-    end
-    if have["source_type"] == nil then
-        db.exec(db_path, "ALTER TABLE document ADD COLUMN source_type TEXT;")
-    end
-    if have["source_id"] == nil then
-        db.exec(db_path, "ALTER TABLE document ADD COLUMN source_id INTEGER;")
-    end
-    if have["source_ref"] == nil then
-        db.exec(db_path, "ALTER TABLE document ADD COLUMN source_ref TEXT;")
-    end
-    if have["content_hash"] == nil then
-        db.exec(db_path, "ALTER TABLE document ADD COLUMN content_hash TEXT;")
-    end
-    if have["duplicate_of"] == nil then
-        db.exec(db_path, "ALTER TABLE document ADD COLUMN duplicate_of INTEGER;")
-    end
-    if have["merged_into"] == nil then
-        db.exec(db_path, "ALTER TABLE document ADD COLUMN merged_into INTEGER;")
-    end
-    -- The conserved heat-pool model (see doc/heat-decay-redesign.md).
-    -- ADD COLUMN ... DEFAULT 1.0 backfills every existing row to
-    -- BASE_HEAT, which is exactly the "reset" migration decision from
-    -- that document -- no separate UPDATE needed.
-    if have["raw_heat"] == nil then
-        db.exec(db_path, "ALTER TABLE document ADD COLUMN raw_heat REAL DEFAULT 1.0;")
-    end
-    if have["scale_at_write"] == nil then
-        db.exec(db_path, "ALTER TABLE document ADD COLUMN scale_at_write REAL DEFAULT 1.0;")
-    end
-    document.ensure_document_pool_columns(db_path, have)
+    store_mod = require("store")
+    store_mod.ensure_columns(db_path, "document", {
+        {"tier", "INTEGER DEFAULT 0"},
+        {"heat", "REAL DEFAULT 1.0"},
+        {"retrieval_count", "INTEGER DEFAULT 0"},
+        {"last_retrieved_at", "TEXT"},
+        {"source_type", "TEXT"},
+        {"source_id", "INTEGER"},
+        {"source_ref", "TEXT"},
+        {"content_hash", "TEXT"},
+        {"duplicate_of", "INTEGER"},
+        {"merged_into", "INTEGER"},
+        {"raw_heat", "REAL DEFAULT 1.0"},
+        {"scale_at_write", "REAL DEFAULT 1.0"},
+    })
+    document.ensure_document_pool_columns(db_path, nil)
 end
 
 ACTIVE_POOL_DOCUMENT_WHERE = "(archived_at IS NULL OR archived_at = '') AND merged_into IS NULL"
@@ -454,6 +427,7 @@ ACTIVE_POOL_DOCUMENT_WHERE = "(archived_at IS NULL OR archived_at = '') AND merg
 -- Kept callable standalone so minimal test tables (tst/unit/document_pool.lua)
 -- and store migration 11 both pick up the exact same schema and backfill.
 function document.ensure_document_pool_columns(db_path, existing_map)
+    store_mod = require("store")
     have = existing_map
     if have == nil then
         if not db.table_exists(db_path, "document") then
@@ -465,13 +439,13 @@ function document.ensure_document_pool_columns(db_path, existing_map)
         end
     end
     if have["log_scale_at_write"] == nil then
-        db.exec(db_path, "ALTER TABLE document ADD COLUMN log_scale_at_write REAL NOT NULL DEFAULT 0.0;")
+        store_mod.ensure_column(db_path, "document", "log_scale_at_write", "REAL NOT NULL DEFAULT 0.0")
         if have["scale_at_write"] != nil then
             db.exec(db_path, "UPDATE document SET log_scale_at_write = LN(scale_at_write) WHERE scale_at_write IS NOT NULL AND scale_at_write > 0 AND scale_at_write != 1.0;")
         end
     end
     if have["pool_active"] == nil then
-        db.exec(db_path, "ALTER TABLE document ADD COLUMN pool_active INTEGER NOT NULL DEFAULT 0;")
+        store_mod.ensure_column(db_path, "document", "pool_active", "INTEGER NOT NULL DEFAULT 0")
         db.exec(db_path, "UPDATE document SET pool_active = 1 WHERE " .. ACTIVE_POOL_DOCUMENT_WHERE .. ";")
     end
 end
@@ -555,19 +529,11 @@ DOCUMENT_EMBEDDING_SQL_COLUMNS = {
 -- DOCUMENT_EMBEDDING_SCHEMA -- one path for new and existing installs
 -- alike.
 function ensure_document_embedding_columns(db_path)
-    have = {}
-    for _, name in ipairs(db.get_columns(db_path, "document_embedding")) do
-        have[name] = true
-    end
-    if have["vector_packed"] == nil then
-        db.exec(db_path, "ALTER TABLE document_embedding ADD COLUMN vector_packed BLOB;")
-    end
-    if have["text_hash"] == nil then
-        db.exec(db_path, "ALTER TABLE document_embedding ADD COLUMN text_hash VARCHAR(64);")
-    end
-    if have["body_chars"] == nil then
-        db.exec(db_path, "ALTER TABLE document_embedding ADD COLUMN body_chars INTEGER;")
-    end
+    require("store").ensure_columns(db_path, "document_embedding", {
+        {"vector_packed", "BLOB"},
+        {"text_hash", "VARCHAR(64)"},
+        {"body_chars", "INTEGER"},
+    })
 end
 
 function document.embedding_sql_columns_text()
@@ -582,18 +548,12 @@ end
 -- no-op, unlike MariaDB) -- same reasoning as knowledge.lua's own
 -- ensure_knowledge_indexes (now folded in here).
 function ensure_document_knowledge_indexes(db_path)
-    indexes = {
-        {name = "document_tier_idx", table = "document",
-         sql = "CREATE INDEX document_tier_idx ON document(tier, heat DESC, retrieval_count DESC);"},
-        {name = "document_hash_idx", table = "document",
-         sql = string.format("CREATE INDEX document_hash_idx ON document(%s);",
-             db.text_index_column(db_path, "content_hash"))},
-    }
-    for _, idx in ipairs(indexes) do
-        if db.index_exists(db_path, idx.table, idx.name) == false then
-            db.exec(db_path, idx.sql)
-        end
-    end
+    store_mod = require("store")
+    store_mod.ensure_index(db_path, "document", "document_tier_idx",
+        "CREATE INDEX document_tier_idx ON document(tier, heat DESC, retrieval_count DESC);")
+    store_mod.ensure_index(db_path, "document", "document_hash_idx",
+        string.format("CREATE INDEX document_hash_idx ON document(%s);",
+            db.text_index_column(db_path, "content_hash")))
 end
 
 -- The conserved heat-pool model (see doc/heat-decay-redesign.md). One
@@ -632,17 +592,13 @@ BASE_HEAT = 1.0
 -- first, and for a fresh install where the column already came from
 -- the CREATE TABLE itself.
 function ensure_knowledge_pool_state_log_scale_column(db_path)
-    existing = db.get_columns(db_path, "knowledge_pool_state")
-    have = {}
-    for _, name in ipairs(existing) do
-        have[name] = true
-    end
-    if have["log_pool_scale"] != nil then
+    store_mod = require("store")
+    if store_mod.has_column(db_path, "knowledge_pool_state", "log_pool_scale") then
         return
     end
-    db.exec(db_path, "ALTER TABLE knowledge_pool_state ADD COLUMN log_pool_scale REAL NOT NULL DEFAULT 0.0;")
+    store_mod.ensure_column(db_path, "knowledge_pool_state", "log_pool_scale", "REAL NOT NULL DEFAULT 0.0")
     rows = db.query(db_path, "SELECT pool_scale FROM knowledge_pool_state WHERE id = 1;")
-    if rows != nil and rows[1] != nil then
+    if rows != nil and rows[1] != nil and tonumber(rows[1].pool_scale) != nil and tonumber(rows[1].pool_scale) > 0 then
         db.exec(db_path, string.format(
             "UPDATE knowledge_pool_state SET log_pool_scale = %.17g WHERE id = 1;",
             math.log(tonumber(rows[1].pool_scale))

@@ -428,46 +428,19 @@ end
 -- migrates it the same way sync_table() already migrates per-type
 -- tables: additive, idempotent, safe to re-run on every sync.
 function ensure_entity_field_display_column(db_path)
-    existing = db.get_columns(db_path, "entity_field")
-    have = {}
-    for _, name in ipairs(existing) do
-        have[name] = true
-    end
-    if have["display"] == nil then
-        db.exec(db_path, "ALTER TABLE entity_field ADD COLUMN display INTEGER DEFAULT 0;")
-    end
-    -- entity_field predates polymorphic_reference/multi_polymorphic_
-    -- reference -- same migration pattern as `display` just above.
-    -- JSON-encoded list, same convention as enum_values, since a
-    -- polymorphic field's allowed target types are a list, not the one
-    -- fixed ref_entity_type a plain reference/multi_reference declares.
-    if have["allowed_entity_types"] == nil then
-        db.exec(db_path, "ALTER TABLE entity_field ADD COLUMN allowed_entity_types LONGTEXT;")
-    end
-    -- Same pattern again, for the `identifier` flag (see schema.validate).
-    if have["identifier"] == nil then
-        db.exec(db_path, "ALTER TABLE entity_field ADD COLUMN identifier INTEGER DEFAULT 0;")
-    end
+    require("store").ensure_columns(db_path, "entity_field", {
+        {"display", "INTEGER DEFAULT 0"},
+        {"allowed_entity_types", "LONGTEXT"},
+        {"identifier", "INTEGER DEFAULT 0"},
+    })
 end
 
--- entity_type predates the require_reason_on_update/require_reason_on_
--- archive flags and admin_write_only -- same reasoning/pattern as
--- ensure_entity_field_display_column just above.
 function ensure_entity_type_reason_flag_columns(db_path)
-    existing = db.get_columns(db_path, "entity_type")
-    have = {}
-    for _, name in ipairs(existing) do
-        have[name] = true
-    end
-    if have["require_reason_on_update"] == nil then
-        db.exec(db_path, "ALTER TABLE entity_type ADD COLUMN require_reason_on_update INTEGER DEFAULT 0;")
-    end
-    if have["require_reason_on_archive"] == nil then
-        db.exec(db_path, "ALTER TABLE entity_type ADD COLUMN require_reason_on_archive INTEGER DEFAULT 0;")
-    end
-    if have["admin_write_only"] == nil then
-        db.exec(db_path, "ALTER TABLE entity_type ADD COLUMN admin_write_only INTEGER DEFAULT 0;")
-    end
+    require("store").ensure_columns(db_path, "entity_type", {
+        {"require_reason_on_update", "INTEGER DEFAULT 0"},
+        {"require_reason_on_archive", "INTEGER DEFAULT 0"},
+        {"admin_write_only", "INTEGER DEFAULT 0"},
+    })
 end
 
 function schema.register(db_path, def)

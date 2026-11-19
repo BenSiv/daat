@@ -43,6 +43,9 @@ CREATE TABLE IF NOT EXISTS auth_user (
     -- VARCHAR(32), not TEXT -- see extension.lua's system_job.status
     -- for why: real MySQL 8.0 rejects a literal DEFAULT on TEXT columns.
     cap VARCHAR(32) NOT NULL DEFAULT '',
+    email VARCHAR(255) DEFAULT NULL,
+    email_verified_at INTEGER DEFAULT NULL,
+    session_version INTEGER NOT NULL DEFAULT 0,
     created_at TEXT DEFAULT (%s),
     archived_at TEXT
 );
@@ -56,6 +59,8 @@ CREATE TABLE IF NOT EXISTS auth_user (
 CREATE TABLE IF NOT EXISTS auth_email_link (
     token_hash VARCHAR(64) PRIMARY KEY,
     login VARCHAR(255) NOT NULL,
+    purpose VARCHAR(16) NOT NULL DEFAULT 'reset',
+    email VARCHAR(255) DEFAULT NULL,
     issued_at INTEGER NOT NULL,
     expires_at INTEGER NOT NULL,
     used_at INTEGER
@@ -125,11 +130,16 @@ end
 -- can't set one). auth_email_link.email: the address the link went to.
 -- A link only works while that is still the account's address.
 function ensure_auth_columns(db_path)
-    add_column_if_missing(db_path, "auth_user", "email", "VARCHAR(255) DEFAULT NULL")
-    add_column_if_missing(db_path, "auth_user", "email_verified_at", "INTEGER DEFAULT NULL")
-    add_column_if_missing(db_path, "auth_user", "session_version", "INTEGER NOT NULL DEFAULT 0")
-    add_column_if_missing(db_path, "auth_email_link", "purpose", "VARCHAR(16) NOT NULL DEFAULT 'reset'")
-    add_column_if_missing(db_path, "auth_email_link", "email", "VARCHAR(255) DEFAULT NULL")
+    store_mod = require("store")
+    store_mod.ensure_columns(db_path, "auth_user", {
+        {"email", "VARCHAR(255) DEFAULT NULL"},
+        {"email_verified_at", "INTEGER DEFAULT NULL"},
+        {"session_version", "INTEGER NOT NULL DEFAULT 0"},
+    })
+    store_mod.ensure_columns(db_path, "auth_email_link", {
+        {"purpose", "VARCHAR(16) NOT NULL DEFAULT 'reset'"},
+        {"email", "VARCHAR(255) DEFAULT NULL"},
+    })
 end
 
 function auth.init_schema(db_path)

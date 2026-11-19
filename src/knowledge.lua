@@ -33,7 +33,7 @@ knowledge = {}
 
 KNOWLEDGE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS knowledge_retrieval (
-    id INTEGER PRIMARY KEY %s,
+    id INTEGER PRIMARY KEY {{AUTOINC}},
     session_id TEXT,
     author VARCHAR(255),
     query_text TEXT,
@@ -42,17 +42,9 @@ CREATE TABLE IF NOT EXISTS knowledge_retrieval (
     claim_token VARCHAR(64),
     claimed_at TEXT,
     reviewed_at TEXT,
-    created_at TEXT DEFAULT (%s)
+    created_at TEXT DEFAULT ({{NOW}})
 );
 
--- `rank` (backtick-quoted, not a bare identifier): a genuine reserved
--- word in MySQL 8.0 (window functions), though not in MariaDB (see
--- doc/mariadb-migration.md). Backtick quoting is valid MySQL/MariaDB
--- syntax and SQLite's own MySQL-compatibility extension, so this is a
--- single, unified fix needing no per-backend branch.
--- One row per document a retrieval returned: its rank and score, the
--- heat reinforcement it got, and -- once knowledge.review_retrieval has
--- looked at it -- the rule-based review outcome (reviewed_at set).
 CREATE TABLE IF NOT EXISTS knowledge_retrieval_hit (
     retrieval_id INTEGER NOT NULL,
     document_id INTEGER NOT NULL,
@@ -65,57 +57,36 @@ CREATE TABLE IF NOT EXISTS knowledge_retrieval_hit (
     duplication_status VARCHAR(32),
     title_status VARCHAR(32),
     reviewed_at TEXT,
+    aspect INTEGER DEFAULT NULL,
     PRIMARY KEY (retrieval_id, document_id)
 );
 
--- One row per *pair* of documents whose co-retrieval has been evaluated
--- (linked or declined) -- document_a_id is always the smaller id, so
--- (a,b) and (b,a) are always the same row. What makes "don't re-ask on
--- every shared retrieval" and "re-ask once co-occurrence has grown
--- enough since a decline" both possible without re-running the same
--- model call over and over.
 CREATE TABLE IF NOT EXISTS knowledge_link_review (
     document_a_id INTEGER NOT NULL,
     document_b_id INTEGER NOT NULL,
     last_co_count INTEGER NOT NULL,
-    -- VARCHAR(32), not TEXT -- same MariaDB/InnoDB key-length reasoning
-    -- as every other short-code column in this codebase (ledger.lua's
-    -- own SCHEMA comment has the full story) -- not itself part of this
-    -- table's key, but kept consistent with that convention regardless.
     decision VARCHAR(32) NOT NULL,
-    evaluated_at TEXT DEFAULT (%s),
+    reason TEXT DEFAULT NULL,
+    evaluated_at TEXT DEFAULT ({{NOW}}),
     PRIMARY KEY (document_a_id, document_b_id)
 );
 
--- One row per document that's had its tier judged by the agent at
--- least once -- lets due_for_tier_judgment skip re-asking the model
--- when nothing has changed since the last judgment, the same
--- "don't re-run the same model call over and over" reasoning as
--- knowledge_link_review's own last_co_count column.
 CREATE TABLE IF NOT EXISTS document_tier_judgment (
     document_id INTEGER PRIMARY KEY,
     judged_hash TEXT NOT NULL,
     judged_tier INTEGER NOT NULL,
-    evaluated_at TEXT DEFAULT (%s)
+    evaluated_at TEXT DEFAULT ({{NOW}})
 );
 
--- The curate step's queue and outcomes, one row per source (src/curate.lua,
--- doc/tier-curation-ladder.md): the content hash it last saw, and how
--- that went -- pending, curated (note_id is the tier-1 note), nothing,
--- rejected (reason from the check), failed.
 CREATE TABLE IF NOT EXISTS knowledge_curation (
     document_id INTEGER PRIMARY KEY,
     source_hash VARCHAR(64) NOT NULL,
     status VARCHAR(32) NOT NULL,
     note_id INTEGER,
     reason TEXT,
-    queued_at TEXT DEFAULT (%s)
+    queued_at TEXT DEFAULT ({{NOW}})
 );
 
--- The same for one aspect of a long source (doc/aspect-retrieval-plan.md):
--- a part of it searches keep finding through that aspect, curated into a
--- note of its own next to the whole-source one. source_hash is of the
--- part's text, so the note is rewritten only when that part changes.
 CREATE TABLE IF NOT EXISTS knowledge_aspect_curation (
     document_id INTEGER NOT NULL,
     aspect INTEGER NOT NULL,
@@ -123,51 +94,35 @@ CREATE TABLE IF NOT EXISTS knowledge_aspect_curation (
     status VARCHAR(32) NOT NULL,
     note_id INTEGER,
     reason TEXT,
-    queued_at TEXT DEFAULT (%s),
+    queued_at TEXT DEFAULT ({{NOW}}),
     PRIMARY KEY (document_id, aspect)
 );
 
--- The same for a conversation (src/curate.lua, doc/agent-data.md,
--- "Curation"): one row per chat session, curated from its requests,
--- answers and reasoning. checked_at is when the conversation was last
--- looked at, so one that hasn't changed since isn't hashed again.
 CREATE TABLE IF NOT EXISTS knowledge_conversation_curation (
     session_id VARCHAR(255) PRIMARY KEY,
     source_hash VARCHAR(64) NOT NULL,
     status VARCHAR(32) NOT NULL,
     note_id INTEGER,
     reason TEXT,
-    queued_at TEXT DEFAULT (%s),
+    queued_at TEXT DEFAULT ({{NOW}}),
     checked_at TEXT
 );
 
--- The synthesize step's queue and outcomes, one row per tag
--- (src/synthesize.lua): the hash of the notes it last saw, and how that
--- went -- pending, running, referenced (document_id is the tier-2
--- reference), nothing, rejected, failed.
--- The distill step's outcomes, one row per tier-2 reference
--- (src/distill.lua): the reference's content hash when last distilled,
--- and how that went -- pending, running, distilled (reason counts what
--- it wrote), nothing, failed.
 CREATE TABLE IF NOT EXISTS knowledge_distillation (
     reference_id INTEGER PRIMARY KEY,
     reference_hash VARCHAR(64) NOT NULL,
     status VARCHAR(32) NOT NULL,
     reason TEXT,
-    queued_at TEXT DEFAULT (%s)
+    queued_at TEXT DEFAULT ({{NOW}})
 );
 
--- Tag definitions as records (src/tag_define.lua), one row per tag:
--- the hash of what the definition was written from (label, description,
--- broader tag, siblings, central titles) and how that went -- defined
--- (document_id is the record), rejected, failed.
 CREATE TABLE IF NOT EXISTS knowledge_tag_definition (
     tag_id INTEGER PRIMARY KEY,
     input_hash VARCHAR(64) NOT NULL,
     status VARCHAR(32) NOT NULL,
     document_id INTEGER,
     reason TEXT,
-    defined_at TEXT DEFAULT (%s)
+    defined_at TEXT DEFAULT ({{NOW}})
 );
 
 CREATE TABLE IF NOT EXISTS knowledge_reference (
@@ -176,98 +131,41 @@ CREATE TABLE IF NOT EXISTS knowledge_reference (
     status VARCHAR(32) NOT NULL,
     document_id INTEGER,
     reason TEXT,
-    queued_at TEXT DEFAULT (%s)
+    queued_at TEXT DEFAULT ({{NOW}})
 );
 
 """
 
 function knowledge_schema_sql(db_path)
-    return string.format(KNOWLEDGE_SCHEMA,
-        db.autoincrement_keyword(db_path), db.now_expr(db_path),
-        db.now_expr(db_path),
-        db.now_expr(db_path),
-        db.now_expr(db_path),
-        db.now_expr(db_path),
-        db.now_expr(db_path),
-        db.now_expr(db_path),
-        db.now_expr(db_path),
-        db.now_expr(db_path)
-    )
+    sql = string.gsub(KNOWLEDGE_SCHEMA, "{{AUTOINC}}", db.autoincrement_keyword(db_path))
+    sql = string.gsub(sql, "{{NOW}}", db.now_expr(db_path))
+    return sql
 end
 
--- Real MySQL has no "CREATE INDEX IF NOT EXISTS" at all (a syntax error,
--- not a no-op, unlike MariaDB -- see doc/mariadb-migration.md). Pulled
--- out of KNOWLEDGE_SCHEMA's own semicolon batch into their own guarded
--- execs (db.index_exists first, same "check, then conditionally create"
--- shape schema.lua's own CREATE INDEX call sites use) since a single bad
--- statement fails the whole batch on MySQL, not just that one statement.
 function ensure_knowledge_indexes(db_path)
-    indexes = {
-        {name = "knowledge_retrieval_document_document_idx", table = "knowledge_retrieval_hit",
-         sql = "CREATE INDEX knowledge_retrieval_document_document_idx ON knowledge_retrieval_hit(document_id);"},
-        {name = "knowledge_retrieval_status_id_idx", table = "knowledge_retrieval",
-         sql = "CREATE INDEX knowledge_retrieval_status_id_idx ON knowledge_retrieval(status, id);"},
-    }
-    for _, idx in ipairs(indexes) do
-        if db.index_exists(db_path, idx.table, idx.name) == false then
-            db.exec(db_path, idx.sql)
-        end
-    end
+    store_mod = require("store")
+    store_mod.ensure_index(db_path, "knowledge_retrieval_hit", "knowledge_retrieval_document_document_idx",
+        "CREATE INDEX knowledge_retrieval_document_document_idx ON knowledge_retrieval_hit(document_id);")
+    store_mod.ensure_index(db_path, "knowledge_retrieval", "knowledge_retrieval_status_id_idx",
+        "CREATE INDEX knowledge_retrieval_status_id_idx ON knowledge_retrieval(status, id);")
 end
 
--- Deferred retrieval review columns on knowledge_retrieval (store
--- migration 10; doc/tier-curation-ladder.md, Phase 2). Pre-existing rows
--- get DEFAULT 'reviewed' so past inline searches are never re-applied.
 function knowledge.ensure_retrieval_review_columns(db_path)
-    if not db.table_exists(db_path, "knowledge_retrieval") then
-        return
-    end
-    have = {}
-    for _, name in ipairs(db.get_columns(db_path, "knowledge_retrieval")) do
-        have[name] = true
-    end
-    if have["author"] == nil then
-        db.exec(db_path, "ALTER TABLE knowledge_retrieval ADD COLUMN author VARCHAR(255) DEFAULT NULL;")
-    end
-    if have["status"] == nil then
-        db.exec(db_path, "ALTER TABLE knowledge_retrieval ADD COLUMN status VARCHAR(32) NOT NULL DEFAULT 'reviewed';")
-    end
-    if have["claim_token"] == nil then
-        db.exec(db_path, "ALTER TABLE knowledge_retrieval ADD COLUMN claim_token VARCHAR(64) DEFAULT NULL;")
-    end
-    if have["claimed_at"] == nil then
-        db.exec(db_path, "ALTER TABLE knowledge_retrieval ADD COLUMN claimed_at TEXT DEFAULT NULL;")
-    end
-    if have["reviewed_at"] == nil then
-        db.exec(db_path, "ALTER TABLE knowledge_retrieval ADD COLUMN reviewed_at TEXT DEFAULT NULL;")
-    end
+    require("store").ensure_columns(db_path, "knowledge_retrieval", {
+        {"author", "VARCHAR(255) DEFAULT NULL"},
+        {"status", "VARCHAR(32) NOT NULL DEFAULT 'reviewed'"},
+        {"claim_token", "VARCHAR(64) DEFAULT NULL"},
+        {"claimed_at", "TEXT DEFAULT NULL"},
+        {"reviewed_at", "TEXT DEFAULT NULL"},
+    })
 end
 
--- The model's one-sentence reason behind a link review's decision --
--- for "linked" it's also written as the new link's own note
--- (document_link.note); for "declined" this is the only place it's
--- kept, so a NO can be audited later instead of being a bare verdict.
 function ensure_link_review_reason_column(db_path)
-    existing = db.get_columns(db_path, "knowledge_link_review")
-    have = {}
-    for _, name in ipairs(existing) do
-        have[name] = true
-    end
-    if have["reason"] == nil then
-        db.exec(db_path, "ALTER TABLE knowledge_link_review ADD COLUMN reason TEXT DEFAULT NULL;")
-    end
+    require("store").ensure_column(db_path, "knowledge_link_review", "reason", "TEXT DEFAULT NULL")
 end
 
--- Which aspect of the document found it (src/aspect.lua; NULL: its own
--- vector or its words did). Postdates the table, so retrofitted.
 function ensure_retrieval_hit_aspect_column(db_path)
-    have = {}
-    for _, name in ipairs(db.get_columns(db_path, "knowledge_retrieval_hit")) do
-        have[name] = true
-    end
-    if have["aspect"] == nil then
-        db.exec(db_path, "ALTER TABLE knowledge_retrieval_hit ADD COLUMN aspect INTEGER DEFAULT NULL;")
-    end
+    require("store").ensure_column(db_path, "knowledge_retrieval_hit", "aspect", "INTEGER DEFAULT NULL")
 end
 
 function knowledge.init_schema(db_path)
