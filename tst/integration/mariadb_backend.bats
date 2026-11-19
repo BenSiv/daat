@@ -54,7 +54,7 @@ setup() {
     export TEST_DIR="$(mktemp -d)"
     cd "$TEST_DIR"
     cat > config.lua <<EOF
-return {db_backend = "mariadb", mariadb_host = "${DAAT_MARIADB_HOST}", mariadb_port = ${DAAT_MARIADB_PORT}, mariadb_user = "${DAAT_MARIADB_USER}", mariadb_database = "${DAAT_MARIADB_DATABASE}"}
+return {database = {backend = "mariadb", host = "${DAAT_MARIADB_HOST}", port = ${DAAT_MARIADB_PORT}, user = "${DAAT_MARIADB_USER}", database = "${DAAT_MARIADB_DATABASE}"}}
 EOF
 }
 
@@ -356,7 +356,7 @@ JSON
 
 @test "passage search caches embeddings in document_passage_cache on MariaDB/MySQL, reads them back, and prunes them" {
     cat > config.lua <<EOF2
-return {db_backend = "mariadb", mariadb_host = "${DAAT_MARIADB_HOST}", mariadb_port = ${DAAT_MARIADB_PORT}, mariadb_user = "${DAAT_MARIADB_USER}", mariadb_database = "${DAAT_MARIADB_DATABASE}", agent_provider = "test", search_provider = "test", embedding_quiet_minutes = 0, search_passages = true, passage_min_chars = 50}
+return {database = {backend = "mariadb", host = "${DAAT_MARIADB_HOST}", port = ${DAAT_MARIADB_PORT}, user = "${DAAT_MARIADB_USER}", database = "${DAAT_MARIADB_DATABASE}"}, agent = {provider = "test"}, knowledge = {embedding_quiet_minutes = 0, search_passages = true, passage_min_chars = 50}, search = {provider = "test"}}
 EOF2
     export AGENT_TEST_EMBEDDINGS=terms
     export AGENT_TEST_EMBEDDINGS_LOG="$TEST_DIR/embeddings.log"
@@ -390,7 +390,7 @@ EOF2
 
 @test "aspects are built into document_aspect on MariaDB/MySQL, and search finds a document through one" {
     cat > config.lua <<EOF2
-return {db_backend = "mariadb", mariadb_host = "${DAAT_MARIADB_HOST}", mariadb_port = ${DAAT_MARIADB_PORT}, mariadb_user = "${DAAT_MARIADB_USER}", mariadb_database = "${DAAT_MARIADB_DATABASE}", agent_provider = "test", search_provider = "test", embedding_quiet_minutes = 0, search_passages = true, passage_min_chars = 50, aspect_min_chars = 1000, build_aspects = true, search_aspects = true}
+return {database = {backend = "mariadb", host = "${DAAT_MARIADB_HOST}", port = ${DAAT_MARIADB_PORT}, user = "${DAAT_MARIADB_USER}", database = "${DAAT_MARIADB_DATABASE}"}, agent = {provider = "test"}, knowledge = {embedding_quiet_minutes = 0, search_passages = true, passage_min_chars = 50, aspect_min_chars = 1000, build_aspects = true, search_aspects = true}, search = {provider = "test"}}
 EOF2
     export AGENT_TEST_EMBEDDINGS=terms
     "$BIN" init >/dev/null
@@ -414,7 +414,7 @@ EOF2
 
 @test "store migration 9 widens MariaDB agent_message.content to LONGTEXT so >64 KB thinking payloads survive (#37)" {
     cat > config.lua <<EOF2
-return {db_backend = "mariadb", mariadb_host = "${DAAT_MARIADB_HOST}", mariadb_port = ${DAAT_MARIADB_PORT}, mariadb_user = "${DAAT_MARIADB_USER}", mariadb_database = "${DAAT_MARIADB_DATABASE}", agent_provider = "test", agent_thinking = "full", agent_turn_mode = "inline"}
+return {database = {backend = "mariadb", host = "${DAAT_MARIADB_HOST}", port = ${DAAT_MARIADB_PORT}, user = "${DAAT_MARIADB_USER}", database = "${DAAT_MARIADB_DATABASE}"}, agent = {provider = "test", thinking = "full", turn_mode = "inline"}}
 EOF2
     "$BIN" init >/dev/null
     read -r session csrf <<< "$(login_test_user alice i)"
@@ -438,7 +438,7 @@ EOF2
 
 @test "store prune stubs tool_trace rows, clears model_input, reports stored chars by type, and is idempotent on MariaDB (#35)" {
     cat > config.lua <<EOF2
-return {db_backend = "mariadb", mariadb_host = "${DAAT_MARIADB_HOST}", mariadb_port = ${DAAT_MARIADB_PORT}, mariadb_user = "${DAAT_MARIADB_USER}", mariadb_database = "${DAAT_MARIADB_DATABASE}", agent_provider = "test", agent_turn_mode = "inline", agent_retention = "standard"}
+return {database = {backend = "mariadb", host = "${DAAT_MARIADB_HOST}", port = ${DAAT_MARIADB_PORT}, user = "${DAAT_MARIADB_USER}", database = "${DAAT_MARIADB_DATABASE}"}, agent = {provider = "test", turn_mode = "inline", retention = "standard"}}
 EOF2
     "$BIN" init >/dev/null
     read -r session csrf <<< "$(login_test_user alice i)"
@@ -473,7 +473,7 @@ EOF2
 
 @test "deferred search_review_mode queues retrieval review on MariaDB and review-pending drains it idempotently" {
     cat > config.lua <<EOF2
-return {db_backend = "mariadb", mariadb_host = "${DAAT_MARIADB_HOST}", mariadb_port = ${DAAT_MARIADB_PORT}, mariadb_user = "${DAAT_MARIADB_USER}", mariadb_database = "${DAAT_MARIADB_DATABASE}", agent_provider = "test", search_provider = "test", embedding_quiet_minutes = 0}
+return {database = {backend = "mariadb", host = "${DAAT_MARIADB_HOST}", port = ${DAAT_MARIADB_PORT}, user = "${DAAT_MARIADB_USER}", database = "${DAAT_MARIADB_DATABASE}"}, agent = {provider = "test"}, knowledge = {embedding_quiet_minutes = 0}, search = {provider = "test"}}
 EOF2
     "$BIN" init >/dev/null
     read -r session csrf <<< "$(login_test_user alice i)"
@@ -509,7 +509,7 @@ EOF2
 
 @test "store migration 11 and daat store verify succeed end-to-end on MariaDB" {
     cat > config.lua <<EOF2
-return {db_backend = "mariadb", mariadb_host = "${DAAT_MARIADB_HOST}", mariadb_port = ${DAAT_MARIADB_PORT}, mariadb_user = "${DAAT_MARIADB_USER}", mariadb_database = "${DAAT_MARIADB_DATABASE}", agent_provider = "test", search_provider = "test", embedding_quiet_minutes = 0}
+return {database = {backend = "mariadb", host = "${DAAT_MARIADB_HOST}", port = ${DAAT_MARIADB_PORT}, user = "${DAAT_MARIADB_USER}", database = "${DAAT_MARIADB_DATABASE}"}, agent = {provider = "test"}, knowledge = {embedding_quiet_minutes = 0}, search = {provider = "test"}}
 EOF2
     "$BIN" init >/dev/null
     q() { mariadb -N -h "$DAAT_MARIADB_HOST" -P "$DAAT_MARIADB_PORT" -u "$DAAT_MARIADB_USER" -p"$DAAT_MARIADB_PASSWORD" "$DAAT_MARIADB_DATABASE" -e "$1" 2>/dev/null; }
@@ -584,7 +584,7 @@ EOF
 
 @test "email verification and forgot/reset-password flow work end-to-end on MariaDB" {
     cat > config.lua <<EOF2
-return {db_backend = "mariadb", mariadb_host = "${DAAT_MARIADB_HOST}", mariadb_port = ${DAAT_MARIADB_PORT}, mariadb_user = "${DAAT_MARIADB_USER}", mariadb_database = "${DAAT_MARIADB_DATABASE}", mail_provider = "test", mail_from = "noreply@example.com", public_url = "https://lims.example.com/"}
+return {database = {backend = "mariadb", host = "${DAAT_MARIADB_HOST}", port = ${DAAT_MARIADB_PORT}, user = "${DAAT_MARIADB_USER}", database = "${DAAT_MARIADB_DATABASE}"}, mail = {provider = "test", from = "noreply@example.com", public_url = "https://lims.example.com/"}}
 EOF2
     export MAIL_TEST_OUTBOX="$TEST_DIR/outbox"
     "$BIN" init >/dev/null
@@ -623,7 +623,7 @@ EOF2
 
 @test "tags, tag_centre incremental updates, and repair tags --place-untagged work on MariaDB" {
     cat > config.lua <<EOF2
-return {db_backend = "mariadb", mariadb_host = "${DAAT_MARIADB_HOST}", mariadb_port = ${DAAT_MARIADB_PORT}, mariadb_user = "${DAAT_MARIADB_USER}", mariadb_database = "${DAAT_MARIADB_DATABASE}", agent_provider = "test", embedding_quiet_minutes = 0, tag_min_text = 0}
+return {database = {backend = "mariadb", host = "${DAAT_MARIADB_HOST}", port = ${DAAT_MARIADB_PORT}, user = "${DAAT_MARIADB_USER}", database = "${DAAT_MARIADB_DATABASE}"}, agent = {provider = "test"}, knowledge = {embedding_quiet_minutes = 0, tag_min_text = 0}}
 EOF2
     export AGENT_TEST_EMBEDDINGS=terms
     "$BIN" init >/dev/null
@@ -648,7 +648,7 @@ EOF2
 
 @test "repair duplicates folds near-identical synced papers and updates links on MariaDB" {
     cat > config.lua <<EOF2
-return {db_backend = "mariadb", mariadb_host = "${DAAT_MARIADB_HOST}", mariadb_port = ${DAAT_MARIADB_PORT}, mariadb_user = "${DAAT_MARIADB_USER}", mariadb_database = "${DAAT_MARIADB_DATABASE}", agent_provider = "test", embedding_quiet_minutes = 0}
+return {database = {backend = "mariadb", host = "${DAAT_MARIADB_HOST}", port = ${DAAT_MARIADB_PORT}, user = "${DAAT_MARIADB_USER}", database = "${DAAT_MARIADB_DATABASE}"}, agent = {provider = "test"}, knowledge = {embedding_quiet_minutes = 0}}
 EOF2
     "$BIN" init >/dev/null
     q() { mariadb -N -h "$DAAT_MARIADB_HOST" -P "$DAAT_MARIADB_PORT" -u "$DAAT_MARIADB_USER" -p"$DAAT_MARIADB_PASSWORD" "$DAAT_MARIADB_DATABASE" -e "$1" 2>/dev/null; }
@@ -669,7 +669,7 @@ EOF2
 
 @test "tier curation ladder (curate -> synthesize -> distill) and store verify succeed on MariaDB" {
     cat > config.lua <<EOF2
-return {db_backend = "mariadb", mariadb_host = "${DAAT_MARIADB_HOST}", mariadb_port = ${DAAT_MARIADB_PORT}, mariadb_user = "${DAAT_MARIADB_USER}", mariadb_database = "${DAAT_MARIADB_DATABASE}", agent_provider = "test", embedding_quiet_minutes = 0, tag_min_text = 0}
+return {database = {backend = "mariadb", host = "${DAAT_MARIADB_HOST}", port = ${DAAT_MARIADB_PORT}, user = "${DAAT_MARIADB_USER}", database = "${DAAT_MARIADB_DATABASE}"}, agent = {provider = "test"}, knowledge = {embedding_quiet_minutes = 0, tag_min_text = 0}}
 EOF2
     export AGENT_TEST_EMBEDDINGS=terms
     "$BIN" init >/dev/null

@@ -1,12 +1,23 @@
--- Resolves the store location: a `.store/` directory holding the
--- ledger database, alongside `schemas/`/`extensions/`/`views/`/
--- `templates/` directories. `DOCUMENT_ROOT` (a standard CGI env var
--- most web servers set natively) is the CGI-mode signal for where that
--- root is; CLI mode just uses the current directory.
+-- Deployment paths, declarative configuration schema, validation, and
+-- CLI inspection (`daat config <show|check>`).
+--
+-- A deployment's root holds `.store/` (SQLite file + session secret),
+-- `schemas/`, `dropdowns/`, `extensions/`, `views/`, `templates/`, and
+-- two optional sandboxed-Lua data files:
+--   - `config.lua`: structured operational configuration organized into
+--     seven sections (`database`, `agent`, `knowledge`, `search`, `mail`,
+--     `ui`, `extensions`). Secrets never live in `config.lua`; they are
+--     read from environment variables (`DAAT_MARIADB_PASSWORD`,
+--     `DAAT_SMTP_PASSWORD`, `DAAT_GRAPH_CLIENT_SECRET`,
+--     `ANTHROPIC_API_KEY`, `OLLAMA_API_KEY` / `OPENAI_API_KEY`,
+--     `GOOGLE_SEARCH_API_KEY` / `GOOGLE_SEARCH_ENGINE_ID`).
+--   - `theme.lua`: optional branding (`site_name`, `has_logo`,
+--     `hide_home_heading`, `system_prompt_extra`, `colors`).
 
+const db_lib = require("database")
+const json = require("dkjson")
 const paths = require("paths")
 const sandbox = require("sandbox")
-const db_lib = require("database")
 
 const config = {}
 
@@ -17,33 +28,12 @@ end
 const STORE_DIR = ".store"
 const DB_FILE = "store.db"
 const SESSION_SECRET_FILE = "session_secret"
--- theme.lua/config.lua, not .json -- one config format across the
--- whole platform (schemas/dropdowns/views/templates/extension
--- manifests are all the same sandboxed-Lua-table convention already;
--- see doc/schema.md). Loaded via sandbox.run(source, path,
--- sandbox.data_env()) exactly like those -- a data-only sandbox (no
--- io/os/require/loadstring/network, just pairs/ipairs/string/table/
--- math, see sandbox.lua's own header), not "arbitrary code execution":
--- the only thing a loaded file can do is construct and return a table,
--- which still goes through the same field-by-field validation below
--- either way.
 const THEME_FILE = "theme.lua"
 const CONFIG_FILE = "config.lua"
+
 CONFIG_CACHE = nil
--- config.lua's table as written, for config.setting.
 SETTINGS_CACHE = {}
 
--- The CSS custom-property names a theme.lua may override -- matches
--- ui.lua's own var(--platform-*, <fallback>) usage sites exactly, so a
--- deployment can only override colors/tokens the app already exposes
--- as a hook, never introduce a new one by typo.
--- tier_0..tier_3: the Knowledge Pool's ordinal tier ramp (Raw Intake ->
--- Atomic Record) -- one hue, monotone lightness, light->dark as
--- maturity rises. Validated against dataviz's ordinal-ramp checks
--- (monotone L, adjacent ΔL >= 0.06, light-end contrast >= 2:1 on the
--- default surface, single hue) -- see ui.theme_root_css's own
--- fallback defaults for the values, and doc/knowledge-graph-explorer.md
--- for the second place this ramp is meant to be reused (node color).
 const THEME_COLOR_KEYS = {
     "accent", "accent_2", "bg", "bg_2", "border", "border_2",
     "heading", "input_text", "muted", "muted_2", "text", "th_text",
@@ -51,237 +41,14 @@ const THEME_COLOR_KEYS = {
 }
 config.THEME_COLOR_KEYS = THEME_COLOR_KEYS
 
-function config.find_root()
-    root = os.getenv("DOCUMENT_ROOT")
-    if root != nil and root != "" then
-        return string.gsub(root, "\\", "/")
-    end
-    return "."
-end
+const THEME_TOP_KEYS = {
+    site_name = "string",
+    has_logo = "boolean",
+    hide_home_heading = "boolean",
+    system_prompt_extra = "string",
+    colors = "table",
+}
 
-function config.store_dir(root)
-    if root == nil then
-        root = config.find_root()
-    end
-    return paths.joinpath(root, STORE_DIR)
-end
-
--- "sqlite" (default) or "mariadb" -- see doc/mariadb-migration.md.
--- Sourced from config.lua (config.load()) now, not a raw
--- env var directly -- see that function's own header for why.
-function config.db_backend()
-    return config.load().db_backend
-end
-
--- Connection descriptor for the mariadb backend. host/port/user/
--- database come from config.lua -- real, version-controlled
--- deployment content, not secrets. The password is the one field here
--- that stays a plain env var (DAAT_MARIADB_PASSWORD, never written
--- to a file this repo tracks) -- see config.load()'s header.
-function config.mariadb_descriptor()
-    conf = config.load()
-    password = os.getenv("DAAT_MARIADB_PASSWORD")
-    if password == nil then
-        password = ""
-    end
-    return {
-        host = conf.mariadb_host,
-        port = conf.mariadb_port,
-        user = conf.mariadb_user,
-        password = password,
-        database = conf.mariadb_database,
-    }
-end
-
--- Returns whatever database.lua's db_path parameter expects for the
--- active backend: a SQLite file path (a string) or a MariaDB
--- connection descriptor (a table) -- opaque to every caller either
--- way, only database.lua itself ever inspects the shape (see that
--- file's own header comment).
-function config.db_path(root)
-    if config.db_backend() == "mariadb" then
-        return config.mariadb_descriptor()
-    end
-    return paths.joinpath(config.store_dir(root), DB_FILE)
-end
-
-function config.schemas_dir(root)
-    if root == nil then
-        root = config.find_root()
-    end
-    return paths.joinpath(root, "schemas")
-end
-
-function config.extensions_dir(root)
-    if root == nil then
-        root = config.find_root()
-    end
-    return paths.joinpath(root, "extensions")
-end
-
-function config.views_dir(root)
-    if root == nil then
-        root = config.find_root()
-    end
-    return paths.joinpath(root, "views")
-end
-
-function config.templates_dir(root)
-    if root == nil then
-        root = config.find_root()
-    end
-    return paths.joinpath(root, "templates")
-end
-
--- Named, reusable value lists a select/multi_select field can reference
--- (`dropdown = "work_process"`) instead of inlining its own `values`
--- list -- so several fields (or several entity types) can share one
--- list and a single edit updates every field referencing it.
-function config.dropdowns_dir(root)
-    if root == nil then
-        root = config.find_root()
-    end
-    return paths.joinpath(root, "dropdowns")
-end
-
-function config.session_secret_path(root)
-    if root == nil then
-        root = config.find_root()
-    end
-    return paths.joinpath(config.store_dir(root), SESSION_SECRET_FILE)
-end
-
--- "Initialized" means `daat init` has already created the schema --
--- for sqlite that's a file-exists check; for mariadb there's no file to
--- check, so this looks for entity_event (ledger.lua's own core table,
--- always created first during init) existing in the target database
--- instead. Requires "database_adapter" (the raw per-backend bindings
--- one layer below "database") directly rather than requiring
--- "database" -- "database" already requires config for nothing today
--- and never should (see its own header comment on why dispatch is by
--- db_path's shape, not a config lookup), so this file must not create
--- that cycle from the other direction either.
-function config.is_initialized(root)
-    if config.db_backend() == "mariadb" then
-        descriptor = config.mariadb_descriptor()
-        ok_init, exists_init = pcall(db_lib.table_exists, descriptor, "entity_event")
-        return ok_init == true and exists_init == true
-    end
-    return paths.file_exists(config.db_path(root))
-end
-
-function config.theme_path(root)
-    if root == nil then
-        root = config.find_root()
-    end
-    return paths.joinpath(root, THEME_FILE)
-end
-
--- Optional binary assets (favicon/logo) a deployment's theme.lua can
--- reference -- same "generic hook, real files seeded by whoever wants
--- them" split as theme.lua itself.
-function config.theme_assets_dir(root)
-    if root == nil then
-        root = config.find_root()
-    end
-    return paths.joinpath(root, "theme-assets")
-end
-
--- Vendored third-party assets platform itself ships (e.g. the Toast UI
--- Editor bundle) -- unlike theme_assets_dir, this is NOT
--- DOCUMENT_ROOT-relative: these files belong to the daat
--- checkout/build, not a deployment's own data. DAAT_VENDOR_DIR
--- lets a real deployment point at wherever it actually copied
--- vnd/ to (e.g. /app/vnd in the Celleste Docker image); unset
--- defaults to "./vnd", which matches running from a plain repo
--- checkout (CLI/dev usage, tests).
-function config.vendor_assets_dir()
-    dir = os.getenv("DAAT_VENDOR_DIR")
-    if dir != nil and dir != "" then
-        return dir
-    end
-    return "./vnd"
-end
-
-function config.config_path(root)
-    if root == nil then
-        root = config.find_root()
-    end
-    return paths.joinpath(root, CONFIG_FILE)
-end
-
--- Every deployment-tunable setting that ISN'T a secret: which
--- agent_provider/agent_model to call, the chat agent's own turn/row/
--- retry budgets (doc/architecture.md's own table), and the MariaDB
--- connection's host/port/user/database. All of it is real,
--- version-controlled deployment content -- meant to be committed
--- (see lims/config.lua, seeded into the image/store exactly like
--- theme.lua already is), not something only an operator's shell
--- environment happens to know. The one field in this whole area that
--- IS a secret, the MariaDB password, deliberately stays out of this
--- file and out of version control entirely -- see
--- config.mariadb_descriptor's own DAAT_MARIADB_PASSWORD env var
--- read.
---
--- nav_order/nav_hidden's own shared validation: a plain list of
--- non-empty strings, everything else dropped silently (matching this
--- whole function's own "malformed input falls back, never errors"
--- contract) -- an unrecognized key is ui.lua's own concern to treat
--- as a no-op, not this function's; there's no fixed key vocabulary to
--- check against here since extension-contributed keys ("ext:<name>")
--- are only known at render time, per deployment.
-function validate_nav_key_list(raw)
-    keys = {}
-    for _, value in ipairs(raw) do
-        if type(value) == "string" and value != "" then
-            table.insert(keys, value)
-        end
-    end
-    return keys
-end
-
--- Same generic-hook contract as load_theme below: absent or malformed
--- config.lua, every field just falls back to its default rather
--- than erroring -- a deployment that wants none of this can skip the
--- file entirely. Memoized per-process (CONFIG_CACHE) since a
--- single turn loop reads several of these fields across several calls
--- -- safe to cache because CGI/CLI both start a fresh Lua process per
--- request/invocation, so there's never a stale value left over from
--- an earlier one.
--- reference_aliases: a list of {pattern, replacement} string pairs;
--- anything else in it is dropped rather than failing every request.
-function validate_reference_aliases(list)
-    out = {}
-    for _, pair in ipairs(list) do
-        if type(pair) == "table" and type(pair[1]) == "string" and pair[1] != "" and type(pair[2]) == "string" then
-            table.insert(out, {pair[1], pair[2]})
-        end
-    end
-    return out
-end
-
--- A list of Lua patterns; a non-string or a malformed pattern is dropped
--- rather than failing every embedding.
-function validate_patterns(list)
-    out = {}
-    for _, pattern in ipairs(list) do
-        if type(pattern) == "string" and pattern != "" then
-            ok, _ = pcall(string.find, "", pattern)
-            if ok then
-                table.insert(out, pattern)
-            end
-        end
-    end
-    return out
-end
-
--- Retention per data type (doc/agent-data.md, "Retention", decisions 7
--- and 8; #35). A deployment picks a strategy ("full" | "standard" |
--- "lean") and can override single values with agent_retention_override.
--- "forever" keeps rows indefinitely; 0 on model_input_days means model
--- inputs are not stored at all (lean). The legacy prompt_retention_days
--- key is still read as an alias for model_input_days, with <= 0 mapped
--- to "forever" to preserve its old meaning.
 const RETENTION_STRATEGIES = {
     full = {
         knowledge_days = "forever",
@@ -307,6 +74,359 @@ const RETENTION_STRATEGIES = {
 }
 config.RETENTION_STRATEGIES = RETENTION_STRATEGIES
 
+const DEFAULT_MASKING = {
+    chat = false,
+    research = true,
+    background = true,
+}
+
+const CONFIG_SECTIONS = {
+    "database",
+    "agent",
+    "knowledge",
+    "search",
+    "mail",
+    "ui",
+    "extensions",
+}
+config.CONFIG_SECTIONS = CONFIG_SECTIONS
+
+-- Single source of truth for every `config.lua` setting.
+-- `section` + `key` is the path in `config.lua`; `conf_key` is the field
+-- populated on `config.load()` (and `setting_key` is exposed via
+-- `config.setting(...)` for provider-specific fields).
+const CONFIG_SCHEMA = {
+    -- database
+    {section = "database", key = "backend", conf_key = "db_backend", kind = "enum", enum = {"sqlite", "mariadb"}, default = "sqlite", desc = "Storage backend ('sqlite' or 'mariadb')"},
+    {section = "database", key = "host", conf_key = "mariadb_host", kind = "string", default = "127.0.0.1", desc = "MariaDB server host"},
+    {section = "database", key = "port", conf_key = "mariadb_port", kind = "integer", min = 1, default = 3306, desc = "MariaDB server TCP port"},
+    {section = "database", key = "user", conf_key = "mariadb_user", kind = "string", default = nil, desc = "MariaDB login user (password via DAAT_MARIADB_PASSWORD)"},
+    {section = "database", key = "database", conf_key = "mariadb_database", kind = "string", default = nil, desc = "MariaDB database/schema name"},
+
+    -- agent
+    {section = "agent", key = "provider", conf_key = "agent_provider", kind = "string", default = nil, desc = "LLM provider ('vertex', 'claude', 'ollama', or 'test')"},
+    {section = "agent", key = "model", conf_key = "agent_model", kind = "string", default = nil, desc = "Chat/generation model override"},
+    {section = "agent", key = "thinking", conf_key = "agent_thinking", kind = "enum", enum = {"off", "summary", "full"}, default = "summary", desc = "Reasoning capture level ('off', 'summary', 'full')"},
+    {section = "agent", key = "turn_mode", conf_key = "agent_turn_mode", kind = "enum", enum = {"detached", "inline"}, default = "detached", desc = "Chat turn execution mode ('detached' worker or 'inline')"},
+    {section = "agent", key = "turn_stale_seconds", conf_key = "agent_turn_stale_seconds", kind = "number", min = 1, default = 180, desc = "Seconds without heartbeat before a detached turn is marked stale"},
+    {section = "agent", key = "auto_continue_max", conf_key = "agent_auto_continue_max", kind = "integer", min = 0, default = 3, desc = "Max automatic step-budget continuations for a detached turn"},
+    {section = "agent", key = "auto_continue_minutes", conf_key = "agent_auto_continue_minutes", kind = "number", min = 0, default = 10, desc = "Total wall-clock minutes allowed across auto-continuations"},
+    {section = "agent", key = "max_turns", conf_key = "agent_max_turns", kind = "integer", min = 1, default = 20, desc = "Max model steps per chat turn"},
+    {section = "agent", key = "research_max_turns", conf_key = "agent_research_max_turns", kind = "integer", min = 1, default = 12, desc = "Max model steps per research sub-agent call"},
+    {section = "agent", key = "background_max_turns", conf_key = "agent_background_max_turns", kind = "integer", min = 1, default = 20, desc = "Max model steps per background task"},
+    {section = "agent", key = "background_max_attempts", conf_key = "agent_background_max_attempts", kind = "integer", min = 1, default = 3, desc = "Max retry attempts for a failed background task"},
+    {section = "agent", key = "search_excerpt_length", conf_key = "agent_search_excerpt_length", kind = "integer", min = 1, default = 1200, desc = "Default excerpt character length for document.search"},
+    {section = "agent", key = "search_excerpt_full_length", conf_key = "agent_search_excerpt_full_length", kind = "integer", gt = 0, default = 4000, desc = "Full-detail excerpt character length for document.search"},
+    {section = "agent", key = "query_row_cap", conf_key = "agent_query_row_cap", kind = "integer", min = 1, default = 200, desc = "Max rows returned to the model by entity.query"},
+    {section = "agent", key = "query_char_cap", conf_key = "agent_query_char_cap", kind = "integer", gt = 0, default = 12000, desc = "Max characters returned to the model by entity.query"},
+    {section = "agent", key = "get_field_chars", conf_key = "agent_get_field_chars", kind = "integer", gt = 0, default = 4000, desc = "Preview character window for entity.get text fields"},
+    {section = "agent", key = "tool_result_cap", conf_key = "agent_tool_result_cap", kind = "integer", gt = 0, default = 24000, desc = "Max characters shown inline per tool result before result.read paging"},
+    {section = "agent", key = "knowledge_list_page", conf_key = "agent_knowledge_list_page", kind = "integer", gt = 0, default = 50, desc = "Page size for knowledge.list"},
+    {section = "agent", key = "compaction_threshold", conf_key = "agent_compaction_threshold", kind = "integer", min = 1, default = 48000, desc = "Prompt token threshold triggering conversation compaction"},
+    {section = "agent", key = "context_fixed_tokens", conf_key = "agent_context_fixed_tokens", kind = "integer", min = 0, default = 3900, desc = "Estimated fixed prompt token overhead before first model call"},
+    {section = "agent", key = "chars_per_token", conf_key = "agent_chars_per_token", kind = "number", gt = 0, default = 2.8, desc = "Fallback character-per-token ratio before real token counts exist"},
+    {section = "agent", key = "compaction_mid_turn", conf_key = "agent_compaction_mid_turn", kind = "boolean", default = true, desc = "Check compaction threshold before each step within a turn"},
+    {section = "agent", key = "pin_schema", conf_key = "agent_pin_schema", kind = "boolean", default = true, desc = "Preserve schema discovery tool results verbatim across compaction"},
+    {section = "agent", key = "pinned_schema_chars", conf_key = "agent_pinned_schema_chars", kind = "integer", min = 0, default = 6000, desc = "Character budget for pinned schema tool results"},
+    {section = "agent", key = "dedupe_repeat_calls", conf_key = "agent_dedupe_repeat_calls", kind = "boolean", default = true, desc = "Replace identical repeat read-only tool calls with pointers"},
+    {section = "agent", key = "masking", conf_key = "agent_masking", kind = "masking", default = nil, desc = "Observation masking boolean or {chat, research, background} table"},
+    {section = "agent", key = "masking_keep_last", conf_key = "agent_masking_keep_last", kind = "integer", min = 0, default = 5, desc = "Number of most recent tool results exempted from masking"},
+    {section = "agent", key = "masking_min_chars", conf_key = "agent_masking_min_chars", kind = "integer", min = 0, default = 300, desc = "Minimum tool-result length eligible for observation masking"},
+    {section = "agent", key = "masking_batch_tokens", conf_key = "agent_masking_batch_tokens", kind = "integer", min = 0, default = 4000, desc = "Token step size before advancing the observation-masking boundary"},
+    {section = "agent", key = "carry_user_requests", conf_key = "agent_carry_user_requests", kind = "boolean", default = false, desc = "Carry recent user requests across sessions for the same user"},
+    {section = "agent", key = "carry_user_requests_limit", conf_key = "agent_carry_user_requests_limit", kind = "integer", min = 1, default = 5, desc = "Max prior-session user requests carried forward"},
+    {section = "agent", key = "retention", conf_key = "agent_retention", kind = "enum", enum = {"full", "standard", "lean"}, default = "standard", desc = "Data retention strategy ('full', 'standard', 'lean')"},
+    {section = "agent", key = "retention_override", conf_key = "agent_retention_override", kind = "retention_override", default = nil, desc = "Per-category retention overrides ({knowledge_days, tool_trace_days, model_input_days, metrics_days, transcript_documents})"},
+    {section = "agent", key = "model_input_days", conf_key = "model_input_days", kind = "retention_days", default = nil, desc = "Direct override for stored prompt retention days (number >= 0 or 'forever')"},
+    {section = "agent", key = "transcript_documents", conf_key = "agent_transcript_documents", kind = "enum", enum = {"off", "whole"}, default = nil, desc = "Keep full searchable chat transcript documents ('off' or 'whole')"},
+    {section = "agent", key = "curate_quiet_minutes", conf_key = "agent_curate_quiet_minutes", kind = "number", min = 0, default = 60, desc = "Idle minutes before a chat session becomes eligible for curation"},
+    {section = "agent", key = "chat_attachments_enabled", conf_key = "chat_attachments_enabled", kind = "boolean", default = false, desc = "Enable PDF/document uploads in chat (requires pdftotext/pandoc)"},
+    {section = "agent", key = "vertex_project", setting_key = "vertex_project", kind = "string", default = nil, desc = "Google Cloud project ID for Vertex AI"},
+    {section = "agent", key = "vertex_region", setting_key = "vertex_region", kind = "string", default = nil, desc = "Google Cloud region for Vertex AI (e.g. 'global')"},
+    {section = "agent", key = "ollama_url", setting_key = "ollama_url", kind = "string", default = nil, desc = "Base /v1 URL for Ollama or OpenAI-compatible server"},
+    {section = "agent", key = "ollama_reasoning_effort", setting_key = "ollama_reasoning_effort", kind = "boolean", default = nil, desc = "Send OpenAI reasoning_effort field on Ollama/v1 requests"},
+
+    -- knowledge
+    {section = "knowledge", key = "embedding_model", conf_key = "embedding_model", kind = "string", default = nil, desc = "Embedding model override (changing requires 'daat repair embeddings')"},
+    {section = "knowledge", key = "embedding_quiet_minutes", conf_key = "embedding_quiet_minutes", kind = "number", min = 0, default = 5, desc = "Quiet minutes after save before embedding (0 embeds immediately)"},
+    {section = "knowledge", key = "embedding_skip", conf_key = "embedding_skip", kind = "pattern_list", default = nil, desc = "Lua line patterns stripped from document text before embedding"},
+    {section = "knowledge", key = "search_review_mode", conf_key = "search_review_mode", kind = "enum", enum = {"deferred", "inline"}, default = "deferred", desc = "Run retrieval heat/link review 'deferred' in worker or 'inline'"},
+    {section = "knowledge", key = "search_passages", conf_key = "search_passages", kind = "boolean", default = true, desc = "Score and extract top matching passages within search hits"},
+    {section = "knowledge", key = "passage_max_chars", conf_key = "passage_max_chars", kind = "integer", gt = 0, default = 1500, desc = "Maximum characters per split passage"},
+    {section = "knowledge", key = "passage_min_chars", conf_key = "passage_min_chars", kind = "integer", gt = 0, default = 200, desc = "Minimum characters per passage before merging into neighbors"},
+    {section = "knowledge", key = "passages_per_document", conf_key = "passages_per_document", kind = "integer", gt = 0, default = 2, desc = "Maximum passages shown per shortlisted document"},
+    {section = "knowledge", key = "passage_lexical_weight", conf_key = "passage_lexical_weight", kind = "number", min = 0, default = 0.2, desc = "Lexical weight blended into semantic passage scoring"},
+    {section = "knowledge", key = "passage_max_embeds_per_search", conf_key = "passage_max_embeds_per_search", kind = "integer", gt = 0, default = 60, desc = "Maximum uncached passages embedded during a single search"},
+    {section = "knowledge", key = "passage_cache_days", conf_key = "passage_cache_days", kind = "number", min = 0, default = 30, desc = "Days unused passage embeddings remain cached (0 keeps forever)"},
+    {section = "knowledge", key = "build_aspects", conf_key = "build_aspects", kind = "boolean", default = false, desc = "Build multi-aspect vectors for long documents during embedding"},
+    {section = "knowledge", key = "search_aspects", conf_key = "search_aspects", kind = "boolean", default = false, desc = "Include multi-aspect document vectors in semantic search"},
+    {section = "knowledge", key = "curate_aspects", conf_key = "curate_aspects", kind = "boolean", default = true, desc = "Curate repeatedly retrieved aspects of long sources into standalone notes"},
+    {section = "knowledge", key = "aspect_min_chars", conf_key = "aspect_min_chars", kind = "integer", min = 0, default = 7000, desc = "Minimum document length before building aspect vectors"},
+    {section = "knowledge", key = "aspect_max", conf_key = "aspect_max", kind = "integer", min = 1, default = 4, desc = "Maximum aspect clusters built per long document"},
+    {section = "knowledge", key = "aspect_dims", conf_key = "aspect_dims", kind = "integer", min = 0, default = 0, desc = "Truncated aspect vector dimensions (0 keeps full dimensionality)"},
+    {section = "knowledge", key = "aspect_vector", conf_key = "aspect_vector", kind = "enum", enum = {"medoid", "centroid"}, default = "centroid", desc = "Aspect cluster vector representation ('centroid' or 'medoid')"},
+    {section = "knowledge", key = "link_passage_gate", conf_key = "link_passage_gate", kind = "number", min = 0, default = 0.72, desc = "Minimum passage cosine similarity before proposing co-retrieval links (0 disables)"},
+    {section = "knowledge", key = "link_gate_passages_per_document", conf_key = "link_gate_passages_per_document", kind = "integer", gt = 0, default = 40, desc = "Max passages compared per document in the co-retrieval link gate"},
+    {section = "knowledge", key = "link_gate_max_embeds", conf_key = "link_gate_max_embeds", kind = "integer", gt = 0, default = 80, desc = "Max new passage embeddings computed per co-retrieval pair"},
+    {section = "knowledge", key = "tag_restructure", conf_key = "tag_restructure", kind = "boolean", default = false, desc = "Allow agent-judged tag splits, merges, and relabels after embedding"},
+    {section = "knowledge", key = "tag_dims", conf_key = "tag_dims", kind = "integer", min = 1, default = 256, desc = "Embedding prefix dimensions used for tag centres"},
+    {section = "knowledge", key = "tag_second_within", conf_key = "tag_second_within", kind = "number_or_false", default = 0.02, desc = "Cosine margin to also assign second-nearest tag (or false for single tag)"},
+    {section = "knowledge", key = "tag_min_text", conf_key = "tag_min_text", kind = "integer", min = 0, default = 200, desc = "Minimum body characters required before auto-tagging a document"},
+    {section = "knowledge", key = "tag_split_min", conf_key = "tag_split_min", kind = "integer", min = 2, default = 40, desc = "Minimum member count before a tag is eligible to split"},
+    {section = "knowledge", key = "tag_build_max", conf_key = "tag_build_max", kind = "integer", min = 2, default = 60, desc = "Maximum tag count considered by 'daat tag build'"},
+    {section = "knowledge", key = "tag_build_coarseness", conf_key = "tag_build_coarseness", kind = "number", min = 0, default = 0, desc = "Coarseness exponent biasing 'daat tag build' toward fewer tags"},
+    {section = "knowledge", key = "reference_aliases", conf_key = "reference_aliases", kind = "alias_list", default = nil, desc = "List of {lua_pattern, replacement} pairs for entity-mention normalization"},
+    {section = "knowledge", key = "duplicate_external_prefixes", conf_key = "duplicate_external_prefixes", kind = "string_list", default = nil, desc = "External ID prefixes eligible for duplicate folding"},
+
+    -- search
+    {section = "search", key = "provider", conf_key = "search_provider", kind = "string", default = nil, desc = "Web search provider ('google_cse' or 'test')"},
+
+    -- mail
+    {section = "mail", key = "provider", conf_key = "mail_provider", kind = "string", default = nil, desc = "Outbound mail provider ('smtp', 'graph', or 'test')"},
+    {section = "mail", key = "from", conf_key = "mail_from", kind = "string", default = nil, desc = "Sender email address for password-reset emails"},
+    {section = "mail", key = "public_url", conf_key = "public_url", kind = "string", default = nil, desc = "Externally reachable base URL for emailed links"},
+    {section = "mail", key = "smtp_url", setting_key = "smtp_url", kind = "string", default = nil, desc = "SMTP server URL (e.g. 'smtp://smtp.office365.com:587')"},
+    {section = "mail", key = "smtp_user", setting_key = "smtp_user", kind = "string", default = nil, desc = "SMTP username (password via DAAT_SMTP_PASSWORD)"},
+    {section = "mail", key = "graph_tenant_id", setting_key = "graph_tenant_id", kind = "string", default = nil, desc = "Microsoft Entra tenant ID for Graph mail"},
+    {section = "mail", key = "graph_client_id", setting_key = "graph_client_id", kind = "string", default = nil, desc = "Microsoft Entra app client ID (secret via DAAT_GRAPH_CLIENT_SECRET)"},
+
+    -- ui
+    {section = "ui", key = "nav_order", conf_key = "nav_order", kind = "string_list", default = nil, desc = "Ordered list of sidebar navigation item keys"},
+    {section = "ui", key = "nav_hidden", conf_key = "nav_hidden", kind = "string_list", default = nil, desc = "Sidebar navigation item keys to hide"},
+    {section = "ui", key = "adhoc_row_cap", conf_key = "adhoc_row_cap", kind = "integer", min = 1, default = 1000, desc = "Default row limit applied to ad-hoc /sql queries"},
+
+    -- extensions
+    {section = "extensions", key = "max_job_attempts", conf_key = "extension_max_job_attempts", kind = "integer", min = 1, default = 5, desc = "Max retry attempts for background after-hook extension jobs"},
+}
+config.CONFIG_SCHEMA = CONFIG_SCHEMA
+
+-- Build lookup indexes once at load time.
+const SCHEMA_BY_SECTION = {}
+const SECTION_SET = {}
+const FLAT_KEY_HINTS = {}
+for _, sec in ipairs(CONFIG_SECTIONS) do
+    SCHEMA_BY_SECTION[sec] = {}
+    SECTION_SET[sec] = true
+end
+for _, spec in ipairs(CONFIG_SCHEMA) do
+    SCHEMA_BY_SECTION[spec.section][spec.key] = spec
+    if spec.conf_key != nil then
+        FLAT_KEY_HINTS[spec.conf_key] = spec.section .. "." .. spec.key
+    end
+    if spec.setting_key != nil then
+        FLAT_KEY_HINTS[spec.setting_key] = spec.section .. "." .. spec.key
+    end
+    if FLAT_KEY_HINTS[spec.key] == nil then
+        FLAT_KEY_HINTS[spec.key] = spec.section .. "." .. spec.key
+    end
+end
+
+function edit_distance(a, b)
+    la = string.len(a)
+    lb = string.len(b)
+    prev = {}
+    for j = 0, lb do
+        prev[j] = j
+    end
+    for i = 1, la do
+        curr = {[0] = i}
+        ca = string.byte(a, i)
+        for j = 1, lb do
+            cost = 1
+            if ca == string.byte(b, j) then
+                cost = 0
+            end
+            ins = curr[j - 1] + 1
+            del = prev[j] + 1
+            sub = prev[j - 1] + cost
+            curr[j] = math.min(ins, math.min(del, sub))
+        end
+        prev = curr
+    end
+    return prev[lb]
+end
+
+function closest_match(target, candidates)
+    best = nil
+    best_dist = 4
+    lower_target = string.lower(tostring(target))
+    for _, cand in ipairs(candidates) do
+        d = edit_distance(lower_target, string.lower(cand))
+        if d < best_dist then
+            best_dist = d
+            best = cand
+        end
+    end
+    return best
+end
+
+function secret_env_hint(key_path)
+    lower = string.lower(key_path)
+    if string.find(lower, "mariadb", 1, true) != nil or string.find(lower, "database%.", 1, false) != nil or string.find(lower, "db_", 1, true) != nil then
+        return "DAAT_MARIADB_PASSWORD"
+    end
+    if string.find(lower, "smtp", 1, true) != nil or string.find(lower, "mail%.", 1, false) != nil then
+        return "DAAT_SMTP_PASSWORD"
+    end
+    if string.find(lower, "graph", 1, true) != nil then
+        return "DAAT_GRAPH_CLIENT_SECRET"
+    end
+    if string.find(lower, "anthropic", 1, true) != nil or string.find(lower, "claude", 1, true) != nil then
+        return "ANTHROPIC_API_KEY"
+    end
+    if string.find(lower, "ollama", 1, true) != nil or string.find(lower, "openai", 1, true) != nil then
+        return "OLLAMA_API_KEY or OPENAI_API_KEY"
+    end
+    if string.find(lower, "google", 1, true) != nil or string.find(lower, "search", 1, true) != nil then
+        return "GOOGLE_SEARCH_API_KEY"
+    end
+    return "an environment variable"
+end
+
+function is_secret_key_name(key)
+    lower = string.lower(tostring(key))
+    if string.find(lower, "password", 1, true) != nil then return true end
+    if string.find(lower, "passwd", 1, true) != nil then return true end
+    if string.find(lower, "secret", 1, true) != nil then return true end
+    if string.find(lower, "api_key", 1, true) != nil then return true end
+    if string.find(lower, "apikey", 1, true) != nil then return true end
+    if string.find(lower, "private_key", 1, true) != nil then return true end
+    return false
+end
+
+function scan_for_secret_keys(tbl, prefix, file_label, errors)
+    if type(tbl) != "table" then
+        return
+    end
+    keys = {}
+    for k, _ in pairs(tbl) do
+        table.insert(keys, tostring(k))
+    end
+    table.sort(keys)
+    for _, k in ipairs(keys) do
+        path_label = k
+        if prefix != "" then
+            path_label = prefix .. "." .. k
+        end
+        if is_secret_key_name(k) then
+            table.insert(errors, string.format(
+                "%s: '%s' looks like a secret -- never put secrets in %s; set %s in the environment instead",
+                file_label, path_label, file_label, secret_env_hint(path_label)
+            ))
+        elseif type(tbl[k]) == "table" then
+            scan_for_secret_keys(tbl[k], path_label, file_label, errors)
+        end
+    end
+end
+
+function config.reset_cache()
+    CONFIG_CACHE = nil
+    SETTINGS_CACHE = {}
+end
+
+function config.find_root()
+    root = os.getenv("DOCUMENT_ROOT")
+    if root != nil and root != "" then
+        return string.gsub(root, "\\", "/")
+    end
+    return "."
+end
+
+function config.store_dir(root)
+    if root == nil then
+        root = config.find_root()
+    end
+    return paths.joinpath(root, STORE_DIR)
+end
+
+function config.db_backend(root)
+    return config.load(root).db_backend
+end
+
+function config.mariadb_descriptor(root)
+    conf = config.load(root)
+    password = os.getenv("DAAT_MARIADB_PASSWORD")
+    if password == nil then
+        password = ""
+    end
+    return {
+        host = conf.mariadb_host,
+        port = conf.mariadb_port,
+        user = conf.mariadb_user,
+        password = password,
+        database = conf.mariadb_database,
+    }
+end
+
+function config.db_path(root)
+    if config.db_backend(root) == "mariadb" then
+        return config.mariadb_descriptor(root)
+    end
+    return paths.joinpath(config.store_dir(root), DB_FILE)
+end
+
+function config.schemas_dir(root)
+    if root == nil then root = config.find_root() end
+    return paths.joinpath(root, "schemas")
+end
+
+function config.extensions_dir(root)
+    if root == nil then root = config.find_root() end
+    return paths.joinpath(root, "extensions")
+end
+
+function config.views_dir(root)
+    if root == nil then root = config.find_root() end
+    return paths.joinpath(root, "views")
+end
+
+function config.templates_dir(root)
+    if root == nil then root = config.find_root() end
+    return paths.joinpath(root, "templates")
+end
+
+function config.dropdowns_dir(root)
+    if root == nil then root = config.find_root() end
+    return paths.joinpath(root, "dropdowns")
+end
+
+function config.session_secret_path(root)
+    if root == nil then root = config.find_root() end
+    return paths.joinpath(config.store_dir(root), SESSION_SECRET_FILE)
+end
+
+function config.is_initialized(root)
+    if config.db_backend(root) == "mariadb" then
+        descriptor = config.mariadb_descriptor(root)
+        ok_init, exists_init = pcall(db_lib.table_exists, descriptor, "entity_event")
+        return ok_init == true and exists_init == true
+    end
+    return paths.file_exists(config.db_path(root))
+end
+
+function config.theme_path(root)
+    if root == nil then root = config.find_root() end
+    return paths.joinpath(root, THEME_FILE)
+end
+
+function config.theme_assets_dir(root)
+    if root == nil then root = config.find_root() end
+    return paths.joinpath(root, "theme-assets")
+end
+
+function config.vendor_assets_dir()
+    dir = os.getenv("DAAT_VENDOR_DIR")
+    if dir != nil and dir != "" then
+        return dir
+    end
+    return "./vnd"
+end
+
+function config.config_path(root)
+    if root == nil then root = config.find_root() end
+    return paths.joinpath(root, CONFIG_FILE)
+end
+
 function valid_retention_days(value)
     if value == "forever" then
         return "forever"
@@ -317,11 +437,19 @@ function valid_retention_days(value)
     return nil
 end
 
-
+-- Accepts either structured agent section keys (`retention`,
+-- `retention_override`, `model_input_days`, `transcript_documents`) or
+-- unit-test tables passing `agent_retention` / `agent_retention_override`.
 function config.resolve_retention(parsed)
     strategy = "standard"
-    if type(parsed) == "table" and RETENTION_STRATEGIES[parsed.agent_retention] != nil then
-        strategy = parsed.agent_retention
+    if type(parsed) == "table" then
+        raw_strat = parsed.retention
+        if raw_strat == nil then
+            raw_strat = parsed.agent_retention
+        end
+        if RETENTION_STRATEGIES[raw_strat] != nil then
+            strategy = raw_strat
+        end
     end
     base = RETENTION_STRATEGIES[strategy]
     policy = {
@@ -339,11 +467,18 @@ function config.resolve_retention(parsed)
     if mi_days != nil then
         policy.model_input_days = mi_days
     end
-    if parsed.agent_transcript_documents == "off" or parsed.agent_transcript_documents == "whole" then
-        policy.transcript_documents = parsed.agent_transcript_documents
+    raw_td = parsed.transcript_documents
+    if raw_td == nil then
+        raw_td = parsed.agent_transcript_documents
     end
-    if type(parsed.agent_retention_override) == "table" then
+    if raw_td == "off" or raw_td == "whole" then
+        policy.transcript_documents = raw_td
+    end
+    overrides = parsed.retention_override
+    if overrides == nil then
         overrides = parsed.agent_retention_override
+    end
+    if type(overrides) == "table" then
         for _, key in ipairs({"knowledge_days", "tool_trace_days", "model_input_days", "metrics_days"}) do
             ov = valid_retention_days(overrides[key])
             if ov != nil then
@@ -367,488 +502,459 @@ function apply_retention(conf, policy)
     conf.agent_transcript_documents = policy.transcript_documents
 end
 
--- Per-loop observation masking (doc/context-management-plan.md, Phase 4;
--- #12, #36): enabled by default for long sub-agent loops, off for chat.
--- Accepts either a table {research = ..., background = ..., chat = ...}
--- or a single boolean enabling/disabling every loop.
-function config.resolve_masking(value)
-    policy = {research = true, background = true, chat = false}
-    if value == true or value == false then
-        policy.research = value
-        policy.background = value
-        policy.chat = value
-    elseif type(value) == "table" then
-        for _, loop_name in ipairs({"research", "background", "chat"}) do
-            if value[loop_name] == true or value[loop_name] == false then
-                policy[loop_name] = value[loop_name]
+function config.resolve_masking(raw)
+    resolved = {
+        chat = DEFAULT_MASKING.chat,
+        research = DEFAULT_MASKING.research,
+        background = DEFAULT_MASKING.background,
+    }
+    if raw == true or raw == false then
+        resolved.chat = raw
+        resolved.research = raw
+        resolved.background = raw
+        return resolved
+    end
+    if type(raw) == "table" then
+        for _, loop_kind in ipairs({"chat", "research", "background"}) do
+            if raw[loop_kind] == true or raw[loop_kind] == false then
+                resolved[loop_kind] = raw[loop_kind]
             end
         end
     end
-    return policy
+    return resolved
 end
 
-function config.load()
-    if CONFIG_CACHE != nil then
-        return CONFIG_CACHE
+function build_default_conf()
+    conf = {}
+    for _, spec in ipairs(CONFIG_SCHEMA) do
+        if spec.conf_key != nil and spec.default != nil then
+            conf[spec.conf_key] = spec.default
+        end
     end
-
-    -- Which backend to call is the deployment's choice, so core names
-    -- none: nil agent_provider/search_provider/mail_provider means that
-    -- feature is off. A nil agent_model/embedding_model means the
-    -- chosen provider's own default (agent_provider.model/
-    -- embedding_model). A provider's own settings (a cloud project, a
-    -- mail server) aren't listed here either: the provider reads them
-    -- itself through config.setting.
-    SETTINGS_CACHE = {}
-    conf = {
-        agent_provider = nil,
-        agent_model = nil,
-        embedding_model = nil,
-        search_provider = nil,
-        -- Reasoning capture (doc/agent-data.md, "Reasoning capture",
-        -- decision 5): "off" | "summary" | "full", translated per
-        -- provider (Vertex thinkingConfig MEDIUM/HIGH; Claude thinking).
-        -- Default "summary" (2026-11-15 live scorecard: all checks
-        -- 78% -> 90%, cites and document links 89% -> 100%).
-        agent_thinking = "summary",
-        agent_max_turns = 20,
-        -- "detached": a chat turn runs in its own worker process, not
-        -- the web request (agent.lua, "Detached turns"); "inline": in
-        -- the request, as before.
-        agent_turn_mode = "detached",
-        -- "deferred": search records only the retrieval row and raw hits
-        -- on the request path, leaving pool-heat reinforcement, spreading
-        -- activation, curation queueing, and co-retrieval link review to
-        -- `daat knowledge review-pending` in the jobs worker
-        -- (doc/tier-curation-ladder.md, Phase 2; doc/performance.md,
-        -- Option 1.1); "inline": runs them inside search_and_log.
-        search_review_mode = "deferred",
-        -- A detached turn with no progress for this long is reported as
-        -- stopped.
-        agent_turn_stale_seconds = 180,
-        -- A detached turn that spends its step budget goes on with a
-        -- fresh one (and a progress note) up to this many more times,
-        -- within this many minutes in all.
-        agent_auto_continue_max = 3,
-        agent_auto_continue_minutes = 10,
-        agent_research_max_turns = 12,
-        agent_background_max_turns = 20,
-        agent_background_max_attempts = 3,
-        agent_search_excerpt_length = 1200,
-        agent_query_row_cap = 200,
-        -- Compaction (doc/context-management-plan.md, Phase 3): the
-        -- threshold is in real tokens, sized from the last call's
-        -- recorded prompt_tokens; without one, from the fixed overhead
-        -- (system prompt + tool definitions) plus history characters
-        -- per token, both fitted on prod chat calls. Mid-turn: check
-        -- before every step, not only when a turn starts.
-        agent_compaction_threshold = 48000,
-        agent_context_fixed_tokens = 3900,
-        agent_chars_per_token = 2.8,
-        agent_compaction_mid_turn = true,
-        -- Retention per data type (doc/agent-data.md, "Retention"; #35):
-        -- populated from RETENTION_STRATEGIES[agent_retention] below.
-        -- model_input_days replaces prompt_retention_days (still kept as
-        -- an alias).
-        agent_retention = "standard",
-        model_input_days = 30,
-        prompt_retention_days = 30,
-        -- Keep what's already known (doc/context-management-plan.md,
-        -- Phase 1): schema lookups carried verbatim through compaction
-        -- (within this many characters), and an exact repeat of a
-        -- read-only call answered with a pointer to the earlier result.
-        -- Result sizes (doc/context-management-plan.md, Phase 2): tool
-        -- results were 77% of prod chat history. knowledge.list pages
-        -- (was every pool document); entity.query stops at a size as well
-        -- as a row count; entity.get shows the start of a long text field
-        -- (and reads the rest on request); any other tool result over
-        -- agent_tool_result_cap is cut when shown to the model, with the
-        -- rest readable through result.read. document.search's "full"
-        -- detail uses the longer excerpt.
-        agent_knowledge_list_page = 50,
-        agent_query_char_cap = 12000,
-        agent_get_field_chars = 4000,
-        agent_tool_result_cap = 24000,
-        agent_search_excerpt_full_length = 4000,
-        -- Passage retrieval (doc/passage-retrieval.md): search shows each
-        -- shortlisted document's most relevant passages, chosen by
-        -- meaning, to the agent and on /documents alike.
-        -- On since the 2026-10-26 live scorecard: answers and checks
-        -- unchanged, ~3% fewer tokens per passed run.
-        search_passages = true,
-        passage_max_chars = 1500,
-        passage_min_chars = 200,
-        passages_per_document = 2,
-        passage_lexical_weight = 0.2,
-        passage_max_embeds_per_search = 60,
-        -- Passage embeddings are cached (document_passage_cache) and
-        -- expire this many days after last use (0: never).
-        passage_cache_days = 30,
-        -- Aspects (doc/aspect-retrieval-plan.md): a document longer than
-        -- aspect_min_chars gets up to aspect_max extra vectors, from its
-        -- passages grouped by meaning, so search finds it by a subject
-        -- past the start its own vector covers. build_aspects keeps them
-        -- up to date in the embedding job; search_aspects lets search
-        -- use them. aspect_dims cuts them to that many dimensions (0:
-        -- all); aspect_vector is "medoid" (the group's most central
-        -- passage) or "centroid" (the group's mean). Values from the
-        -- recall test on prod data (2026-11-05, doc/aspect-retrieval-plan.md):
-        -- k <= 4 centroids at int8/768 got within ~2 points of indexing
-        -- every passage. The two switches stay off until a deployment
-        -- has backfilled its aspects. curate_aspects:
-        -- an aspect searches keep finding a long source through is
-        -- curated into a note of its own (src/curate.lua); it only
-        -- happens with search_aspects on, since hits record no aspect
-        -- otherwise.
-        build_aspects = false,
-        search_aspects = false,
-        aspect_min_chars = 7000,
-        aspect_max = 4,
-        aspect_dims = 0,
-        aspect_vector = "centroid",
-        curate_aspects = true,
-        -- The co-retrieval link gate (doc/link-passage-gate.md): a pair
-        -- whose most similar passages score below this isn't put to the
-        -- model (0: off). Compares at most this many passages of each
-        -- document, embedding at most this many new ones per pair.
-        link_passage_gate = 0.72,
-        link_gate_passages_per_document = 40,
-        link_gate_max_embeds = 80,
-        agent_pin_schema = true,
-        agent_pinned_schema_chars = 6000,
-        agent_dedupe_repeat_calls = true,
-        -- Observation masking (doc/context-management-plan.md, Phase 4;
-        -- #12, #36): older tool results in long loops become compact
-        -- stubs once at least agent_masking_batch_tokens have piled up
-        -- before the last agent_masking_keep_last tool results.
-        agent_masking = config.resolve_masking(nil),
-        agent_masking_keep_last = 5,
-        agent_masking_min_chars = 300,
-        agent_masking_batch_tokens = 4000,
-        -- Cross-session user requests/corrections (#11, #36): off by
-        -- default; when true, a person's recent prior-session request
-        -- rows carry into their own later sessions (never another
-        -- user's, never tool traces).
-        agent_carry_user_requests = false,
-        agent_carry_user_requests_limit = 5,
-        adhoc_row_cap = 1000,
-        extension_max_job_attempts = 5,
-        -- Tag upkeep (tag.lua): vectors are the cached embeddings cut to
-        -- tag_dims (256 lost about a point against the full 768 in the
-        -- 2026-10-04 check, at a third of the cost); a document also
-        -- joins its second-nearest tag when that's within
-        -- tag_second_within of the nearest (nil: one tag only).
-        tag_dims = 256,
-        tag_second_within = 0.02,
-        -- A saved document is (re-)embedded once it has gone this many
-        -- minutes without another edit (`daat document embed-pending`,
-        -- on the deployment's job timer), so a document edited again
-        -- and again -- a chat transcript after every turn -- costs one
-        -- embedding, not one per save. 0 embeds on save.
-        embedding_quiet_minutes = 5,
-        -- A chat is curated into a note once it has gone this many
-        -- minutes without a new message and has changed since it was
-        -- last curated (doc/agent-data.md, "Curation"): an hour, so a
-        -- chat picked up again after a short pause isn't curated in
-        -- between. 0 curates at the next jobs run.
-        agent_curate_quiet_minutes = 60,
-        -- "off": a chat reaches the pool only as its curated note.
-        -- "whole": each chat is also kept as a searchable transcript
-        -- document, holding its requests, answers and reasoning, never
-        -- tool output (doc/agent-data.md, "Retention").
-        agent_transcript_documents = "off",
-        -- Lua patterns: a content line any of them matches is left out of
-        -- the text a document's embedding is made from (document.lua's
-        -- embedding_text) -- a sync's own header, template boilerplate.
-        -- Changing them changes text hashes: `daat repair embeddings`
-        -- re-embeds what changed.
-        embedding_skip = nil,
-        -- Tag restructuring (tag_upkeep.lua): split, merge and label
-        -- checks, each decided by the agent, after embed-pending embeds
-        -- anything. Off until a deployment has reviewed `daat repair tags
-        -- --restructure --dry-run --judge` on its own tags. A tag smaller
-        -- than tag_split_min is never split.
-        tag_restructure = false,
-        -- A document whose embedded text has fewer characters than this
-        -- besides its title (a folder page, a template, a file with no
-        -- extractable text) has nothing to say what it's about: it isn't
-        -- tagged, by placement or the cold start. Still searchable.
-        tag_min_text = 200,
-        tag_split_min = 40,
-        -- The most tags `daat tag build` may cut the pool into
-        -- (tag_build.lua's range; `--max-tags N` overrides it).
-        tag_build_max = 60,
-        -- How strongly `daat tag build` leans to fewer tags (tag_build.lua:
-        -- a level scores life / tags^c); 0 takes the longest-lived level.
-        tag_build_coarseness = 0,
-        -- How this deployment's people write its entity names, for
-        -- references (reference.lua): {{lua_pattern, replacement}, ...}
-        -- over lowercased text, e.g. {{"experiment%s*(%d)", "exp%1"}}
-        -- when experiments are named ExpN but written "Experiment N".
-        reference_aliases = nil,
-        duplicate_external_prefixes = nil,
-        -- Off by default -- a deployment opts in once pdftotext/pandoc
-        -- (see doc's own Dockerfile) are actually installed, rather
-        -- than the platform deciding every deployment wants a chat
-        -- file-upload surface and its two extra system dependencies.
-        chat_attachments_enabled = false,
-        db_backend = "sqlite",
-        mariadb_host = "127.0.0.1",
-        mariadb_port = 3306,
-        mariadb_user = nil,
-        mariadb_database = nil,
-        -- nil (both) means "today's hardcoded rail, unchanged" -- see
-        -- ui.lua's own apply_nav_order/apply_nav_hidden. Deliberately a
-        -- reorder/hide overlay on the
-        -- existing capability-gated built-in items, not a from-scratch
-        -- nav vocabulary: an unrecognized key in either list is a
-        -- silent no-op (never an error), and a key genuinely hidden by
-        -- capability/deployment state today (no Setup/Admin cap, no
-        -- prioritized_tasks view, an unapproved extension) stays hidden
-        -- regardless of what's listed here -- this can only reorder or
-        -- further hide what would already render, never grant it back.
-        nav_order = nil,
-        nav_hidden = nil,
-        -- Outbound mail (mail_provider.lua) -- only used by the
-        -- forgot-password flow today. nil mail_provider means no mail
-        -- at all: /forgot-password 404s and /login shows no link to it
-        -- (see config.password_reset_enabled). public_url is the
-        -- deployment's own externally-reachable base URL, used to build
-        -- the emailed reset link -- deliberately config, never derived
-        -- from the request's Host header, which a caller controls and
-        -- could otherwise point a real user's reset link at their own
-        -- server. The backend's own settings (an SMTP server, a Graph
-        -- app registration) are its own, read through config.setting.
-        mail_provider = nil,
-        mail_from = nil,
-        public_url = nil,
-    }
+    conf.agent_masking = config.resolve_masking(nil)
     apply_retention(conf, config.resolve_retention(nil))
+    return conf
+end
 
-    path = config.config_path()
-    file = io.open(path, "r")
+function enum_contains(list, val)
+    for _, item in ipairs(list) do
+        if item == val then
+            return true
+        end
+    end
+    return false
+end
+
+function validate_field_value(spec, raw, path_label, errors, warnings)
+    kind = spec.kind
+    if kind == "string" then
+        if type(raw) != "string" or raw == "" then
+            table.insert(errors, string.format("config.lua: '%s' must be a non-empty string (got %s)", path_label, type(raw)))
+            return nil, false
+        end
+        return raw, true
+    end
+    if kind == "enum" then
+        if type(raw) != "string" or not enum_contains(spec.enum, raw) then
+            table.insert(errors, string.format("config.lua: '%s' must be one of {%s} (got %s)",
+                path_label, table.concat(spec.enum, ", "), tostring(raw)))
+            return nil, false
+        end
+        return raw, true
+    end
+    if kind == "boolean" then
+        if raw != true and raw != false then
+            table.insert(errors, string.format("config.lua: '%s' must be true or false (got %s)", path_label, type(raw)))
+            return nil, false
+        end
+        return raw, true
+    end
+    if kind == "number" or kind == "integer" then
+        if type(raw) != "number" then
+            table.insert(errors, string.format("config.lua: '%s' must be a number (got %s)", path_label, type(raw)))
+            return nil, false
+        end
+        if spec.gt != nil and not (raw > spec.gt) then
+            table.insert(errors, string.format("config.lua: '%s' must be > %s (got %s)", path_label, tostring(spec.gt), tostring(raw)))
+            return nil, false
+        end
+        if spec.min != nil and raw < spec.min then
+            table.insert(errors, string.format("config.lua: '%s' must be >= %s (got %s)", path_label, tostring(spec.min), tostring(raw)))
+            return nil, false
+        end
+        if kind == "integer" then
+            return math.floor(raw), true
+        end
+        return raw, true
+    end
+    if kind == "number_or_false" then
+        if raw == false then
+            return nil, true
+        end
+        if type(raw) == "number" then
+            return raw, true
+        end
+        table.insert(errors, string.format("config.lua: '%s' must be a number or false (got %s)", path_label, type(raw)))
+        return nil, false
+    end
+    if kind == "string_list" then
+        if type(raw) != "table" then
+            table.insert(errors, string.format("config.lua: '%s' must be a list of strings (got %s)", path_label, type(raw)))
+            return nil, false
+        end
+        out = {}
+        for idx, item in ipairs(raw) do
+            if type(item) == "string" and item != "" then
+                table.insert(out, item)
+            else
+                table.insert(warnings, string.format("config.lua: '%s[%d]' ignored (expected non-empty string, got %s)", path_label, idx, type(item)))
+            end
+        end
+        if spec.key == "duplicate_external_prefixes" and #out == 0 then
+            return nil, true
+        end
+        return out, true
+    end
+    if kind == "pattern_list" then
+        if type(raw) != "table" then
+            table.insert(errors, string.format("config.lua: '%s' must be a list of Lua patterns (got %s)", path_label, type(raw)))
+            return nil, false
+        end
+        out = {}
+        for idx, pattern in ipairs(raw) do
+            if type(pattern) == "string" and pattern != "" then
+                ok_pat, pat_err = pcall(string.find, "", pattern)
+                if ok_pat then
+                    table.insert(out, pattern)
+                else
+                    table.insert(warnings, string.format("config.lua: '%s[%d]' invalid Lua pattern '%s' (%s)", path_label, idx, pattern, tostring(pat_err)))
+                end
+            else
+                table.insert(warnings, string.format("config.lua: '%s[%d]' ignored (expected pattern string, got %s)", path_label, idx, type(pattern)))
+            end
+        end
+        return out, true
+    end
+    if kind == "alias_list" then
+        if type(raw) != "table" then
+            table.insert(errors, string.format("config.lua: '%s' must be a list of {pattern, replacement} pairs (got %s)", path_label, type(raw)))
+            return nil, false
+        end
+        out = {}
+        for idx, pair in ipairs(raw) do
+            if type(pair) == "table" and type(pair[1]) == "string" and pair[1] != "" and type(pair[2]) == "string" then
+                ok_pat, pat_err = pcall(string.find, "", pair[1])
+                if ok_pat then
+                    table.insert(out, {pair[1], pair[2]})
+                else
+                    table.insert(warnings, string.format("config.lua: '%s[%d]' invalid Lua pattern '%s' (%s)", path_label, idx, pair[1], tostring(pat_err)))
+                end
+            else
+                table.insert(warnings, string.format("config.lua: '%s[%d]' ignored (expected {pattern, replacement})", path_label, idx))
+            end
+        end
+        return out, true
+    end
+    if kind == "masking" then
+        if raw != true and raw != false and type(raw) != "table" then
+            table.insert(errors, string.format("config.lua: '%s' must be a boolean or {chat, research, background} table (got %s)", path_label, type(raw)))
+            return nil, false
+        end
+        if type(raw) == "table" then
+            allowed_mask = {chat = true, research = true, background = true}
+            for k, v in pairs(raw) do
+                if allowed_mask[k] == nil then
+                    table.insert(errors, string.format("config.lua: unknown key '%s.%s' (allowed: chat, research, background)", path_label, tostring(k)))
+                elseif v != true and v != false then
+                    table.insert(errors, string.format("config.lua: '%s.%s' must be true or false", path_label, tostring(k)))
+                end
+            end
+        end
+        return config.resolve_masking(raw), true
+    end
+    if kind == "retention_days" then
+        days = valid_retention_days(raw)
+        if days == nil then
+            table.insert(errors, string.format("config.lua: '%s' must be a number >= 0 or 'forever' (got %s)", path_label, tostring(raw)))
+            return nil, false
+        end
+        return days, true
+    end
+    if kind == "retention_override" then
+        if type(raw) != "table" then
+            table.insert(errors, string.format("config.lua: '%s' must be a table (got %s)", path_label, type(raw)))
+            return nil, false
+        end
+        allowed_ov = {
+            knowledge_days = true,
+            tool_trace_days = true,
+            model_input_days = true,
+            metrics_days = true,
+            transcript_documents = true,
+        }
+        for k, v in pairs(raw) do
+            if allowed_ov[k] == nil then
+                table.insert(errors, string.format("config.lua: unknown key '%s.%s'", path_label, tostring(k)))
+            elseif k == "transcript_documents" then
+                if v != "off" and v != "whole" then
+                    table.insert(errors, string.format("config.lua: '%s.transcript_documents' must be 'off' or 'whole'", path_label))
+                end
+            elseif valid_retention_days(v) == nil then
+                table.insert(errors, string.format("config.lua: '%s.%s' must be a number >= 0 or 'forever'", path_label, tostring(k)))
+            end
+        end
+        return raw, true
+    end
+    return raw, true
+end
+
+function validate_theme_file(root, errors, warnings)
+    theme_path = config.theme_path(root)
+    file = io.open(theme_path, "r")
     if file == nil then
-        CONFIG_CACHE = conf
-        return conf
+        return false
     end
     contents = io.read(file, "*all")
     io.close(file)
 
-    ok, parsed = sandbox.run(contents, path, sandbox.data_env())
-    if ok == false or type(parsed) != "table" then
-        CONFIG_CACHE = conf
-        return conf
+    ok, parsed = sandbox.run(contents, theme_path, sandbox.data_env())
+    if ok == false then
+        table.insert(errors, "theme.lua: syntax/evaluation error: " .. tostring(parsed))
+        return true
+    end
+    if parsed == nil then
+        return true
+    end
+    if type(parsed) != "table" then
+        table.insert(errors, "theme.lua: must return a table (got " .. type(parsed) .. ")")
+        return true
     end
 
-    if type(parsed.agent_provider) == "string" and parsed.agent_provider != "" then
-        conf.agent_provider = parsed.agent_provider
+    scan_for_secret_keys(parsed, "", "theme.lua", errors)
+
+    top_candidates = {"site_name", "has_logo", "hide_home_heading", "system_prompt_extra", "colors"}
+    for k, v in pairs(parsed) do
+        expected = THEME_TOP_KEYS[k]
+        if expected == nil then
+            hint = closest_match(tostring(k), top_candidates)
+            suffix = ""
+            if hint != nil then
+                suffix = " (did you mean '" .. hint .. "'?)"
+            end
+            table.insert(errors, "theme.lua: unknown key '" .. tostring(k) .. "'" .. suffix)
+        elseif expected == "boolean" and v != true and v != false then
+            table.insert(errors, "theme.lua: '" .. tostring(k) .. "' must be true or false (got " .. type(v) .. ")")
+        elseif expected == "string" and type(v) != "string" then
+            table.insert(errors, "theme.lua: '" .. tostring(k) .. "' must be a string (got " .. type(v) .. ")")
+        elseif expected == "table" and type(v) != "table" then
+            table.insert(errors, "theme.lua: '" .. tostring(k) .. "' must be a table (got " .. type(v) .. ")")
+        end
     end
-    SETTINGS_CACHE = parsed
-    if type(parsed.agent_model) == "string" and parsed.agent_model != "" then
-        conf.agent_model = parsed.agent_model
-    end
-    if type(parsed.embedding_model) == "string" and parsed.embedding_model != "" then
-        conf.embedding_model = parsed.embedding_model
-    end
-    if type(parsed.search_provider) == "string" and parsed.search_provider != "" then
-        conf.search_provider = parsed.search_provider
-    end
-    if parsed.agent_thinking == "off" or parsed.agent_thinking == "summary" or parsed.agent_thinking == "full" then
-        conf.agent_thinking = parsed.agent_thinking
-    end
-    if type(parsed.agent_max_turns) == "number" then
-        conf.agent_max_turns = parsed.agent_max_turns
-    end
-    if parsed.agent_turn_mode == "detached" or parsed.agent_turn_mode == "inline" then
-        conf.agent_turn_mode = parsed.agent_turn_mode
-    end
-    if parsed.search_review_mode == "deferred" or parsed.search_review_mode == "inline" then
-        conf.search_review_mode = parsed.search_review_mode
-    end
-    if type(parsed.agent_turn_stale_seconds) == "number" then
-        conf.agent_turn_stale_seconds = parsed.agent_turn_stale_seconds
-    end
-    if type(parsed.agent_auto_continue_max) == "number" then
-        conf.agent_auto_continue_max = parsed.agent_auto_continue_max
-    end
-    if type(parsed.agent_auto_continue_minutes) == "number" then
-        conf.agent_auto_continue_minutes = parsed.agent_auto_continue_minutes
-    end
-    if type(parsed.agent_research_max_turns) == "number" then
-        conf.agent_research_max_turns = parsed.agent_research_max_turns
-    end
-    if type(parsed.agent_background_max_turns) == "number" then
-        conf.agent_background_max_turns = parsed.agent_background_max_turns
-    end
-    if type(parsed.agent_background_max_attempts) == "number" then
-        conf.agent_background_max_attempts = parsed.agent_background_max_attempts
-    end
-    if type(parsed.agent_search_excerpt_length) == "number" then
-        conf.agent_search_excerpt_length = parsed.agent_search_excerpt_length
-    end
-    if type(parsed.agent_query_row_cap) == "number" then
-        conf.agent_query_row_cap = parsed.agent_query_row_cap
-    end
-    if type(parsed.agent_compaction_threshold) == "number" then
-        conf.agent_compaction_threshold = parsed.agent_compaction_threshold
-    end
-    if type(parsed.agent_context_fixed_tokens) == "number" then
-        conf.agent_context_fixed_tokens = parsed.agent_context_fixed_tokens
-    end
-    if type(parsed.agent_chars_per_token) == "number" and parsed.agent_chars_per_token > 0 then
-        conf.agent_chars_per_token = parsed.agent_chars_per_token
-    end
-    if parsed.agent_compaction_mid_turn == true or parsed.agent_compaction_mid_turn == false then
-        conf.agent_compaction_mid_turn = parsed.agent_compaction_mid_turn
-    end
-    if type(parsed.duplicate_external_prefixes) == "table" then
-        prefixes = {}
-        for _, prefix in ipairs(parsed.duplicate_external_prefixes) do
-            if type(prefix) == "string" and prefix != "" then
-                table.insert(prefixes, prefix)
+
+    if type(parsed.colors) == "table" then
+        valid_color = {}
+        for _, ck in ipairs(THEME_COLOR_KEYS) do
+            valid_color[ck] = true
+        end
+        for ck, cv in pairs(parsed.colors) do
+            if valid_color[ck] == nil then
+                hint = closest_match(tostring(ck), THEME_COLOR_KEYS)
+                suffix = ""
+                if hint != nil then
+                    suffix = " (did you mean '" .. hint .. "'?)"
+                end
+                table.insert(errors, "theme.lua: unknown color key 'colors." .. tostring(ck) .. "'" .. suffix)
+            elseif type(cv) != "string" then
+                table.insert(errors, "theme.lua: 'colors." .. tostring(ck) .. "' must be a CSS color string")
+            elseif cv != "" and string.match(cv, "^#[0-9a-fA-F]+$") == nil and string.match(cv, "^rgba?%([0-9,%s%.%%]+%)$") == nil and string.match(cv, "^hsla?%([0-9,%s%.%%deg]+%)$") == nil then
+                table.insert(warnings, "theme.lua: 'colors." .. tostring(ck) .. "' ('" .. cv .. "') does not look like a hex/rgb/hsl color")
             end
         end
-        if #prefixes > 0 then
-            conf.duplicate_external_prefixes = prefixes
-        end
-    end
-    apply_retention(conf, config.resolve_retention(parsed))
-    if parsed.search_passages == true or parsed.search_passages == false then
-        conf.search_passages = parsed.search_passages
-    end
-    if type(parsed.passage_lexical_weight) == "number" and parsed.passage_lexical_weight >= 0 then
-        conf.passage_lexical_weight = parsed.passage_lexical_weight
-    end
-    if type(parsed.passage_cache_days) == "number" and parsed.passage_cache_days >= 0 then
-        conf.passage_cache_days = parsed.passage_cache_days
-    end
-    for _, key in ipairs({"build_aspects", "search_aspects", "curate_aspects"}) do
-        if parsed[key] == true or parsed[key] == false then
-            conf[key] = parsed[key]
-        end
-    end
-    for _, key in ipairs({"aspect_min_chars", "aspect_dims"}) do
-        if type(parsed[key]) == "number" and parsed[key] >= 0 then
-            conf[key] = math.floor(parsed[key])
-        end
-    end
-    if type(parsed.aspect_max) == "number" and parsed.aspect_max >= 1 then
-        conf.aspect_max = math.floor(parsed.aspect_max)
-    end
-    if parsed.aspect_vector == "medoid" or parsed.aspect_vector == "centroid" then
-        conf.aspect_vector = parsed.aspect_vector
-    end
-    if type(parsed.link_passage_gate) == "number" and parsed.link_passage_gate >= 0 then
-        conf.link_passage_gate = parsed.link_passage_gate
-    end
-    for _, key in ipairs({"agent_knowledge_list_page", "agent_query_char_cap", "agent_get_field_chars", "agent_tool_result_cap", "agent_search_excerpt_full_length",
-            "passage_max_chars", "passage_min_chars", "passages_per_document", "passage_max_embeds_per_search",
-            "link_gate_passages_per_document", "link_gate_max_embeds"}) do
-        if type(parsed[key]) == "number" and parsed[key] > 0 then
-            conf[key] = parsed[key]
-        end
-    end
-    if parsed.agent_pin_schema == true or parsed.agent_pin_schema == false then
-        conf.agent_pin_schema = parsed.agent_pin_schema
-    end
-    if type(parsed.agent_pinned_schema_chars) == "number" and parsed.agent_pinned_schema_chars >= 0 then
-        conf.agent_pinned_schema_chars = parsed.agent_pinned_schema_chars
-    end
-    if parsed.agent_dedupe_repeat_calls == true or parsed.agent_dedupe_repeat_calls == false then
-        conf.agent_dedupe_repeat_calls = parsed.agent_dedupe_repeat_calls
-    end
-    conf.agent_masking = config.resolve_masking(parsed.agent_masking)
-    for _, key in ipairs({"agent_masking_keep_last", "agent_masking_min_chars", "agent_masking_batch_tokens"}) do
-        if type(parsed[key]) == "number" and parsed[key] >= 0 then
-            conf[key] = math.floor(parsed[key])
-        end
-    end
-    if parsed.agent_carry_user_requests == true or parsed.agent_carry_user_requests == false then
-        conf.agent_carry_user_requests = parsed.agent_carry_user_requests
-    end
-    if type(parsed.agent_carry_user_requests_limit) == "number" and parsed.agent_carry_user_requests_limit >= 1 then
-        conf.agent_carry_user_requests_limit = math.floor(parsed.agent_carry_user_requests_limit)
-    end
-    if type(parsed.adhoc_row_cap) == "number" then
-        conf.adhoc_row_cap = parsed.adhoc_row_cap
-    end
-    if type(parsed.extension_max_job_attempts) == "number" then
-        conf.extension_max_job_attempts = parsed.extension_max_job_attempts
-    end
-    -- Explicit true/false boolean check.
-    if parsed.chat_attachments_enabled == true or parsed.chat_attachments_enabled == false then
-        conf.chat_attachments_enabled = parsed.chat_attachments_enabled
-    end
-    if type(parsed.embedding_quiet_minutes) == "number" and parsed.embedding_quiet_minutes >= 0 then
-        conf.embedding_quiet_minutes = parsed.embedding_quiet_minutes
-    end
-    if type(parsed.agent_curate_quiet_minutes) == "number" and parsed.agent_curate_quiet_minutes >= 0 then
-        conf.agent_curate_quiet_minutes = parsed.agent_curate_quiet_minutes
-    end
-    if type(parsed.embedding_skip) == "table" then
-        conf.embedding_skip = validate_patterns(parsed.embedding_skip)
-    end
-    if parsed.tag_restructure == true or parsed.tag_restructure == false then
-        conf.tag_restructure = parsed.tag_restructure
-    end
-    if type(parsed.tag_min_text) == "number" and parsed.tag_min_text >= 0 then
-        conf.tag_min_text = parsed.tag_min_text
-    end
-    if type(parsed.tag_build_coarseness) == "number" and parsed.tag_build_coarseness >= 0 then
-        conf.tag_build_coarseness = parsed.tag_build_coarseness
-    end
-    if type(parsed.tag_build_max) == "number" and parsed.tag_build_max >= 2 then
-        conf.tag_build_max = parsed.tag_build_max
-    end
-    if type(parsed.tag_split_min) == "number" and parsed.tag_split_min >= 2 then
-        conf.tag_split_min = parsed.tag_split_min
-    end
-    if type(parsed.tag_dims) == "number" and parsed.tag_dims >= 1 then
-        conf.tag_dims = parsed.tag_dims
-    end
-    -- A number, or false for one tag per document.
-    if type(parsed.tag_second_within) == "number" then
-        conf.tag_second_within = parsed.tag_second_within
-    elseif parsed.tag_second_within == false then
-        conf.tag_second_within = nil
-    end
-    if type(parsed.reference_aliases) == "table" then
-        conf.reference_aliases = validate_reference_aliases(parsed.reference_aliases)
-    end
-    if parsed.db_backend == "mariadb" then
-        conf.db_backend = "mariadb"
-    end
-    if type(parsed.mariadb_host) == "string" and parsed.mariadb_host != "" then
-        conf.mariadb_host = parsed.mariadb_host
-    end
-    if type(parsed.mariadb_port) == "number" then
-        conf.mariadb_port = parsed.mariadb_port
-    end
-    if type(parsed.mariadb_user) == "string" and parsed.mariadb_user != "" then
-        conf.mariadb_user = parsed.mariadb_user
-    end
-    if type(parsed.mariadb_database) == "string" and parsed.mariadb_database != "" then
-        conf.mariadb_database = parsed.mariadb_database
-    end
-    if type(parsed.nav_order) == "table" then
-        conf.nav_order = validate_nav_key_list(parsed.nav_order)
-    end
-    if type(parsed.nav_hidden) == "table" then
-        conf.nav_hidden = validate_nav_key_list(parsed.nav_hidden)
-    end
-    for _, key in ipairs({"mail_provider", "mail_from", "public_url"}) do
-        if type(parsed[key]) == "string" and parsed[key] != "" then
-            conf[key] = parsed[key]
-        end
     end
 
-    CONFIG_CACHE = conf
-    return conf
+    return true
 end
 
--- A provider's own config.lua setting (vertex_project, smtp_url,
--- ...), as written: core doesn't know these keys, so the provider that
--- reads one checks it. An empty string counts as unset.
+-- Validates `config.lua` and `theme.lua` at `root` and resolves the
+-- effective configuration, per-field sources ("config.lua" or "default"),
+-- and provider settings.
+function config.validate(root)
+    if root == nil then
+        root = config.find_root()
+    end
+    errors = {}
+    warnings = {}
+    conf = build_default_conf()
+    settings = {}
+    sources = {}
+    for _, spec in ipairs(CONFIG_SCHEMA) do
+        sources[spec.section .. "." .. spec.key] = "default"
+    end
+
+    cfg_path = config.config_path(root)
+    cfg_exists = false
+    file = io.open(cfg_path, "r")
+    if file != nil then
+        cfg_exists = true
+        contents = io.read(file, "*all")
+        io.close(file)
+
+        ok, parsed = sandbox.run(contents, cfg_path, sandbox.data_env())
+        if ok == false then
+            table.insert(errors, "config.lua: syntax/evaluation error: " .. tostring(parsed))
+        elseif parsed != nil and type(parsed) != "table" then
+            table.insert(errors, "config.lua: must return a table (got " .. type(parsed) .. ")")
+        elseif type(parsed) == "table" then
+            scan_for_secret_keys(parsed, "", "config.lua", errors)
+
+            top_keys = {}
+            for k, _ in pairs(parsed) do
+                table.insert(top_keys, tostring(k))
+            end
+            table.sort(top_keys)
+            for _, k in ipairs(top_keys) do
+                if not is_secret_key_name(k) then
+                    if SECTION_SET[k] == nil then
+                        if FLAT_KEY_HINTS[k] != nil then
+                            table.insert(errors, string.format(
+                                "config.lua: flat top-level key '%s' is not supported; move it under '%s'",
+                                k, FLAT_KEY_HINTS[k]
+                            ))
+                        else
+                            hint = closest_match(k, CONFIG_SECTIONS)
+                            suffix = ""
+                            if hint != nil then
+                                suffix = " (did you mean section '" .. hint .. "'?)"
+                            end
+                            table.insert(errors, "config.lua: unknown top-level section '" .. k .. "'" .. suffix)
+                        end
+                    elseif type(parsed[k]) != "table" then
+                        table.insert(errors, string.format("config.lua: section '%s' must be a table (got %s)", k, type(parsed[k])))
+                    end
+                end
+            end
+
+            for _, sec in ipairs(CONFIG_SECTIONS) do
+                sec_tbl = parsed[sec]
+                if type(sec_tbl) == "table" then
+                    sec_schema = SCHEMA_BY_SECTION[sec]
+                    sec_candidates = {}
+                    for sk, _ in pairs(sec_schema) do
+                        table.insert(sec_candidates, sk)
+                    end
+                    table.sort(sec_candidates)
+
+                    written_keys = {}
+                    for wk, _ in pairs(sec_tbl) do
+                        table.insert(written_keys, tostring(wk))
+                    end
+                    table.sort(written_keys)
+                    for _, wk in ipairs(written_keys) do
+                        if not is_secret_key_name(wk) and sec_schema[wk] == nil then
+                            hint = closest_match(wk, sec_candidates)
+                            suffix = ""
+                            if hint != nil then
+                                suffix = " (did you mean '" .. sec .. "." .. hint .. "'?)"
+                            elseif FLAT_KEY_HINTS[wk] != nil then
+                                suffix = " (belongs at '" .. FLAT_KEY_HINTS[wk] .. "')"
+                            end
+                            table.insert(errors, string.format("config.lua: unknown key '%s.%s'%s", sec, wk, suffix))
+                        end
+                    end
+
+                    for _, spec in ipairs(CONFIG_SCHEMA) do
+                        if spec.section == sec and sec_tbl[spec.key] != nil then
+                            path_label = sec .. "." .. spec.key
+                            val, valid = validate_field_value(spec, sec_tbl[spec.key], path_label, errors, warnings)
+                            if valid then
+                                sources[path_label] = "config.lua"
+                                if spec.conf_key != nil and spec.key != "retention" and spec.key != "retention_override" and spec.key != "model_input_days" and spec.key != "transcript_documents" then
+                                    conf[spec.conf_key] = val
+                                end
+                                if spec.setting_key != nil then
+                                    settings[spec.setting_key] = val
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+
+            if type(parsed.agent) == "table" then
+                valid_agent_retention = {}
+                if RETENTION_STRATEGIES[parsed.agent.retention] != nil then
+                    valid_agent_retention.retention = parsed.agent.retention
+                end
+                if type(parsed.agent.retention_override) == "table" then
+                    valid_agent_retention.retention_override = parsed.agent.retention_override
+                end
+                if valid_retention_days(parsed.agent.model_input_days) != nil then
+                    valid_agent_retention.model_input_days = parsed.agent.model_input_days
+                end
+                if parsed.agent.transcript_documents == "off" or parsed.agent.transcript_documents == "whole" then
+                    valid_agent_retention.transcript_documents = parsed.agent.transcript_documents
+                end
+                apply_retention(conf, config.resolve_retention(valid_agent_retention))
+            end
+
+            -- Cross-field completeness checks.
+            if conf.db_backend == "mariadb" then
+                if conf.mariadb_user == nil or conf.mariadb_database == nil then
+                    table.insert(errors, "config.lua: database.backend is 'mariadb' but database.user or database.database is missing")
+                end
+            end
+            if conf.mail_provider != nil and (conf.mail_from == nil or conf.public_url == nil) then
+                table.insert(warnings, "config.lua: mail.provider is set, but mail.from or mail.public_url is missing (password reset remains disabled until all three are set)")
+            elseif conf.mail_provider == nil and conf.mail_from != nil then
+                table.insert(warnings, "config.lua: mail.from is set without mail.provider (outbound mail remains disabled)")
+            end
+            if conf.agent_provider == "vertex" and settings.vertex_project == nil then
+                table.insert(warnings, "config.lua: agent.provider is 'vertex' but agent.vertex_project is not set")
+            end
+            if conf.mail_provider == "smtp" and settings.smtp_url == nil then
+                table.insert(warnings, "config.lua: mail.provider is 'smtp' but mail.smtp_url is not set")
+            end
+            if conf.mail_provider == "graph" and (settings.graph_tenant_id == nil or settings.graph_client_id == nil) then
+                table.insert(warnings, "config.lua: mail.provider is 'graph' but mail.graph_tenant_id or mail.graph_client_id is not set")
+            end
+        end
+    end
+
+    theme_exists = validate_theme_file(root, errors, warnings)
+
+    return {
+        ok = (#errors == 0),
+        config_exists = cfg_exists,
+        config_path = cfg_path,
+        theme_exists = theme_exists,
+        theme_path = config.theme_path(root),
+        errors = errors,
+        warnings = warnings,
+        resolved = conf,
+        settings = settings,
+        sources = sources,
+    }
+end
+
+function config.load(root)
+    if root == nil and CONFIG_CACHE != nil then
+        return CONFIG_CACHE
+    end
+
+    report = config.validate(root)
+    for _, err_msg in ipairs(report.errors) do
+        if string.find(err_msg, "syntax/evaluation error", 1, true) != nil or string.find(err_msg, "looks like a secret", 1, true) != nil then
+            io.write(io.stderr, "Warning: " .. err_msg .. "\n")
+        end
+    end
+
+    if root == nil then
+        SETTINGS_CACHE = report.settings
+        CONFIG_CACHE = report.resolved
+    end
+    return report.resolved
+end
+
 function config.setting(key)
     config.load()
     value = SETTINGS_CACHE[key]
@@ -858,22 +964,11 @@ function config.setting(key)
     return value
 end
 
--- The forgot-password flow needs all three: something to send with,
--- an address to send from, and a real base URL to put in the link.
--- Missing any one, the whole flow stays off rather than half-working
--- (e.g. sending a link with no host in it).
-function config.password_reset_enabled()
-    conf = config.load()
+function config.password_reset_enabled(root)
+    conf = config.load(root)
     return conf.mail_provider != nil and conf.mail_from != nil and conf.public_url != nil
 end
 
--- Deliberately generic here: platform itself ships no brand identity,
--- just a hook. A deployment that wants one drops an optional
--- theme.lua at the store root (e.g. seeded by its own deploy tooling,
--- outside this repo) -- absent or malformed, every value below falls
--- back to nil, which leaves ui.lua's existing var(--platform-*,
--- <fallback>) defaults (its current indigo/slate palette) untouched.
--- site_name similarly defaults to a generic label, never a company name.
 function config.load_theme(root)
     theme = {site_name = "Daat", colors = {}, has_logo = false, hide_home_heading = false, system_prompt_extra = nil}
     path = config.theme_path(root)
@@ -885,7 +980,11 @@ function config.load_theme(root)
     io.close(file)
 
     ok, parsed = sandbox.run(contents, path, sandbox.data_env())
-    if ok == false or type(parsed) != "table" then
+    if ok == false then
+        io.write(io.stderr, "Warning: theme.lua: syntax/evaluation error: " .. tostring(parsed) .. "\n")
+        return theme
+    end
+    if type(parsed) != "table" then
         return theme
     end
 
@@ -895,19 +994,9 @@ function config.load_theme(root)
     if parsed.has_logo == true then
         theme.has_logo = true
     end
-    -- For a deployment whose logo image already contains the company
-    -- name (a wordmark, not just a mark) -- repeating it as a second,
-    -- redundant text heading on Home reads as a mistake, not a
-    -- feature. A generic hook, not a Celleste-specific behavior baked
-    -- into ui.lua: any deployment can opt into it, none are forced to.
     if parsed.hide_home_heading == true then
         theme.hide_home_heading = true
     end
-    -- Deployment-specific instructions appended to the chat agent's own
-    -- system prompt -- e.g. domain vocabulary, house style, or
-    -- reminders specific to this deployment's use case, without editing
-    -- daat's own source. A generic hook (any deployment can set
-    -- it), same split as every other theme.lua field here.
     if type(parsed.system_prompt_extra) == "string" and parsed.system_prompt_extra != "" then
         theme.system_prompt_extra = parsed.system_prompt_extra
     end
@@ -922,15 +1011,6 @@ function config.load_theme(root)
     return theme
 end
 
--- A theme.lua field value is about to become part of a real Lua source
--- file that sandbox.run will later execute -- unlike dkjson.encode
--- (which handled this automatically), writing a string literal by hand
--- means backslashes/quotes/newlines in an admin-supplied value (site_name,
--- system_prompt_extra) must be escaped correctly, or they'd either break
--- the file's own syntax or (worse) let a crafted value close the string
--- early and inject extra table fields. Order matters: backslashes must
--- be escaped first, before quotes/newlines, so the backslashes this
--- function itself inserts are never re-escaped by a later step.
 function lua_string_literal(s)
     escaped = string.gsub(s, "\\", "\\\\")
     escaped = string.gsub(escaped, "\"", "\\\"")
@@ -939,13 +1019,6 @@ function lua_string_literal(s)
     return "\"" .. escaped .. "\""
 end
 
--- Writes theme.lua back out -- the settings UI's save path, symmetric
--- to load_theme above rather than a one-off ad hoc writer. `theme` is
--- the same shape load_theme returns; only non-empty/non-default values
--- are actually written, so a field left blank in the settings form
--- round-trips back to "absent from theme.lua" (load_theme's own
--- generic fallback) instead of being persisted as an explicit empty
--- string.
 function config.save_theme(root, theme)
     lines = {"return {"}
     if theme.site_name != nil and theme.site_name != "" and theme.site_name != "Daat" then
@@ -985,6 +1058,153 @@ function config.save_theme(root, theme)
     io.write(file, table.concat(lines, "\n") .. "\n")
     io.close(file)
     return true
+end
+
+function resolved_value_for_spec(report, spec)
+    if spec.setting_key != nil then
+        return report.settings[spec.setting_key]
+    end
+    if spec.key == "retention_override" then
+        return report.resolved.retention
+    end
+    return report.resolved[spec.conf_key]
+end
+
+function format_display_value(val)
+    if val == nil then
+        return "nil"
+    end
+    if type(val) == "string" then
+        return lua_string_literal(val)
+    end
+    if val == true or val == false or type(val) == "number" then
+        return tostring(val)
+    end
+    if type(val) == "table" then
+        return json.encode(val)
+    end
+    return tostring(val)
+end
+
+function has_flag(cmd_args, flag)
+    for _, a in ipairs(cmd_args) do
+        if a == flag then
+            return true
+        end
+    end
+    return false
+end
+
+function config.do_config(cmd_args, root)
+    if root == nil then
+        root = "."
+    end
+    sub = cmd_args[1]
+    as_json = has_flag(cmd_args, "--json")
+
+    if sub == "check" then
+        report = config.validate(root)
+        if as_json then
+            print(json.encode({
+                ok = report.ok,
+                config_exists = report.config_exists,
+                theme_exists = report.theme_exists,
+                errors = report.errors,
+                warnings = report.warnings,
+            }))
+        else
+            cfg_state = "absent (using defaults)"
+            if report.config_exists then
+                cfg_state = "present"
+            end
+            theme_state = "absent (using defaults)"
+            if report.theme_exists then
+                theme_state = "present"
+            end
+            print("config.lua: " .. cfg_state)
+            print("theme.lua:  " .. theme_state)
+            for _, w in ipairs(report.warnings) do
+                print("WARNING: " .. w)
+            end
+            for _, e in ipairs(report.errors) do
+                print("ERROR:   " .. e)
+            end
+            if report.ok then
+                print(string.format("OK (%d warning(s))", #report.warnings))
+            else
+                print(string.format("FAILED (%d error(s), %d warning(s))", #report.errors, #report.warnings))
+            end
+        end
+        if report.ok then
+            return 0
+        end
+        return 1
+    end
+
+    if sub == "show" then
+        report = config.validate(root)
+        theme = config.load_theme(root)
+        if as_json then
+            sections_out = {}
+            for _, sec in ipairs(CONFIG_SECTIONS) do
+                sections_out[sec] = {}
+            end
+            for _, spec in ipairs(CONFIG_SCHEMA) do
+                path_label = spec.section .. "." .. spec.key
+                sections_out[spec.section][spec.key] = {
+                    value = resolved_value_for_spec(report, spec),
+                    source = report.sources[path_label],
+                    description = spec.desc,
+                }
+            end
+            print(json.encode({
+                ok = report.ok,
+                config_exists = report.config_exists,
+                theme_exists = report.theme_exists,
+                sections = sections_out,
+                theme = {
+                    site_name = theme.site_name,
+                    has_logo = theme.has_logo,
+                    hide_home_heading = theme.hide_home_heading,
+                    has_system_prompt_extra = (theme.system_prompt_extra != nil and theme.system_prompt_extra != ""),
+                    colors = theme.colors,
+                },
+                errors = report.errors,
+                warnings = report.warnings,
+            }))
+            return 0
+        end
+
+        for _, sec in ipairs(CONFIG_SECTIONS) do
+            print("[" .. sec .. "]")
+            for _, spec in ipairs(CONFIG_SCHEMA) do
+                if spec.section == sec then
+                    path_label = sec .. "." .. spec.key
+                    val_str = format_display_value(resolved_value_for_spec(report, spec))
+                    src_tag = report.sources[path_label]
+                    print(string.format("  %-32s = %-28s (%s)", spec.key, val_str, src_tag))
+                end
+            end
+            print("")
+        end
+        print("[theme]")
+        print(string.format("  %-32s = %s", "site_name", format_display_value(theme.site_name)))
+        print(string.format("  %-32s = %s", "has_logo", tostring(theme.has_logo)))
+        print(string.format("  %-32s = %s", "hide_home_heading", tostring(theme.hide_home_heading)))
+        for _, w in ipairs(report.warnings) do
+            print("WARNING: " .. w)
+        end
+        for _, e in ipairs(report.errors) do
+            print("ERROR:   " .. e)
+        end
+        return 0
+    end
+
+    print("Usage: daat config <show|check> [--json]")
+    if sub == "-h" or sub == "--help" then
+        return 0
+    end
+    return 1
 end
 
 return config

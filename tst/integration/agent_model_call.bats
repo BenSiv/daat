@@ -84,7 +84,7 @@ teardown() {
     read session csrf < <(session_for admin secret123)
     chat_session=$(start_chat "$session" "$csrf" "Test")
     cat > "${TEST_DIR}/config.lua" <<'EOF'
-return {agent_provider = "nonexistent-provider", agent_turn_mode = "inline"}
+return {agent = {provider = "nonexistent-provider", turn_mode = "inline"}}
 EOF
     printf '{"session_id":"%s","message":"hi"}' "$chat_session" | \
         GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/chat-widget-send" QUERY_STRING="" \
@@ -106,7 +106,7 @@ EOF
     read session csrf < <(session_for admin secret123)
     chat_session=$(start_chat "$session" "$csrf" "Test")
     cat > "${TEST_DIR}/config.lua" <<'EOF'
-return {agent_provider = "nonexistent-provider", agent_turn_mode = "inline"}
+return {agent = {provider = "nonexistent-provider", turn_mode = "inline"}}
 EOF
     resp=$(printf '{"session_id":"%s","message":"hi"}' "$chat_session" | \
         GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/chat-widget-send" QUERY_STRING="" \
@@ -272,7 +272,7 @@ EOF
     # Newer prompts stay.
     [ "$(sqlite3 .store/store.db "SELECT COUNT(*) FROM agent_model_call WHERE prompt IS NOT NULL;")" -ge 1 ]
 
-    write_config ', model_input_days = "forever"'
+    write_config 'agent = {model_input_days = "forever"}'
     sqlite3 .store/store.db "UPDATE agent_model_call SET created_at = '2020-01-01 00:00:00';"
     run "$BIN" agent prune-prompts
     [[ "$output" =~ "Cleared 0 stored prompts" ]]

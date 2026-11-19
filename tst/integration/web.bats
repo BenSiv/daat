@@ -427,7 +427,7 @@ print('\n'.join(lines))
     # setup()'s own Dr. Cohen makes 6 total -- override the cap well
     # below that, cheaply, instead of the default test's 1010-row bulk
     # insert (which exercises the *default* value specifically).
-    write_config ', adhoc_row_cap = 3'
+    write_config 'ui = {adhoc_row_cap = 3}'
     run env GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/sql" \
         QUERY_STRING="q=SELECT+id+FROM+person%3B" \
         HTTP_COOKIE="session=${ADMIN_SESSION_COOKIE}; csrf=${ADMIN_CSRF_TOKEN}" \
@@ -522,7 +522,7 @@ EOF
 }
 
 @test "config.lua's nav_hidden hides the listed rail item, keeps the rest" {
-    write_config ', nav_hidden = {"data"}'
+    write_config 'ui = {nav_hidden = {"data"}}'
 
     run_cgi "/"
     [ "$status" -eq 0 ]
@@ -536,7 +536,7 @@ EOF
 }
 
 @test "config.lua's nav_order moves listed rail items first, keeps the rest in their original order" {
-    write_config ', nav_order = {"data", "home"}'
+    write_config 'ui = {nav_order = {"data", "home"}}'
 
     run_cgi "/"
     [ "$status" -eq 0 ]

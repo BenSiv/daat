@@ -18,7 +18,7 @@ Requires a built `luam` checkout beside this one (`../luam`, or set `LUAM_DIR`, 
 ./bld/build.sh          # -> bin/daat
 ```
 
-The chat agent's model provider is chosen in `config.lua` (`agent_provider`): Google Vertex AI (`"vertex"`, chat and embeddings, needs `vertex_project`), Claude (`"claude"`, chat only), Ollama or any OpenAI-compatible `/v1` server (`"ollama"`, chat and embeddings, defaults to `http://127.0.0.1:11434/v1` with `qwen3:8b` and `nomic-embed-text`, configurable via `ollama_url`, `agent_model`, `embedding_model`, and `OLLAMA_API_KEY`/`OPENAI_API_KEY`), or the scripted `"test"` provider. Vertex authenticates through the VM's service account on Google Cloud, or the logged-in `gcloud` account elsewhere.
+The chat agent's model provider is chosen in `config.lua` (`agent.provider`; see [configuration.md](doc/configuration.md)): Google Vertex AI (`"vertex"`, chat and embeddings, needs `agent.vertex_project`), Claude (`"claude"`, chat only), Ollama or any OpenAI-compatible `/v1` server (`"ollama"`, chat and embeddings, defaults to `http://127.0.0.1:11434/v1` with `qwen3:8b` and `nomic-embed-text`, configurable via `agent.ollama_url`, `agent.model`, `knowledge.embedding_model`, and `OLLAMA_API_KEY`/`OPENAI_API_KEY`), or the scripted `"test"` provider. Vertex authenticates through the VM's service account on Google Cloud, or the logged-in `gcloud` account elsewhere.
 
 ## Testing
 

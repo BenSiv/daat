@@ -22,7 +22,7 @@ end
 function mail_provider.load()
     name = mail_provider.name()
     if name == nil then
-        return nil, "no mail_provider configured in config.lua"
+        return nil, "no mail.provider configured in config.lua"
     end
     ok, mod = pcall(require, "provider.mail_" .. name)
     if ok == false or mod == nil then
@@ -74,7 +74,7 @@ function mail_provider.send(message)
     end
     from_address = config.load().mail_from
     if not mail_provider.valid_address(from_address) then
-        return nil, "invalid mail_from in config.lua: " .. tostring(from_address)
+        return nil, "invalid mail.from in config.lua: " .. tostring(from_address)
     end
     if not mail_provider.valid_address(message.to) then
         return nil, "invalid recipient address"

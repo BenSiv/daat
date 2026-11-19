@@ -45,8 +45,8 @@ teardown() {
     [ -f theme.lua ]
     [ -f config.lua ]
     run cat config.lua
-    [[ "$output" =~ "-- agent_provider = \"ollama\"" ]]
-    [[ "$output" =~ "-- agent_model = \"qwen3:8b\"" ]]
+    [[ "$output" =~ "-- provider = \"ollama\"" ]]
+    [[ "$output" =~ "-- model = \"qwen3:8b\"" ]]
 
     # The generated content is real, working config-as-code, not just
     # placeholder text -- both example schemas register successfully.

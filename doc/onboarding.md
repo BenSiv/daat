@@ -126,6 +126,7 @@ A few design and migration notes in this directory record empirical measurements
 
 ## Where to go next
 
+- `configuration.md` -- full `config.lua`, `theme.lua`, and environment-variable reference (`daat config check` / `daat config show`).
 - `architecture.md` -- the full entity-history model, sandboxing, and auth/session design (the big one -- start here for depth).
 - `performance.md` -- request lifecycle invariants, SQLite/MariaDB benchmarks, and saved optimization roadmap.
 - `schema.md` -- defining entity types.

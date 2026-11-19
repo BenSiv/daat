@@ -96,7 +96,20 @@ for scenario in tst/eval/scenarios/*.lua; do
         work="$RUN_DIR/work/$name-$r"
         cp -r "$ENV_DIR" "$work"
         if [ -n "$EXTRA" ]; then
-            sed -i "\$ s/}[[:space:]]*\$/, ${EXTRA}}/" "$work/config.lua"
+            CFG_OUT="$work/config.lua" CFG_OVER="$EXTRA" "$LUAM" -e '
+                data = require("data")
+                out_path = os.getenv("CFG_OUT")
+                base = data.load(out_path)
+                over = data.loads("return {" .. os.getenv("CFG_OVER") .. "}")
+                for sec, tbl in pairs(over) do
+                    if type(tbl) == "table" and type(base[sec]) == "table" then
+                        for k, v in pairs(tbl) do base[sec][k] = v end
+                    else
+                        base[sec] = tbl
+                    end
+                end
+                data.save(out_path, base)
+            '
         fi
         (
             cd "$work"

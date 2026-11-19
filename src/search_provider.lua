@@ -33,7 +33,7 @@ end
 
 function search_provider.load()
     if search_provider.name() == nil then
-        return nil, "no search_provider is set in config.lua"
+        return nil, "no search.provider is set in config.lua"
     end
     ok, mod = pcall(require, "provider.search_" .. search_provider.name())
     if ok == false or mod == nil then

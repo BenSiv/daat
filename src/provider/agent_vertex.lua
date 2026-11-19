@@ -129,7 +129,7 @@ REQUEST_TIMEOUT_SECONDS = 120
 function vertex_config()
     project = config.setting("vertex_project")
     if type(project) != "string" then
-        return nil, nil, "vertex_project is not set in config.lua"
+        return nil, nil, "agent.vertex_project is not set in config.lua"
     end
     region = config.setting("vertex_region")
     if type(region) != "string" then

@@ -181,49 +181,59 @@ return {
 -- file changes nothing (sandbox.run on an all-comments file returns nil,
 -- same as no file at all) -- it's reference documentation of what's
 -- available, not a behavior change.
-const EXAMPLE_CONFIG_LUA = """-- Every field here is optional; see doc/architecture.md's own table
--- for the full list and current defaults. Uncomment and edit only what
--- this deployment actually needs to override.
+const EXAMPLE_CONFIG_LUA = """-- Deployment configuration (see doc/configuration.md for every section,
+-- field, default, and advanced tuning knob). Run `daat config check` to
+-- validate syntax and field names, or `daat config show` to inspect all
+-- effective settings.
+--
+-- Secrets never belong in this file; pass them as environment variables:
+--   DAAT_MARIADB_PASSWORD, DAAT_SMTP_PASSWORD, DAAT_GRAPH_CLIENT_SECRET,
+--   ANTHROPIC_API_KEY, OLLAMA_API_KEY / OPENAI_API_KEY,
+--   GOOGLE_SEARCH_API_KEY / GOOGLE_SEARCH_ENGINE_ID
 return {
-  -- Which backends to call (unset: that feature is off). The models
-  -- default to the chosen provider's own ("ollama", "vertex", "claude");
-  -- name one to pin it.
-  -- agent_provider = "ollama",
-  -- agent_model = "qwen3:8b",
-  -- agent_thinking = "summary",
-  -- agent_retention = "full",
-  -- agent_retention_override = {tool_trace_days = 30},
-  -- embedding_model = "nomic-embed-text",
-  -- search_provider = "google_cse",
-  -- The chosen provider's own settings, read by the provider itself:
-  -- ollama_url = "http://127.0.0.1:11434/v1",
-  -- vertex_project = "your-gcp-project",
-  -- vertex_region = "global",
-  -- agent_max_turns = 20,
-  -- agent_research_max_turns = 12,
-  -- agent_background_max_turns = 20,
-  -- agent_background_max_attempts = 3,
-  -- agent_search_excerpt_length = 1200,
-  -- agent_query_row_cap = 200,
-  -- agent_compaction_threshold = 48000,
-  -- agent_context_fixed_tokens = 3900,
-  -- agent_chars_per_token = 2.8,
-  -- agent_compaction_mid_turn = true,
-  -- adhoc_row_cap = 1000,
-  -- extension_max_job_attempts = 5,
-  -- db_backend = "sqlite",
-  -- mariadb_host = "127.0.0.1",
-  -- mariadb_port = 3306,
-  -- mariadb_user = "platform",
-  -- mariadb_database = "platform",
-  -- Nav rail: reorder and/or hide built-in items (home/documents/data/
-  -- tasks/system) and approved extensions (ext:<name>) -- an item
-  -- unlisted in nav_order just keeps its default relative position;
-  -- an unrecognized key in either list is silently ignored. Can only
-  -- reorder/hide what a user's own capabilities would already show
-  -- them, never grant back something they can't otherwise see.
-  -- nav_order = {"data", "home", "documents"},
-  -- nav_hidden = {"tasks"},
+  database = {
+    -- backend = "sqlite",        -- "sqlite" (default, .store/store.db) or "mariadb"
+    -- host = "127.0.0.1",
+    -- port = 3306,
+    -- user = "daat",             -- password via DAAT_MARIADB_PASSWORD
+    -- database = "daat",
+  },
+  agent = {
+    -- provider = "ollama",       -- "ollama", "vertex", or "claude" (unset: chat off)
+    -- model = "qwen3:8b",
+    -- thinking = "summary",      -- "off" | "summary" | "full"
+    -- retention = "standard",    -- "full" | "standard" | "lean"
+    -- chat_attachments_enabled = false,
+    -- Provider-specific settings:
+    -- ollama_url = "http://127.0.0.1:11434/v1",
+    -- vertex_project = "your-gcp-project",
+    -- vertex_region = "global",
+  },
+  knowledge = {
+    -- embedding_model = "nomic-embed-text", -- changing requires `daat repair embeddings`
+    -- build_aspects = false,
+    -- search_aspects = false,
+    -- tag_restructure = false,
+  },
+  search = {
+    -- provider = "google_cse",   -- requires GOOGLE_SEARCH_API_KEY + GOOGLE_SEARCH_ENGINE_ID
+  },
+  mail = {
+    -- All three (provider, from, public_url) are required to enable forgot-password emails:
+    -- provider = "smtp",         -- "smtp" or "graph"
+    -- from = "noreply@example.com",
+    -- public_url = "https://daat.example.com",
+    -- smtp_url = "smtp://smtp.example.com:587",
+    -- smtp_user = "noreply@example.com",    -- password via DAAT_SMTP_PASSWORD
+  },
+  ui = {
+    -- nav_order = {"data", "home", "documents"},
+    -- nav_hidden = {"tasks"},
+    -- adhoc_row_cap = 1000,
+  },
+  extensions = {
+    -- max_job_attempts = 5,
+  },
 }
 """
 

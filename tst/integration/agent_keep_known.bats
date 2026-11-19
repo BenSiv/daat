@@ -36,7 +36,7 @@ tool_results() {
     run tool_results
     [[ ! "${lines[1]}" =~ "Same call as one earlier" ]]
 
-    write_config ", agent_dedupe_repeat_calls = false"
+    write_config "agent = {dedupe_repeat_calls = false}"
     fields="$(tool_call_response "entity.fields" '{"entity_type":"document"}')"
     send "again" "${fields}"$'\1'"$(done_response "Listed.")"
     run tool_results
@@ -45,7 +45,7 @@ tool_results() {
 
 @test "compaction carries schema lookups verbatim, and drops other tool results into the prose" {
     send "fields of document" "$(tool_call_response "entity.fields" '{"entity_type":"document"}')"$'\1'"$(tool_call_response "entity.query" '{"sql":"SELECT COUNT(*) AS n FROM document"}')"$'\1'"$(done_response "Document has a title field.")"
-    write_config ", agent_compaction_threshold = 1"
+    write_config "agent = {compaction_threshold = 1}"
     send "and now?" "$(done_response "Still here.")"
     run sqlite3 "$TEST_DIR/.store/store.db" "SELECT content FROM agent_message WHERE session_id = '${CHAT}' AND role = 'compaction_summary' ORDER BY id DESC LIMIT 1;"
     [[ "$output" =~ "Confirmed schema (exact earlier tool results" ]]
@@ -55,9 +55,9 @@ tool_results() {
 }
 
 @test "with agent_pin_schema = false, compaction pins nothing" {
-    write_config ", agent_pin_schema = false"
+    write_config "agent = {pin_schema = false}"
     send "fields of document" "$(tool_call_response "entity.fields" '{"entity_type":"document"}')"$'\1'"$(done_response "Listed.")"
-    write_config ", agent_pin_schema = false, agent_compaction_threshold = 1"
+    write_config "agent = {pin_schema = false, compaction_threshold = 1}"
     send "and now?" "$(done_response "Still here.")"
     run sqlite3 "$TEST_DIR/.store/store.db" "SELECT content FROM agent_message WHERE session_id = '${CHAT}' AND role = 'compaction_summary' ORDER BY id DESC LIMIT 1;"
     [ -n "$output" ]

@@ -64,7 +64,7 @@ calling_message() {
 }
 
 @test "a sub-agent's steps stay out of the chat view; a kept transcript has its finding and reasoning, never tool output" {
-    write_config ', agent_transcript_documents = "whole"'
+    write_config 'agent = {transcript_documents = "whole"}'
     read session csrf < <(session_for admin secret123)
     chat=$(start_chat "$session" "$csrf" "Research")
     scripted="$(tool_call_response "research.investigate" '{"question":"what types exist"}')"$'\1'"$(tool_call_response "entity.list_types" "{}")"$'\1'"$(done_response "Found the types.")"$'\1'"$(done_response "Here are the types.")"
@@ -83,7 +83,7 @@ calling_message() {
 }
 
 @test "a research loop that runs out of budget leaves its last step and that step's result" {
-    write_config ", agent_research_max_turns = 1"
+    write_config "agent = {research_max_turns = 1}"
     read session csrf < <(session_for admin secret123)
     chat=$(start_chat "$session" "$csrf" "Budget")
     scripted="$(tool_call_response "research.investigate" '{"question":"what types exist"}')"$'\1'"$(tool_call_response "entity.list_types" "{}")"$'\1'"$(done_response "I could not finish.")"
@@ -186,14 +186,14 @@ propose_create() {
     read session csrf < <(session_for admin secret123)
 
     # Explicit agent_thinking = "off" disables thinking capture.
-    write_config ', agent_thinking = "off"'
+    write_config 'agent = {thinking = "off"}'
     off_chat=$(start_chat "$session" "$csrf" "Off")
     AGENT_TEST_THINKING="should not appear" send_message "$session" "$csrf" "$off_chat" "hello" "$(done_response "Plain reply.")" > /dev/null
     run store "SELECT content FROM agent_message WHERE session_id = '${off_chat}';"
     [[ ! "$output" =~ "should not appear" ]]
 
     # Unset (and unrecognized values falling back to default) uses "summary": thinking is captured in agent_message across loops and never creates pool documents.
-    write_config ', agent_thinking = "bogus"'
+    write_config 'agent = {thinking = "bogus"}'
     bogus_chat=$(start_chat "$session" "$csrf" "Bogus")
     AGENT_TEST_THINKING="default-summary-thought" send_message "$session" "$csrf" "$bogus_chat" "hello" "$(done_response "Plain reply.")" > /dev/null
     run store "SELECT content FROM agent_message WHERE session_id = '${bogus_chat}';"
@@ -226,7 +226,7 @@ propose_create() {
     [[ "$(store "SELECT content FROM agent_message WHERE parent_message_id = ${bg_parent} AND loop_kind = 'background';")" =~ "bg-monologue" ]]
 
     # Compaction captures generate() thinking as a child reasoning row under the summary.
-    write_config ', agent_thinking = "summary", agent_compaction_threshold = 10'
+    write_config 'agent = {thinking = "summary", compaction_threshold = 10}'
     for i in 1 2 3; do
         AGENT_TEST_THINKING="turn-thought-$i" AGENT_TEST_GENERATE_RESPONSES="## Established facts
 fact $i
@@ -243,7 +243,7 @@ none" AGENT_TEST_GENERATE_THINKING="compaction-monologue" \
     [[ "$(store "SELECT content FROM agent_message WHERE parent_message_id = ${summary_id};")" =~ "compaction-monologue" ]]
 
     # Turn-limit wrapup preserves structured thinking blocks on the wrapup assistant row.
-    write_config ', agent_thinking = "full", agent_max_turns = 1'
+    write_config 'agent = {thinking = "full", max_turns = 1}'
     wrap_chat=$(start_chat "$session" "$csrf" "Wrapup")
     printf '{"session_id":"%s","message":"keep calling tools"}' "$wrap_chat" | \
         AGENT_TEST_THINKING="wrapup-monologue" \
