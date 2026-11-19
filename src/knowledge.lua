@@ -190,6 +190,8 @@ const HAND_ROLLED_TABLE_COLUMNS = {
         {name = "query_text", note = "the search query text"},
         {name = "hit_count", note = "number of documents this retrieval matched"},
         {name = "status", note = "deferred review state: pending, running, or reviewed"},
+        {name = "claim_token", note = "worker token claiming a running deferred review (NULL unless status = 'running')"},
+        {name = "claimed_at", note = "when the running review was claimed (NULL unless status = 'running')"},
         {name = "reviewed_at", note = "when reinforcement and review finished (NULL while pending)"},
         {name = "created_at", note = "timestamp of the retrieval event"},
     },

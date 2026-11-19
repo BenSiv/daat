@@ -34,18 +34,149 @@ const do_repair = repair.do_repair
 const tag_upkeep = require("tag_upkeep")
 const do_tag = tag_upkeep.do_tag
 
--- Required explicitly here (not left to load transitively via web's
--- own require) since knowledge.lua can't require agent.lua back itself
--- (agent.lua already requires knowledge.lua; a real circular require,
--- not just an ordering nuisance) -- the one thing that needs both,
--- `daat knowledge distill`, is dispatched from here instead of
--- inside knowledge.do_knowledge.
+-- Required explicitly here since knowledge.lua does not require agent.lua
+-- (`daat knowledge distill` bridges both).
 const agent = require("agent")
 const agent_tools = require("agent_tools")
 
 const cgi = require("cgi")
 const web = require("web")
 const db = require("database")
+const store = require("store")
+const passage = require("passage")
+const verify = require("verify")
+const context_report = require("context_report")
+
+function run_prune(db_path)
+    agent.init_schema(db_path)
+    passage.init_schema(db_path)
+    conf = config.platform_config()
+    pruned = agent.prune_retention(db_path, conf)
+    policy = pruned.policy
+    mi_label = "(kept forever)"
+    if policy.model_input_days == 0 then
+        mi_label = "(not stored, 0 days)"
+    elseif type(policy.model_input_days) == "number" then
+        mi_label = string.format("older than %s days", tostring(policy.model_input_days))
+    end
+    tt_label = "(kept forever)"
+    if type(policy.tool_trace_days) == "number" then
+        tt_label = string.format("older than %s days", tostring(policy.tool_trace_days))
+    end
+    kn_label = "(kept forever)"
+    if type(policy.knowledge_days) == "number" then
+        kn_label = string.format("older than %s days after curation", tostring(policy.knowledge_days))
+    end
+    mt_label = "(kept forever)"
+    if type(policy.metrics_days) == "number" then
+        mt_label = string.format("older than %s days", tostring(policy.metrics_days))
+    end
+    print(string.format("Retention strategy: %s", tostring(pruned.strategy)))
+    print(string.format("model_input: Cleared %d stored prompts %s", pruned.model_input, mi_label))
+    print(string.format("tool_trace: Stubbed %d tool results %s", pruned.tool_trace, tt_label))
+    print(string.format("knowledge: Removed %d raw knowledge rows %s", pruned.knowledge, kn_label))
+    print(string.format("metrics: Removed %d metrics and control rows %s", pruned.metrics, mt_label))
+    deleted = passage.prune_cache(db_path, conf.passage_cache_days)
+    print(string.format("passage_cache: Deleted %d passage embeddings unused for %s days", deleted, tostring(conf.passage_cache_days)))
+    return 0
+end
+
+function do_store(cmd_args, db_path)
+    sub = cmd_args[1]
+    if sub == "prune" then
+        return run_prune(db_path)
+    end
+    if sub == "verify" then
+        if not verify.do_verify(cmd_args, db_path) then
+            return 1
+        end
+        return 0
+    end
+    print("Usage: daat store <prune|verify> [--json]")
+    return 1
+end
+
+function do_agent(cmd_args, db_path)
+    sub = cmd_args[1]
+    if sub == "run-pending-background" then
+        agent.init_schema(db_path)
+        result = agent.run_pending_background_tasks(db_path, agent.default_model())
+        print(string.format("Ran %d, failed %d", result.ran, result.failed))
+        return 0
+    end
+    if sub == "prune-prompts" then
+        return run_prune(db_path)
+    end
+    if sub == "context-report" then
+        since = nil
+        if cmd_args[2] == "--since" then
+            since = cmd_args[3]
+            if since == nil or string.match(since, "^%d%d%d%d%-%d%d%-%d%d$") == nil then
+                print("Usage: daat agent context-report [--since YYYY-MM-DD]")
+                return 1
+            end
+        elseif cmd_args[2] != nil then
+            print("Usage: daat agent context-report [--since YYYY-MM-DD]")
+            return 1
+        end
+        print(context_report.build(db_path, since))
+        return 0
+    end
+    if sub == "continue" then
+        if cmd_args[2] == nil then
+            print("Usage: daat agent continue <session_id>")
+            return 1
+        end
+        agent.init_schema(db_path)
+        result, err = agent.continue_turn(db_path, cmd_args[2], agent.default_model())
+        if result == nil then
+            print("Error: " .. tostring(err))
+            return 1
+        end
+        print(string.format("Turn %s: %s", cmd_args[2], tostring(result.status)))
+        return 0
+    end
+    print("Usage: daat agent <run-pending-background|prune-prompts|context-report|continue> ...")
+    return 1
+end
+
+function do_knowledge_dispatch(cmd_args, db_path)
+    if cmd_args[1] == "distill" then
+        session_id, result = agent_tools.run_knowledge_distillation(db_path, os.getenv("USER"), agent.default_model())
+        if session_id == nil then
+            print("Error: " .. tostring(result))
+            return 1
+        end
+        print("Distillation session: " .. tostring(session_id))
+        print("Status: " .. tostring(result.status))
+        if result.status == "pending_approval" then
+            print("Proposed: " .. tostring(result.tool) .. "." .. tostring(result.method) ..
+                " (pending action #" .. tostring(result.pending_id) .. ") -- approve/deny from the chat UI")
+        else
+            print(tostring(result.message))
+        end
+        return 0
+    end
+    do_knowledge(cmd_args, db_path)
+    return 0
+end
+
+const COMMAND_FUNCS = {
+    ["init"] = do_init,
+    ["schema"] = do_schema,
+    ["entity"] = do_entity,
+    ["ledger"] = do_ledger,
+    ["extension"] = do_extension,
+    ["view"] = do_view,
+    ["user"] = do_user,
+    ["api-key"] = do_api_key,
+    ["document"] = do_document,
+    ["knowledge"] = do_knowledge_dispatch,
+    ["repair"] = do_repair,
+    ["tag"] = do_tag,
+    ["store"] = do_store,
+    ["agent"] = do_agent,
+}
 
 function run_main()
     if cgi.is_cgi() then
@@ -53,23 +184,8 @@ function run_main()
         if not ok then
             cgi.respond_error(err)
         end
-        return
+        return 0
     end
-
-    command_funcs = {
-        ["init"] = do_init,
-        ["schema"] = do_schema,
-        ["entity"] = do_entity,
-        ["ledger"] = do_ledger,
-        ["extension"] = do_extension,
-        ["view"] = do_view,
-        ["user"] = do_user,
-        ["api-key"] = do_api_key,
-        ["document"] = do_document,
-        ["knowledge"] = do_knowledge,
-        ["repair"] = do_repair,
-        ["tag"] = do_tag,
-    }
 
     arg[-1] = "lua"
     command = arg[1]
@@ -82,151 +198,16 @@ function run_main()
 
     if command == nil or command == "-h" or command == "--help" then
         print("Usage: daat <init|schema|entity|ledger|extension|view|user|api-key|document|knowledge|agent|repair|tag|store> ...")
-        return
+        if command == nil then
+            return 1
+        end
+        return 0
     end
 
-    -- Every command on an existing store brings its tables to the
-    -- current layout first (see store.lua's header); `init` does it
-    -- itself once the store exists.
-    if command != "init" and config.is_initialized(".") then
-        require("store").migrate(config.db_path("."))
-    end
-
-    -- "agent" has no command_funcs entry of its own, so its
-    -- subcommands are special-cased here,
-    -- before the generic command_funcs lookup below, the same reason
-    -- "knowledge distill" further down is dispatched outside of
-    -- knowledge.do_knowledge instead of through it: see the
-    -- require("agent") comment above main(). Meant to be invoked
-    -- periodically (cron/systemd timer), the same way system_job's
-    -- own "daat extension run-pending" already is.
-    if command == "agent" and arg[2] == "run-pending-background" then
-        if config.is_initialized(".") == false then
-            print("Not initialized. Run 'daat init' first.")
-            return
-        end
-        db_path = config.db_path(".")
-        -- This can run before any web request after a deploy (it's on a
-        -- timer), so it brings the tables it writes up to date itself
-        -- rather than relying on cgi.handle_request having done it.
-        agent.init_schema(db_path)
-        result = agent.run_pending_background_tasks(db_path, agent.default_model())
-        print(string.format("Ran %d, failed %d", result.ran, result.failed))
-        return
-    end
-
-    -- Every retention rule, for the retention timer (doc/agent-data.md,
-    -- "Retention"; #35): model_input, tool_trace, raw knowledge,
-    -- call_metrics/control, and passage embeddings unused past
-    -- passage_cache_days. `agent prune-prompts` is kept as an alias.
-    if (command == "store" and arg[2] == "prune") or (command == "agent" and arg[2] == "prune-prompts") then
-        if config.is_initialized(".") == false then
-            print("Not initialized. Run 'daat init' first.")
-            return
-        end
-        db_path = config.db_path(".")
-        agent.init_schema(db_path)
-        passage = require("passage")
-        passage.init_schema(db_path)
-        conf = config.platform_config()
-        pruned = agent.prune_retention(db_path, conf)
-        policy = pruned.policy
-        mi_label = "(kept forever)"
-        if policy.model_input_days == 0 then
-            mi_label = "(not stored, 0 days)"
-        elseif type(policy.model_input_days) == "number" then
-            mi_label = string.format("older than %s days", tostring(policy.model_input_days))
-        end
-        tt_label = "(kept forever)"
-        if type(policy.tool_trace_days) == "number" then
-            tt_label = string.format("older than %s days", tostring(policy.tool_trace_days))
-        end
-        kn_label = "(kept forever)"
-        if type(policy.knowledge_days) == "number" then
-            kn_label = string.format("older than %s days after curation", tostring(policy.knowledge_days))
-        end
-        mt_label = "(kept forever)"
-        if type(policy.metrics_days) == "number" then
-            mt_label = string.format("older than %s days", tostring(policy.metrics_days))
-        end
-        print(string.format("Retention strategy: %s", tostring(pruned.strategy)))
-        print(string.format("model_input: Cleared %d stored prompts %s", pruned.model_input, mi_label))
-        print(string.format("tool_trace: Stubbed %d tool results %s", pruned.tool_trace, tt_label))
-        print(string.format("knowledge: Removed %d raw knowledge rows %s", pruned.knowledge, kn_label))
-        print(string.format("metrics: Removed %d metrics and control rows %s", pruned.metrics, mt_label))
-        deleted = passage.prune_cache(db_path, conf.passage_cache_days)
-        print(string.format("passage_cache: Deleted %d passage embeddings unused for %s days", deleted, tostring(conf.passage_cache_days)))
-        return
-    end
-
-    if command == "store" and arg[2] == "verify" then
-        if config.is_initialized(".") == false then
-            print("Not initialized. Run 'daat init' first.")
-            os.exit(1)
-        end
-        verify_mod = require("verify")
-        verify_args = {}
-        for i = 2, #arg do
-            table.insert(verify_args, arg[i])
-        end
-        verify_mod.do_verify(verify_args, config.db_path("."))
-        return
-    end
-
-    if command == "store" then
-        print("Usage: daat store <prune|verify> [--json]")
-        return
-    end
-
-    -- Read-only usage report: how big the agent's context gets and what
-    -- fills it (src/context_report.lua, doc/context-management-plan.md).
-    if command == "agent" and arg[2] == "context-report" then
-        if config.is_initialized(".") == false then
-            print("Not initialized. Run 'daat init' first.")
-            return
-        end
-        since = nil
-        if arg[3] == "--since" then
-            since = arg[4]
-            if since == nil or string.match(since, "^%d%d%d%d%-%d%d%-%d%d$") == nil then
-                print("Usage: daat agent context-report [--since YYYY-MM-DD]")
-                return
-            end
-        elseif arg[3] != nil then
-            print("Usage: daat agent context-report [--since YYYY-MM-DD]")
-            return
-        end
-        context_report = require("context_report")
-        print(context_report.build(config.db_path("."), since))
-        return
-    end
-
-    -- The detached-turn worker (agent.spawn_turn_worker starts it from
-    -- the web request): runs one session's turn to its end.
-    if command == "agent" and arg[2] == "continue" then
-        if arg[3] == nil then
-            print("Usage: daat agent continue <session_id>")
-            return
-        end
-        if config.is_initialized(".") == false then
-            print("Not initialized. Run 'daat init' first.")
-            return
-        end
-        db_path = config.db_path(".")
-        agent.init_schema(db_path)
-        result, err = agent.continue_turn(db_path, arg[3], agent.default_model())
-        if result == nil then
-            print("Error: " .. tostring(err))
-            return
-        end
-        print(string.format("Turn %s: %s", arg[3], tostring(result.status)))
-        return
-    end
-
-    func = command_funcs[command]
+    func = COMMAND_FUNCS[command]
     if func == nil then
         print("'" .. command .. "' is not a valid command")
-        return
+        return 1
     end
 
     cmd_args = {}
@@ -237,44 +218,40 @@ function run_main()
 
     if command == "init" then
         func(cmd_args)
-        return
+        return 0
+    end
+
+    -- Usage errors that precede store checks (e.g. `daat agent continue`
+    -- with no session_id before `daat init`).
+    if command == "agent" and cmd_args[1] == "continue" and cmd_args[2] == nil then
+        print("Usage: daat agent continue <session_id>")
+        return 1
     end
 
     if config.is_initialized(".") == false then
         print("Not initialized. Run 'daat init' first.")
-        return
+        return 1
     end
 
     db_path = config.db_path(".")
+    store.migrate(db_path)
 
-    -- Dispatched here, not inside knowledge.do_knowledge -- see the
-    -- require("agent") comment above for why.
-    if command == "knowledge" and cmd_args[1] == "distill" then
-        session_id, result = agent_tools.run_knowledge_distillation(db_path, os.getenv("USER"), agent.default_model())
-        if session_id == nil then
-            print("Error: " .. tostring(result))
-            return
-        end
-        print("Distillation session: " .. tostring(session_id))
-        print("Status: " .. tostring(result.status))
-        if result.status == "pending_approval" then
-            print("Proposed: " .. tostring(result.tool) .. "." .. tostring(result.method) ..
-                " (pending action #" .. tostring(result.pending_id) .. ") -- approve/deny from the chat UI")
-        else
-            print(tostring(result.message))
-        end
-        return
+    code = func(cmd_args, db_path)
+    if type(code) == "number" then
+        return code
     end
-
-    func(cmd_args, db_path)
+    return 0
 end
 
 function main()
     db.sqlite_keep_open(true)
-    ok_run, run_err = pcall(run_main)
+    ok_run, result_or_err = pcall(run_main)
     db.sqlite_close_all()
     if not ok_run then
-        error(run_err, 0)
+        error(result_or_err, 0)
+    end
+    if type(result_or_err) == "number" and result_or_err != 0 then
+        os.exit(result_or_err)
     end
 end
 

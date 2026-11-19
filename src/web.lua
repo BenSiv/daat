@@ -24,12 +24,6 @@ const cgi = {}
 -- copy for the same reason) -- Luam's per-module isolation means a
 -- bare top-level global in one file isn't visible from another, only
 -- what a module explicitly returns on its own table.
-const THEME_COLOR_KEYS = {
-    "accent", "accent_2", "bg", "bg_2", "border", "border_2",
-    "heading", "input_text", "muted", "muted_2", "text", "th_text",
-    "tier_0", "tier_1", "tier_2", "tier_3",
-}
-
 -- The baseline capability every gated route (other than /login,
 -- /logout, and the login form's own POST) requires. Real session/login
 -- machinery lives in auth.lua -- see cgi.handle_request's session
@@ -1770,7 +1764,7 @@ function cgi.handle_request()
         -- structurally excludes every HTML/CSS-breakout character.
         new_colors = {}
         color_error = nil
-        for _, key in ipairs(THEME_COLOR_KEYS) do
+        for _, key in ipairs(config.THEME_COLOR_KEYS) do
             value = form["color_" .. key]
             if value != nil and value != "" then
                 if string.match(value, "^[%w%s#%.,%%()-]+$") == nil then

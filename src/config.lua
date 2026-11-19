@@ -44,6 +44,7 @@ const THEME_COLOR_KEYS = {
     "heading", "input_text", "muted", "muted_2", "text", "th_text",
     "tier_0", "tier_1", "tier_2", "tier_3",
 }
+config.THEME_COLOR_KEYS = THEME_COLOR_KEYS
 
 function config.find_root()
     root = os.getenv("DOCUMENT_ROOT")
@@ -136,18 +137,6 @@ function config.dropdowns_dir(root)
         root = config.find_root()
     end
     return paths.joinpath(root, "dropdowns")
-end
-
--- One file per entity type, each a `view`-shaped SQL query (see
--- src/label.lua) plus a `zpl` template string. Lazily looked up by
--- entity_type on /detail and /label, not eagerly scanned at boot the
--- way dropdowns/schemas are -- nothing else references a label
--- template the way a schema field references a dropdown.
-function config.label_templates_dir(root)
-    if root == nil then
-        root = config.find_root()
-    end
-    return paths.joinpath(root, "label_templates")
 end
 
 function config.session_secret_path(root)
@@ -616,6 +605,7 @@ function config.platform_config()
         -- over lowercased text, e.g. {{"experiment%s*(%d)", "exp%1"}}
         -- when experiments are named ExpN but written "Experiment N".
         reference_aliases = nil,
+        duplicate_external_prefixes = nil,
         -- Off by default -- a deployment opts in once pdftotext/pandoc
         -- (see doc's own Dockerfile) are actually installed, rather
         -- than the platform deciding every deployment wants a chat
@@ -729,6 +719,17 @@ function config.platform_config()
     end
     if parsed.agent_compaction_mid_turn == true or parsed.agent_compaction_mid_turn == false then
         conf.agent_compaction_mid_turn = parsed.agent_compaction_mid_turn
+    end
+    if type(parsed.duplicate_external_prefixes) == "table" then
+        prefixes = {}
+        for _, prefix in ipairs(parsed.duplicate_external_prefixes) do
+            if type(prefix) == "string" and prefix != "" then
+                table.insert(prefixes, prefix)
+            end
+        end
+        if #prefixes > 0 then
+            conf.duplicate_external_prefixes = prefixes
+        end
     end
     apply_retention(conf, config.resolve_retention(parsed))
     if parsed.search_passages == true or parsed.search_passages == false then

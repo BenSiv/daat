@@ -160,7 +160,11 @@ function curate.queue(db_path, doc, recheck)
     end
     hash = curate_source_hash(doc)
     row = curate_row(db_path, doc.id)
-    if row != nil and row.source_hash == hash and not (recheck == true and row.status != "curated" and row.status != "pending") then
+    raw_content = doc.content
+    if raw_content == nil then
+        raw_content = ""
+    end
+    if row != nil and document.content_hash_matches(row.source_hash, raw_content) and not (recheck == true and row.status != "curated" and row.status != "pending") then
         return false
     end
     note_id = nil
@@ -344,7 +348,7 @@ function curate.queue_aspect(db_path, doc, n)
     end
     hash = document.content_hash(text)
     row = aspect_curate_row(db_path, doc.id, n)
-    if row != nil and row.source_hash == hash then
+    if row != nil and document.content_hash_matches(row.source_hash, text) then
         return false
     end
     note_id = nil
@@ -530,7 +534,11 @@ function curate.due_sources(db_path, recheck)
         if curate.is_source(row) then
             existing = curate_row(db_path, row.id)
             retry = recheck == true and existing != nil and existing.status != "curated" and existing.status != "pending"
-            if existing == nil or existing.source_hash != curate_source_hash(row) or retry then
+            raw_content = row.content
+            if raw_content == nil then
+                raw_content = ""
+            end
+            if existing == nil or not document.content_hash_matches(existing.source_hash, raw_content) or retry then
                 table.insert(due, row)
             end
         end
@@ -732,7 +740,7 @@ function curate.conversation_text(db_path, session_id)
     full = render_entries(entries, nil)
     hash = document.content_hash(full)
     if string.len(full) <= CURATE_INPUT_MAX_CHARS then
-        return full, hash
+        return full, hash, full
     end
     keep = {}
     budget = CURATE_INPUT_MAX_CHARS - 200
@@ -747,7 +755,7 @@ function curate.conversation_text(db_path, session_id)
         end
     end
     return render_entries(entries, keep) ..
-        "\n\n[...conversation shortened to fit: the newest requests and answers are shown whole, earlier reasoning in part...]", hash
+        "\n\n[...conversation shortened to fit: the newest requests and answers are shown whole, earlier reasoning in part...]", hash, full
 end
 
 function conversation_row(db_path, session_id)
@@ -809,8 +817,8 @@ function curate.due_conversations(db_path, quiet_minutes)
         "AND (c.status IS NULL OR c.status NOT IN ('pending', 'running')) ORDER BY s.updated_at, s.id;", cutoff_expr))
     due = {}
     for _, row in ipairs(or_empty(rows)) do
-        text, hash = curate.conversation_text(db_path, row.id)
-        if row.source_hash != nil and row.source_hash == hash then
+        text, hash, full = curate.conversation_text(db_path, row.id)
+        if row.source_hash != nil and document.content_hash_matches(row.source_hash, full) then
             db.exec(db_path, string.format(
                 "UPDATE knowledge_conversation_curation SET checked_at = %s WHERE session_id = %s;",
                 db.now_expr(db_path), db.quote(row.id)))

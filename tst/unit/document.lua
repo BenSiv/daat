@@ -133,9 +133,21 @@ function tests.guess_title_empty_body_returns_untitled()
 end
 
 function tests.content_hash_is_deterministic()
-    print("Testing content_hash is deterministic and content-sensitive")
-    check(document.content_hash("hello world") == document.content_hash("hello world"), "same content should hash the same")
-    check(document.content_hash("hello world") != document.content_hash("hello there"), "different content should hash differently")
+    print("Testing content_hash is 64-char SHA-256 and content_hash_matches accepts legacy 8-char djb2")
+    h = document.content_hash("hello world")
+    check(string.len(h) == 64, "content_hash should be 64-char SHA-256 hex")
+    check(h == document.content_hash("hello world"), "same content should hash the same")
+    check(h != document.content_hash("hello there"), "different content should hash differently")
+    check(document.content_hash_matches(h, "hello world") == true, "64-char SHA-256 matches")
+    check(document.content_hash_matches(h, "hello there") == false, "64-char SHA-256 rejects changed content")
+    -- Pre-cutover 8-char djb2("hello world") == "7c9dc9b3":
+    legacy = string.format("%08x", (function(s)
+        acc = 5381
+        for i = 1, string.len(s) do acc = (acc * 33 + string.byte(s, i)) % 4294967296 end
+        return acc
+    end)("hello world"))
+    check(document.content_hash_matches(legacy, "hello world") == true, "legacy 8-char djb2 matches unchanged body")
+    check(document.content_hash_matches(legacy, "hello there") == false, "legacy 8-char djb2 rejects changed body")
 end
 
 function tests.pool_effective_heat_reads_raw_heat_unchanged_when_pool_scale_matches()

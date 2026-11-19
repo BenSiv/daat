@@ -162,3 +162,31 @@ $(paper_text cell 60 count)" >/dev/null
     run "$BIN" repair duplicates --dry-run
     [[ "$output" =~ "would fold #$dated 2025-03-12 into #$hebrew נספח אקסל (same text)" ]]
 }
+
+@test "repair duplicates handles generic '<source>:' external_ids and respects duplicate_external_prefixes" {
+    text=$(paper_text generic)
+    "$BIN" entity create document title="Paper Copy A" external_id="gdrive:doc-1" \
+        content="> **Drive:** [Lit/Paper Copy A.pdf](https://drive.example/1)
+
+---
+
+$text" >/dev/null
+    "$BIN" entity create document title="Paper Copy B" external_id="gdrive:doc-2" \
+        content="> **Drive:** [Archive/Paper Copy B.pdf](https://drive.example/2)
+
+---
+
+$text" >/dev/null
+    # Non-namespaced ELN entry id must not be treated as a synced file copy:
+    "$BIN" entity create document title="Notebook Entry" external_id="etr_AAA111" content="$text" >/dev/null
+
+    run "$BIN" repair duplicates --dry-run
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "1 paper(s) with copies, 1 copy(ies) would be folded" ]]
+    [[ ! "$output" =~ "Notebook Entry" ]]
+
+    write_platform_config ', duplicate_external_prefixes = {"s3:"}'
+    run "$BIN" repair duplicates --dry-run
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "0 paper(s) with copies, 0 copy(ies) would be folded" ]]
+}

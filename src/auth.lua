@@ -80,31 +80,6 @@ CREATE TABLE IF NOT EXISTS auth_api_key (
 );
 """
 
-function has_column(db_path, table_name, column_name)
-    for _, name in ipairs(db.get_columns(db_path, table_name)) do
-        if name == column_name then
-            return true
-        end
-    end
-    return false
-end
-
--- Every request runs init_schema, so concurrent first requests after an
--- upgrade can all see a column missing and race to add it -- found
--- rehearsing against real MySQL 8, where the losers' ALTER raises
--- "Duplicate column name" (the same race document.lua's
--- ensure_document_link_indexes tolerates for indexes). A failed ALTER is
--- only an error if the column still doesn't exist afterwards.
-function add_column_if_missing(db_path, table_name, column_name, column_sql)
-    if has_column(db_path, table_name, column_name) then
-        return
-    end
-    ok, err = pcall(db.exec, db_path, "ALTER TABLE " .. table_name .. " ADD COLUMN " .. column_name .. " " .. column_sql .. ";")
-    if ok == false and not has_column(db_path, table_name, column_name) then
-        error(err)
-    end
-end
-
 -- Columns added after these tables already existed in real deployments,
 -- so migrations rather than SCHEMA edits (CREATE TABLE IF NOT EXISTS
 -- never adds a column to an existing table).

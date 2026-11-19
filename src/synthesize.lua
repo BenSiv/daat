@@ -84,7 +84,7 @@ function synthesize.notes(db_path, tag_id)
 end
 
 -- What a reference is made from, as one hash: the notes it would read.
-function synthesize_notes_hash(notes)
+function synthesize_notes_key(notes)
     parts = {}
     for i, note in ipairs(notes) do
         if i > SYNTHESIZE_MAX_NOTES then
@@ -92,7 +92,11 @@ function synthesize_notes_hash(notes)
         end
         table.insert(parts, tostring(note.id) .. ":" .. tostring(note.content_hash))
     end
-    return document.content_hash(table.concat(parts, ","))
+    return table.concat(parts, ",")
+end
+
+function synthesize_notes_hash(notes)
+    return document.content_hash(synthesize_notes_key(notes))
 end
 
 -- Active tags with enough notes, most notes first, whose notes this
@@ -124,10 +128,10 @@ function synthesize.due_tags(db_path, recheck)
     stale_cutoff = synthesize_stale_cutoff(db_path)
     for _, t in ipairs(rows) do
         existing = synthesize_row(db_path, t.id)
-        hash = synthesize_notes_hash(synthesize.notes(db_path, t.id))
+        notes_key = synthesize_notes_key(synthesize.notes(db_path, t.id))
         stale_running = existing != nil and existing.status == "running" and stale_cutoff != nil and existing.queued_at != nil and tostring(existing.queued_at) < tostring(stale_cutoff)
         retry = recheck == true and existing != nil and existing.status != "referenced" and existing.status != "pending"
-        if existing == nil or existing.notes_hash != hash or stale_running or retry then
+        if existing == nil or not document.content_hash_matches(existing.notes_hash, notes_key) or stale_running or retry then
             table.insert(due, t)
         end
     end

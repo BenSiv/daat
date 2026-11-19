@@ -45,12 +45,13 @@ const external_tool = require("external_tool")
 const gnuplot = require("gnuplot")
 const hmac = require("hmac")
 const config = require("config")
+const vector_lib = require("vector")
 
 const document = {}
 
--- shell_quote/strip_spaces used before their own definitions below --
--- pre-declared, see ../../luam/doc/forward_references.md
-shell_quote, strip_spaces = nil, nil
+-- strip_spaces used before its own definition below -- pre-declared,
+-- see ../../luam/doc/forward_references.md
+strip_spaces = nil
 
 const DOCUMENT_SCHEMA = {
     name = "document",
@@ -1931,17 +1932,32 @@ function document.tier_weight(tier)
     return weight
 end
 
--- A fast, deterministic (not cryptographic -- dedup fingerprinting has
--- no adversarial threat model here) djb2-style hash, since no SHA1/MD5
--- binding is available in this Lua fork's stdlib. Kept within 2^32 so
--- the running total stays exactly representable in a Lua 5.1 double.
-function document.content_hash(body)
+-- Keyed SHA-256 fingerprint via OpenSSL (lib/hmac), replacing the legacy
+-- 32-bit pure-Lua djb2 hash so duplicate detection and curation/synthesis
+-- tracking avoid 32-bit birthday collisions on large document pools.
+function legacy_djb2_content_hash(body)
     body = tostring(body)
     hash = 5381
     for i = 1, string.len(body) do
         hash = (hash * 33 + string.byte(body, i)) % 4294967296
     end
     return string.format("%08x", hash)
+end
+
+function document.content_hash(body)
+    return hmac.sha256("document_content", tostring(body))
+end
+
+-- Matches a stored hash against `body`, accepting pre-cutover 8-hex-char
+-- djb2 hashes so existing curated/defined rows aren't needlessly re-run.
+function document.content_hash_matches(stored_hash, body)
+    if stored_hash == nil or stored_hash == "" then
+        return false
+    end
+    if string.len(stored_hash) == 8 then
+        return stored_hash == legacy_djb2_content_hash(body)
+    end
+    return stored_hash == document.content_hash(body)
 end
 
 -- A flat 0.15 plus the retrieved document's own tier weight -- the
@@ -2361,20 +2377,6 @@ function document.was_revised(db_path, document_id)
         return false
     end
     return tonumber(rows[1].n) > 0
-end
-
--- A document created by knowledge.distill (source_type == "distilled")
--- is, by construction, a deliberate rewrite -- that's strictly stronger
--- evidence of "processed" than one incidental ledger edit, so it
--- satisfies the revised gate without waiting for a second, separate
--- edit after creation. It must still independently pass
--- content_shape == "atomic" though -- provenance proves intent, not
--- that the actual output came out short and single-subject; a
--- rambling "distillation" doesn't get to skip the content check just
--- because of where it came from.
-function document.processing_maturity(db_path, document_id, body, source_type)
-    revised = (source_type == "distilled") or document.was_revised(db_path, document_id)
-    return {revised = revised, content_shape = document.content_shape(body), word_count = document.word_count(body)}
 end
 
 function document.connectivity_status(peer_count)
@@ -2804,10 +2806,6 @@ function document.reindex_all_embeddings(db_path, all)
     return reindexed, failed, unchanged
 end
 
-function escape_pattern(text)
-    return (string.gsub(text, "([%(%)%.%%%+%-%*%?%[%]%^%$])", "%%%1"))
-end
-
 -- Function words dropped from a search query before lexical scoring.
 -- Found live: the agent writes queries like "passage OR subculture OR
 -- degradation" -- every "or" then matched as a substring of nearly every
@@ -3058,44 +3056,9 @@ end
 -- the wire than the JSON, decoded by one string.unpack instead of a JSON
 -- parse (JSON decoding alone was ~9 s per search over ~8,000 documents),
 -- and pre-normalised so similarity is a plain dot product.
-function document.pack_vector(vector)
-    if vector == nil or #vector == 0 then
-        return nil
-    end
-    norm = 0.0
-    for _, x in ipairs(vector) do
-        norm = norm + x * x
-    end
-    if norm == 0.0 then
-        return nil
-    end
-    norm = math.sqrt(norm)
-    normalized = {}
-    for i, x in ipairs(vector) do
-        normalized[i] = x / norm
-    end
-    return string.pack("<" .. string.rep("f", #normalized), table.unpack(normalized))
-end
-
-function document.unpack_vector(packed)
-    if packed == nil or packed == "" or string.len(packed) % 4 != 0 then
-        return nil
-    end
-    values = {string.unpack("<" .. string.rep("f", string.len(packed) / 4), packed)}
-    table.remove(values) -- string.unpack's trailing "next position"
-    return values
-end
-
-function dot_product(v1, v2)
-    if v1 == nil or v2 == nil or #v1 != #v2 then
-        return 0.0
-    end
-    total = 0.0
-    for i = 1, #v1 do
-        total = total + v1[i] * v2[i]
-    end
-    return total
-end
+document.pack_vector = vector_lib.pack
+document.unpack_vector = vector_lib.unpack
+const dot_product = vector_lib.dot
 
 -- Semantic ranking: every searchable document's embedding against the
 -- query's, keeping those above the similarity floor. Reads only

@@ -28,6 +28,7 @@ const db = require("database")
 const entity = require("entity")
 const config = require("config")
 const json = require("dkjson")
+const vector_lib = require("vector")
 
 const tag = {}
 
@@ -59,34 +60,8 @@ function tag.init_schema(db_path)
     _tag_schema_ready[key] = true
 end
 
-function tag_unit(v, dims)
-    n = #v
-    if dims != nil and dims < n then
-        n = dims
-    end
-    out = {}
-    norm = 0.0
-    for i = 1, n do
-        out[i] = v[i]
-        norm = norm + v[i] * v[i]
-    end
-    if norm == 0.0 then
-        return nil
-    end
-    norm = math.sqrt(norm)
-    for i = 1, n do
-        out[i] = out[i] / norm
-    end
-    return out
-end
-
-function tag_dot(a, b)
-    s = 0.0
-    for i = 1, #a do
-        s = s + a[i] * b[i]
-    end
-    return s
-end
+const tag_unit = vector_lib.unit
+const tag_dot = vector_lib.dot
 
 -- For tag_upkeep.lua, which works on the same vectors.
 tag.unit = tag_unit
@@ -788,30 +763,6 @@ function tag.lifts(rows, min_support)
         end
     end
     return out
-end
-
--- Every active evidence row with its lift, core's own rows refreshed
--- first if their inputs changed since they were computed.
-function tag.evidence(db_path)
-    if require("store").get_text(db_path, "tag.evidence_fingerprint") != tag_evidence_fingerprint(db_path) then
-        tag.refresh_evidence(db_path)
-    end
-    rows = db.query(db_path, string.format(
-        "SELECT tag_a, tag_b, kind, direction, weight, support, producer FROM tag_evidence WHERE %s;", ACTIVE))
-    if rows == nil then
-        rows = {}
-    end
-    plain = {}
-    for _, row in ipairs(rows) do
-        support = tonumber(row.support)
-        if support == nil then
-            support = 0
-        end
-        table.insert(plain, {tag_a = tonumber(row.tag_a), tag_b = tonumber(row.tag_b), kind = row.kind,
-            direction = row.direction, weight = tonumber(row.weight), support = support,
-            producer = row.producer})
-    end
-    return tag.lifts(plain, TAG_EVIDENCE_MIN_SUPPORT)
 end
 
 --------------------------------------------------------------------------

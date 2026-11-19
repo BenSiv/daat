@@ -43,6 +43,7 @@ const tag = require("tag")
 const tag_upkeep = require("tag_upkeep")
 const agent_provider = require("agent_provider")
 const document = require("document")
+const vector_lib = require("vector")
 
 const tag_build = {}
 
@@ -84,29 +85,8 @@ function build_rng(seed)
     end
 end
 
-function build_dot(a, b)
-    s = 0.0
-    for i = 1, #a do
-        s = s + a[i] * b[i]
-    end
-    return s
-end
-
-function build_unit(v)
-    s = 0.0
-    for i = 1, #v do
-        s = s + v[i] * v[i]
-    end
-    if s == 0.0 then
-        return nil
-    end
-    s = math.sqrt(s)
-    out = {}
-    for i = 1, #v do
-        out[i] = v[i] / s
-    end
-    return out
-end
+const build_dot = vector_lib.dot
+const build_unit = vector_lib.unit
 
 function build_list(rows)
     if rows == nil then

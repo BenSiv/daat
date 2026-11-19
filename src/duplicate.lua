@@ -1,10 +1,9 @@
--- Duplicate papers: the same file synced from SharePoint into several
--- folders arrives as several documents, one per SharePoint item, each
--- with its own folder header and sometimes its own text extraction.
+-- Duplicate papers: the same file synced from an external document store
+-- into several folders arrives as several documents, one per synced item,
+-- each with its own folder header and sometimes its own text extraction.
 -- Every copy is searched, judged, distilled and linked on its own, so
 -- the same facts get distilled twice and links to one paper are split
--- across its copies (2026-10-28: 310 groups of identical texts, 458
--- extra copies, in production).
+-- across its copies.
 --
 -- find_groups pairs copies two ways, with no model call:
 -- * same text: the same body once the sync header (document.
@@ -14,8 +13,9 @@
 --   shared (DUPLICATE_MIN_SHARED) -- two extractions of one paper. Only
 --   PDFs: two spreadsheets or protocols with the same title and most of
 --   the text in common are usually two versions whose differences
---   matter (2026-10-28 in production: "EXPERIMENT 42 DATA" x3, 89%).
--- Only synced files are considered (external_id "sharepoint:..."):
+--   matter.
+-- Only externally synced files are considered (namespaced external_id
+-- "<source>:...", or platform.lua's duplicate_external_prefixes when set):
 -- a page someone wrote is never folded into another, the same rule
 -- knowledge.duplication_status keeps.
 --
@@ -32,6 +32,7 @@ const document = require("document")
 const entity = require("entity")
 const db = require("database")
 const hmac = require("hmac")
+const config = require("config")
 
 const duplicate = {}
 
@@ -58,7 +59,7 @@ function duplicate.body(content)
 end
 
 -- The file type of a synced file, from its sync header's link
--- ("> **SharePoint:** [folder/name.pdf](...)"), lower case, or nil.
+-- ("> **Source:** [folder/name.pdf](...)"), lower case, or nil.
 function duplicate.file_type(content)
     if content == nil then
         return nil
@@ -155,13 +156,32 @@ function duplicate_issue(issues)
     return tostring(issues[1].message)
 end
 
+function escape_like_prefix(prefix)
+    escaped = string.gsub(prefix, "\\", "\\\\")
+    escaped = string.gsub(escaped, "%%", "\\%%")
+    escaped = string.gsub(escaped, "_", "\\_")
+    return db.quote(escaped .. "%") .. " ESCAPE " .. db.quote("\\")
+end
+
+function duplicate_external_where()
+    prefixes = config.platform_config().duplicate_external_prefixes
+    if prefixes == nil or #prefixes == 0 then
+        return "external_id LIKE '%:%'"
+    end
+    clauses = {}
+    for _, prefix in ipairs(prefixes) do
+        table.insert(clauses, "external_id LIKE " .. escape_like_prefix(prefix))
+    end
+    return "(" .. table.concat(clauses, " OR ") .. ")"
+end
+
 function duplicate_candidates(db_path)
-    return duplicate_rows(db_path, """
+    return duplicate_rows(db_path, string.format("""
         SELECT id, title FROM document
         WHERE (archived_at IS NULL OR archived_at = '')
           AND merged_into IS NULL
-          AND external_id LIKE 'sharepoint:%'
-        ORDER BY id;""")
+          AND %s
+        ORDER BY id;""", duplicate_external_where()))
 end
 
 function duplicate_root(parents, id)

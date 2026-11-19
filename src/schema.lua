@@ -87,10 +87,6 @@ function is_polymorphic_field_type(t)
     return POLYMORPHIC_FIELD_TYPES[t] == true
 end
 
-function is_multivalue_polymorphic_field_type(t)
-    return t == "multi_polymorphic_reference"
-end
-
 --------------------------------------------------------------------------
 -- Named, reusable dropdown value lists (see doc/schema.md's "Named
 -- dropdown lists" section)
@@ -211,11 +207,6 @@ function schema.dropdown_values(db_path, name)
         table.insert(values, row.value)
     end
     return values
-end
-
-function schema.is_dropdown_registered(db_path, name)
-    rows = db.query(db_path, string.format("SELECT 1 FROM entity_dropdown_value WHERE list_name = %s LIMIT 1;", db.quote(name)))
-    return rows != nil and #rows > 0
 end
 
 -- A select/multi_select field's resolved allowed-values list -- inline

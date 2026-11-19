@@ -14,6 +14,7 @@ const config = require("config")
 const db = require("database")
 const document = require("document")
 const hmac = require("hmac")
+const vector_lib = require("vector")
 
 const passage = {}
 
@@ -290,16 +291,7 @@ function term_share(text, terms)
     return found / #terms
 end
 
-function dot(a, b)
-    if a == nil or b == nil or #a != #b then
-        return 0
-    end
-    total = 0
-    for i = 1, #a do
-        total = total + a[i] * b[i]
-    end
-    return total
-end
+const dot = vector_lib.dot
 
 -- What a passage is embedded as: its text, led by its heading when the
 -- passage doesn't already start with it (a section's later pieces), so

@@ -250,22 +250,6 @@ function render_page_header(title, extra, action)
     return "<div class=\"platform-header\"><div><h2>" .. title .. "</h2>" .. extra .. "</div>" .. action .. "</div>"
 end
 
--- The post-action status banner ("User created", "Wrong password", ...)
--- shown at the top of render_admin_users/render_admin_api_keys/
--- render_settings -- both this Lua and its .platform-admin-message*
--- CSS (platform_admin_message_css() below) were hand-copied
--- identically into all three. One shared pair instead.
-function render_admin_message(message, is_error)
-    if message == nil or message == "" then
-        return ""
-    end
-    css_class = "platform-admin-message"
-    if is_error == true then
-        css_class = "platform-admin-message platform-admin-message-error"
-    end
-    return "<div class=\"" .. css_class .. "\">" .. html.html_escape(message) .. "</div>"
-end
-
 function platform_admin_message_css()
     return """
         .platform-admin-message { padding: 10px 12px; margin-bottom: 16px; border-radius: var(--platform-radius-item, 10px); background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; font-size: 0.9rem; }
@@ -511,13 +495,6 @@ function platform_common_js(nonce)
 end
 
 -- The CSS custom-property names a theme may override, in a fixed
--- display order -- matches config.lua's own THEME_COLOR_KEYS exactly.
-const THEME_COLOR_KEYS = {
-    "accent", "accent_2", "bg", "bg_2", "border", "border_2",
-    "heading", "input_text", "muted", "muted_2", "text", "th_text",
-    "tier_0", "tier_1", "tier_2", "tier_3",
-}
-
 -- Wraps a rendered page body in the outer HTML document (<!doctype>,
 -- <head>, top nav) that nothing in this codebase supplies on its own --
 -- every render_* function below returns a bare content fragment (the
@@ -557,7 +534,7 @@ const ICON_CHAT_BUBBLE = "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" 
 -- generic fallback instead of the deployment's real palette.
 function html.theme_root_css(theme)
     root_vars = {}
-    for _, key in ipairs(THEME_COLOR_KEYS) do
+    for _, key in ipairs(config.THEME_COLOR_KEYS) do
         value = theme.colors[key]
         if value != nil then
             css_name = string.gsub(key, "_", "-")
@@ -2581,7 +2558,7 @@ function html.render_settings(theme, csrf_token, message, is_error)
     end
 
     color_fields = {}
-    for _, key in ipairs(THEME_COLOR_KEYS) do
+    for _, key in ipairs(config.THEME_COLOR_KEYS) do
         value = ""
         if theme.colors != nil and theme.colors[key] != nil then
             value = theme.colors[key]

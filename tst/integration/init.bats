@@ -104,3 +104,20 @@ EOF
     [[ "$output" =~ "collides with a builtin column" ]]
     [[ ! "$output" =~ "Registered" ]]
 }
+
+@test "CLI exits non-zero on unknown commands, missing init, and --help exits zero" {
+    run "$BIN" --help
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "Usage: daat" ]]
+
+    run "$BIN"
+    [ "$status" -eq 1 ]
+
+    run "$BIN" not-a-command
+    [ "$status" -eq 1 ]
+    [[ "$output" =~ "not a valid command" ]]
+
+    run "$BIN" user list
+    [ "$status" -eq 1 ]
+    [[ "$output" =~ "Not initialized" ]]
+}

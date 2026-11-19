@@ -19,6 +19,7 @@ const entity = require("entity")
 const document = require("document")
 const passage = require("passage")
 const hmac = require("hmac")
+const vector_lib = require("vector")
 
 const aspect = {}
 
@@ -55,32 +56,8 @@ end
 -- Pure parts: grouping and packing
 --------------------------------------------------------------------------
 
-function dot(a, b)
-    if a == nil or b == nil or #a != #b then
-        return 0.0
-    end
-    total = 0.0
-    for i = 1, #a do
-        total = total + a[i] * b[i]
-    end
-    return total
-end
-
-function normalized(v)
-    norm = 0.0
-    for i = 1, #v do
-        norm = norm + v[i] * v[i]
-    end
-    if norm == 0.0 then
-        return nil
-    end
-    norm = math.sqrt(norm)
-    out = {}
-    for i = 1, #v do
-        out[i] = v[i] / norm
-    end
-    return out
-end
+const dot = vector_lib.dot
+const normalized = vector_lib.unit
 
 -- How many aspects a document of `n` passages gets: about the square
 -- root of its passages, at most `max`, at least 1.

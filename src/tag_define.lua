@@ -203,7 +203,7 @@ function tag_define.repair(db_path, limit, dry_run, author, recheck)
     for _, t in ipairs(tag_define.inputs(db_path)) do
         row = define_row(db_path, t.id)
         retry = recheck == true and row != nil and row.status != "defined"
-        if row == nil or row.input_hash != document.content_hash(t.structure) or retry then
+        if row == nil or not document.content_hash_matches(row.input_hash, t.structure) or retry then
             table.insert(due, t)
         end
     end

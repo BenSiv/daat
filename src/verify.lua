@@ -25,6 +25,7 @@ const document = require("document")
 const reference = require("reference")
 const tag = require("tag")
 const knowledge = require("knowledge")
+const store = require("store")
 
 const verify = {}
 
@@ -41,14 +42,7 @@ function sql_is_blank(v)
     return v == nil or tostring(v) == ""
 end
 
-function has_column(db_path, table_name, col_name)
-    for _, c in ipairs(db.get_columns(db_path, table_name)) do
-        if c == col_name then
-            return true
-        end
-    end
-    return false
-end
+const has_column = store.has_column
 
 function is_finite_number(x)
     if type(x) != "number" then
@@ -925,9 +919,7 @@ function verify.do_verify(cmd_args, db_path)
         end
     end
 
-    if not report.ok then
-        os.exit(1)
-    end
+    return report.ok
 end
 
 return verify

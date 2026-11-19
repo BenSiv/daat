@@ -91,37 +91,15 @@ const REFERENCE_INSERT_BATCH = 200
 -- Words longer than this many tokens aren't names worth a lookup.
 const REFERENCE_MAX_NAME_TOKENS = 8
 
-function reference_has_column(db_path, table_name, column_name)
-    for _, column in ipairs(db.get_columns(db_path, table_name)) do
-        if column == column_name then
-            return true
-        end
-    end
-    return false
-end
-
 function reference.init_schema(db_path)
+    store_mod = require("store")
     db.exec(db_path, REFERENCE_NAME_SCHEMA)
     db.exec(db_path, DOCUMENT_REFERENCE_SCHEMA)
     db.exec(db_path, REFERENCE_PREFIX_SCHEMA)
-    -- An index built before #38 holds only distinctive names, so 1 is
-    -- right for every row already there. The names it lacks ("YPD") are
-    -- added by `daat repair references --names-only`.
-    if reference_has_column(db_path, "entity_name_index", "distinctive") == false then
-        ok, err = pcall(db.exec, db_path, "ALTER TABLE entity_name_index ADD COLUMN distinctive INTEGER NOT NULL DEFAULT 1;")
-        -- Concurrent first requests race to add it; only an error if it's still missing.
-        if ok == false and reference_has_column(db_path, "entity_name_index", "distinctive") == false then
-            error(err)
-        end
-    end
+    store_mod.ensure_column(db_path, "entity_name_index", "distinctive", "INTEGER NOT NULL DEFAULT 1")
     for _, index in ipairs(REFERENCE_INDEXES) do
-        if db.index_exists(db_path, index.table, index.name) == false then
-            ok, err = pcall(db.exec, db_path, string.format("CREATE INDEX %s ON %s (%s);", index.name, index.table, index.columns))
-            -- Concurrent first requests race to add it; only an error if it's still missing.
-            if ok == false and db.index_exists(db_path, index.table, index.name) == false then
-                error(err)
-            end
-        end
+        store_mod.ensure_index(db_path, index.table, index.name,
+            string.format("CREATE INDEX %s ON %s (%s);", index.name, index.table, index.columns))
     end
 end
 

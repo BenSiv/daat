@@ -24,6 +24,7 @@ const document = require("document")
 const knowledge = require("knowledge")
 const config = require("config")
 const json = require("dkjson")
+const vector_lib = require("vector")
 
 const distill = {}
 
@@ -162,22 +163,13 @@ function distill.parse_claims(reply)
     return kept
 end
 
-function distill_dot(a, b)
-    if a == nil or b == nil then
-        return 0
-    end
-    sum = 0
-    for i = 1, math.min(#a, #b) do
-        sum = sum + a[i] * b[i]
-    end
-    return sum
-end
+const distill_dot = vector_lib.dot
 
 function distill_unit(vector)
     if vector == nil then
         return nil
     end
-    return document.unpack_vector(document.pack_vector(vector))
+    return vector_lib.unpack(vector_lib.pack(vector))
 end
 
 -- Records and legacy facts with a stored vector for `model`:
