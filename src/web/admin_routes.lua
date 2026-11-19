@@ -9,7 +9,10 @@ const extension = require("extension")
 const mail_provider = require("mail_provider")
 const multipart = require("multipart")
 const json = require("dkjson")
+const schema = require("schema")
+const status_lib = require("status")
 const ui = require("ui")
+const view = require("view")
 const web_ctx = require("web.context")
 
 const admin_routes = {}
@@ -30,6 +33,85 @@ function admin_routes.handle(req)
         end
         body = ui.render_system(req.show_sql_nav, req.show_admin_nav)
         return web_ctx.render_page(req, "System", "system", body)
+    end
+
+    if path_info == "/system-status" then
+        if not is_admin then
+            return web_ctx.respond(req, "403 Forbidden", "text/html", "<h3>Forbidden: requires Admin capability</h3>")
+        end
+        rep = status_lib.collect(db_path, root)
+        body = ui.render_system_status(rep, csrf_val, params.msg, false)
+        return web_ctx.render_page(req, "Status & Approvals", "system", body)
+    end
+
+    is_status_action = path_info == "/system-status-schema-sync" or
+        path_info == "/system-status-view-approve" or
+        path_info == "/system-status-view-revoke" or
+        path_info == "/system-status-extension-approve" or
+        path_info == "/system-status-extension-revoke"
+    if is_status_action and method == "POST" then
+        if not is_admin then
+            return web_ctx.respond(req, "403 Forbidden", "text/html", "<h3>Forbidden: requires Admin capability</h3>")
+        end
+        form = web_ctx.parse_query(io.read("*all"))
+        if not web_ctx.require_csrf(req, form.csrf_token) then
+            rep = status_lib.collect(db_path, root)
+            body = ui.render_system_status(rep, csrf_val, "CSRF check failed.", true)
+            return web_ctx.render_page(req, "Status & Approvals", "system", body, nil, "403 Forbidden")
+        end
+
+        action_err = nil
+        if path_info == "/system-status-schema-sync" then
+            _, sync_err = schema.sync_all(db_path, root)
+            if sync_err != nil then
+                action_err = tostring(sync_err)
+            end
+        elseif path_info == "/system-status-view-approve" then
+            target_name = web_ctx.default_value(form.name, "")
+            if not config.valid_resource_name(target_name) then
+                action_err = "Invalid view name."
+            else
+                def, load_err = view.load(db_path, target_name, root)
+                if def == nil then
+                    action_err = tostring(load_err)
+                else
+                    view.approve(db_path, def, author)
+                end
+            end
+        elseif path_info == "/system-status-view-revoke" then
+            target_name = web_ctx.default_value(form.name, "")
+            if not config.valid_resource_name(target_name) then
+                action_err = "Invalid view name."
+            else
+                view.revoke(db_path, target_name)
+            end
+        elseif path_info == "/system-status-extension-approve" then
+            target_name = web_ctx.default_value(form.name, "")
+            if not config.valid_resource_name(target_name) then
+                action_err = "Invalid extension name."
+            else
+                manifest, load_err = extension.load_manifest(config.extensions_dir(root), target_name)
+                if manifest == nil then
+                    action_err = tostring(load_err)
+                else
+                    extension.approve(db_path, manifest, author)
+                end
+            end
+        elseif path_info == "/system-status-extension-revoke" then
+            target_name = web_ctx.default_value(form.name, "")
+            if not config.valid_resource_name(target_name) then
+                action_err = "Invalid extension name."
+            else
+                extension.revoke(db_path, target_name)
+            end
+        end
+
+        if action_err != nil then
+            rep = status_lib.collect(db_path, root)
+            body = ui.render_system_status(rep, csrf_val, action_err, true)
+            return web_ctx.render_page(req, "Status & Approvals", "system", body)
+        end
+        return web_ctx.respond(req, "302 Found", "text/plain", "", {"Location: system-status"})
     end
 
     if path_info == "/admin-triggers" then
