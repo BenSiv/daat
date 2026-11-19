@@ -33,7 +33,7 @@ teardown() {
     [[ "$output" =~ "required field is missing" ]]
 }
 
-@test "concurrent entity creates never collide on entity_id or leave one NULL (task #77)" {
+@test "concurrent entity creates never collide on entity_id or leave one NULL" {
     # ledger.append_create used to re-derive entity_id via SELECT
     # MAX(event_id) -- not connection-scoped the way last_insert_rowid()
     # is, so two simultaneous creates could both read the same MAX and

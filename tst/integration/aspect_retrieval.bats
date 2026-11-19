@@ -41,10 +41,6 @@ teardown() {
     cleanup_test_env
 }
 
-db() {
-    sqlite3 "$TEST_DIR/.store/store.db" "$1"
-}
-
 # The /documents search box. The page always lists every document in
 # its tree, so whether search found one is read from the retrieval log.
 page_search() {

@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # Deferred retrieval review (doc/tier-curation-ladder.md Phase 2;
-# doc/performance.md Option 1.1; brex 161417116): interactive search
+# doc/performance.md Option 1.1;): interactive search
 # (/documents?q=... and agent document.search) records only the
 # lightweight retrieval event + raw hits, while `daat knowledge
 # review-pending` applies conserved pool heat, spreading activation,
@@ -23,10 +23,6 @@ EOF
 
 teardown() {
     cleanup_test_env
-}
-
-db() {
-    sqlite3 "$TEST_DIR/.store/store.db" "$1"
 }
 
 @test "default search_review_mode is deferred: /documents?q=... and document.search return hits with zero synchronous reinforcement, curation queueing, or link model calls" {

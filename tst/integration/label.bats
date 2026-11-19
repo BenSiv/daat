@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# task #73: label printing. label_template is a real, ledgered entity
+# label printing. label_template is a real, ledgered entity
 # type (not a config file) -- created/edited through the normal
 # /register -> entity.create / /detail -> entity.update flows, gated by
 # the generic admin_write_only schema flag (not special-cased to this

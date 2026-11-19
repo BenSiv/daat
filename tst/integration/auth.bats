@@ -11,13 +11,6 @@ teardown() {
     cleanup_test_env
 }
 
-raw_login() {
-    local login="$1"
-    local password="$2"
-    printf 'login=%s&password=%s' "$login" "$password" | \
-        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/login" QUERY_STRING="" "$BIN"
-}
-
 # A POST to one of the /admin-users-* routes with a real request body --
 # piping straight into `run "$BIN"` doesn't carry stdin through bats'
 # `run` correctly, so (matching raw_login above) this runs the binary
@@ -60,7 +53,7 @@ raw_admin_action() {
 }
 
 @test "the login page itself is wrapped in the real page shell, not a bare content fragment" {
-    # task #89 regression: /login used to print ui.render_login's raw
+    # regression: /login used to print ui.render_login's raw
     # fragment directly, with no <head>/favicon <link>/theme :root{}
     # block at all -- a deployment's theme.lua colors/site name never
     # applied to the one page every user sees before authenticating,

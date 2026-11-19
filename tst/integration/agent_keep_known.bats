@@ -21,10 +21,6 @@ tool_results() {
     sqlite3 "$TEST_DIR/.store/store.db" "SELECT content FROM agent_message WHERE session_id = '${CHAT}' AND role = 'tool_result' ORDER BY id;"
 }
 
-send() {
-    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${CHAT}\",\"message\":\"$1\"}" "$COOKIE" "$CSRF" "$2" >/dev/null
-}
-
 @test "an exact repeat of a schema lookup is answered with a pointer, not a second copy" {
     fields="$(tool_call_response "entity.fields" '{"entity_type":"document"}')"
     send "what fields does document have" "${fields}"$'\1'"${fields}"$'\1'"$(done_response "Listed.")"

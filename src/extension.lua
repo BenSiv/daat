@@ -207,7 +207,7 @@ function extension.validate_manifest(manifest)
         end
     end
     -- capabilities.manual_triggers declares admin-only "run this now"
-    -- buttons (brex 925561615's own blocker), listed and dispatched from
+    -- buttons, listed and dispatched from
     -- a dedicated /admin-triggers route (web.lua) -- never the chat
     -- agent, never an ordinary user's own request. Unlike
     -- capabilities.tools there's no shared dispatch namespace to worry

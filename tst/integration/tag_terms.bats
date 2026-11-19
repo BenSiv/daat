@@ -24,10 +24,6 @@ teardown() {
     cleanup_test_env
 }
 
-db() {
-    sqlite3 .store/store.db "$1"
-}
-
 add_doc() {
     "$BIN" entity create document title="$1" content="$2" >/dev/null
     local id

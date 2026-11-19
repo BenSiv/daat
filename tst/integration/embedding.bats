@@ -18,15 +18,6 @@ teardown() {
     cleanup_test_env
 }
 
-db() {
-    sqlite3 .store/store.db "$1"
-}
-
-new_document() {
-    "$BIN" entity create document title="$1" content="$2" >/dev/null
-    db "SELECT id FROM document WHERE title = '$1';"
-}
-
 # Moves a queued document's last save back past the quiet period.
 backdate_queue() {
     db "UPDATE document_embedding_due SET queued_at = '2000-01-01 00:00:00' WHERE document_id = $1;"

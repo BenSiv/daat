@@ -188,7 +188,7 @@ function tests.extension_without_tools_can_still_use_a_reserved_name()
 end
 
 -- capabilities.manual_triggers validation (admin manual-trigger
--- surface, brex 925561615) -- structurally the same shape as
+-- surface) -- structurally the same shape as
 -- capabilities.tools' own tests above, minus the reserved-name check:
 -- a trigger dispatches under /admin-triggers/<extension name>/<trigger
 -- name>, a namespace scoped by construction, so there's nothing for a
@@ -227,7 +227,7 @@ function tests.manual_trigger_entry_missing_name_is_rejected()
     check(err != nil, "expected a validation error for a missing name")
 end
 
--- capabilities_equal (approval invalidation, brex 925561615) -- like
+-- capabilities_equal (approval invalidation) -- like
 -- capabilities.ui/tools, a manual trigger's presence is a real grant
 -- (an admin-reachable entry point into the extension's own code), so
 -- adding one or editing an existing one's label/description has to

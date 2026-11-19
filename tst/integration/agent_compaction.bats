@@ -27,10 +27,6 @@ teardown() {
     cleanup_test_env
 }
 
-send() {
-    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${CHAT}\",\"message\":\"$1\"}" "$COOKIE" "$CSRF" "$2" >/dev/null
-}
-
 summaries() {
     sqlite3 "$DB" "SELECT COUNT(*) FROM agent_message WHERE session_id = '${CHAT}' AND role = 'compaction_summary' AND in_context = ${1:-1};"
 }

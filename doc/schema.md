@@ -148,7 +148,7 @@ return {
 
 ## Master/detail: a entity type with a variable-length list of children
 
-Some entities are naturally a fixed set of fields plus however many child rows a user adds -- e.g. a `composite` entity built from however many `component` rows describe it (task #112). No new storage concept is needed for this: `component` is just its own entity type with a plain `reference` field pointing at `composite`, exactly like any other `reference`. Children aren't picked from a pre-existing list the way a `multi_reference` value would be -- each one is entered fresh alongside its parent -- so the junction-table mechanism above doesn't apply here at all.
+Some entities are naturally a fixed set of fields plus however many child rows a user adds -- e.g. a `composite` entity built from however many `component` rows describe it. No new storage concept is needed for this: `component` is just its own entity type with a plain `reference` field pointing at `composite`, exactly like any other `reference`. Children aren't picked from a pre-existing list the way a `multi_reference` value would be -- each one is entered fresh alongside its parent -- so the junction-table mechanism above doesn't apply here at all.
 
 ```lua
 -- schemas/composite.lua

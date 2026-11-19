@@ -15,10 +15,6 @@ teardown() {
     cleanup_test_env
 }
 
-db() {
-    sqlite3 .store/store.db "$1"
-}
-
 # A source with enough text to curate, retrieved `uses` times.
 used_source() {
     local title="$1" uses="$2"

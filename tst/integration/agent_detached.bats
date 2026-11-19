@@ -27,10 +27,6 @@ teardown() {
 }
 
 # A busy timeout: the worker writes the store while the test polls it.
-store() {
-    sqlite3 -cmd ".timeout 5000" "$TEST_DIR/.store/store.db" "$1"
-}
-
 new_session() {
     json_body "$(raw_post_json "/api/chat-widget-start" '{"title":"Chat"}' "$COOKIE" "$CSRF" "")" | jq -r '.session_id'
 }

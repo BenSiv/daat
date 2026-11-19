@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# task #84: multivalue fields (multi_select/multi_reference) -- storage
+# multivalue fields (multi_select/multi_reference) -- storage
 # via a companion junction table (schema.ensure_multi_field_table), not
 # a lossy semicolon/comma column, plus the named-dropdown-list system.
 

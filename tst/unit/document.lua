@@ -7,7 +7,7 @@
 -- heuristics (content_shape, title-guessing, content hashing) -- all
 -- ported/adapted from a Fossil SCM fork's ai_note/ai_retrieval system
 -- (see document.lua's own header). Moved here from tst/unit/knowledge.lua
--- under task #106, when these columns/heuristics moved from a separate
+-- under when these columns/heuristics moved from a separate
 -- knowledge_note table onto `document` itself.
 
 document = require("document")
@@ -53,7 +53,7 @@ function tests.promotion_duplicate_never_advances()
 end
 
 function tests.promotion_demotes_when_edited_down_to_a_smaller_shape()
-    print("Testing a document at tier 3 demotes if its current content no longer earns that shape (task #87, redesigned for content-maturity)")
+    print("Testing a document at tier 3 demotes if its current content no longer earns that shape (redesigned for content-maturity)")
     -- Recomputed fresh from the CURRENT body every review (no
     -- ratcheting) -- a document that was legitimately tier 3 once (an
     -- atomic-shaped edit) but has since been edited down to something

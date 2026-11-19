@@ -13,10 +13,6 @@ teardown() {
     cleanup_test_env
 }
 
-db() {
-    sqlite3 .store/store.db "$1"
-}
-
 # A paper's text: N distinct words, enough to pass DUPLICATE_MIN_BODY.
 # Every `step`-th word is replaced by `swap` (a second extraction of
 # the same PDF differs here and there).

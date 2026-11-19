@@ -1420,7 +1420,7 @@ function schema.suggest_type(db_path, entity_type)
     return best
 end
 
--- Task #93's reason-for-change opt-in flags for one registered entity
+-- Reason-for-change opt-in flags for one registered entity
 -- type -- what entity.update/entity.archive check before requiring
 -- (or not) a non-empty `reason` argument. Defaults both false for an
 -- unregistered type rather than erroring -- callers already handle

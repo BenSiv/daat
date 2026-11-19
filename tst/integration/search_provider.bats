@@ -25,16 +25,6 @@ teardown() {
     cleanup_test_env
 }
 
-start_chat() {
-    local cookie="$1"
-    local csrf="$2"
-    local title="$3"
-    local resp sid
-    resp=$(raw_post_json "/api/chat-widget-start" "{\"title\":\"${title}\"}" "$cookie" "$csrf" "")
-    sid=$(json_body "$resp" | jq -r '.session_id')
-    printf 'session_id=%s' "$sid"
-}
-
 @test "internet_search.search is destructive: pauses for approval instead of executing" {
     resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
     session_id=$(extract_query_param "$resp" "session_id")

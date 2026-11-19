@@ -10,7 +10,7 @@ teardown() {
     cleanup_test_env
 }
 
-@test "a plain init stays truly empty -- no seed content, no theme.lua (task #101)" {
+@test "a plain init stays truly empty -- no seed content, no theme.lua" {
     run "$BIN" init
     [[ "$output" =~ "Initialized store at" ]]
     [ -d schemas ]

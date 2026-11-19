@@ -621,8 +621,8 @@ function config.platform_config()
         mariadb_user = nil,
         mariadb_database = nil,
         -- nil (both) means "today's hardcoded rail, unchanged" -- see
-        -- ui.lua's own apply_nav_order/apply_nav_hidden (brex
-        -- 683042859). Deliberately a reorder/hide overlay on the
+        -- ui.lua's own apply_nav_order/apply_nav_hidden. Deliberately a
+        -- reorder/hide overlay on the
         -- existing capability-gated built-in items, not a from-scratch
         -- nav vocabulary: an unrecognized key in either list is a
         -- silent no-op (never an error), and a key genuinely hidden by

@@ -21,18 +21,9 @@ teardown() {
     cleanup_test_env
 }
 
-db() {
-    sqlite3 .store/store.db "$1"
-}
-
 new_entity() {
     "$BIN" entity create "$1" label="$2" >/dev/null
     db "SELECT id FROM $1 WHERE label = '$2' ORDER BY id DESC LIMIT 1;"
-}
-
-new_document() {
-    "$BIN" entity create document title="$1" content="$2" >/dev/null
-    db "SELECT id FROM document WHERE title = '$1';"
 }
 
 refs_of() {

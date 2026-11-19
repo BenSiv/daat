@@ -18,10 +18,6 @@ teardown() {
     cleanup_test_env
 }
 
-db() {
-    sqlite3 .store/store.db "$1"
-}
-
 # new_document TITLE X Y Z -- a document whose vector points along the
 # first three axes by X, Y, Z.
 new_document() {
@@ -29,11 +25,6 @@ new_document() {
     id=$(db "SELECT id FROM document WHERE title = '$1';")
     db "INSERT OR REPLACE INTO document_embedding (document_id, model, vector_json) VALUES ($id, 'test-embedding', '[$2, $3, $4, 0, 0, 0, 0, 0]');"
     echo "$id"
-}
-
-new_tag() {
-    "$BIN" entity create tag label="$1" source="${2:-computed}" >/dev/null
-    db "SELECT id FROM tag WHERE label = '$1';"
 }
 
 member() {

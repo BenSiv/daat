@@ -63,7 +63,7 @@ function entity.build_ctx(db_path, manifest, read_only)
         end
         -- read.entity means registered entity types, not any table: a
         -- plain table_exists check let an extension read auth_user (password
-        -- hashes), auth_api_key, document_embedding, ... (brex 456424482).
+        -- hashes), auth_api_key, document_embedding, ...
         if schema.is_registered(db_path, target_type) == false then
             error("ctx.query: '" .. tostring(target_type) .. "' is not a registered entity type")
         end

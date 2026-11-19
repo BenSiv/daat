@@ -32,10 +32,6 @@ teardown() {
     cleanup_test_env
 }
 
-db() {
-    sqlite3 .store/store.db "$1"
-}
-
 # An agent reply line block: a NEW AREA with Area<n>'s four tags.
 new_area() {
     local out=$'NEW AREA: '"$1"$' | '"$2"$' | nothing in the library fits'

@@ -33,10 +33,6 @@ teardown() {
     cleanup_test_env
 }
 
-db() {
-    sqlite3 .store/store.db "$1"
-}
-
 NAMES=$'Alpha notes | Notes of the first group.\1Beta notes | Notes of the second group.\1Gamma notes | Notes of the third group.'
 
 @test "a dry run finds the three groups, the same way every time, and writes nothing" {

@@ -21,13 +21,6 @@ teardown() {
     cleanup_test_env
 }
 
-start_chat() {
-    local resp sid
-    resp=$(raw_post_json "/api/chat-widget-start" '{"title":"Chat"}' "$COOKIE" "$CSRF" "")
-    sid=$(json_body "$resp" | jq -r '.session_id')
-    printf 'session_id=%s' "$sid"
-}
-
 get_route() {
     GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="$1" QUERY_STRING="$2" \
         HTTP_COOKIE="$COOKIE" "$BIN"
@@ -41,7 +34,7 @@ search_for_bioreactor() {
 }
 
 # Same as search_for_bioreactor, but with an optional extra scripted
-# response for task #109's own generate() call -- which only fires on
+# response for generate() call -- which only fires on
 # whichever retrieval first crosses CO_RETRIEVAL_LINK_THRESHOLD for a
 # given pair (not every retrieval), so most calls to this helper don't
 # need one at all. Slot order matters: knowledge.search_and_log (and so
@@ -172,7 +165,7 @@ search_for_bioreactor_extra() {
 
     run "$BIN" knowledge stats
     # notes=1: Bioreactor Notes, still exactly one row -- a retrieved
-    # document accrues heat/tier directly on itself, task #106, never a
+    # document accrues heat/tier directly on itself, never a
     # second row per search (and a chat writes no transcript document by
     # default).
     [[ "$output" =~ "notes=1 retrievals=2" ]]
@@ -262,7 +255,7 @@ Assistant: Rinse, then autoclave."
     [[ "$output" =~ "title: Bioreactor Notes" ]]
     [[ "$output" =~ "tier: 0" ]]
     # A real, user-authored page retrieved directly has no source_type
-    # (task #106) -- it isn't "sourced from" anything, it simply IS the
+    # -- it isn't "sourced from" anything, it simply IS the
     # document; only agent-derived content (reasoning notes, future
     # distilled notes) prints a "source:" line.
     [[ ! "$output" =~ "source:" ]]
@@ -405,7 +398,7 @@ Assistant: Rinse, then autoclave."
     [[ "$output" =~ "Tier 3: Atomic Record" ]]
 }
 
-@test "/knowledge renders for a plain baseline user (brex 492390825 -- read-only browsing, no Setup/Admin needed)" {
+@test "/knowledge renders for a plain baseline user ( -- read-only browsing, no Setup/Admin needed)" {
     run raw_get "/knowledge" "" "$COOKIE"
     [[ "$output" =~ "200 OK" ]]
     [[ "$output" =~ "Knowledge Pool" ]]
@@ -561,7 +554,7 @@ Assistant: Rinse, then autoclave."
     [[ ! "$output" =~ 'title="Chats"' ]]
 }
 
-@test "the Knowledge Pool has its own nav-rail icon, not gated on Setup/Admin (brex 492390825)" {
+@test "the Knowledge Pool has its own nav-rail icon, not gated on Setup/Admin" {
     run raw_get "/" "" "$COOKIE"
     [[ "$output" =~ 'class="platform-nav-link" href="knowledge"' ]]
 
@@ -585,7 +578,7 @@ Assistant: Rinse, then autoclave."
     [[ "$output" =~ 'href="admin-users"' ]]
 }
 
-@test "two documents repeatedly co-retrieved get a connection document once the agent says YES -- ordinary content linking both (task #109)" {
+@test "two documents repeatedly co-retrieved get a connection document once the agent says YES -- ordinary content linking both" {
     "$BIN" entity create document title="Bioreactor Cleaning" content="cleaning steps for the bioreactor procedure"
     "$BIN" entity create document title="Bioreactor Startup" content="startup steps for the bioreactor procedure"
 
@@ -720,7 +713,7 @@ make_thin_connection() {
     [ "$output" = "0" ]
 }
 
-@test "a co-retrieved pair the agent declines is remembered, not re-asked on the very next shared retrieval (task #109)" {
+@test "a co-retrieved pair the agent declines is remembered, not re-asked on the very next shared retrieval" {
     "$BIN" entity create document title="Bioreactor Cleaning" content="cleaning steps for the bioreactor procedure"
     "$BIN" entity create document title="Bioreactor Startup" content="startup steps for the bioreactor procedure"
 
@@ -745,7 +738,7 @@ make_thin_connection() {
     [ "$output" -eq 3 ]
 }
 
-@test "a pair connected through a connection document isn't re-judged, and re-saving either document leaves the connection intact (task #109)" {
+@test "a pair connected through a connection document isn't re-judged, and re-saving either document leaves the connection intact" {
     "$BIN" entity create document title="Bioreactor Cleaning" content="cleaning steps for the bioreactor procedure"
     "$BIN" entity create document title="Bioreactor Startup" content="startup steps for the bioreactor procedure"
 

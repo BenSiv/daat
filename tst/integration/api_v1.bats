@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# task #114: external API support. Covers the api_key CLI/table
+# external API support. Covers the api_key CLI/table
 # (src/auth.lua), the X-Api-Key auth plug-in and CSRF bypass it gets in
 # web.handle_request, and all 6 /api/v1/<type>[/<id>[/action]] route
 # shapes -- reusing the same widget/label_template fixtures label.bats

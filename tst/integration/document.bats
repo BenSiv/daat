@@ -357,7 +357,7 @@ EOF
     [[ "$output" =~ "<strong>bold</strong>" ]]
 }
 
-@test "Markdown GFM tables and strikethrough render as real HTML, not raw pipe/tilde text (task #117)" {
+@test "Markdown GFM tables and strikethrough render as real HTML, not raw pipe/tilde text" {
     body='{"content": "| A | B |\n|---|---|\n| 1 | 2 |\n\n~~struck~~ text."}'
 
     run raw_document_preview "$body" "$CSRF"
@@ -399,7 +399,7 @@ EOF
     [[ "$output" =~ "No documents yet" ]]
 }
 
-@test "creating and updating a page auto-computes its embedding (task #105)" {
+@test "creating and updating a page auto-computes its embedding" {
     save_document "csrf_token=${CSRF}&title=Home&parent_id=&content=hello" >/dev/null
     run bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db 'SELECT COUNT(*) FROM document_embedding;'"
     [ "$output" = "1" ]

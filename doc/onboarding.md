@@ -37,7 +37,8 @@ cd dev && ./deploy.sh
 
 **Optional** -- you do not need any of this to build, test, or run the app or its chat UI, because tests default to a deterministic stub LLM provider (see "Testing conventions"):
 
-- `curl` and `gcloud` (`gcloud auth application-default login` plus a `vertex_project` in `platform.lua`) -- only if you want to actually exercise the real Google Vertex AI chat backend.
+- `curl` and `gcloud` (`gcloud auth application-default login` plus a `vertex_project` in `platform.lua`) -- only if you want to exercise the Google Vertex AI chat/embeddings backend.
+- `curl` and a local [Ollama](https://ollama.com/) server (or any OpenAI-compatible `/v1` endpoint configured via `agent_provider = "ollama"` and optional `ollama_url`, `agent_model`, `embedding_model`, and `OLLAMA_API_KEY`/`OPENAI_API_KEY` in `platform.lua`) -- if you want to run tool-calling chat and embeddings locally with open-weights models (`qwen3:8b` and `nomic-embed-text` by default) and no cloud account.
 
 ### Build & test
 
@@ -70,7 +71,7 @@ cd dev && ./deploy.sh
 - `document.lua` -- the Document entity type and its tree/links
 - `knowledge.lua` -- the knowledge pool (tiering/heat on documents)
 - `agent.lua` + `agent_tools.lua` -- the chat/assistant subsystem: the turn loop, approval gate and tool registry in `agent.lua`, the tool records and their handlers in `agent_tools.lua` (`agent-tools.md`)
-- `agent_provider.lua` + `provider/agent_*.lua` -- the pluggable LLM backends (Vertex, Claude, and the scripted `test` provider)
+- `agent_provider.lua` + `provider/agent_*.lua` -- the pluggable LLM backends (Vertex, Claude, Ollama/OpenAI-compatible `/v1`, and the scripted `test` provider)
 - `extension.lua` / `view.lua` -- the drop-in extensibility mechanisms (see below)
 - `ui.lua` / `template.lua` / `page.lua` -- rendering (`page.lua` is daat's own first-party page-section vocabulary, deliberately separate from `ui.lua`'s extension canvas -- see `doc/templating.md`; the low-level escaping and `{{ }}` interpolation modules `html.lua` and `render.lua` live in `../luam/lib/`)
 - `config.lua` / `init.lua` / `label.lua` -- deployment config, `daat init`, ZPL labels (the storage adapter `database.lua` -- with the raw per-backend bindings one layer down in `database_adapter.lua` -- and the subprocess helper `external_tool.lua` are shared infrastructure in `../luam/lib/`, not daat's own `src/`)
@@ -115,12 +116,11 @@ A change to the agent's behaviour (a prompt, a tool, the turn loop) is judged by
 
 ## Docs that mix in private deployment details
 
-Two other files in this directory are written for the maintainer's own production hosting and contain some private infrastructure specifics (GCP project/instance names, Terraform paths, private-repo paths) mixed in with genuinely general content:
+A few design and migration notes in this directory record empirical measurements or cutover notes from the maintainer's reference LIMS deployment alongside general architecture:
 
 - `data-durability.md` -- the SQLite-durability reasoning is general and useful; skip the specific Terraform file paths and GCP instance names it references.
 - `mariadb-migration.md` -- the MariaDB-portability/dialect content (what changes between SQLite and MariaDB, why) is general and useful; skip the specific Cloud SQL instance names, container names, and private-repo paths it references partway through.
-
-Everything else in `doc/` (`architecture.md`, `performance.md`, `schema.md`, `extensibility.md`, `glossary.md`, `api.md`, `agent-protocol.md`, `heat-decay-redesign.md`) is fully general -- no private context needed.
+- Design/measurement notes (`agent-data.md`, `chat-history-migration.md`, `link-passage-gate.md`, `structure-layers.md`) cite read-only corpus counts from that reference deployment to motivate thresholds and schema choices; nothing in building, testing, or running `daat` depends on that deployment.
 
 ## Where to go next
 

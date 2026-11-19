@@ -13,13 +13,6 @@ teardown() {
     cleanup_test_env
 }
 
-raw_login() {
-    local login="$1"
-    local password="$2"
-    printf 'login=%s&password=%s' "$login" "$password" | \
-        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/login" QUERY_STRING="" "$BIN"
-}
-
 admin_session() {
     local raw session csrf
     raw=$(raw_login admin secret123)

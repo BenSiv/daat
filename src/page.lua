@@ -603,8 +603,8 @@ end
 -- real callers, not something worth inventing a new CSS class for one
 -- inline value.
 --
--- A button's optional `data` table (added for the admin manual-trigger
--- page, brex 925561615) mirrors the canvas system's own data-action/
+-- A button's optional `data` table (used by the admin manual-trigger
+-- page) mirrors the canvas system's own data-action/
 -- data-args convention: auxiliary values a click handler needs, carried
 -- as escaped data-* attributes rather than interpolated into inline JS
 -- text, so an extension-declared string (a trigger's own name) can

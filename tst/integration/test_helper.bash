@@ -64,13 +64,51 @@ EOF
 # tests' purposes -- no need to actually decode it.
 latest_tool_result() {
     local session_id="$1"
-    sqlite3 "$TEST_DIR/.store/store.db" \
-        "SELECT content FROM agent_message WHERE session_id = '${session_id}' AND role = 'tool_result' ORDER BY id DESC LIMIT 1;"
+    db "SELECT content FROM agent_message WHERE session_id = '${session_id}' AND role = 'tool_result' ORDER BY id DESC LIMIT 1;"
+}
+
+# Runs a SQL query against the test's SQLite store with a 5s busy timeout
+# so concurrent background test helpers never spuriously fail on SQLITE_BUSY.
+db() {
+    sqlite3 -cmd ".timeout 5000" "$TEST_DIR/.store/store.db" "$1"
+}
+
+store() {
+    db "$1"
+}
+
+new_document() {
+    local title="$1"
+    local content="${2:-$1}"
+    "$BIN" entity create document title="$title" content="$content" >/dev/null
+    db "SELECT id FROM document WHERE title = '$title' ORDER BY id DESC LIMIT 1;"
+}
+
+new_tag() {
+    local label="$1"
+    local source="${2:-computed}"
+    "$BIN" entity create tag label="$label" source="$source" >/dev/null
+    db "SELECT id FROM tag WHERE label = '$label' ORDER BY id DESC LIMIT 1;"
 }
 
 cleanup_test_env() {
     cd "$PROJECT_ROOT"
     rm -rf "$TEST_DIR"
+}
+
+raw_login() {
+    local login="$1"
+    local password="$2"
+    printf 'login=%s&password=%s' "$login" "$password" | \
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/login" QUERY_STRING="" "$BIN"
+}
+
+session_for() {
+    local raw session_cookie csrf_token
+    raw=$(raw_login "$1" "$2")
+    session_cookie=$(printf '%s' "$raw" | grep -o 'Set-Cookie: session=[^;[:space:]]*' | head -1 | sed 's/^Set-Cookie: session=//')
+    csrf_token=$(printf '%s' "$raw" | grep -o 'Set-Cookie: csrf=[^;[:space:]]*' | head -1 | sed 's/^Set-Cookie: csrf=//')
+    echo "${session_cookie} ${csrf_token}"
 }
 
 # Creates a user (via the real `user add` CLI command, bcrypt hash and
@@ -82,16 +120,7 @@ login_test_user() {
     local login="$1"
     local cap="$2"
     "$BIN" user add "$login" "testpass123" "$cap" >/dev/null
-
-    local raw
-    raw=$(printf 'login=%s&password=testpass123' "$login" | \
-        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/login" QUERY_STRING="" "$BIN")
-
-    local session_cookie csrf_token
-    session_cookie=$(printf '%s' "$raw" | grep -o 'Set-Cookie: session=[^;[:space:]]*' | head -1 | sed 's/^Set-Cookie: session=//')
-    csrf_token=$(printf '%s' "$raw" | grep -o 'Set-Cookie: csrf=[^;[:space:]]*' | head -1 | sed 's/^Set-Cookie: csrf=//')
-
-    echo "${session_cookie} ${csrf_token}"
+    session_for "$login" "testpass123"
 }
 
 # Plain GET/POST against the real built binary, real CGI env vars --
@@ -151,6 +180,49 @@ extract_query_param() {
     local response="$1"
     local param="$2"
     printf '%s' "$response" | grep -o "${param}=[^ ]*" | sed "s/${param}=//" | tr -d '\r'
+}
+
+# Starts a chat session through /api/chat-widget-start.
+# Supports three calling conventions across the suite:
+#   start_chat                              -> uses $COOKIE/$CSRF, prints "session_id=<sid>"
+#   start_chat "session=...; ..." "$csrf" [title] -> prints "session_id=<sid>"
+#   start_chat "$session_tok" "$csrf" [title]     -> prints "<sid>"
+start_chat() {
+    local cookie csrf title resp sid emit_kv=0
+    if [ "$#" -eq 0 ]; then
+        cookie="$COOKIE"
+        csrf="$CSRF"
+        title="Chat"
+        emit_kv=1
+    elif [[ "$1" == session=* ]]; then
+        cookie="$1"
+        csrf="$2"
+        title="${3:-Chat}"
+        emit_kv=1
+    else
+        cookie="session=$1; csrf=$2"
+        csrf="$2"
+        title="${3:-Chat}"
+    fi
+    resp=$(raw_post_json "/api/chat-widget-start" "{\"title\":\"${title}\"}" "$cookie" "$csrf" "")
+    sid=$(json_body "$resp" | jq -r '.session_id')
+    if [ "$emit_kv" -eq 1 ]; then
+        printf 'session_id=%s' "$sid"
+    else
+        printf '%s\n' "$sid"
+    fi
+}
+
+send_message() {
+    local session="$1" csrf="$2" chat_session_id="$3" message="$4" scripted="${5:-}"
+    local cookie="session=${session}; csrf=${csrf}"
+    local escaped="${message//\\/\\\\}"
+    escaped="${escaped//\"/\\\"}"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${chat_session_id}\",\"message\":\"${escaped}\"}" "$cookie" "$csrf" "$scripted"
+}
+
+send() {
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${CHAT}\",\"message\":\"$1\"}" "$COOKIE" "$CSRF" "$2" >/dev/null
 }
 
 # Runs the binary in real CGI mode -- the same GATEWAY_INTERFACE

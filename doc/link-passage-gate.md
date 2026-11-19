@@ -1,6 +1,6 @@
 # The co-retrieval link gate
 
-How daat decides which co-retrieved document pairs are worth asking the model about, and why (brex 355095515).
+How daat decides which co-retrieved document pairs are worth asking the model about, and why.
 
 ## The problem
 

@@ -64,7 +64,7 @@ teardown() {
     [[ "$output" =~ "platform-diagram-edge\" data-from=\"sample\" data-to=\"experiment\"" ]]
 }
 
-@test "/data's diagram is a real ERD: boxes show real field name/type rows, edges carry cardinality labels (task #86)" {
+@test "/data's diagram is a real ERD: boxes show real field name/type rows, edges carry cardinality labels" {
     run_cgi "/data" ""
     [ "$status" -eq 0 ]
     # sample's own real fields, not just its name -- a required text
@@ -351,7 +351,7 @@ EOF
     [[ "$output" =~ "--platform-accent: #C97F1E;" ]]
 }
 
-@test "/sql's popover JS repositions via fixed viewport coordinates, not left CSS clipped by the scrolling table wrapper (task #111)" {
+@test "/sql's popover JS repositions via fixed viewport coordinates, not left CSS clipped by the scrolling table wrapper" {
     # The result table is wrapped in .platform-table-wrapper (overflow-x:
     # auto), which per the CSS Overflow spec forces overflow-y to auto
     # too -- clipping/trapping the default position:absolute popover at
@@ -521,7 +521,7 @@ EOF
     [[ "$output" =~ 'class="platform-nav-link platform-nav-link-active" href="data"' ]]
 }
 
-@test "platform.lua's nav_hidden hides the listed rail item, keeps the rest (brex 683042859)" {
+@test "platform.lua's nav_hidden hides the listed rail item, keeps the rest" {
     write_platform_config ', nav_hidden = {"data"}'
 
     run_cgi "/"
@@ -535,7 +535,7 @@ EOF
     [[ "$output" =~ 'class="platform-nav-link platform-nav-link-active" href="/"' ]]
 }
 
-@test "platform.lua's nav_order moves listed rail items first, keeps the rest in their original order (brex 683042859)" {
+@test "platform.lua's nav_order moves listed rail items first, keeps the rest in their original order" {
     write_platform_config ', nav_order = {"data", "home"}'
 
     run_cgi "/"
@@ -595,7 +595,7 @@ EOF
     [[ "$output" =~ "LOT-42" ]]
 }
 
-@test "/api/archive requires a reason when the schema opts in via require_reason_on_archive (task #93)" {
+@test "/api/archive requires a reason when the schema opts in via require_reason_on_archive" {
     cat > schemas/reagent_regulated.lua <<'EOF'
 return {
   name = "reagent_regulated",
@@ -624,7 +624,7 @@ EOF
     [[ "$output" =~ "Reason: Contaminated" ]]
 }
 
-@test "/api/update requires a reason when the schema opts in via require_reason_on_update (task #93)" {
+@test "/api/update requires a reason when the schema opts in via require_reason_on_update" {
     cat > schemas/reagent_regulated_upd.lua <<'EOF'
 return {
   name = "reagent_regulated_upd",

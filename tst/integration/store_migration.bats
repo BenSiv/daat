@@ -14,10 +14,6 @@ teardown() {
     cleanup_test_env
 }
 
-store() {
-    sqlite3 "$TEST_DIR/.store/store.db" "$1"
-}
-
 has_table() {
     [ "$(store "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '$1';")" = "1" ]
 }

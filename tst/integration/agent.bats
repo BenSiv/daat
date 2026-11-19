@@ -30,16 +30,6 @@ teardown() {
 # external contract identical: callers still pipe its output through
 # extract_query_param "$resp" "session_id", so it still prints
 # "session_id=<value>" text.
-start_chat() {
-    local cookie="$1"
-    local csrf="$2"
-    local title="$3"
-    local resp sid
-    resp=$(raw_post_json "/api/chat-widget-start" "{\"title\":\"${title}\"}" "$cookie" "$csrf" "")
-    sid=$(json_body "$resp" | jq -r '.session_id')
-    printf 'session_id=%s' "$sid"
-}
-
 @test "GET /chat with no sessions shows the empty state" {
     run raw_get "/chat" "" "$COOKIE"
     [[ "$output" =~ "200 OK" ]]
@@ -85,7 +75,7 @@ start_chat() {
     [[ ! "$output" =~ "Untitled chat" ]]
 }
 
-@test "a deployment's theme.lua system_prompt_extra is appended to the agent's system prompt (task #70)" {
+@test "a deployment's theme.lua system_prompt_extra is appended to the agent's system prompt" {
     cat > theme.lua <<'EOF'
 return {system_prompt_extra = "This deployment tracks bioreactor runs -- always ask for the run ID before creating a sample."}
 EOF
@@ -211,7 +201,7 @@ EOF
 
     # Not asserting the document table is empty -- a real chat turn now
     # syncs the Knowledge Pool folder and this session's own transcript
-    # document (task #108 follow-up), even one that ends in
+    # document, even one that ends in
     # pending_approval. What must still be true: the specifically
     # *proposed* page was never created (entity list only prints ids,
     # not titles, so this checks the real column directly).
@@ -236,7 +226,7 @@ EOF
 
     # Not necessarily id 1 -- ledger ids are a single sequence shared
     # across every entity type, and this session's own transcript
-    # document (task #108 follow-up) has already been ledgered by the
+    # document has already been ledgered by the
     # time this page is approved. Look it up by title instead (entity
     # list only prints ids, not titles -- entity show is what confirms
     # content).
@@ -1280,7 +1270,7 @@ EOF
 
     # Not necessarily id 1 -- ledger ids are a single sequence shared
     # across every entity type (document included), and this session's
-    # own transcript document (task #108 follow-up) has already been
+    # own transcript document has already been
     # ledgered by the time this task is approved.
     task_id=$(sqlite3 "$TEST_DIR/.store/store.db" "SELECT id FROM task WHERE title = 'New task';")
     run "$BIN" entity show task "$task_id"
@@ -2379,7 +2369,7 @@ EOF
     [[ "$output" != "" ]]
 }
 
-@test "admin can open another user's chat session read-only (#23, brex 326591764); non-admins see a styled private-conversation page" {
+@test "admin can open another user's chat session read-only (#23); non-admins see a styled private-conversation page" {
     write_task_schema
     resp=$(start_chat "$COOKIE" "$CSRF" "Alice growth curve")
     session_id=$(extract_query_param "$resp" "session_id")

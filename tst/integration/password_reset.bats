@@ -29,10 +29,6 @@ raw_form_post() {
         HTTP_COOKIE="$cookie" "$BIN"
 }
 
-raw_login() {
-    raw_form_post "/login" "login=$1&password=$2"
-}
-
 outbox_count() {
     if [ ! -f "$MAIL_TEST_OUTBOX" ]; then
         echo 0

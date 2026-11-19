@@ -426,7 +426,7 @@
         messagesEl.scrollTop = messagesEl.scrollHeight;
     }
 
-    // Attachments (brex #53) -- "documents for context," not vision or
+    // Attachments -- "documents for context," not vision or
     // a real platform Document: /api/chat-widget-attach (web.lua)
     // extracts a PDF/.docx's text and hands it straight back, stateless
     // -- nothing is persisted server-side until the text is folded into

@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# UI plugin surface (doc/plugin-system-research.md, brex 757245439): an
+# UI plugin surface (doc/plugin-system-research.md): an
 # approved extension declaring capabilities.ui gets a page at
 # /ext/<name> plus a sidebar nav entry, rendered from a plain Lua table
 # of canvas elements -- never raw HTML from the extension itself.
@@ -64,7 +64,7 @@ EOF
 return {on_before = function(new, old, ctx) return {} end}
 EOF
 
-    # Agent-tools plugin surface (brex 278013129): an approved
+    # Agent-tools plugin surface: an approved
     # extension declaring capabilities.tools contributes tools the chat
     # agent can call, dispatched under tool_name = the extension's own
     # name -- exercised below through a real scripted chat turn, the
@@ -116,7 +116,7 @@ return {
 }
 EOF
 
-    # Manual-trigger admin surface (brex 925561615): an approved
+    # Manual-trigger admin surface: an approved
     # extension declaring capabilities.manual_triggers contributes an
     # admin-only "run this now" button, dispatched from GET/POST
     # /admin-triggers (web.lua). meta.triggered_by carries the real
@@ -152,15 +152,6 @@ EOF
 
     read TEST_SESSION_COOKIE TEST_CSRF_TOKEN < <(login_test_user "plainuser" "i")
     read ADMIN_SESSION_COOKIE ADMIN_CSRF_TOKEN < <(login_test_user "admintest" "ia")
-}
-
-start_chat() {
-    local cookie="$1"
-    local csrf="$2"
-    local resp sid
-    resp=$(raw_post_json "/api/chat-widget-start" '{"title":"Chat"}' "$cookie" "$csrf" "")
-    sid=$(json_body "$resp" | jq -r '.session_id')
-    printf 'session_id=%s' "$sid"
 }
 
 teardown() {
@@ -241,7 +232,7 @@ teardown() {
     [[ "$output" =~ "404 Not Found" ]]
 }
 
-# ---- Agent-tools plugin surface (brex 278013129) ----
+# ---- Agent-tools plugin surface ----
 
 @test "an approved extension's non-destructive tool executes automatically within the same chat turn" {
     "$BIN" entity create widget label="gadget"
@@ -259,7 +250,7 @@ teardown() {
     [[ "$output" =~ "found 1 widget(s) labeled gadget" ]]
 }
 
-# ctx.query is read.entity, not "read any table" (brex 456424482).
+# ctx.query is read.entity, not "read any table".
 peek() {
     "$BIN" entity create widget label="gadget"
     "$BIN" extension approve tool-demo
@@ -403,7 +394,7 @@ EOF
     [[ "$output" =~ stats[[:space:]]+ERROR:.*"collides with a built-in tool group" ]]
 }
 
-# Manual-trigger admin surface (brex 925561615) -- see setup()'s
+# Manual-trigger admin surface -- see setup()'s
 # trigger-demo extension above.
 
 @test "GET /admin-triggers requires Admin capability, not just baseline" {

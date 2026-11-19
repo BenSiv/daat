@@ -17,10 +17,6 @@ teardown() {
     cleanup_test_env
 }
 
-db() {
-    sqlite3 .store/store.db "$1"
-}
-
 # A tier-2 reference on a tag of three curated notes, written by the
 # synthesize step; prints its id.
 reference() {

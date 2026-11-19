@@ -1,9 +1,9 @@
 #!/usr/bin/env bats
-# task #87: full prompt/reasoning/token persistence and chat evaluation,
+# full prompt/reasoning/token persistence and chat evaluation,
 # all in agent_model_call (one row per model call; reply rows carry their
 # evaluation and feedback).
 # Note materialization/agent-driven review (originally covered here too)
-# were removed under task #106 -- knowledge_note no longer exists as a
+# were removed -- knowledge_note no longer exists as a
 # separate table to materialize out of; every pool record already is a
 # real document.
 
@@ -18,38 +18,6 @@ setup() {
 
 teardown() {
     cleanup_test_env
-}
-
-raw_login() {
-    local login="$1"
-    local password="$2"
-    printf 'login=%s&password=%s' "$login" "$password" | \
-        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/login" QUERY_STRING="" "$BIN"
-}
-
-session_for() {
-    local login="$1" password="$2"
-    local raw session csrf
-    raw=$(raw_login "$login" "$password")
-    session=$(printf '%s' "$raw" | grep -o 'Set-Cookie: session=[^;]*' | sed 's/Set-Cookie: session=//')
-    csrf=$(printf '%s' "$raw" | grep -o 'Set-Cookie: csrf=[^;]*' | sed 's/Set-Cookie: csrf=//')
-    echo "${session} ${csrf}"
-}
-
-start_chat() {
-    local session="$1" csrf="$2" title="$3"
-    local cookie="session=${session}; csrf=${csrf}"
-    local resp
-    resp=$(raw_post_json "/api/chat-widget-start" "{\"title\":\"${title}\"}" "$cookie" "$csrf" "")
-    json_body "$resp" | jq -r '.session_id'
-}
-
-send_message() {
-    local session="$1" csrf="$2" chat_session_id="$3" message="$4" scripted="$5"
-    local cookie="session=${session}; csrf=${csrf}"
-    local escaped="${message//\\/\\\\}"
-    escaped="${escaped//\"/\\\"}"
-    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${chat_session_id}\",\"message\":\"${escaped}\"}" "$cookie" "$csrf" "$scripted"
 }
 
 @test "a real chat turn persists the exact prompt and real token counts in agent_model_call" {
@@ -228,7 +196,7 @@ EOF
     [[ "$output" == "up" ]]
 }
 
-@test "chat feedback buttons get an immediate pressed state and a real error message on failure, not silent no-op (task #115)" {
+@test "chat feedback buttons get an immediate pressed state and a real error message on failure, not silent no-op" {
     read session csrf < <(session_for admin secret123)
     GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/" QUERY_STRING="" \
         HTTP_COOKIE="session=${session}; csrf=${csrf}" run "$BIN"

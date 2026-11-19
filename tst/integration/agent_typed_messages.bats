@@ -16,33 +16,6 @@ teardown() {
     cleanup_test_env
 }
 
-store() {
-    sqlite3 "$TEST_DIR/.store/store.db" "$1"
-}
-
-raw_login() {
-    printf 'login=%s&password=%s' "$1" "$2" | \
-        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/login" QUERY_STRING="" "$BIN"
-}
-
-session_for() {
-    local raw session csrf
-    raw=$(raw_login "$1" "$2")
-    session=$(printf '%s' "$raw" | grep -o 'Set-Cookie: session=[^;]*' | sed 's/Set-Cookie: session=//')
-    csrf=$(printf '%s' "$raw" | grep -o 'Set-Cookie: csrf=[^;]*' | sed 's/Set-Cookie: csrf=//')
-    echo "${session} ${csrf}"
-}
-
-start_chat() {
-    local cookie="session=$1; csrf=$2"
-    json_body "$(raw_post_json "/api/chat-widget-start" "{\"title\":\"$3\"}" "$cookie" "$2" "")" | jq -r '.session_id'
-}
-
-send_message() {
-    local cookie="session=$1; csrf=$2"
-    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"$3\",\"message\":\"$4\"}" "$cookie" "$2" "$5"
-}
-
 # The assistant message holding the session's research.investigate or
 # background.start call.
 calling_message() {
