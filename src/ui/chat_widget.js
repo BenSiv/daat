@@ -29,8 +29,8 @@
     }
 
     var ROLE_LABELS = {user: 'You', assistant: 'Assistant', tool_result: 'Tool result', compaction_summary: 'Compacted summary', self_check: 'Self-check', error: 'Error', progress: 'Progress', decision: 'Decision'};
-    // Same roles as html.lua's own CHAT_MARKDOWN_ROLES -- the server
-    // (chat_widget_state, cgi.lua) already rendered these through
+    // Same roles as ui.lua's own CHAT_MARKDOWN_ROLES -- the server
+    // (chat_widget_state, web.lua) already rendered these through
     // cmark-gfm before this JSON ever reached the browser, so this JS
     // trusts and embeds that HTML directly rather than re-escaping it
     // (which would just show the literal tags) or re-implementing
@@ -109,7 +109,7 @@
 
     // Prefills the /sql console's own query textarea from the agent's
     // most recent entity.query call this session (chat_widget_state,
-    // cgi.lua) -- only on this specific page (page_type "sql", set by
+    // web.lua) -- only on this specific page (page_type "sql", set by
     // page_shell), and only once per new value, so re-renders after an
     // unrelated turn don't keep clobbering text the user is actively
     // editing by hand. Writes the query text only -- running it is
@@ -124,7 +124,7 @@
     // could be from an entirely unrelated conversation -- with no
     // guard, it would silently overwrite the query the user JUST ran
     // and is looking at results for, seconds after the page finished
-    // loading. page_context.query_ran (cgi.lua's /sql route)
+    // loading. page_context.query_ran (web.lua's /sql route)
     // is true exactly when this page load itself came from running a
     // query (?q= present) -- suppress exactly that one rehydrate-
     // triggered sync in that case, so the box keeps showing what the
@@ -353,7 +353,7 @@
 
     // /api/chat-widget-send runs the whole (possibly multi-tool-call)
     // turn synchronously server-side before its HTTP response returns
-    // (cgi.lua's /api/chat-widget-send handler calls agent.run_turn
+    // (web.lua's /api/chat-widget-send handler calls agent.run_turn
     // directly), and a full-page navigation is a real, separate CGI
     // process per request -- navigating away mid-turn aborts the
     // browser's own fetch and tears down pollWhilePending's interval,
@@ -427,7 +427,7 @@
     }
 
     // Attachments (brex #53) -- "documents for context," not vision or
-    // a real platform Document: /api/chat-widget-attach (cgi.lua)
+    // a real platform Document: /api/chat-widget-attach (web.lua)
     // extracts a PDF/.docx's text and hands it straight back, stateless
     // -- nothing is persisted server-side until the text is folded into
     // the next outgoing message below and sent through the normal
@@ -451,7 +451,7 @@
 
     // attachBtn/fileInput only exist in the DOM at all when
     // config.platform_config().chat_attachments_enabled is on for this
-    // deployment (html.render_chat_widget's own attach_html) -- guard
+    // deployment (ui.render_chat_widget's own attach_html) -- guard
     // the whole wiring, not just individual calls, so a disabled
     // deployment's widget script has nothing left that ever touches
     // these two elements.
@@ -520,7 +520,7 @@
         // a later message never carries a stale attachment along.
         if (pendingAttachment) {
             // Dash delimiters, not triple-double-quotes -- this whole
-            // template is itself a Luam long string (html.lua) using
+            // template is itself a Luam long string (ui.lua) using
             // that same triple-double-quote token, so using it here
             // too would terminate the outer string early (confirmed --
             // it did, as a real parse error, before this fix).
@@ -587,7 +587,7 @@
     });
 
     // A page can hand off a specific session to resume (currently only
-    // /chat's history browser does this, via cgi.lua's page_context.
+    // /chat's history browser does this, via web.lua's page_context.
     // open_chat_session_id -- clicking a past session there should pop
     // the widget open onto that exact conversation, not leave it
     // closed or on whatever it had cached). When an admin opens another

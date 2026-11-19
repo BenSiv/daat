@@ -1782,7 +1782,7 @@ EOF
     run raw_get "/api/chat-widget-history" "session_id=${session_id}" "$COOKIE"
     # "platform-chat-out-of-context" and the "Compacted summary" label
     # are both built client-side in JS from in_context/role (see
-    # html.lua's own render() -- ROLE_LABELS, and
+    # ui.lua's own render() -- ROLE_LABELS, and
     # 'platform-chat-' + msg.role) -- raw_get never runs that JS, so
     # check the real fields the JSON actually carries instead: at least
     # one compacted-out message (in_context = 0) and a real

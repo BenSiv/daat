@@ -27,8 +27,8 @@ const admin_routes = require("web.admin_routes")
 const chat_routes = require("web.chat_routes")
 const api_v1_routes = require("web.api_v1_routes")
 
-const cgi = {}
-cgi.has_capability = web_ctx.has_capability
+const web = {}
+web.has_capability = web_ctx.has_capability
 
 const ROUTE_MODULES = {
     auth_routes,
@@ -237,7 +237,7 @@ function handle_extension_ui(req)
     return web_ctx.respond(req, "404 Not Found", "text/plain", "Not Found")
 end
 
-function cgi.handle_request()
+function web.handle_request()
     path_info = web_ctx.default_value(os.getenv("PATH_INFO"), "/register")
     query_string = web_ctx.default_value(os.getenv("QUERY_STRING"), "")
     method = web_ctx.default_value(os.getenv("REQUEST_METHOD"), "GET")
@@ -331,7 +331,7 @@ function cgi.handle_request()
         end
     end
 
-    if not cgi.has_capability(req.capabilities, web_ctx.REQUIRED_CAPABILITY) then
+    if not web.has_capability(req.capabilities, web_ctx.REQUIRED_CAPABILITY) then
         if req.via_api_key then
             web_ctx.respond(req, "403 Forbidden", "application/json", json.encode({error = "Insufficient capability"}))
         else
@@ -340,8 +340,8 @@ function cgi.handle_request()
         return
     end
 
-    req.show_sql_nav = cgi.has_capability(req.capabilities, "s") or cgi.has_capability(req.capabilities, "a")
-    req.show_admin_nav = cgi.has_capability(req.capabilities, "a")
+    req.show_sql_nav = web.has_capability(req.capabilities, "s") or web.has_capability(req.capabilities, "a")
+    req.show_admin_nav = web.has_capability(req.capabilities, "a")
     req.has_tasks_view = view.load(req.db_path, "prioritized_tasks", root) != nil
     req.nav_extensions = extension.approved_with_ui(req.db_path, config.extensions_dir(root))
 
@@ -364,4 +364,4 @@ function cgi.handle_request()
     web_ctx.respond(req, "404 Not Found", "text/plain", "Not Found")
 end
 
-return cgi
+return web

@@ -119,7 +119,7 @@ EOF
     # Manual-trigger admin surface (brex 925561615): an approved
     # extension declaring capabilities.manual_triggers contributes an
     # admin-only "run this now" button, dispatched from GET/POST
-    # /admin-triggers (cgi.lua). meta.triggered_by carries the real
+    # /admin-triggers (web.lua). meta.triggered_by carries the real
     # clicking admin's own login (not the fixed "extension:<name>"
     # identity ctx.create_entity itself still attributes writes to) --
     # exercised below by folding it into the created widget's label.

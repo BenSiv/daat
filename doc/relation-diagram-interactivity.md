@@ -2,7 +2,7 @@
 
 ## Phase 1 -- drag-to-reposition (DONE)
 
-`html.render_relation_diagram` (`src/html.lua:2232-2385`, backing `GET /data`, `src/cgi.lua:787-799`) renders `schema.relationships()`'s entity-type graph as an inline SVG ERD: each entity type is a box listing its real fields, edges connect the specific referencing field's row to the target type's `id` row with cardinality labels. Layout is still a deterministic, server-computed "shortest-column-first" packing (`src/html.lua:2260-2284`) -- the three open questions below resolved against plain drag, no physics.
+`ui.render_relation_diagram` (`src/ui.lua:2232-2385`, backing `GET /data`, `src/web.lua:787-799`) renders `schema.relationships()`'s entity-type graph as an inline SVG ERD: each entity type is a box listing its real fields, edges connect the specific referencing field's row to the target type's `id` row with cardinality labels. Layout is still a deterministic, server-computed "shortest-column-first" packing (`src/ui.lua:2260-2284`) -- the three open questions below resolved against plain drag, no physics.
 
 Resolved, and why:
 - **SVG-native drag, not canvas.** Each box is a real `<g class="platform-diagram-node">`; dragging just updates its own `transform="translate(dx,dy)"` and its children (rect, field rows) move for free. No hit-testing code needed at all -- the browser's own DOM event targeting does it.

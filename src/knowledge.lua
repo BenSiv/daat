@@ -1554,7 +1554,7 @@ end
 -- Documents with at least one review recorded against them (a reviewed
 -- knowledge_retrieval_hit) -- backs /knowledge's "reviewed
 -- notes" stat, same reused table view as tier documents
--- (html.render_knowledge_documents).
+-- (ui.render_knowledge_documents).
 function knowledge.reviewed_documents(db_path)
     rows = db.query(db_path, """
         SELECT * FROM document

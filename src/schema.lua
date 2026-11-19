@@ -337,7 +337,7 @@ function schema.validate(def)
     -- above -- a schema can require Admin capability to create/update/
     -- archive rows of this type (e.g. label_template, whose `sql_select`
     -- field is genuinely executable). Anyone can still read/view rows
-    -- of the type; this only gates writes. Enforced in cgi.lua, not
+    -- of the type; this only gates writes. Enforced in web.lua, not
     -- here (schema.lua has no notion of an HTTP session/capability).
     if def.admin_write_only != nil and def.admin_write_only != true and def.admin_write_only != false then
         return string.format("schema '%s': 'admin_write_only' must be true or false", def.name)
@@ -392,7 +392,7 @@ function schema.validate(def)
         end
         -- Optional bounds on a "number" field -- UI-hint only for now
         -- (wired into the registration table's <input type="number">
-        -- min/max, see html.lua), not yet enforced server-side. A real
+        -- min/max, see ui.lua), not yet enforced server-side. A real
         -- bug found in production: without this, the registration
         -- table's number input had no min/max at all, so its native
         -- spinner arrows could be clicked past any sensible bound
@@ -418,7 +418,7 @@ end
 -- Registers a validated schema definition: upserts entity_type/entity_field
 -- rows, then creates or migrates the projected table.
 -- entity_field predates the `display` flag (see schema.fields()'s own
--- header comment on entity_display_label in html.lua) -- ledger.lua's
+-- header comment on entity_display_label in ui.lua) -- ledger.lua's
 -- CREATE TABLE IF NOT EXISTS never retrofits an existing table, so this
 -- migrates it the same way sync_table() already migrates per-type
 -- tables: additive, idempotent, safe to re-run on every sync.
@@ -1194,7 +1194,7 @@ end
 -- The schema layout as a plain Luam table: {name, fields = {{name, label,
 -- type, required, values?, ref_entity_type?}, ...}}. Shared by
 -- schema.show_json (JSON for the client-side registration table) and
--- the browse/detail HTML views (cgi.lua/html.lua) -- one source of
+-- the browse/detail HTML views (web.lua/ui.lua) -- one source of
 -- truth for "what does this entity type's layout look like", native
 -- consumers don't need to decode JSON just to get a Luam table back.
 -- Prefers labels from the version-controlled schema file if available,
@@ -1217,7 +1217,7 @@ function schema.layout(db_path, name)
         -- its own literal list) AND the resolved dropdown values --
         -- checking only the former sends no `values` array at all for
         -- a dropdown-referencing select field, and the register page's
-        -- own client-side JS (addRow(), html.lua) crashes on
+        -- own client-side JS (addRow(), ui.lua) crashes on
         -- `field.values.forEach` the instant it reaches one, breaking
         -- the whole batch-entry table for any entity type with a
         -- dropdown-based select (e.g. cell_line's required
@@ -1323,7 +1323,7 @@ end
 -- call site happened to be safe only because it incidentally checked
 -- the name resolves via schema.layout/schema.fields first -- not a
 -- deliberate guard. This is that guard: a single charset check, applied
--- once, centrally, at every point in cgi.lua where `params.type`/
+-- once, centrally, at every point in web.lua where `params.type`/
 -- `params.ref_type`-shaped external input becomes an `entity_type`,
 -- before it can reach any raw SQL or path-building call.
 function schema.valid_name_syntax(name)
@@ -1440,7 +1440,7 @@ function schema.reason_flags(db_path, entity_type)
 end
 
 -- Whether writes (create/update/archive) to this entity type
--- require Admin capability -- checked in cgi.lua, which has the HTTP
+-- require Admin capability -- checked in web.lua, which has the HTTP
 -- session's capabilities in scope (schema.lua/entity.lua don't).
 function schema.admin_write_only(db_path, entity_type)
     rows = db.query(db_path, string.format(
@@ -1534,7 +1534,7 @@ end
 -- {from_type, to_type, field_name}, one per reference-typed field, across
 -- every registered schema. Backs the Data page's entity-relation diagram;
 -- a pure introspection query (like schema.fields()), so it belongs here
--- rather than in html.lua/cgi.lua alongside the rendering.
+-- rather than in ui.lua/web.lua alongside the rendering.
 function schema.relationships(db_path, entity_types)
     types = entity_types
     if types == nil then
@@ -1548,7 +1548,7 @@ function schema.relationships(db_path, entity_types)
             if (field.type == "reference" or field.type == "multi_reference") and field.ref_entity_type != nil and field.ref_entity_type != "" then
                 -- field_type lets a caller tell a plain
                 -- `reference` (a real column on from_type -- reverse-
-                -- queryable directly, see cgi.lua's related_records)
+                -- queryable directly, see web.lua's related_records)
                 -- apart from `multi_reference` (stored in a separate
                 -- junction table instead, schema.ensure_multi_field_table
                 -- -- not reverse-queryable the same way).

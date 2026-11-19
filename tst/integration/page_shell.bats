@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # tst/integration/page_shell.bats
-# Locks in the layout relationship src/html.lua's PLATFORM_GUTTER/
+# Locks in the layout relationship src/ui.lua's PLATFORM_GUTTER/
 # PLATFORM_NAV_WIDTH constants exist to guarantee -- see their own
 # comments: the main content area's side gutter, the chat widget's own
 # right/bottom offset, and the chat panel's stretch-to-nav-edge limits

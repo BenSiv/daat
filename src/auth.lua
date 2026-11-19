@@ -1,4 +1,4 @@
--- Real login/session auth, replacing cgi.lua's Phase 0
+-- Real login/session auth, replacing web.lua's Phase 0
 -- AUTH_USER/AUTH_CAPABILITIES/AUTH_NONCE env-var stub.
 --
 -- Password storage: bcrypt (require("bcrypt"), luam/lib/bcrypt/bcrypt.c).

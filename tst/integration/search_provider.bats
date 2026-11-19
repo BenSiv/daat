@@ -45,7 +45,7 @@ start_chat() {
     [[ "$(json_body "$output" | jq -r '.pending.tool')" = "internet_search" ]]
     [[ "$(json_body "$output" | jq -r '.pending.method')" = "search" ]]
     # The query itself is already visible to whoever approves -- the
-    # generic pending-action arg renderer (src/html.lua) shows every
+    # generic pending-action arg renderer (src/ui.lua) shows every
     # arg verbatim, no tool-specific UI work needed.
     [[ "$(json_body "$output" | jq -r '.pending.args.query')" = "celleste bio" ]]
 }

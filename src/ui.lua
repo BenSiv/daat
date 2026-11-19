@@ -9,69 +9,69 @@ const ui_common = require("ui.common")
 const ui_data = require("ui.data_pages")
 const ui_knowledge = require("ui.knowledge_pages")
 
-const html = {}
+const ui = {}
 
 -- Escaping & shared shell/canvas/widget primitives (ui.common)
-html.escape = ui_common.escape
-html.html_escape = ui_common.html_escape
-html.plot_css = ui_common.plot_css
-html.validate_canvas = ui_common.validate_canvas
-html.render_canvas = ui_common.render_canvas
-html.canvas_js = ui_common.canvas_js
-html.render_plugin_page = ui_common.render_plugin_page
-html.popover_css = ui_common.popover_css
-html.popover_js = ui_common.popover_js
-html.theme_root_css = ui_common.theme_root_css
-html.page_shell = ui_common.page_shell
-html.render = ui_common.render
-html.render_entity_edit = ui_common.render_entity_edit
-html.render_chat_widget = ui_common.render_chat_widget
-html.apply_nav_hidden = ui_common.apply_nav_hidden
-html.apply_nav_order = ui_common.apply_nav_order
+ui.escape = ui_common.escape
+ui.html_escape = ui_common.html_escape
+ui.plot_css = ui_common.plot_css
+ui.validate_canvas = ui_common.validate_canvas
+ui.render_canvas = ui_common.render_canvas
+ui.canvas_js = ui_common.canvas_js
+ui.render_plugin_page = ui_common.render_plugin_page
+ui.popover_css = ui_common.popover_css
+ui.popover_js = ui_common.popover_js
+ui.theme_root_css = ui_common.theme_root_css
+ui.page_shell = ui_common.page_shell
+ui.render = ui_common.render
+ui.render_entity_edit = ui_common.render_entity_edit
+ui.render_chat_widget = ui_common.render_chat_widget
+ui.apply_nav_hidden = ui_common.apply_nav_hidden
+ui.apply_nav_order = ui_common.apply_nav_order
 
 -- Structured data pages & helpers (ui.data_pages)
-html.entity_display_label = ui_data.entity_display_label
-html.own_row_label = ui_data.own_row_label
-html.display_field_value = ui_data.display_field_value
-html.render_browse = ui_data.render_browse
-html.render_detail = ui_data.render_detail
-html.render_view_table = ui_data.render_view_table
-html.render_view = ui_data.render_view
-html.expand_inline_views = ui_data.expand_inline_views
-html.render_relation_diagram = ui_data.render_relation_diagram
-html.relation_diagram_css = ui_data.relation_diagram_css
-html.diagram_js = ui_data.diagram_js
-html.render_index = ui_data.render_index
-html.render_sql = ui_data.render_sql
-html.word_diff_runs = ui_data.word_diff_runs
-html.word_diff_html = ui_data.word_diff_html
+ui.entity_display_label = ui_data.entity_display_label
+ui.own_row_label = ui_data.own_row_label
+ui.display_field_value = ui_data.display_field_value
+ui.render_browse = ui_data.render_browse
+ui.render_detail = ui_data.render_detail
+ui.render_view_table = ui_data.render_view_table
+ui.render_view = ui_data.render_view
+ui.expand_inline_views = ui_data.expand_inline_views
+ui.render_relation_diagram = ui_data.render_relation_diagram
+ui.relation_diagram_css = ui_data.relation_diagram_css
+ui.diagram_js = ui_data.diagram_js
+ui.render_index = ui_data.render_index
+ui.render_sql = ui_data.render_sql
+ui.word_diff_runs = ui_data.word_diff_runs
+ui.word_diff_html = ui_data.word_diff_html
 
 -- Auth, account, landing & admin pages (ui.admin_pages)
-html.render_login = ui_admin.render_login
-html.render_forgot_password = ui_admin.render_forgot_password
-html.render_reset_password = ui_admin.render_reset_password
-html.render_verify_email = ui_admin.render_verify_email
-html.render_account = ui_admin.render_account
-html.render_admin_users = ui_admin.render_admin_users
-html.render_admin_api_keys = ui_admin.render_admin_api_keys
-html.render_settings = ui_admin.render_settings
-html.render_home = ui_admin.render_home
-html.render_system = ui_admin.render_system
-html.render_admin_triggers = ui_admin.render_admin_triggers
+ui.render_login = ui_admin.render_login
+ui.render_forgot_password = ui_admin.render_forgot_password
+ui.render_reset_password = ui_admin.render_reset_password
+ui.render_verify_email = ui_admin.render_verify_email
+ui.render_account = ui_admin.render_account
+ui.render_admin_users = ui_admin.render_admin_users
+ui.render_admin_api_keys = ui_admin.render_admin_api_keys
+ui.render_settings = ui_admin.render_settings
+ui.render_home = ui_admin.render_home
+ui.render_system = ui_admin.render_system
+ui.render_admin_triggers = ui_admin.render_admin_triggers
 
 -- Knowledge pool, templates, documents & chat pages (ui.knowledge_pages)
-html.render_knowledge_pool = ui_knowledge.render_knowledge_pool
-html.render_knowledge_graph = ui_knowledge.render_knowledge_graph
-html.render_knowledge_documents = ui_knowledge.render_knowledge_documents
-html.render_knowledge_retrievals = ui_knowledge.render_knowledge_retrievals
-html.render_templates_list = ui_knowledge.render_templates_list
-html.render_template = ui_knowledge.render_template
-html.document_parent_options = ui_knowledge.document_parent_options
-html.render_document_tree = ui_knowledge.render_document_tree
-html.render_document = ui_knowledge.render_document
-html.render_document_edit = ui_knowledge.render_document_edit
-html.CHAT_MARKDOWN_ROLES = ui_knowledge.CHAT_MARKDOWN_ROLES
-html.render_chat = ui_knowledge.render_chat
-html.render_chat_unavailable = ui_knowledge.render_chat_unavailable
+ui.render_knowledge_pool = ui_knowledge.render_knowledge_pool
+ui.render_knowledge_graph = ui_knowledge.render_knowledge_graph
+ui.render_knowledge_documents = ui_knowledge.render_knowledge_documents
+ui.render_knowledge_retrievals = ui_knowledge.render_knowledge_retrievals
+ui.render_templates_list = ui_knowledge.render_templates_list
+ui.render_template = ui_knowledge.render_template
+ui.document_parent_options = ui_knowledge.document_parent_options
+ui.render_document_tree = ui_knowledge.render_document_tree
+ui.render_document = ui_knowledge.render_document
+ui.render_document_edit = ui_knowledge.render_document_edit
+ui.CHAT_MARKDOWN_ROLES = ui_knowledge.CHAT_MARKDOWN_ROLES
+ui.render_chat = ui_knowledge.render_chat
+ui.render_chat_unavailable = ui_knowledge.render_chat_unavailable
 
-return html
+return ui

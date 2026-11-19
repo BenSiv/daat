@@ -170,7 +170,7 @@ const LINK_MIGRATION_BATCH = 200
 -- content (a connection document per pair) and then drop. Notes aren't
 -- copied either: the sentence around a link is read from content now.
 --
--- Runs from every request's schema init (cgi.handle_request), so on
+-- Runs from every request's schema init (web.handle_request), so on
 -- MySQL it takes a named lock and re-checks under it: the first
 -- requests after a deploy would otherwise run it concurrently, and DDL
 -- isn't transactional. Copies into document_link_new before swapping
@@ -716,7 +716,7 @@ end
 -- Every active document's id/title/parent_id, for building the full
 -- tree view in one query rather than one query per level. created_at/
 -- external_id ride along here rather than a second query (used by
--- html.document_parent_options to disambiguate duplicate titles) --
+-- ui.document_parent_options to disambiguate duplicate titles) --
 -- cheap, and every existing caller already ignores columns it doesn't use.
 function document.all_active(db_path)
     rows = db.query(db_path,
@@ -1548,7 +1548,7 @@ end
 -- that budget is meant to guard against.
 const ATTACHMENT_TEXT_MAX_CHARS = 20000
 
--- Chat-widget file attachments (`/api/chat-widget-attach`, cgi.lua) --
+-- Chat-widget file attachments (`/api/chat-widget-attach`, web.lua) --
 -- "documents for context," not vision/images and not a real platform
 -- Document: the extracted text is folded into that one turn's outgoing
 -- message client-side and never persisted as its own row anywhere.
@@ -1560,7 +1560,7 @@ const ATTACHMENT_TEXT_MAX_CHARS = 20000
 -- explicit nil, err -- an attachment failure has to be visible to the
 -- user, not swallowed into an empty-context turn. Gated by
 -- config.platform_config().chat_attachments_enabled at the route level
--- (cgi.lua) -- this function itself just extracts text; it doesn't
+-- (web.lua) -- this function itself just extracts text; it doesn't
 -- know or care whether the feature is turned on for this deployment.
 function document.extract_attachment_text(filename, data)
     if filename == nil then

@@ -3,7 +3,7 @@
 -- move an existing store from one table layout to the next.
 --
 -- Migrations (doc/schema-revision.md) run before any module creates its
--- tables, from every entry point that opens the store: cgi.handle_request,
+-- tables, from every entry point that opens the store: web.handle_request,
 -- main.lua's CLI dispatch, and `daat init`. They have to run first: the
 -- modules' CREATE TABLE IF NOT EXISTS would otherwise create an empty
 -- table under a new name before the migration could rename the old one

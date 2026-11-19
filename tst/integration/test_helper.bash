@@ -124,7 +124,7 @@ raw_post() {
 # own chat-start/chat-message/chat-approve/chat-deny form routes are
 # gone, the widget's JSON API is the only surviving way to drive a
 # chat turn in a test). Sets HTTP_X_CSRF_TOKEN, not a csrf_token form
-# field -- confirmed via cgi.lua's require_csrf(cookies) call at every
+# field -- confirmed via web.lua's require_csrf(cookies) call at every
 # /api/chat-widget-* route: JSON routes check *only* the header, no
 # form-field fallback (unlike the old form routes' require_csrf(cookies,
 # form.csrf_token)).

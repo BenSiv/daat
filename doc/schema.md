@@ -121,7 +121,7 @@ Dropdown files live in `dropdowns/*.lua`, loaded the same config-as-code way `sc
 
 ## Type-level flags -- `admin_write_only`
 
-A definition can opt into `admin_write_only = true` at the top level (alongside `name`/`fields`), requiring Admin capability to create/update/archive any row of that type (checked in `cgi.lua`'s entity-write routes, not here -- schema.lua has no notion of an HTTP session). Anyone can still read/view rows of the type; this only gates writes. Meant for entity types whose data is itself sensitive or consequential in a way ordinary lab entities aren't -- see `label_template` below, the first real consumer.
+A definition can opt into `admin_write_only = true` at the top level (alongside `name`/`fields`), requiring Admin capability to create/update/archive any row of that type (checked in `web.lua`'s entity-write routes, not here -- schema.lua has no notion of an HTTP session). Anyone can still read/view rows of the type; this only gates writes. Meant for entity types whose data is itself sensitive or consequential in a way ordinary lab entities aren't -- see `label_template` below, the first real consumer.
 
 ## Label printing (`label_template`)
 

@@ -24,7 +24,7 @@
 --               label = "Experiment", columns = {"number", "title"}},
 --           {type = "lookup_view", view_name = "samples_by_experiment",
 --               label = "Samples for this experiment"},  -- an inert
---               -- {{view:...:EXPERIMENT_ID}} marker (see html.lua's
+--               -- {{view:...:EXPERIMENT_ID}} marker (see ui.lua's
 --               -- expand_inline_views) -- EXPERIMENT_ID is a literal
 --               -- placeholder the user replaces by hand once pasted
 --               -- into a real document, same as registration_table's own
@@ -32,8 +32,8 @@
 --       },
 --   }
 --
--- default_path is optional: it's the title value html.render_template
--- prefills the new document's Title field with (html.lua's own
+-- default_path is optional: it's the title value ui.render_template
+-- prefills the new document's Title field with (ui.lua's own
 -- render_template falls back to `label` if absent) -- a deployment's own
 -- document-naming convention (e.g. a folder-path prefix) belongs here, in
 -- a deployment's own template files, never hardcoded into platform itself.

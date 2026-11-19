@@ -53,7 +53,7 @@ teardown() {
 
 @test "/data renders the entity-relation diagram with a node per type and an edge for each reference field" {
     # Moved off "/" when Home became its own separate landing page --
-    # see html.render_home/render_index's own comments.
+    # see ui.render_home/render_index's own comments.
     run_cgi "/data" ""
     [ "$status" -eq 0 ]
     [[ "$output" =~ "200 OK" ]]
@@ -290,7 +290,7 @@ EOF
     # column into a {type=,id=} array, which tostring()s as a table
     # address for any field type this loop didn't special-case
     # (polymorphic_reference, multi_reference, multi_polymorphic_
-    # reference alike). Fixed by reusing html.display_field_value, the
+    # reference alike). Fixed by reusing ui.display_field_value, the
     # same dispatcher /browse and /detail already use.
     mkdir -p schemas
     cat > schemas/plant.lua <<'EOF'
@@ -338,7 +338,7 @@ EOF
 @test "/sql?embed=1 still gets the real theme colors, not the generic fallback" {
     # Reported live: the embedded SQL widget on /data rendered in the
     # default indigo/slate instead of the deployment's real theme --
-    # ?embed=1 skips html.page_shell entirely (to avoid nesting a
+    # ?embed=1 skips ui.page_shell entirely (to avoid nesting a
     # second full page inside the iframe), which also meant it never
     # got the :root { --platform-x: ...; } block a real theme.lua
     # compiles to, so every var(--platform-*, fallback) silently fell
@@ -387,7 +387,7 @@ EOF
 @test "/sql adds a default row cap to a query with no LIMIT of its own" {
     # Found live: an unrestricted query against ~3800 rows of real
     # document content took 54 real seconds and produced a 5.7MB page
-    # (html.render_sql's own O(n^2) string-concat, fixed separately) --
+    # (ui.render_sql's own O(n^2) string-concat, fixed separately) --
     # this is the second half of that fix: a query with no LIMIT at all
     # shouldn't render thousands of rows in the first place.
     for i in $(seq 1 5); do
@@ -526,7 +526,7 @@ EOF
 
     run_cgi "/"
     [ "$status" -eq 0 ]
-    # The rail link specifically (exact class+href pairing html.lua's
+    # The rail link specifically (exact class+href pairing ui.lua's
     # own render loop always emits together), not the Home page's own
     # separate "Data" sitemap tile -- a different link to the same
     # href, in the page body, unaffected by nav_hidden.

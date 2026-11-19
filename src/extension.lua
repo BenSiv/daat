@@ -208,7 +208,7 @@ function extension.validate_manifest(manifest)
     end
     -- capabilities.manual_triggers declares admin-only "run this now"
     -- buttons (brex 925561615's own blocker), listed and dispatched from
-    -- a dedicated /admin-triggers route (cgi.lua) -- never the chat
+    -- a dedicated /admin-triggers route (web.lua) -- never the chat
     -- agent, never an ordinary user's own request. Unlike
     -- capabilities.tools there's no shared dispatch namespace to worry
     -- about (no is_reserved_tool_name-style check needed): the route path
@@ -340,8 +340,8 @@ function extension.definition_files(db_path, dir, ext_dir, kind, dir_required)
 end
 
 -- Approved extensions that also declare capabilities.ui -- the one
--- list both the nav rail (html.page_shell) and the /ext/<name> route
--- dispatcher (cgi.lua) need; a bad manifest or an unapproved/no-ui
+-- list both the nav rail (ui.page_shell) and the /ext/<name> route
+-- dispatcher (web.lua) need; a bad manifest or an unapproved/no-ui
 -- extension is silently excluded here rather than surfaced as an
 -- error, same spirit as extension.matching's own filtering.
 function extension.approved_with_ui(db_path, ext_dir)
@@ -377,7 +377,7 @@ function extension.approved_with_tools(db_path, ext_dir)
 end
 
 -- Approved extensions that also declare capabilities.manual_triggers --
--- the one list the /admin-triggers route (cgi.lua) needs, same
+-- the one list the /admin-triggers route (web.lua) needs, same
 -- exclusion spirit as approved_with_ui/approved_with_tools.
 function extension.approved_with_manual_triggers(db_path, ext_dir)
     result = {}
@@ -630,7 +630,7 @@ end
 -- never one).
 --
 -- Shared by extension.invoke (entity hooks) and the UI-route/action
--- dispatch (cgi.lua) -- both need "load this extension's code, get its
+-- dispatch (web.lua) -- both need "load this extension's code, get its
 -- hooks table" and nothing else; what they call on that table differs
 -- per call site. Returns (nil, nil) -- not an error -- when main.lua
 -- doesn't return a hooks table at all, so a manifest can declare

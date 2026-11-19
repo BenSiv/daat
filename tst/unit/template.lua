@@ -1,7 +1,7 @@
 -- tst/unit/template.lua
 -- Unit tests for src/template.lua: pure validation/rendering logic for
 -- reusable Entry templates, including the "lookup_view" section type
--- (inline per-experiment lookup tables, see html.lua's
+-- (inline per-experiment lookup tables, see ui.lua's
 -- expand_inline_views). No prior test coverage existed for this
 -- module at all before this file.
 

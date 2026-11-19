@@ -1,6 +1,6 @@
 # Auth: how it's built and why
 
-daat's login, session, CSRF and account-recovery code is its own, in `src/auth.lua` and the routes in `src/cgi.lua`. This page records what each piece does, why it is built that way, what was considered instead, and what is knowingly left open. `doc/architecture.md`'s "Auth" section is the short version; this is the one to read before changing any of it.
+daat's login, session, CSRF and account-recovery code is its own, in `src/auth.lua` and the routes in `src/web.lua`. This page records what each piece does, why it is built that way, what was considered instead, and what is knowingly left open. `doc/architecture.md`'s "Auth" section is the short version; this is the one to read before changing any of it.
 
 The ground rule: daat writes the policy (who may do what, when a credential stops working), never the cryptography. Every primitive comes from a vetted library through a thin binding.
 
@@ -46,7 +46,7 @@ Double-submit token: at login the server sets a random `csrf` cookie (readable b
 
 - Why it works: another site can make the browser send daat's cookies, but it can't read them, so it can't put the matching value in the request.
 - Why double-submit instead of a server-stored token: same reason as sessions, no per-request server state. The token doesn't need signing because it's only compared with itself.
-- Every POST route in `cgi.lua` calls `require_csrf`. The exceptions are `/login`, `/forgot-password`, `/reset-password` and `/verify-email` (no session exists yet) and API-key requests (see below). When adding a route, add the check; `tst/integration/auth.bats` covers the pattern.
+- Every POST route in `web.lua` calls `require_csrf`. The exceptions are `/login`, `/forgot-password`, `/reset-password` and `/verify-email` (no session exists yet) and API-key requests (see below). When adding a route, add the check; `tst/integration/auth.bats` covers the pattern.
 
 ## Emailed links: reset, setup, verify
 
@@ -103,7 +103,7 @@ Known cost: a key is checked by running bcrypt against every active key (there's
 
 ## Response headers
 
-`print_response` adds these to every response (`security_header_lines` in `cgi.lua`). A route can override one by setting the same header itself.
+`print_response` adds these to every response (`security_header_lines` in `web.lua`). A route can override one by setting the same header itself.
 
 - **`Content-Security-Policy`**, which tells the browser what the page may load and run:
   - `script-src 'self' 'nonce-<per-request>'`: only daat's own script files and inline `<script>` blocks carrying this request's random nonce run. Every inline script daat writes carries it. An injected `<script>` or `onclick=` doesn't, so an escaping bug can't become running code. This is the important line. daat generated nonces before but stopped sending a CSP when the Fossil wrapper (which used to send one) was removed, so for a while the nonces protected nothing.

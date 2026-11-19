@@ -1,5 +1,5 @@
 -- View-model builder and asset renderer for the floating chat widget
--- embedded in html.page_shell.
+-- embedded in ui.page_shell.
 --
 -- Keeps server-side state decisions in Luam (whether PDF/DOCX
 -- attachments are enabled, layout constants, CSP nonce) and keeps the

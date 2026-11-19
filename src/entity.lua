@@ -1221,7 +1221,7 @@ end
 -- Filtered siblings of entity.list/entity.count, for "every X that
 -- references this Y" (e.g. a mixture's ingredients) -- field_name/value
 -- are trusted the same way entity_type already is throughout this file
--- (schema-registered names from cgi.lua, not raw user input), quoted
+-- (schema-registered names from web.lua, not raw user input), quoted
 -- for safety regardless.
 function entity.list_by_field(db_path, entity_type, field_name, value, limit, offset, include_archived)
     if db.table_exists(db_path, entity_type) == false then

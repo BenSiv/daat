@@ -34,14 +34,14 @@ PLATFORM_CONFIG_CACHE = nil
 PLATFORM_SETTINGS_CACHE = {}
 
 -- The CSS custom-property names a theme.lua may override -- matches
--- html.lua's own var(--platform-*, <fallback>) usage sites exactly, so a
+-- ui.lua's own var(--platform-*, <fallback>) usage sites exactly, so a
 -- deployment can only override colors/tokens the app already exposes
 -- as a hook, never introduce a new one by typo.
 -- tier_0..tier_3: the Knowledge Pool's ordinal tier ramp (Raw Intake ->
 -- Atomic Record) -- one hue, monotone lightness, light->dark as
 -- maturity rises. Validated against dataviz's ordinal-ramp checks
 -- (monotone L, adjacent ΔL >= 0.06, light-end contrast >= 2:1 on the
--- default surface, single hue) -- see html.theme_root_css's own
+-- default surface, single hue) -- see ui.theme_root_css's own
 -- fallback defaults for the values, and doc/knowledge-graph-explorer.md
 -- for the second place this ramp is meant to be reused (node color).
 const THEME_COLOR_KEYS = {
@@ -226,7 +226,7 @@ end
 -- nav_order/nav_hidden's own shared validation: a plain list of
 -- non-empty strings, everything else dropped silently (matching this
 -- whole function's own "malformed input falls back, never errors"
--- contract) -- an unrecognized key is html.lua's own concern to treat
+-- contract) -- an unrecognized key is ui.lua's own concern to treat
 -- as a no-op, not this function's; there's no fixed key vocabulary to
 -- check against here since extension-contributed keys ("ext:<name>")
 -- are only known at render time, per deployment.
@@ -621,7 +621,7 @@ function config.platform_config()
         mariadb_user = nil,
         mariadb_database = nil,
         -- nil (both) means "today's hardcoded rail, unchanged" -- see
-        -- html.lua's own apply_nav_order/apply_nav_hidden (brex
+        -- ui.lua's own apply_nav_order/apply_nav_hidden (brex
         -- 683042859). Deliberately a reorder/hide overlay on the
         -- existing capability-gated built-in items, not a from-scratch
         -- nav vocabulary: an unrecognized key in either list is a
@@ -895,7 +895,7 @@ end
 -- just a hook. A deployment that wants one drops an optional
 -- theme.lua at the store root (e.g. seeded by its own deploy tooling,
 -- outside this repo) -- absent or malformed, every value below falls
--- back to nil, which leaves html.lua's existing var(--platform-*,
+-- back to nil, which leaves ui.lua's existing var(--platform-*,
 -- <fallback>) defaults (its current indigo/slate palette) untouched.
 -- site_name similarly defaults to a generic label, never a company name.
 function config.load_theme(root)
@@ -923,7 +923,7 @@ function config.load_theme(root)
     -- name (a wordmark, not just a mark) -- repeating it as a second,
     -- redundant text heading on Home reads as a mistake, not a
     -- feature. A generic hook, not a Celleste-specific behavior baked
-    -- into html.lua: any deployment can opt into it, none are forced to.
+    -- into ui.lua: any deployment can opt into it, none are forced to.
     if parsed.hide_home_heading == true then
         theme.hide_home_heading = true
     end

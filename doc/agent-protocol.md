@@ -66,5 +66,5 @@ Some vendors offer tools they execute themselves (Anthropic's `web_search`, `cod
 
 1. Write `src/provider/agent_<name>.lua` implementing `.generate`/`.converse` (and `.embeddings` if the vendor has one).
 2. Translate `messages`/`tools` from the canonical shape above into the vendor's real wire format, and the vendor's response back into canonical blocks/`stopReason` -- entirely within that one file.
-3. No changes needed to `agent.lua`, `cgi.lua`, or the existing test suite (`src/provider/agent_test.lua`'s scripted fixtures already use this canonical shape directly).
+3. No changes needed to `agent.lua`, `web.lua`, or the existing test suite (`src/provider/agent_test.lua`'s scripted fixtures already use this canonical shape directly).
 4. Set `config.platform_config().agent_provider` to `"<name>"` to switch.

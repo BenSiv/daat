@@ -378,7 +378,7 @@ Assistant: Rinse, then autoclave."
 
     # Reported live: this test used to assert against /chat's own
     # rendered page, which deliberately strips tool calls/results for
-    # human display (cgi.lua's chat route, agent.all_messages(...,
+    # human display (web.lua's chat route, agent.all_messages(...,
     # false)) -- the string "notes=2" can never appear there for any
     # input, so the assertion was checking a view that structurally
     # never carries this content. Fixed to read the raw tool_result row

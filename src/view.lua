@@ -309,7 +309,7 @@ function view.validate(def)
     end
     -- Optional: which single entity type this view is primarily about,
     -- if any (a view can join across types, so there isn't always one --
-    -- see html.render_view's own comment). Purely a rendering hint for
+    -- see ui.render_view's own comment). Purely a rendering hint for
     -- the "+ Register new" link; not cross-checked against schema.list()
     -- here since view.load/validate has no db_path to check against --
     -- a typo'd name just means a broken register link, not a security
@@ -495,7 +495,7 @@ end
 -- Ad-hoc, unsaved SELECT execution against the entity store -- for
 -- one-off exploration, not embeddable/shareable content, so unlike a
 -- named view there's nothing to approve (the caller enforcing Setup/
--- Admin capability -- see cgi.lua's /sql route -- already *is* the
+-- Admin capability -- see web.lua's /sql route -- already *is* the
 -- approval: nobody untrusted can reach this). Still SELECT-only via
 -- the same is_select_only guard, and returns column names separately
 -- from db.query's rows (which are unordered Lua tables keyed by
@@ -503,7 +503,7 @@ end
 -- an empty result set.
 -- Best-effort single-table guess for "which table is this query
 -- primarily about" -- used for the "id" self-reference special case in
--- cgi.lua (the queried table's own id column). Still just the first
+-- web.lua (the queried table's own id column). Still just the first
 -- `FROM <table>` match, alias discarded (a result column is looked up
 -- by its own name, not by qualified alias.column, so the alias itself
 -- is never needed). See guess_tables below for the full table list a
@@ -542,7 +542,7 @@ end
 
 -- {column_name -> ref_entity_type} for a set of tables' reference-type
 -- fields, via the same entity_field metadata schema.layout() already
--- exposes (see html.lua's display_field_value) -- used here directly by
+-- exposes (see ui.lua's display_field_value) -- used here directly by
 -- table name since an ad-hoc query has no schema.layout() call of its
 -- own. Accepts either a single table name (back-compat for callers that
 -- only ever guessed one table) or a list (see guess_tables) -- merged in

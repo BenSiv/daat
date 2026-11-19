@@ -91,7 +91,7 @@ Each rule reports what it removed. `daat agent prune-prompts` stays as an alias 
 | `src/provider/agent_vertex.lua` | Batched `:predict` (many instances), cut by count and size |
 | `src/provider/agent_test.lua` | Batch support, plus an opt-in word-based test embedding (`AGENT_TEST_EMBEDDINGS=terms`: hashed word counts, so texts sharing words are similar) so ranking tests mean something; the existing default is unchanged |
 | `src/document.lua` | `document.search` also returns the query vector; the cache table is created in `document.init_schema`; column notes for `/sql` |
-| `src/html.lua` / `src/cgi.lua` | The `/documents` search results use the same `passage.excerpt` (same setting, same fallback) |
+| `src/ui.lua` / `src/web.lua` | The `/documents` search results use the same `passage.excerpt` (same setting, same fallback) |
 | `src/agent_tools.lua` | `document.search` uses `passage.excerpt(...)` when `search_passages` is on, else `search_snippet` (also the fallback). `detail = "full"` doubles `passages_per_document` and uses the full excerpt length |
 | `src/config.lua` | The settings above |
 | `src/main.lua` | `daat store prune` (+ the `agent prune-prompts` alias) |
