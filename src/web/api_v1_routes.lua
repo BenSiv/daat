@@ -2,6 +2,7 @@
 
 const schema = require("schema")
 const entity = require("entity")
+const knowledge = require("knowledge")
 const json = require("dkjson")
 const web_ctx = require("web.context")
 
@@ -9,6 +10,29 @@ const api_v1_routes = {}
 
 function api_v1_routes.handle(req)
     path_info = req.path_info
+    if path_info == "/api/v1/documents/search" then
+        if req.method != "GET" then
+            io.read("*all")
+            return web_ctx.respond(req, "405 Method Not Allowed", "application/json", json.encode({error = "Method not allowed"}))
+        end
+        q_str = req.params.q
+        if q_str == nil then
+            q_str = ""
+        end
+        s_limit = tonumber(req.params.limit)
+        if s_limit == nil or s_limit < 1 then
+            s_limit = 10
+        end
+        if q_str == "" then
+            return web_ctx.respond(req, "200 OK", "application/json", "{\"results\":[]}")
+        end
+        s_results = knowledge.search_for_display(req.db_path, q_str, s_limit, nil, req.author, false)
+        if s_results == nil or #s_results == 0 then
+            return web_ctx.respond(req, "200 OK", "application/json", "{\"results\":[]}")
+        end
+        return web_ctx.respond(req, "200 OK", "application/json", json.encode({results = s_results}))
+    end
+
     v1_type, v1_id, v1_action = string.match(path_info, "^/api/v1/([a-z_][a-z0-9_]*)/(%d+)/([a-z_]+)$")
     if v1_type == nil then
         v1_type, v1_id = string.match(path_info, "^/api/v1/([a-z_][a-z0-9_]*)/(%d+)$")
@@ -39,6 +63,28 @@ function api_v1_routes.handle(req)
     end
 
     if v1_id == nil and method == "GET" then
+        max_ev = entity.max_event_id(db_path)
+        v1_limit = tonumber(params.limit)
+        if v1_limit == nil then
+            v1_limit = web_ctx.BROWSE_PAGE_SIZE
+        end
+        v1_offset = tonumber(params.offset)
+        if v1_offset == nil then
+            v1_offset = 0
+        end
+        if params.since_event != nil and params.since_event != "" then
+            since_num = tonumber(params.since_event)
+            if since_num == nil or since_num < 0 then
+                return web_ctx.respond(req, "400 Bad Request", "application/json", json.encode({error = "Invalid 'since_event' parameter"}))
+            end
+            v1_total = entity.count_since_event(db_path, v1_type, since_num)
+            v1_rows = entity.list_since_event(db_path, v1_type, since_num, v1_limit, v1_offset)
+            return web_ctx.respond(req, "200 OK", "application/json", json.encode({
+                rows = v1_rows,
+                total = v1_total,
+                max_event_id = max_ev
+            }))
+        end
         layout = schema.layout(db_path, v1_type)
         v1_filter_field = nil
         if params.filter_field != nil and params.filter_field != "" and params.filter_value != nil and layout != nil then
@@ -47,14 +93,6 @@ function api_v1_routes.handle(req)
                     v1_filter_field = params.filter_field
                 end
             end
-        end
-        v1_limit = tonumber(params.limit)
-        if v1_limit == nil then
-            v1_limit = web_ctx.BROWSE_PAGE_SIZE
-        end
-        v1_offset = tonumber(params.offset)
-        if v1_offset == nil then
-            v1_offset = 0
         end
         v1_total = nil
         v1_rows = nil
@@ -65,7 +103,11 @@ function api_v1_routes.handle(req)
             v1_total = entity.count(db_path, v1_type)
             v1_rows = entity.list(db_path, v1_type, v1_limit, v1_offset)
         end
-        return web_ctx.respond(req, "200 OK", "application/json", json.encode({rows = v1_rows, total = v1_total}))
+        return web_ctx.respond(req, "200 OK", "application/json", json.encode({
+            rows = v1_rows,
+            total = v1_total,
+            max_event_id = max_ev
+        }))
     end
 
     if v1_id == nil and method == "POST" then

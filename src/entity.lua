@@ -1041,6 +1041,68 @@ function entity.count(db_path, entity_type, include_archived)
     return tonumber(rows[1].n)
 end
 
+function entity.max_event_id(db_path)
+    if db.table_exists(db_path, "entity_event") == false then
+        return 0
+    end
+    rows = db.query(db_path, "SELECT COALESCE(MAX(event_id), 0) AS m FROM entity_event;")
+    if rows == nil or rows[1] == nil or rows[1].m == nil then
+        return 0
+    end
+    val = tonumber(rows[1].m)
+    if val == nil then
+        return 0
+    end
+    return val
+end
+
+function entity.list_since_event(db_path, entity_type, since_event, limit, offset)
+    if db.table_exists(db_path, entity_type) == false then
+        return {}
+    end
+    min_ev = tonumber(since_event)
+    if min_ev == nil then
+        min_ev = 0
+    end
+    query = string.format(
+        "SELECT * FROM %s WHERE COALESCE(last_event_id, 0) > %d ORDER BY last_event_id ASC, id ASC",
+        db.quote_ident(entity_type), min_ev
+    )
+    if limit != nil then
+        query = query .. " LIMIT " .. tostring(tonumber(limit))
+        if offset != nil then
+            query = query .. " OFFSET " .. tostring(tonumber(offset))
+        end
+    end
+    rows = db.query(db_path, query .. ";")
+    if rows == nil then
+        return {}
+    end
+    return entity.apply_computed_field_overrides(db_path, entity_type, rows)
+end
+
+function entity.count_since_event(db_path, entity_type, since_event)
+    if db.table_exists(db_path, entity_type) == false then
+        return 0
+    end
+    min_ev = tonumber(since_event)
+    if min_ev == nil then
+        min_ev = 0
+    end
+    rows = db.query(db_path, string.format(
+        "SELECT COUNT(*) AS n FROM %s WHERE COALESCE(last_event_id, 0) > %d;",
+        db.quote_ident(entity_type), min_ev
+    ))
+    if rows == nil or rows[1] == nil then
+        return 0
+    end
+    val = tonumber(rows[1].n)
+    if val == nil then
+        return 0
+    end
+    return val
+end
+
 -- Batched active row counts across a list of registered entity types for
 -- `/data`. Every create, archive and unarchive of a registered entity
 -- appends an `entity_event` row, so `MAX(event_id)` + the sorted type list

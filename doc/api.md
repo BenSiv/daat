@@ -57,9 +57,18 @@ Query params (all optional):
 - `limit` -- default matches the browse page size.
 - `offset` -- default `0`.
 - `filter_field` / `filter_value` -- restrict to rows where this field equals this value; `filter_field` must name a real field on the type. The same mechanism `/browse`'s own filtered links use for reverse-reference lookups (e.g. "every ingredient of this recipe").
+- `since_event` -- return all rows of `<type>` (including archived rows) whose `last_event_id` is strictly greater than `<since_event>`, ordered by `last_event_id ASC, id ASC`. Together with `max_event_id` in the response, external sync consumers can poll incrementally in `O(1)` when idle.
 
 ```json
-{"rows": [{"id": 5, "name": "Glucose", ...}], "total": 42}
+{"rows": [{"id": 5, "name": "Glucose", ...}], "total": 42, "max_event_id": 108}
+```
+
+### `GET /api/v1/documents/search`
+
+Hybrid lexical + semantic + heat-reinforced document search (`?q=<query>&limit=10`), recording a `knowledge_retrieval` hit under the API key's author (`api:<label>`) so programmatic/CLI lookups reinforce pool heat and co-retrieval linking the same way browser searches do.
+
+```json
+{"results": [{"id": 12, "title": "Cryopreservation protocol", "excerpt": "...", "tier": 1, ...}]}
 ```
 
 ### `GET /api/v1/<type>/<id>`
