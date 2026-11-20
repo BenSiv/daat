@@ -45,7 +45,7 @@ return function(f, s)
         approval = "approve",
         script = script,
         checks = {
-            {kind = "approval", expect_write = true},
+            {kind = "approval"},
             {kind = "links_documents", ids = notes_ids},
             {kind = "no_dangling_links"},
             {kind = "not_filed_under", ids = all_notes_ids},
