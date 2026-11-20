@@ -133,8 +133,6 @@ const CONFIG_SCHEMA = {
     {section = "agent", key = "masking_keep_last", conf_key = "agent_masking_keep_last", kind = "integer", min = 0, default = 5, desc = "Number of most recent tool results exempted from masking"},
     {section = "agent", key = "masking_min_chars", conf_key = "agent_masking_min_chars", kind = "integer", min = 0, default = 300, desc = "Minimum tool-result length eligible for observation masking"},
     {section = "agent", key = "masking_batch_tokens", conf_key = "agent_masking_batch_tokens", kind = "integer", min = 0, default = 4000, desc = "Token step size before advancing the observation-masking boundary"},
-    {section = "agent", key = "carry_user_requests", conf_key = "agent_carry_user_requests", kind = "boolean", default = false, desc = "Carry recent user requests across sessions for the same user"},
-    {section = "agent", key = "carry_user_requests_limit", conf_key = "agent_carry_user_requests_limit", kind = "integer", min = 1, default = 5, desc = "Max prior-session user requests carried forward"},
     {section = "agent", key = "retention", conf_key = "agent_retention", kind = "enum", enum = {"full", "standard", "lean"}, default = "standard", desc = "Data retention strategy ('full', 'standard', 'lean')"},
     {section = "agent", key = "retention_override", conf_key = "agent_retention_override", kind = "retention_override", default = nil, desc = "Per-category retention overrides ({knowledge_days, tool_trace_days, model_input_days, metrics_days, transcript_documents})"},
     {section = "agent", key = "model_input_days", conf_key = "model_input_days", kind = "retention_days", default = nil, desc = "Direct override for stored prompt retention days (number >= 0 or 'forever')"},
