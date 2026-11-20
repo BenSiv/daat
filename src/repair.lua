@@ -14,12 +14,18 @@
 -- A new repair is one REPAIRS entry; `daat repair` with no name lists
 -- them all.
 
-document = require("document")
-tag = require("tag")
-tag_upkeep = require("tag_upkeep")
-reference = require("reference")
+const document = require("document")
+const tag = require("tag")
+const tag_upkeep = require("tag.upkeep")
+const reference = require("document.reference")
+const aspect_lib = require("document.aspect")
+const duplicate_lib = require("document.duplicate")
+const curate_lib = require("knowledge.curate")
+const synthesize_lib = require("knowledge.synthesize")
+const distill_lib = require("knowledge.distill")
+const knowledge_lib = require("knowledge")
 
-repair = {}
+const repair = {}
 
 function repair_links(cmd_args, db_path)
     entity_id = tonumber(cmd_args[2])
@@ -54,7 +60,7 @@ end
 -- Builds aspects whatever build_aspects says: the backfill runs before
 -- the embedding job is told to keep them current.
 function repair_aspects(cmd_args, db_path)
-    aspect = require("aspect")
+    aspect = aspect_lib
     entity_id = tonumber(cmd_args[2])
     if entity_id != nil then
         outcome, detail = aspect.refresh(db_path, entity_id)
@@ -186,14 +192,14 @@ function repair_references(cmd_args, db_path)
 end
 
 function repair_duplicates(cmd_args, db_path)
-    duplicate = require("duplicate")
+    duplicate = duplicate_lib
     for _, line in ipairs(duplicate.repair(db_path, cmd_args[2] == "--dry-run")) do
         print(line)
     end
 end
 
 function repair_curate(cmd_args, db_path)
-    curate = require("curate")
+    curate = curate_lib
     limit = nil
     dry_run = false
     recheck = false
@@ -215,7 +221,7 @@ function repair_curate(cmd_args, db_path)
 end
 
 function repair_curate_chats(cmd_args, db_path)
-    curate = require("curate")
+    curate = curate_lib
     limit = nil
     dry_run = false
     skip = {}
@@ -238,7 +244,7 @@ function repair_curate_chats(cmd_args, db_path)
 end
 
 function repair_retire_transcripts(cmd_args, db_path)
-    curate = require("curate")
+    curate = curate_lib
     lines = nil
     if cmd_args[2] == "--undo" then
         if cmd_args[3] == nil then
@@ -255,7 +261,7 @@ function repair_retire_transcripts(cmd_args, db_path)
 end
 
 function repair_synthesize(cmd_args, db_path)
-    synthesize = require("synthesize")
+    synthesize = synthesize_lib
     limit = nil
     dry_run = false
     recheck = false
@@ -277,7 +283,7 @@ function repair_synthesize(cmd_args, db_path)
 end
 
 function repair_distill(cmd_args, db_path)
-    distill = require("distill")
+    distill = distill_lib
     limit = nil
     dry_run = false
     recheck = false
@@ -299,7 +305,7 @@ function repair_distill(cmd_args, db_path)
 end
 
 function repair_connections(cmd_args, db_path)
-    knowledge = require("knowledge")
+    knowledge = knowledge_lib
     flags = {}
     for i = 2, #cmd_args do
         flags[cmd_args[i]] = true
@@ -310,7 +316,7 @@ function repair_connections(cmd_args, db_path)
 end
 
 -- Ordered (a list, not a map) so `daat repair`'s listing is stable.
-REPAIRS = {
+const REPAIRS = {
     {name = "links", usage = "links [document_id | --all]", run = repair_links,
      description = "Re-parse [[...]] links from document content into document_link, for documents whose content changed since their links were last synced (--all: every document)."},
     {name = "embeddings", usage = "embeddings [document_id | --all]", run = repair_embeddings,

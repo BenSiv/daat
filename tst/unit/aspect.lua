@@ -1,7 +1,7 @@
 -- src/aspect.lua: grouping passages by meaning and packing aspect
 -- vectors (doc/aspect-retrieval-plan.md).
 
-aspect = require("aspect")
+aspect = require("document.aspect")
 
 unit = require("unit")
 check = unit.check

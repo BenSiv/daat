@@ -7,7 +7,7 @@
 -- distinctive or not, and only references keep to the distinctive ones.
 
 agent_tools = require("agent_tools")
-reference = require("reference")
+reference = require("document.reference")
 document = require("document")
 entity = require("entity")
 schema = require("schema")
@@ -180,12 +180,12 @@ end
 function tests.aliases_apply_as_they_do_to_documents(db_path)
     print("Testing reference_aliases rewrite the name before the lookup")
     id = new_batch(db_path, "Alias trial", "EXP-027")
-    original = config.platform_config
-    config.platform_config = function()
+    original = config.load
+    config.load = function()
         return {reference_aliases = {{"experiment%s*(%d)", "exp%1"}}}
     end
     result = find(db_path, {text = "Experiment 027"})
-    config.platform_config = original
+    config.load = original
     check(contains(result, "batch " .. id .. " \"Alias trial\" (lab_number EXP-027)"), "got: " .. tostring(result))
     check(contains(find(db_path, {text = "Experiment 027"}), "No entity is named"), "without the alias it's no match")
 end

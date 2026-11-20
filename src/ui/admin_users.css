@@ -1,0 +1,11 @@
+.platform-admin-new-key code { display: inline-block; margin-left: 8px; padding: 2px 8px; background: #fff; border: 1px solid #bbf7d0; border-radius: 6px; font-size: 0.9rem; }
+.platform-admin-create-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 24px; padding: 16px; background: var(--platform-bg, #f8fafc); border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); }
+.platform-admin-create-form input[type=text], .platform-admin-create-form input[type=password] {
+    padding: 8px 10px; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-sm, 8px); font-size: 0.9rem;
+}
+table.platform-admin-users { width: 100%; border-collapse: collapse; }
+table.platform-admin-users th, table.platform-admin-users td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--platform-border, #e2e8f0); font-size: 0.9rem; vertical-align: middle; }
+.platform-admin-inline-form { display: inline-flex; gap: 6px; align-items: center; margin-right: 8px; }
+.platform-admin-inline-form input[type=text], .platform-admin-inline-form input[type=password] {
+    padding: 6px 8px; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-sm, 8px); font-size: 0.85rem;
+}

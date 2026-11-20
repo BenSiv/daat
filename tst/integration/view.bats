@@ -58,7 +58,7 @@ EOF
     [[ "$output" =~ "NOT APPROVED" ]]
 }
 
-@test "a view with sql_mariadb still runs its plain sql on a SQLite deployment (task #116)" {
+@test "a view with sql_mariadb still runs its plain sql on a SQLite deployment" {
     cat > views/dual.lua <<'EOF'
 return {
   name = "dual",
@@ -82,7 +82,7 @@ EOF
     [[ ! "$output" =~ "Internal Server Error" ]]
 }
 
-@test "editing only sql_mariadb (sql unchanged) still invalidates approval (task #116)" {
+@test "editing only sql_mariadb (sql unchanged) still invalidates approval" {
     cat > views/dual.lua <<'EOF'
 return {
   name = "dual",
@@ -129,7 +129,7 @@ EOF
     [[ "$output" =~ "Error" ]]
 }
 
-@test "view add rejects a stacked statement in sql_mariadb too, not just sql (task #116)" {
+@test "view add rejects a stacked statement in sql_mariadb too, not just sql" {
     mkdir -p views
     cat > views/evil2.lua <<'EOF'
 return {

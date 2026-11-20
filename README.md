@@ -18,7 +18,7 @@ Requires a built `luam` checkout beside this one (`../luam`, or set `LUAM_DIR`, 
 ./bld/build.sh          # -> bin/daat
 ```
 
-The chat agent's model provider is chosen in `platform.lua` (`agent_provider`): Google Vertex AI (chat and embeddings, needs `vertex_project`), Claude (chat only), or a scripted test provider. Vertex authenticates through the VM's service account on Google Cloud, or the logged-in `gcloud` account elsewhere.
+The chat agent's model provider is chosen in `config.lua` (`agent.provider`; see [configuration.md](doc/configuration.md)): Google Vertex AI (`"vertex"`, chat and embeddings, needs `agent.vertex_project`), Claude (`"claude"`, chat only), Ollama or any OpenAI-compatible `/v1` server (`"ollama"`, chat and embeddings, defaults to `http://127.0.0.1:11434/v1` with `qwen3:8b` and `nomic-embed-text`, configurable via `agent.ollama_url`, `agent.model`, `knowledge.embedding_model`, and `OLLAMA_API_KEY`/`OPENAI_API_KEY`), or the scripted `"test"` provider. Vertex authenticates through the VM's service account on Google Cloud, or the logged-in `gcloud` account elsewhere.
 
 ## Testing
 
@@ -34,11 +34,14 @@ Live runs need `DAAT_EVAL_VERTEX_PROJECT`. See [agent-eval.md](doc/agent-eval.md
 ## Usage
 
 ```sh
-daat init                       # create the store in the current directory
-daat                            # list the command groups; most print their usage when run alone
+daat init --with-examples       # create the store + starter schemas/view/extension/config.lua
+daat user add admin <pw> isa    # create your first admin account
+daat status                     # inspect configuration, runtime binaries, and pending approvals
+daat serve                      # open http://127.0.0.1:8000 locally in your browser
+daat --help                     # list every command group; `daat <cmd> --help` explains each one
 ```
 
-Run as a CGI program under a web server, it serves the web application instead (see `src/main.lua`). [dev/demo/](dev/demo/README.md) builds the demo lab into a container image that runs as a live instance.
+Run as a CGI program under a web server, `daat` serves the web application directly (`src/main.lua`), and `daat run-pending` drains all background queues in one timer/cron command. [dev/demo/](dev/demo/README.md) builds the demo lab into a container image that runs as a live instance.
 
 ## Contributing
 

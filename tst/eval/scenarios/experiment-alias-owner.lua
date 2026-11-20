@@ -1,5 +1,5 @@
 -- People write "Experiment 027" in prose when the stored lab_number is
--- "EXP-027" (matched by platform.lua's reference_aliases).
+-- "EXP-027" (matched by config.lua's reference_aliases).
 return function(f, s)
     e = nil
     for _, n in ipairs(f.experiment_order) do

@@ -9,7 +9,7 @@
 init = require("init")
 entity = require("entity")
 schema = require("schema")
-reference = require("reference")
+reference = require("document.reference")
 db = require("database")
 lfs = require("lfs")
 

@@ -7,16 +7,16 @@
 -- `luam/lib/static/build.lua` discovers every bundled asset statically
 -- at compile time).
 
-render_lib = require("render")
+const render_lib = require("render")
 
-ui_assets = {}
+const ui_assets = {}
 
-INLINE_SCRIPT_TEMPLATE = """
+const INLINE_SCRIPT_TEMPLATE = """
 <script nonce="{{ nonce }}">
 {{{ code }}}</script>
 """
 
-INLINE_STYLE_TEMPLATE = """
+const INLINE_STYLE_TEMPLATE = """
 <style>
 {{{ css }}}</style>
 """

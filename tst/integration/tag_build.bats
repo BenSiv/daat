@@ -33,10 +33,6 @@ teardown() {
     cleanup_test_env
 }
 
-db() {
-    sqlite3 .store/store.db "$1"
-}
-
 NAMES=$'Alpha notes | Notes of the first group.\1Beta notes | Notes of the second group.\1Gamma notes | Notes of the third group.'
 
 @test "a dry run finds the three groups, the same way every time, and writes nothing" {
@@ -85,7 +81,7 @@ NAMES=$'Alpha notes | Notes of the first group.\1Beta notes | Notes of the secon
     for i in 1 2 3 4 5; do "$BIN" entity create document title="Folder $i" content="" >/dev/null; done
     db "UPDATE document_embedding SET body_chars = 0 WHERE document_id IN (SELECT id FROM document WHERE title LIKE 'Folder %');"
     db "INSERT OR IGNORE INTO document_embedding (document_id, model, vector_json, body_chars) SELECT id, 'test-embedding', '[0,0,0,1,1,0,0,0]', 0 FROM document WHERE title LIKE 'Folder %';"
-    write_platform_config ", tag_min_text = 200"
+    write_config "knowledge = {tag_min_text = 200}"
     run "$BIN" tag build --dry-run
     [[ "$output" =~ "90 documents with an embedding" ]]
     [[ "$output" =~ "5 left out with under 200 characters of text" ]]
@@ -117,7 +113,7 @@ NAMES=$'Alpha notes | Notes of the first group.\1Beta notes | Notes of the secon
     run "$BIN" tag build --dry-run --max-tags 2
     [[ "$output" =~ "cut: 2 tags" ]]
     [[ "$output" =~ "range 2-2;" ]]
-    write_platform_config ", tag_build_max = 2"
+    write_config "knowledge = {tag_build_max = 2}"
     run "$BIN" tag build --dry-run
     [[ "$output" =~ "cut: 2 tags" ]]
 }
@@ -130,7 +126,7 @@ NAMES=$'Alpha notes | Notes of the first group.\1Beta notes | Notes of the secon
     # life / tags^3: 0.053 / 27 beats 0.098 / 64.
     run "$BIN" tag build --dry-run --coarseness 3
     [[ "$output" =~ "cut: 3 tags (level lives 0.053; range 2-8; coarseness 3)" ]]
-    write_platform_config ", tag_build_coarseness = 3"
+    write_config "knowledge = {tag_build_coarseness = 3}"
     run "$BIN" tag build --dry-run
     [[ "$output" =~ "cut: 3 tags" ]]
 }

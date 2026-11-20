@@ -1,6 +1,6 @@
 # The co-retrieval link gate
 
-How daat decides which co-retrieved document pairs are worth asking the model about, and why (brex 355095515).
+How daat decides which co-retrieved document pairs are worth asking the model about, and why.
 
 ## The problem
 
@@ -45,7 +45,7 @@ At the deployed cap:
 
 Whole-document similarity scored about the same on these labels. The passage pair is used anyway because it measures the thing a connection is (a shared idea, possibly small), not shared subject, and it gives the passages that explain the score.
 
-## Settings (`platform.lua`)
+## Settings (`config.lua`)
 
 | Setting | Default | |
 |---|---|---|

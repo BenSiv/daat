@@ -36,8 +36,7 @@ function tests.every_declaration_is_well_formed()
     each_declared(function(group, method, spec)
         name = group .. "." .. method
         check(type(spec.description) == "string" and spec.description != "", name .. ": description must be a non-empty string")
-        -- Luam's type() calls a boolean a "flag".
-        check(type(spec.destructive) == "flag", name .. ": destructive must be true or false")
+        check(spec.destructive == true or spec.destructive == false, name .. ": destructive must be true or false")
         params = spec.parameters
         -- Every record declares its parameters, an argument-less tool too
         -- (EMPTY_OBJECT_SCHEMA): a provider may require them (#20).

@@ -14,9 +14,9 @@ schema = require("schema")
 entity = require("entity")
 extension = require("extension")
 document = require("document")
-reference = require("reference")
+reference = require("document.reference")
 tag = require("tag")
-duplicate = require("duplicate")
+duplicate = require("document.duplicate")
 verify = require("verify")
 
 ORIGIN_CWD = lfs.currentdir()
@@ -26,8 +26,8 @@ function make_derived_env()
     dir = os.tmpname()
     os.remove(dir)
     lfs.mkdir(dir)
-    pf = io.open(dir .. "/platform.lua", "w")
-    io.write(pf, """return {agent_provider = "test", search_provider = "test", embedding_quiet_minutes = 0, tag_min_text = 0, agent_turn_mode = "inline", search_review_mode = "inline"}""")
+    pf = io.open(dir .. "/config.lua", "w")
+    io.write(pf, """return {agent = {provider = "test", turn_mode = "inline"}, knowledge = {embedding_quiet_minutes = 0, tag_min_text = 0, search_review_mode = "inline"}, search = {provider = "test"}}""")
     io.close(pf)
     lfs.chdir(dir)
     init.do_init({}, dir)
@@ -397,6 +397,28 @@ return M
     extension.revoke(db_path, "audit_hook")
     res2 = entity.run_pending_jobs(db_path, 10)
     check(res2.ran == 0 and res2.failed == 1, "unapproved retry marked failed")
+
+    -- Atomic job claiming prevents double-claim while stale running:<tok> jobs are reclaimed
+    extension.approve(db_path, manifest, "admin")
+    e_claim, _ = entity.create(db_path, "experiment", {exp_code = "EXP-CLAIM", title = "Claim Exp"}, "tester")
+    check(e_claim != nil, "created experiment for claim test")
+    jobs = extension.pending_jobs(db_path, 10)
+    target_job_id = nil
+    for _, j in ipairs(jobs) do
+        if tonumber(j.entity_id) == tonumber(e_claim) then
+            target_job_id = tonumber(j.job_id)
+        end
+    end
+    check(target_job_id != nil, "found pending job for EXP-CLAIM")
+    check(extension.claim_job(db_path, target_job_id) == true, "first claim_job succeeds")
+    check(extension.claim_job(db_path, target_job_id) == false, "second concurrent claim_job on fresh running job is refused")
+
+    -- Backdating updated_at past 900s allows reclamation
+    db.exec(db_path, string.format(
+        "UPDATE system_job SET updated_at = datetime('now', 'localtime', '-1200 seconds') WHERE job_id = %d;",
+        target_job_id))
+    reclaimed = entity.run_pending_jobs(db_path, 10)
+    check(reclaimed.ran == 1, "stale running:<token> job reclaimed and executed, got ran=" .. tostring(reclaimed.ran))
 
     cleanup_derived_env(sut)
 end

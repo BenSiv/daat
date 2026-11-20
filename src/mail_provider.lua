@@ -1,7 +1,7 @@
 -- The seam outbound mail plugs into -- same facade shape as
 -- search_provider.lua (see that file's header, and
 -- doc/architecture.md's "Providers" section). Loaded dynamically by
--- name (config.platform_config().mail_provider -- no default: nil
+-- name (config.load().mail_provider -- no default: nil
 -- means this deployment sends no mail at all), so swapping backends or
 -- substituting the deterministic test provider is a config change.
 --
@@ -11,18 +11,18 @@
 -- live in exactly one place rather than per backend. Implementations
 -- live under src/provider/ (mail_smtp.lua, mail_test.lua).
 
-config = require("config")
+const config = require("config")
 
-mail_provider = {}
+const mail_provider = {}
 
 function mail_provider.name()
-    return config.platform_config().mail_provider
+    return config.load().mail_provider
 end
 
 function mail_provider.load()
     name = mail_provider.name()
     if name == nil then
-        return nil, "no mail_provider configured in platform.lua"
+        return nil, "no mail.provider configured in config.lua"
     end
     ok, mod = pcall(require, "provider.mail_" .. name)
     if ok == false or mod == nil then
@@ -72,9 +72,9 @@ function mail_provider.send(message)
     if provider == nil then
         return nil, err
     end
-    from_address = config.platform_config().mail_from
+    from_address = config.load().mail_from
     if not mail_provider.valid_address(from_address) then
-        return nil, "invalid mail_from in platform.lua: " .. tostring(from_address)
+        return nil, "invalid mail.from in config.lua: " .. tostring(from_address)
     end
     if not mail_provider.valid_address(message.to) then
         return nil, "invalid recipient address"

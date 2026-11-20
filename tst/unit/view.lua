@@ -139,8 +139,66 @@ function tests.select_only_ignores_keywords_inside_quoted_strings()
     check(view.is_select_only("SELECT * FROM entity_event WHERE event_type IN ('update', 'archive')") == true,
         "'update' as a string value should pass")
     check(view.is_select_only("SELECT 'it''s' FROM t WHERE x = 'delete'") == true, "doubled quotes stay inside the literal")
+    check(view.is_select_only("SELECT * FROM t WHERE note LIKE '%;%'") == true, "semicolon inside a quoted literal is inert")
     check(view.is_select_only("SELECT 'a' FROM t WHERE 1 = 1 OR (DELETE)") == false, "a keyword after a closed literal is still checked")
     check(view.is_select_only("SELECT 'a\\' ' DELETE FROM t '") == false, "with a backslash, every word is checked")
+    check(view.is_select_only("SELECT GET_LOCK('daat_store_migrate', 1)") == false, "GET_LOCK must be refused")
+    check(view.is_select_only("SELECT RELEASE_LOCK('daat_store_migrate')") == false, "RELEASE_LOCK must be refused")
+    check(view.is_select_only("SELECT SLEEP(5)") == false, "SLEEP must be refused")
+    check(view.is_select_only("SELECT LOAD_FILE('/etc/passwd')") == false, "LOAD_FILE must be refused")
+    check(view.is_select_only("SELECT 1 INTO OUTFILE '/tmp/x'") == false, "INTO OUTFILE must be refused")
+    check(view.is_select_only("SELECT * FROM t /*! UNION SELECT 1 */") == false, "MySQL executable comments must be refused")
+end
+
+function tests.run_agent_query_blocks_all_allowlist_bypass_shapes()
+    print("Testing run_agent_query blocks aliased comma-joins, quoted/commented identifiers, schema prefixes, and fake CTE literals")
+    init = require("init")
+    lfs = require("lfs")
+    dir = os.tmpname()
+    os.remove(dir)
+    lfs.mkdir(dir)
+    init.do_init({}, dir)
+    db_path = dir .. "/.store/store.db"
+
+    -- Sanity check: allowed table works
+    cols, rows, err = view.run_agent_query(db_path, "SELECT id, title FROM document")
+    check(err == nil and cols != nil, "plain registered document query must succeed, got: " .. tostring(err))
+
+    bypasses = {
+        "SELECT u.password_hash FROM document d, auth_user u",
+        "SELECT u.password_hash FROM document AS d, auth_user AS u",
+        "SELECT password_hash FROM \"auth_user\" UNION SELECT title FROM document",
+        "SELECT password_hash FROM `auth_user` UNION SELECT title FROM document",
+        "SELECT password_hash FROM [auth_user] UNION SELECT title FROM document",
+        "SELECT password_hash FROM /* comment */ auth_user UNION SELECT title FROM document",
+        "SELECT password_hash FROM -- line comment\n auth_user UNION SELECT title FROM document",
+        "SELECT password_hash FROM (SELECT 1 FROM document) sub, auth_user u",
+        "SELECT password_hash FROM main.auth_user UNION SELECT title FROM document",
+        "WITH legit AS (SELECT 'auth_user AS (' AS x FROM document) SELECT password_hash FROM auth_user",
+        "SELECT content FROM document STRAIGHT_JOIN agent_message",
+    }
+    for _, bad_sql in ipairs(bypasses) do
+        _, bad_rows, bad_err = view.run_agent_query(db_path, bad_sql)
+        check(bad_rows == nil and bad_err != nil and string.find(bad_err, "refusing to run", 1, true) != nil,
+            "expected allowlist refusal for: " .. bad_sql .. " (got err=" .. tostring(bad_err) .. ")")
+    end
+
+    -- Legitimate CTE with column list and quoted string literals still works
+    cte_cols, cte_rows, cte_err = view.run_agent_query(
+        db_path,
+        "WITH docs(doc_id) AS (SELECT id FROM document WHERE title != 'limit') SELECT doc_id FROM docs"
+    )
+    check(cte_err == nil and cte_cols != nil, "valid column-listed CTE over document must succeed, got: " .. tostring(cte_err))
+
+    -- view.load blocks ../ traversal before touching the filesystem
+    f = io.open(dir .. "/secret.lua", "w")
+    io.write(f, "return {name = \"secret\", sql = \"SELECT 1;\", columns = {{name = \"x\"}}}\n")
+    io.close(f)
+    loaded, load_err = view.load(db_path, "../secret", dir)
+    check(loaded == nil and load_err != nil and string.find(load_err, "invalid view name", 1, true) != nil,
+        "view.load must reject ../secret traversal, got: " .. tostring(load_err))
+
+    os.execute("rm -rf '" .. dir .. "'")
 end
 
 unit.run(tests)

@@ -28,7 +28,7 @@ first_tool_result() {
     "$BIN" document create-json <<< '[{"title":"A","content":"alpha"},{"title":"B","content":"beta"},{"title":"C","content":"gamma"}]' >/dev/null
     # Pool members are documents with a source or a retrieval.
     sqlite3 "$TEST_DIR/.store/store.db" "UPDATE document SET source_type = 'distilled';"
-    write_platform_config ", agent_knowledge_list_page = 2"
+    write_config "agent = {knowledge_list_page = 2}"
     send "list the pool" "$(tool_call_response "knowledge.list" '{}')"
     run first_tool_result
     [[ "$output" =~ "(documents 1-2 of " ]]
@@ -37,7 +37,7 @@ first_tool_result() {
 
 @test "entity.query stops at its size limit and says how many rows it showed" {
     "$BIN" document create-json <<< '[{"title":"One","content":"x"},{"title":"Two","content":"y"},{"title":"Three","content":"z"}]' >/dev/null
-    write_platform_config ", agent_query_char_cap = 8"
+    write_config "agent = {query_char_cap = 8}"
     send "titles" "$(tool_call_response "entity.query" '{"sql":"SELECT title FROM document WHERE archived_at IS NULL"}')"
     run first_tool_result
     [[ "$output" =~ "the result reached its size limit" ]]
@@ -47,7 +47,7 @@ first_tool_result() {
     long=$(printf 'line %s of the protocol. ' $(seq 1 400))
     "$BIN" document create-json <<< "[{\"title\":\"Long\",\"content\":\"# Intro\\n${long}\\n## Method\\nend\"}]" >/dev/null
     id=$(sqlite3 "$TEST_DIR/.store/store.db" "SELECT id FROM document WHERE title = 'Long';")
-    write_platform_config ", agent_get_field_chars = 200"
+    write_config "agent = {get_field_chars = 200}"
     send "read it" "$(tool_call_response "entity.get" "{\"entity_type\":\"document\",\"entity_id\":${id}}")"
     run first_tool_result
     [[ "$output" =~ "of " ]]
@@ -63,7 +63,7 @@ first_tool_result() {
     long=$(printf 'word%s ' $(seq 1 300))
     "$BIN" document create-json <<< "[{\"title\":\"Big\",\"content\":\"${long}\"}]" >/dev/null
     id=$(sqlite3 "$TEST_DIR/.store/store.db" "SELECT id FROM document WHERE title = 'Big';")
-    write_platform_config ", agent_tool_result_cap = 100, agent_get_field_chars = 100000"
+    write_config "agent = {tool_result_cap = 100, get_field_chars = 100000}"
     send "read it" "$(tool_call_response "entity.get" "{\"entity_type\":\"document\",\"entity_id\":${id}}")"
     result_id=$(sqlite3 "$TEST_DIR/.store/store.db" "SELECT id FROM agent_message WHERE session_id = '${CHAT}' AND role = 'tool_result' ORDER BY id LIMIT 1;")
     # Stored whole...
@@ -88,7 +88,7 @@ first_tool_result() {
 @test "document.search's full detail gives a longer excerpt than the default" {
     long=$(printf 'incubator note %s. ' $(seq 1 600))
     "$BIN" document create-json <<< "[{\"title\":\"Incubator\",\"content\":\"${long}\"}]" >/dev/null
-    write_platform_config ", agent_search_excerpt_length = 100, agent_search_excerpt_full_length = 2000"
+    write_config "agent = {search_excerpt_length = 100, search_excerpt_full_length = 2000}"
     send "short" "$(tool_call_response "document.search" '{"query":"incubator"}')"
     short_len=$(first_tool_result | wc -c)
     send "long" "$(tool_call_response "document.search" '{"query":"incubator","detail":"full"}')"

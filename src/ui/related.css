@@ -1,0 +1,12 @@
+.platform-related { display: flex; flex-direction: column; gap: 16px; }
+.platform-related-group {
+    padding: 16px 20px;
+    background: var(--platform-bg, #f8fafc);
+    border: 1px solid var(--platform-border, #e2e8f0);
+    border-radius: var(--platform-radius-md, 12px);
+}
+.platform-related-group h4 { margin: 0 0 10px 0; font-size: 0.95rem; color: var(--platform-heading, #0f172a); }
+.platform-related-group ul { margin: 0 0 10px 0; padding-left: 20px; }
+.platform-related-group li { font-size: 0.9rem; margin-bottom: 4px; }
+.platform-related-actions { display: flex; gap: 16px; font-size: 0.85rem; }
+.platform-related-empty { color: var(--platform-muted, #64748b); font-style: italic; font-size: 0.9rem; margin: 0 0 10px 0; }

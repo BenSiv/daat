@@ -18,10 +18,6 @@ teardown() {
     cleanup_test_env
 }
 
-db() {
-    sqlite3 .store/store.db "$1"
-}
-
 # new_document TITLE X Y Z -- a document whose vector points along the
 # first three axes by X, Y, Z.
 new_document() {
@@ -29,11 +25,6 @@ new_document() {
     id=$(db "SELECT id FROM document WHERE title = '$1';")
     db "INSERT OR REPLACE INTO document_embedding (document_id, model, vector_json) VALUES ($id, 'test-embedding', '[$2, $3, $4, 0, 0, 0, 0, 0]');"
     echo "$id"
-}
-
-new_tag() {
-    "$BIN" entity create tag label="$1" source="${2:-computed}" >/dev/null
-    db "SELECT id FROM tag WHERE label = '$1';"
 }
 
 member() {
@@ -47,7 +38,7 @@ members_of() {
 # A tag "Cultures" built on five documents along x, then joined by three
 # along y: loose enough to propose a split, B (the smaller half) the y's.
 loosened_tag() {
-    write_platform_config ", tag_split_min = 4"
+    write_config "knowledge = {tag_split_min = 4}"
     for i in 1 2 3 4 5; do A[$i]=$(new_document "Callus $i" 1 0.0$i 0); done
     for i in 1 2 3; do B[$i]=$(new_document "Bioreactor $i" 0.0$i 1 0); done
     T=$(new_tag "Cultures")
@@ -127,7 +118,7 @@ SPLIT_DIFFERENT=$'DIFFERENT -- callus work and bioreactor runs are separate subj
 # Three tags built apart (x, y, z), then four x documents join "Beta":
 # Alpha and Beta now share a direction, closer than any pair at build.
 converged_tags() {
-    write_platform_config ", tag_split_min = 100"
+    write_config "knowledge = {tag_split_min = 100}"
     for i in 1 2 3 4; do X[$i]=$(new_document "Alpha doc $i" 1 0.0$i 0); done
     for i in 1 2 3; do Y[$i]=$(new_document "Beta doc $i" 0.0$i 1 0); done
     for i in 1 2 3; do Z[$i]=$(new_document "Gamma doc $i" 0 0.0$i 1); done
@@ -165,7 +156,7 @@ converged_tags() {
 }
 
 @test "a tag that grew is re-checked: RENAME relabels it, and the next check waits for more growth" {
-    write_platform_config ", tag_split_min = 100"
+    write_config "knowledge = {tag_split_min = 100}"
     for i in 1 2 3 4 5 6; do D[$i]=$(new_document "Media $i" 1 0.0$i 0); done
     T=$(new_tag "Media")
     for i in 1 2 3 4 5; do member "${D[$i]}" "$T"; done
@@ -184,7 +175,7 @@ converged_tags() {
 }
 
 @test "a tag that shrank is re-checked too -- its label may no longer fit what's left (found live: celleste-lims)" {
-    write_platform_config ", tag_split_min = 100"
+    write_config "knowledge = {tag_split_min = 100}"
     for i in 1 2 3 4 5 6; do D[$i]=$(new_document "Meeting $i" 1 0.0$i 0); done
     T=$(new_tag "Meeting notes")
     for i in 1 2 3 4 5 6; do member "${D[$i]}" "$T"; done
@@ -205,7 +196,7 @@ converged_tags() {
 
 @test "with tag_restructure on, embed-pending runs the upkeep after embedding" {
     loosened_tag
-    write_platform_config ", tag_split_min = 4, tag_restructure = true, embedding_quiet_minutes = 5"
+    write_config "knowledge = {tag_split_min = 4, tag_restructure = true, embedding_quiet_minutes = 5}"
     "$BIN" entity create document title="Late note" content="a late note" >/dev/null
     db "UPDATE document_embedding_due SET queued_at = '2000-01-01 00:00:00';"
     AGENT_TEST_RESPONSES="$SPLIT_DIFFERENT" run "$BIN" document embed-pending
@@ -216,7 +207,7 @@ converged_tags() {
 
 @test "with tag_restructure off (the default), embed-pending leaves the tags alone" {
     loosened_tag
-    write_platform_config ", tag_split_min = 4, embedding_quiet_minutes = 5"
+    write_config "knowledge = {tag_split_min = 4, embedding_quiet_minutes = 5}"
     "$BIN" entity create document title="Late note" content="a late note" >/dev/null
     db "UPDATE document_embedding_due SET queued_at = '2000-01-01 00:00:00';"
     AGENT_TEST_RESPONSES="$SPLIT_DIFFERENT" run "$BIN" document embed-pending
@@ -264,7 +255,7 @@ converged_tags() {
 }
 
 @test "right after repair tags nothing is proposed: the closest pair at build isn't closer than itself" {
-    write_platform_config ", tag_split_min = 100"
+    write_config "knowledge = {tag_split_min = 100}"
     for i in 1 2 3; do X[$i]=$(new_document "Near A $i" 1 0.3$i 0.1); done
     for i in 1 2 3; do Y[$i]=$(new_document "Near B $i" 0.9 0.4$i 0.2); done
     for i in 1 2 3; do Z[$i]=$(new_document "Far $i" 0 0.1$i 1); done
@@ -285,7 +276,7 @@ converged_tags() {
     member "$short" "$T"; member "$short" "$P" pinned
     db "UPDATE document_embedding SET body_chars = 12 WHERE document_id = $short;"
     db "UPDATE document_embedding SET body_chars = 900 WHERE document_id = $long;"
-    write_platform_config ", tag_min_text = 200"
+    write_config "knowledge = {tag_min_text = 200}"
 
     run "$BIN" repair tags "$short"
     [[ "$output" =~ "not placed" ]]

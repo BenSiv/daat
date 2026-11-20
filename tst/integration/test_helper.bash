@@ -16,7 +16,7 @@ setup_test_env() {
     resolve_bin
     export TEST_DIR="$(mktemp -d)"
     cd "$TEST_DIR"
-    write_platform_config
+    write_config
 }
 
 # run_luam <script.lua> [args...]: bats-`run`s a Lua script against the
@@ -31,11 +31,11 @@ run_luam() {
         luam_dir=$(cd "${PROJECT_ROOT}/../luam" && pwd)
     fi
     run env LUA_PATH="${PROJECT_ROOT}/src/?.lua;${PROJECT_ROOT}/tst/lib/?.lua;${luam_dir}/lib/?.lua;${luam_dir}/lib/?/init.lua;;" \
-        LUA_CPATH="${luam_dir}/bin/?.so;${luam_dir}/lib/lfs/?.so;${luam_dir}/lib/hmac/?.so;${luam_dir}/lib/bcrypt/?.so;${luam_dir}/lib/mariadb/?.so;;" \
+        LUA_CPATH="${luam_dir}/lib/?.so;${luam_dir}/lib/?/?.so;${luam_dir}/bin/?.so;;" \
         "${luam_dir}/bin/luam" "$@"
 }
 
-# Writes platform.lua into TEST_DIR (config.platform_config() resolves
+# Writes config.lua into TEST_DIR (config.load() resolves
 # it relative to DOCUMENT_ROOT, which falls back to "." -- the real
 # CGI/CLI cwd every raw_get/raw_post/"$BIN" call in these tests already
 # runs from). Called once with no overrides from setup_test_env, so
@@ -46,11 +46,44 @@ run_luam() {
 # override one specific knob. Each "$BIN" invocation is its own fresh
 # process, so overwriting this file between two calls in the same test
 # is always safe -- there's no stale in-process cache to worry about.
-write_platform_config() {
+write_config() {
     local extra_lua_fields="${1:-}"
-    cat > "$TEST_DIR/platform.lua" <<EOF
-return {agent_provider = "test", search_provider = "test", embedding_quiet_minutes = 0, tag_min_text = 0, agent_turn_mode = "inline", search_review_mode = "inline"${extra_lua_fields}}
+    if [ -z "$extra_lua_fields" ]; then
+        cat > "$TEST_DIR/config.lua" <<'EOF'
+return {
+    agent = {provider = "test", turn_mode = "inline"},
+    search = {provider = "test"},
+    knowledge = {embedding_quiet_minutes = 0, tag_min_text = 0, search_review_mode = "inline"},
+}
 EOF
+        return
+    fi
+    local luam_dir="${LUAM_DIR:-${PROJECT_ROOT}/../luam}"
+    CFG_OUT="$TEST_DIR/config.lua" CFG_OVER="$extra_lua_fields" \
+    LUA_PATH="${luam_dir}/lib/?.lua;${luam_dir}/lib/?/init.lua;;" \
+    LUA_CPATH="${luam_dir}/bin/?.so;${luam_dir}/lib/lfs/?.so;;" \
+    "${luam_dir}/bin/luam" -e '
+        data = require("data")
+        base = {
+            agent = {provider = "test", turn_mode = "inline"},
+            search = {provider = "test"},
+            knowledge = {embedding_quiet_minutes = 0, tag_min_text = 0, search_review_mode = "inline"},
+        }
+        raw = os.getenv("CFG_OVER")
+        if raw == nil then raw = "" end
+        raw = string.gsub(raw, "^[%s,]+", "")
+        if raw != "" then
+            over = data.loads("return {" .. raw .. "}")
+            for sec, tbl in pairs(over) do
+                if type(tbl) == "table" and type(base[sec]) == "table" then
+                    for k, v in pairs(tbl) do base[sec][k] = v end
+                else
+                    base[sec] = tbl
+                end
+            end
+        end
+        data.save(os.getenv("CFG_OUT"), base)
+    '
 }
 
 # Raw content of the most recent tool_result message for a session --
@@ -64,13 +97,51 @@ EOF
 # tests' purposes -- no need to actually decode it.
 latest_tool_result() {
     local session_id="$1"
-    sqlite3 "$TEST_DIR/.store/store.db" \
-        "SELECT content FROM agent_message WHERE session_id = '${session_id}' AND role = 'tool_result' ORDER BY id DESC LIMIT 1;"
+    db "SELECT content FROM agent_message WHERE session_id = '${session_id}' AND role = 'tool_result' ORDER BY id DESC LIMIT 1;"
+}
+
+# Runs a SQL query against the test's SQLite store with a 5s busy timeout
+# so concurrent background test helpers never spuriously fail on SQLITE_BUSY.
+db() {
+    sqlite3 -cmd ".timeout 5000" "$TEST_DIR/.store/store.db" "$1"
+}
+
+store() {
+    db "$1"
+}
+
+new_document() {
+    local title="$1"
+    local content="${2:-$1}"
+    "$BIN" entity create document title="$title" content="$content" >/dev/null
+    db "SELECT id FROM document WHERE title = '$title' ORDER BY id DESC LIMIT 1;"
+}
+
+new_tag() {
+    local label="$1"
+    local source="${2:-computed}"
+    "$BIN" entity create tag label="$label" source="$source" >/dev/null
+    db "SELECT id FROM tag WHERE label = '$label' ORDER BY id DESC LIMIT 1;"
 }
 
 cleanup_test_env() {
     cd "$PROJECT_ROOT"
     rm -rf "$TEST_DIR"
+}
+
+raw_login() {
+    local login="$1"
+    local password="$2"
+    printf 'login=%s&password=%s' "$login" "$password" | \
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/login" QUERY_STRING="" "$BIN"
+}
+
+session_for() {
+    local raw session_cookie csrf_token
+    raw=$(raw_login "$1" "$2")
+    session_cookie=$(printf '%s' "$raw" | grep -o 'Set-Cookie: session=[^;[:space:]]*' | head -1 | sed 's/^Set-Cookie: session=//')
+    csrf_token=$(printf '%s' "$raw" | grep -o 'Set-Cookie: csrf=[^;[:space:]]*' | head -1 | sed 's/^Set-Cookie: csrf=//')
+    echo "${session_cookie} ${csrf_token}"
 }
 
 # Creates a user (via the real `user add` CLI command, bcrypt hash and
@@ -82,16 +153,7 @@ login_test_user() {
     local login="$1"
     local cap="$2"
     "$BIN" user add "$login" "testpass123" "$cap" >/dev/null
-
-    local raw
-    raw=$(printf 'login=%s&password=testpass123' "$login" | \
-        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/login" QUERY_STRING="" "$BIN")
-
-    local session_cookie csrf_token
-    session_cookie=$(printf '%s' "$raw" | grep -o 'Set-Cookie: session=[^;[:space:]]*' | head -1 | sed 's/^Set-Cookie: session=//')
-    csrf_token=$(printf '%s' "$raw" | grep -o 'Set-Cookie: csrf=[^;[:space:]]*' | head -1 | sed 's/^Set-Cookie: csrf=//')
-
-    echo "${session_cookie} ${csrf_token}"
+    session_for "$login" "testpass123"
 }
 
 # Plain GET/POST against the real built binary, real CGI env vars --
@@ -113,7 +175,7 @@ raw_post() {
     local test_responses="${4:-}"
     local compaction_threshold="${5:-}"
     if [ -n "$compaction_threshold" ]; then
-        write_platform_config ", agent_compaction_threshold = ${compaction_threshold}"
+        write_config ", agent_compaction_threshold = ${compaction_threshold}"
     fi
     printf '%s' "$body" | AGENT_TEST_RESPONSES="$test_responses" \
         GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="$path_info" QUERY_STRING="" \
@@ -124,7 +186,7 @@ raw_post() {
 # own chat-start/chat-message/chat-approve/chat-deny form routes are
 # gone, the widget's JSON API is the only surviving way to drive a
 # chat turn in a test). Sets HTTP_X_CSRF_TOKEN, not a csrf_token form
-# field -- confirmed via cgi.lua's require_csrf(cookies) call at every
+# field -- confirmed via web.lua's require_csrf(cookies) call at every
 # /api/chat-widget-* route: JSON routes check *only* the header, no
 # form-field fallback (unlike the old form routes' require_csrf(cookies,
 # form.csrf_token)).
@@ -151,6 +213,49 @@ extract_query_param() {
     local response="$1"
     local param="$2"
     printf '%s' "$response" | grep -o "${param}=[^ ]*" | sed "s/${param}=//" | tr -d '\r'
+}
+
+# Starts a chat session through /api/chat-widget-start.
+# Supports three calling conventions across the suite:
+#   start_chat                              -> uses $COOKIE/$CSRF, prints "session_id=<sid>"
+#   start_chat "session=...; ..." "$csrf" [title] -> prints "session_id=<sid>"
+#   start_chat "$session_tok" "$csrf" [title]     -> prints "<sid>"
+start_chat() {
+    local cookie csrf title resp sid emit_kv=0
+    if [ "$#" -eq 0 ]; then
+        cookie="$COOKIE"
+        csrf="$CSRF"
+        title="Chat"
+        emit_kv=1
+    elif [[ "$1" == session=* ]]; then
+        cookie="$1"
+        csrf="$2"
+        title="${3-Chat}"
+        emit_kv=1
+    else
+        cookie="session=$1; csrf=$2"
+        csrf="$2"
+        title="${3-Chat}"
+    fi
+    resp=$(raw_post_json "/api/chat-widget-start" "{\"title\":\"${title}\"}" "$cookie" "$csrf" "")
+    sid=$(json_body "$resp" | jq -r '.session_id')
+    if [ "$emit_kv" -eq 1 ]; then
+        printf 'session_id=%s' "$sid"
+    else
+        printf '%s\n' "$sid"
+    fi
+}
+
+send_message() {
+    local session="$1" csrf="$2" chat_session_id="$3" message="$4" scripted="${5:-}"
+    local cookie="session=${session}; csrf=${csrf}"
+    local escaped="${message//\\/\\\\}"
+    escaped="${escaped//\"/\\\"}"
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${chat_session_id}\",\"message\":\"${escaped}\"}" "$cookie" "$csrf" "$scripted"
+}
+
+send() {
+    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${CHAT}\",\"message\":\"$1\"}" "$COOKIE" "$CSRF" "$2" >/dev/null
 }
 
 # Runs the binary in real CGI mode -- the same GATEWAY_INTERFACE

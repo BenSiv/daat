@@ -108,7 +108,7 @@ The arithmetic is cheap. Moving the bytes may not be: today's stage 1 already ta
 
 This also fixes the 40k cut for long sources: parts past it become reachable one subject at a time, through use.
 
-### Settings (`platform.lua`)
+### Settings (`config.lua`)
 
 | Setting | Default | |
 |---|---|---|
@@ -201,10 +201,10 @@ On `feature/aspect-retrieval`, each tested on its own:
 
 ## Not now
 
-- **A vector index in the database** (every passage searchable, no grouping). It's the ceiling the gate measures. If it beats aspects by a lot, it's a separate decision, tied to the persistent process (brex 245159427) and to what Cloud SQL for MySQL offers.
+- **A vector index in the database** (every passage searchable, no grouping). It's the ceiling the gate measures. If it beats aspects by a lot, it's a separate decision, tied to the persistent process and to what Cloud SQL for MySQL offers.
 - **`task_type`.** daat sends none; `RETRIEVAL_DOCUMENT` for documents and `RETRIEVAL_QUERY` for questions usually help short questions find long text. It needs a full re-embed. The gate's harness can measure it on the same questions, as a separate change.
 - **A larger-window embedding model.** It would push the cut further out, but a single vector still averages a long document's subjects together. Aspects are needed either way.
-- **The mean of passages as the document's own vector.** The gate's surprise: it recovers most of the deep-question gap (68 / 76 against aspects' 71 / 80) with no extra vectors, by fixing the truncation itself. It changes the vector every other feature reads (tags, links, the passage gate, dedup, distillation's near-match checks), so each of those would need re-checking, and it gives curation no per-part signal. Worth its own measurement later (tags especially: brex 394585883).
+- **The mean of passages as the document's own vector.** The gate's surprise: it recovers most of the deep-question gap (68 / 76 against aspects' 71 / 80) with no extra vectors, by fixing the truncation itself. It changes the vector every other feature reads (tags, links, the passage gate, dedup, distillation's near-match checks), so each of those would need re-checking, and it gives curation no per-part signal. Worth its own measurement later (tags especially:).
 - **Scanning sources for curation without use.** If the gate shows aspects don't help, this is the alternative: curate long sources part by part on a schedule. It costs model calls for every source, used or not.
 
 ## Risks

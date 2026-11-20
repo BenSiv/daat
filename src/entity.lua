@@ -6,15 +6,22 @@
 -- scriptable before-hooks (extension-authored validation rules, see
 -- doc/extensibility.md) plug into the same contract, run after.
 
-db = require("database")
-ledger = require("ledger")
-schema = require("schema")
-config = require("config")
-extension = require("extension")
-json = require("dkjson")
-view = require("view")
+const db = require("database")
+const ledger = require("ledger")
+const schema = require("schema")
+const config = require("config")
+const extension = require("extension")
+const json = require("dkjson")
+const view = require("view")
+const store_lib = require("store")
 
-entity = {}
+const entity = {}
+
+const lifecycle_listeners = {}
+
+function entity.register_lifecycle_listener(listener)
+    table.insert(lifecycle_listeners, listener)
+end
 
 -- has_error used before its own definition below -- pre-declared,
 -- see ../../luam/doc/forward_references.md
@@ -42,7 +49,7 @@ end
 -- extension.lua, because it needs entity.create/entity.update -- see
 -- extension.lua's header comment for why that module can't require this
 -- one back.
-function entity.build_ctx(db_path, manifest)
+function entity.build_ctx(db_path, manifest, read_only)
     capabilities = manifest.capabilities
     ctx = {}
 
@@ -56,7 +63,7 @@ function entity.build_ctx(db_path, manifest)
         end
         -- read.entity means registered entity types, not any table: a
         -- plain table_exists check let an extension read auth_user (password
-        -- hashes), auth_api_key, document_embedding, ... (brex 456424482).
+        -- hashes), auth_api_key, document_embedding, ...
         if schema.is_registered(db_path, target_type) == false then
             error("ctx.query: '" .. tostring(target_type) .. "' is not a registered entity type")
         end
@@ -105,26 +112,28 @@ function entity.build_ctx(db_path, manifest)
         return entity.apply_computed_field_overrides(db_path, target_type, rows)
     end
 
-    function ctx.create_entity(target_type, values)
-        can_write = false
-        if capabilities != nil then
-            can_write = has_capability_item(capabilities.write, "entity")
+    if read_only != true then
+        function ctx.create_entity(target_type, values)
+            can_write = false
+            if capabilities != nil then
+                can_write = has_capability_item(capabilities.write, "entity")
+            end
+            if can_write == false then
+                error("Extension '" .. tostring(manifest.name) .. "' does not have write.entity capability")
+            end
+            return entity.create(db_path, target_type, values, "extension:" .. manifest.name)
         end
-        if can_write == false then
-            error("Extension '" .. tostring(manifest.name) .. "' does not have write.entity capability")
-        end
-        return entity.create(db_path, target_type, values, "extension:" .. manifest.name)
-    end
 
-    function ctx.update_entity(target_type, target_id, values)
-        can_write = false
-        if capabilities != nil then
-            can_write = has_capability_item(capabilities.write, "entity")
+        function ctx.update_entity(target_type, target_id, values)
+            can_write = false
+            if capabilities != nil then
+                can_write = has_capability_item(capabilities.write, "entity")
+            end
+            if can_write == false then
+                error("Extension '" .. tostring(manifest.name) .. "' does not have write.entity capability")
+            end
+            return entity.update(db_path, target_type, target_id, values, "extension:" .. manifest.name)
         end
-        if can_write == false then
-            error("Extension '" .. tostring(manifest.name) .. "' does not have write.entity capability")
-        end
-        return entity.update(db_path, target_type, target_id, values, "extension:" .. manifest.name)
     end
 
     return ctx
@@ -141,7 +150,7 @@ function run_before_hooks(db_path, entity_type, new_values, old_values, is_updat
 
     for _, entry in ipairs(extension.matching(ext_dir, event_name, entity_type)) do
         if extension.is_approved(db_path, entry.manifest) then
-            ctx = entity.build_ctx(db_path, entry.manifest)
+            ctx = entity.build_ctx(db_path, entry.manifest, true)
             invoke_ok, result = extension.invoke(ext_dir, entry.name, entry.manifest, "on_before",
                 new_values, old_values, ctx)
             if invoke_ok then
@@ -173,11 +182,16 @@ function entity.validate(db_path, entity_type, values, old)
 
     for _, field in ipairs(fields) do
         value = values[field.name]
+        old_val = nil
+        if is_update then
+            old_val = old[field.name]
+        end
 
         if field.type == "multi_select" or field.type == "multi_reference" then
             items = schema.normalize_multi_value(value)
+            old_items = schema.normalize_multi_value(old_val)
             if #items == 0 then
-                if tonumber(field.required) == 1 then
+                if tonumber(field.required) == 1 and (not is_update or #old_items > 0) then
                     table.insert(issues, {field = field.name, severity = "error",
                         message = "required field is missing"})
                 end
@@ -186,8 +200,14 @@ function entity.validate(db_path, entity_type, values, old)
                 if allowed == nil then
                     allowed = {}
                 end
+                old_enum_set = {}
+                if is_update then
+                    for _, ov in ipairs(old_items) do
+                        old_enum_set[tostring(ov)] = true
+                    end
+                end
                 for _, item in ipairs(items) do
-                    ok = false
+                    ok = (old_enum_set[tostring(item)] == true)
                     for _, v in ipairs(allowed) do
                         if tostring(v) == tostring(item) then
                             ok = true
@@ -213,8 +233,9 @@ function entity.validate(db_path, entity_type, values, old)
             end
         elseif field.type == "polymorphic_reference" or field.type == "multi_polymorphic_reference" then
             items = schema.normalize_polymorphic_value(value)
+            old_items = schema.normalize_polymorphic_value(old_val)
             if #items == 0 then
-                if tonumber(field.required) == 1 then
+                if tonumber(field.required) == 1 and (not is_update or #old_items > 0) then
                     table.insert(issues, {field = field.name, severity = "error",
                         message = "required field is missing"})
                 end
@@ -244,7 +265,8 @@ function entity.validate(db_path, entity_type, values, old)
                 end
             end
         elseif (value == nil or value == "") then
-            if tonumber(field.required) == 1 then
+            old_non_empty = is_update and old_val != nil and tostring(old_val) != ""
+            if tonumber(field.required) == 1 and (not is_update or old_non_empty) then
                 table.insert(issues, {field = field.name, severity = "error",
                     message = "required field is missing"})
             end
@@ -259,7 +281,7 @@ function entity.validate(db_path, entity_type, values, old)
                 if allowed == nil then
                     allowed = {}
                 end
-                ok = false
+                ok = (is_update and old_val != nil and tostring(old_val) == tostring(value))
                 for _, v in ipairs(allowed) do
                     if tostring(v) == tostring(value) then
                         ok = true
@@ -315,6 +337,88 @@ function has_error(issues)
     return false
 end
 
+-- Pre-settles any lazy companion/system DDL before entering db.transaction,
+-- since MariaDB/MySQL implicitly commits an open transaction on CREATE/ALTER.
+function settle_entity_write_ddl(db_path, entity_type, multi_fields, polymorphic_fields)
+    extension.init_schema(db_path)
+    if multi_fields != nil then
+        for _, field in pairs(multi_fields) do
+            schema.ensure_multi_field_table(db_path, entity_type, field)
+        end
+    end
+    if polymorphic_fields != nil and next(polymorphic_fields) != nil then
+        schema.ensure_entity_source_table(db_path)
+    end
+    for _, listener in ipairs(lifecycle_listeners) do
+        if listener.on_settle_write_ddl != nil then
+            listener.on_settle_write_ddl(db_path, entity_type)
+        end
+    end
+end
+
+function fields_by_name(db_path, entity_type)
+    map = {}
+    for _, field in ipairs(schema.fields(db_path, entity_type)) do
+        map[field.name] = field
+    end
+    return map
+end
+
+function normalize_scalar_for_storage(field, value)
+    if value == nil then
+        return nil
+    end
+    if field != nil and (field.type == "number" or field.type == "reference") and tostring(value) == "" then
+        return nil
+    end
+    return value
+end
+
+function normalize_scalar_for_compare(field, value)
+    if value == nil or tostring(value) == "" then
+        return nil
+    end
+    if field != nil and (field.type == "number" or field.type == "reference") then
+        n = tonumber(value)
+        if n != nil then
+            return n
+        end
+    end
+    return tostring(value)
+end
+
+function scalars_equal(field, old_value, new_value)
+    na = normalize_scalar_for_compare(field, old_value)
+    nb = normalize_scalar_for_compare(field, new_value)
+    if na == nil and nb == nil then
+        return true
+    end
+    if na == nil or nb == nil then
+        return false
+    end
+    if field != nil and field.type == "number" and type(na) == "number" and type(nb) == "number" then
+        tol = 1e-9 * math.max(1.0, math.abs(na), math.abs(nb))
+        return math.abs(na - nb) <= tol
+    end
+    return na == nb
+end
+
+function cas_where_clause(entity_id, last_event_id)
+    if last_event_id != nil and tostring(last_event_id) != "" and tonumber(last_event_id) != nil then
+        return string.format("id = %d AND last_event_id = %d", tonumber(entity_id), tonumber(last_event_id))
+    end
+    return string.format("id = %d AND (last_event_id IS NULL OR last_event_id = '')", tonumber(entity_id))
+end
+
+function lock_entity_row_for_update(db_path, entity_type, entity_id)
+    if db.is_mariadb(db_path) then
+        db.query(db_path, string.format(
+            "SELECT id, last_event_id FROM %s WHERE id = %d FOR UPDATE;",
+            entity_type, tonumber(entity_id)
+        ))
+    end
+end
+
 -- Creates an entity. Returns (entity_id, issues) on success, or
 -- (nil, issues) if validation failed. Multivalue fields never become a
 -- column in the main INSERT -- they're written to their own companion
@@ -328,8 +432,10 @@ function entity.create(db_path, entity_type, values, author, source)
         return nil, issues
     end
 
+    field_map = fields_by_name(db_path, entity_type)
     multi_fields = schema.multi_fields_by_name(db_path, entity_type)
     polymorphic_fields = schema.polymorphic_fields_by_name(db_path, entity_type)
+    settle_entity_write_ddl(db_path, entity_type, multi_fields, polymorphic_fields)
 
     -- The ledger's own audit copy normalizes a multivalue field to a
     -- real array (matching entity.update's own field_changes shape)
@@ -337,63 +443,62 @@ function entity.create(db_path, entity_type, values, author, source)
     -- comma-separated string, an already-real JSON array, ...) -- audit
     -- history should read the same way regardless of create vs. update.
     ledger_values = {}
+    scalar_values = {}
     for name, value in pairs(values) do
         if multi_fields[name] != nil then
             ledger_values[name] = schema.normalize_multi_value(value)
         elseif polymorphic_fields[name] != nil then
             ledger_values[name] = schema.normalize_polymorphic_value(value)
         else
-            ledger_values[name] = value
+            norm_val = normalize_scalar_for_storage(field_map[name], value)
+            scalar_values[name] = norm_val
+            ledger_values[name] = norm_val
         end
     end
-    entity_id = ledger.append_create(db_path, entity_type, ledger_values, author, source)
 
-    columns = {"id"}
-    literals = {tostring(entity_id)}
-    for name, value in pairs(values) do
-        if multi_fields[name] == nil and polymorphic_fields[name] == nil then
+    function run_create_tx()
+        new_entity_id = ledger.append_create(db_path, entity_type, ledger_values, author, source)
+
+        columns = {"id"}
+        literals = {tostring(new_entity_id)}
+        for name, norm_val in pairs(scalar_values) do
             table.insert(columns, db.quote_ident(name))
-            table.insert(literals, db.literal(value))
+            table.insert(literals, db.literal(norm_val))
         end
-    end
-    table.insert(columns, "created_by")
-    table.insert(literals, db.literal(author))
-    table.insert(columns, "last_event_id")
-    table.insert(literals, tostring(entity_id))
+        table.insert(columns, "created_by")
+        table.insert(literals, db.literal(author))
+        table.insert(columns, "last_event_id")
+        table.insert(literals, tostring(new_entity_id))
 
-    db.exec(db_path, string.format(
-        "INSERT INTO %s (%s) VALUES (%s);",
-        entity_type, table.concat(columns, ", "), table.concat(literals, ", ")
-    ))
+        db.exec(db_path, string.format(
+            "INSERT INTO %s (%s) VALUES (%s);",
+            entity_type, table.concat(columns, ", "), table.concat(literals, ", ")
+        ))
 
-    for name, field in pairs(multi_fields) do
-        if values[name] != nil then
-            schema.write_multi_field(db_path, entity_type, entity_id, field, values[name])
+        for name, field in pairs(multi_fields) do
+            if values[name] != nil then
+                schema.write_multi_field(db_path, entity_type, new_entity_id, field, values[name])
+            end
         end
-    end
-    for name, field in pairs(polymorphic_fields) do
-        if values[name] != nil then
-            schema.write_polymorphic_field(db_path, entity_type, entity_id, field, values[name])
+        for name, field in pairs(polymorphic_fields) do
+            if values[name] != nil then
+                schema.write_polymorphic_field(db_path, entity_type, new_entity_id, field, values[name])
+            end
         end
+
+        extension.enqueue_after_hooks(db_path, config.extensions_dir(),
+            "entity.after_create", entity_type, new_entity_id, values, nil)
+
+        for _, listener in ipairs(lifecycle_listeners) do
+            if listener.on_created != nil then
+                listener.on_created(db_path, entity_type, new_entity_id)
+            end
+        end
+
+        return new_entity_id
     end
 
-    extension.enqueue_after_hooks(db_path, config.extensions_dir(),
-        "entity.after_create", entity_type, entity_id, values, nil)
-
-    -- Lazy require, not a module-top-level one: entity.lua must never
-    -- require document.lua (document.lua already requires entity.lua;
-    -- the reverse would be circular). Safe here since entity.create
-    -- only ever runs during real request/CLI handling, long after
-    -- every module has already loaded once -- same reasoning as the
-    -- archive/unarchive hooks below. Called from the one choke point
-    -- every document creation passes through (generic CLI/API callers
-    -- included, not just document.create_page's own direct call) so
-    -- knowledge_pool_state.document_count can't drift out from under a
-    -- caller that doesn't know to register it itself -- see
-    -- document.on_entity_created and doc/heat-decay-redesign.md.
-    document_pool_hook = require("document")
-    document_pool_hook.on_entity_created(db_path, entity_type, entity_id)
-
+    entity_id = db.transaction(db_path, run_create_tx)
     return entity_id, issues
 end
 
@@ -450,8 +555,8 @@ end
 -- be completely invisible to ledger history, undermining this
 -- platform's core "every change is ledgered" guarantee.
 function entity.update(db_path, entity_type, entity_id, values, author, source, reason)
-    current = entity.get(db_path, entity_type, entity_id)
-    if current == nil then
+    initial = entity.get(db_path, entity_type, entity_id)
+    if initial == nil then
         return nil, {{field = nil, severity = "error", message = "no such entity"}}
     end
     reason_flags = schema.reason_flags(db_path, entity_type)
@@ -460,90 +565,125 @@ function entity.update(db_path, entity_type, entity_id, values, author, source, 
     end
 
     merged = {}
-    for k, v in pairs(current) do
+    for k, v in pairs(initial) do
         merged[k] = v
     end
     for k, v in pairs(values) do
         merged[k] = v
     end
 
-    issues = entity.validate(db_path, entity_type, merged, current)
+    issues = entity.validate(db_path, entity_type, merged, initial)
     if has_error(issues) then
         return nil, issues
     end
 
+    field_map = fields_by_name(db_path, entity_type)
     multi_fields = schema.multi_fields_by_name(db_path, entity_type)
     polymorphic_fields = schema.polymorphic_fields_by_name(db_path, entity_type)
+    settle_entity_write_ddl(db_path, entity_type, multi_fields, polymorphic_fields)
 
-    field_changes = {}
-    assignments = {}
-    multi_changed = false
-    for name, new_value in pairs(values) do
-        if multi_fields[name] != nil then
-            new_items = schema.normalize_multi_value(new_value)
-            old_items = current[name]
-            if old_items == nil then
-                old_items = {}
-            end
-            if multi_values_equal(old_items, new_items) == false then
-                field_changes[name] = {old = old_items, new = new_items}
-                multi_changed = true
-            end
-        elseif polymorphic_fields[name] != nil then
-            new_items = schema.normalize_polymorphic_value(new_value)
-            old_items = current[name]
-            if old_items == nil then
-                old_items = {}
-            end
-            if polymorphic_values_equal(old_items, new_items) == false then
-                field_changes[name] = {old = old_items, new = new_items}
-                multi_changed = true
-            end
-        else
-            old_value = current[name]
-            if tostring(old_value) != tostring(new_value) then
-                field_changes[name] = {old = old_value, new = new_value}
-                table.insert(assignments, db.quote_ident(name) .. " = " .. db.literal(new_value))
+    function run_update_tx()
+        lock_entity_row_for_update(db_path, entity_type, entity_id)
+        current = entity.get(db_path, entity_type, entity_id)
+        if current == nil then
+            return false, {{field = nil, severity = "error", message = "no such entity"}}
+        end
+
+        tx_merged = {}
+        for k, v in pairs(current) do
+            tx_merged[k] = v
+        end
+        for k, v in pairs(values) do
+            tx_merged[k] = v
+        end
+
+        tx_issues = issues
+        if tonumber(current.last_event_id) != tonumber(initial.last_event_id) then
+            tx_issues = entity.validate(db_path, entity_type, tx_merged, current)
+            if has_error(tx_issues) then
+                return false, tx_issues
             end
         end
-    end
 
-    if #assignments == 0 and multi_changed == false then
-        return entity_id, issues
-    end
-
-    event_id = ledger.append_update(db_path, entity_type, entity_id, field_changes, author, source, reason)
-
-    table.insert(assignments, "updated_by = " .. db.literal(author))
-    table.insert(assignments, "last_event_id = " .. tostring(event_id))
-    db.exec(db_path, string.format(
-        "UPDATE %s SET %s WHERE id = %d;", entity_type, table.concat(assignments, ", "), entity_id
-    ))
-
-    for name, field in pairs(multi_fields) do
-        if values[name] != nil and field_changes[name] != nil then
-            schema.write_multi_field(db_path, entity_type, entity_id, field, values[name])
+        field_changes = {}
+        assignments = {}
+        multi_changed = false
+        for name, raw_new_value in pairs(values) do
+            if multi_fields[name] != nil then
+                new_items = schema.normalize_multi_value(raw_new_value)
+                old_items = current[name]
+                if old_items == nil then
+                    old_items = {}
+                end
+                if multi_values_equal(old_items, new_items) == false then
+                    field_changes[name] = {old = old_items, new = new_items}
+                    multi_changed = true
+                end
+            elseif polymorphic_fields[name] != nil then
+                new_items = schema.normalize_polymorphic_value(raw_new_value)
+                old_items = current[name]
+                if old_items == nil then
+                    old_items = {}
+                end
+                if polymorphic_values_equal(old_items, new_items) == false then
+                    field_changes[name] = {old = old_items, new = new_items}
+                    multi_changed = true
+                end
+            else
+                old_value = current[name]
+                field_spec = field_map[name]
+                new_value = normalize_scalar_for_storage(field_spec, raw_new_value)
+                if scalars_equal(field_spec, old_value, new_value) == false then
+                    field_changes[name] = {old = old_value, new = new_value}
+                    table.insert(assignments, db.quote_ident(name) .. " = " .. db.literal(new_value))
+                end
+            end
         end
-    end
-    for name, field in pairs(polymorphic_fields) do
-        if values[name] != nil and field_changes[name] != nil then
-            schema.write_polymorphic_field(db_path, entity_type, entity_id, field, values[name])
+
+        if #assignments == 0 and multi_changed == false then
+            return entity_id, tx_issues
         end
+
+        event_id = ledger.append_update(db_path, entity_type, entity_id, field_changes, author, source, reason)
+
+        table.insert(assignments, "updated_by = " .. db.literal(author))
+        table.insert(assignments, "last_event_id = " .. tostring(event_id))
+        _, _, changed = db.exec(db_path, string.format(
+            "UPDATE %s SET %s WHERE %s;",
+            entity_type, table.concat(assignments, ", "), cas_where_clause(entity_id, current.last_event_id)
+        ))
+        if changed == nil or changed == 0 then
+            error("concurrent update conflict on " .. entity_type .. " #" .. tostring(entity_id))
+        end
+
+        for name, field in pairs(multi_fields) do
+            if values[name] != nil and field_changes[name] != nil then
+                schema.write_multi_field(db_path, entity_type, entity_id, field, values[name])
+            end
+        end
+        for name, field in pairs(polymorphic_fields) do
+            if values[name] != nil and field_changes[name] != nil then
+                schema.write_polymorphic_field(db_path, entity_type, entity_id, field, values[name])
+            end
+        end
+
+        extension.enqueue_after_hooks(db_path, config.extensions_dir(),
+            "entity.after_update", entity_type, entity_id, tx_merged, current)
+
+        for _, listener in ipairs(lifecycle_listeners) do
+            if listener.on_updated != nil then
+                listener.on_updated(db_path, entity_type, entity_id, field_changes)
+            end
+        end
+
+        return entity_id, tx_issues
     end
 
-    extension.enqueue_after_hooks(db_path, config.extensions_dir(),
-        "entity.after_update", entity_type, entity_id, merged, current)
-
-    -- Lazy require, same reasoning as entity.create's own
-    -- on_entity_created call above -- the one choke point every real
-    -- document edit passes through, so a generic API/agent/CLI write
-    -- keeps links and embeddings in step with content exactly like a
-    -- /document-save does. Only reached on a real change: the
-    -- no-op-update early return above skips it.
-    document_update_hook = require("document")
-    document_update_hook.on_entity_updated(db_path, entity_type, entity_id, field_changes)
-
-    return entity_id, issues
+    updated_id, final_issues = db.transaction(db_path, run_update_tx)
+    if updated_id == false then
+        return nil, final_issues
+    end
+    return updated_id, final_issues
 end
 
 -- Archives an entity -- never deletes it. The row stays in the
@@ -557,11 +697,11 @@ end
 -- for a schema to actually require one (rarer, more consequential than
 -- a routine field edit).
 function entity.archive(db_path, entity_type, entity_id, author, source, reason)
-    current = entity.get(db_path, entity_type, entity_id)
-    if current == nil then
+    initial = entity.get(db_path, entity_type, entity_id)
+    if initial == nil then
         return nil, {{field = nil, severity = "error", message = "no such entity"}}
     end
-    if current.archived_at != nil and current.archived_at != "" then
+    if initial.archived_at != nil and initial.archived_at != "" then
         return entity_id, {}
     end
     reason_flags = schema.reason_flags(db_path, entity_type)
@@ -569,50 +709,97 @@ function entity.archive(db_path, entity_type, entity_id, author, source, reason)
         return nil, {{field = "reason", severity = "error", message = "a reason for archiving is required"}}
     end
 
-    event_id = ledger.append_archive(db_path, entity_type, entity_id, author, source, reason)
+    settle_entity_write_ddl(db_path, entity_type, nil, nil)
 
-    db.exec(db_path, string.format(
-        "UPDATE %s SET archived_at = %s, updated_by = %s, last_event_id = %d WHERE id = %d;",
-        entity_type, db.now_expr(db_path), db.literal(author), event_id, entity_id
-    ))
+    function run_archive_tx()
+        lock_entity_row_for_update(db_path, entity_type, entity_id)
+        current = entity.get(db_path, entity_type, entity_id)
+        if current == nil then
+            return false, {{field = nil, severity = "error", message = "no such entity"}}
+        end
+        if current.archived_at != nil and current.archived_at != "" then
+            return entity_id, {}
+        end
 
-    extension.enqueue_after_hooks(db_path, config.extensions_dir(),
-        "entity.after_archive", entity_type, entity_id, current, current)
+        event_id = ledger.append_archive(db_path, entity_type, entity_id, author, source, reason)
 
-    -- Single choke point after the idempotent early return above, matching
-    -- entity.create / entity.update: an already-archived entity returns
-    -- early before reaching here so pool heat, tag centres, and reference
-    -- indexes are updated once per real state transition, for every caller.
-    document_archive_hook = require("document")
-    document_archive_hook.on_entity_archived(db_path, entity_type, entity_id)
+        _, _, changed = db.exec(db_path, string.format(
+            "UPDATE %s SET archived_at = %s, updated_by = %s, last_event_id = %d WHERE %s;",
+            entity_type, db.now_expr(db_path), db.literal(author), event_id,
+            cas_where_clause(entity_id, current.last_event_id)
+        ))
+        if changed == nil or changed == 0 then
+            error("concurrent archive conflict on " .. entity_type .. " #" .. tostring(entity_id))
+        end
 
-    return entity_id, {}
+        extension.enqueue_after_hooks(db_path, config.extensions_dir(),
+            "entity.after_archive", entity_type, entity_id, current, current)
+
+        for _, listener in ipairs(lifecycle_listeners) do
+            if listener.on_archived != nil then
+                listener.on_archived(db_path, entity_type, entity_id)
+            end
+        end
+
+        return entity_id, {}
+    end
+
+    archived_id, issues = db.transaction(db_path, run_archive_tx)
+    if archived_id == false then
+        return nil, issues
+    end
+    return archived_id, issues
 end
 
 -- Reverses entity.archive -- also never deletes anything, just another
 -- additive ledger event (an 'update' clearing archived_at, the same
 -- shape any other field-level edit takes).
 function entity.unarchive(db_path, entity_type, entity_id, author, source)
-    current = entity.get(db_path, entity_type, entity_id)
-    if current == nil then
+    initial = entity.get(db_path, entity_type, entity_id)
+    if initial == nil then
         return nil, {{field = nil, severity = "error", message = "no such entity"}}
     end
-    if current.archived_at == nil or current.archived_at == "" then
+    if initial.archived_at == nil or initial.archived_at == "" then
         return entity_id, {}
     end
 
-    field_changes = {archived_at = {old = current.archived_at, new = nil}}
-    event_id = ledger.append_update(db_path, entity_type, entity_id, field_changes, author, source)
+    settle_entity_write_ddl(db_path, entity_type, nil, nil)
 
-    db.exec(db_path, string.format(
-        "UPDATE %s SET archived_at = NULL, updated_by = %s, last_event_id = %d WHERE id = %d;",
-        entity_type, db.literal(author), event_id, entity_id
-    ))
+    function run_unarchive_tx()
+        lock_entity_row_for_update(db_path, entity_type, entity_id)
+        current = entity.get(db_path, entity_type, entity_id)
+        if current == nil then
+            return false, {{field = nil, severity = "error", message = "no such entity"}}
+        end
+        if current.archived_at == nil or current.archived_at == "" then
+            return entity_id, {}
+        end
 
-    document_unarchive_hook = require("document")
-    document_unarchive_hook.on_entity_unarchived(db_path, entity_type, entity_id)
+        field_changes = {archived_at = {old = current.archived_at, new = nil}}
+        event_id = ledger.append_update(db_path, entity_type, entity_id, field_changes, author, source)
 
-    return entity_id, {}
+        _, _, changed = db.exec(db_path, string.format(
+            "UPDATE %s SET archived_at = NULL, updated_by = %s, last_event_id = %d WHERE %s;",
+            entity_type, db.literal(author), event_id, cas_where_clause(entity_id, current.last_event_id)
+        ))
+        if changed == nil or changed == 0 then
+            error("concurrent unarchive conflict on " .. entity_type .. " #" .. tostring(entity_id))
+        end
+
+        for _, listener in ipairs(lifecycle_listeners) do
+            if listener.on_unarchived != nil then
+                listener.on_unarchived(db_path, entity_type, entity_id)
+            end
+        end
+
+        return entity_id, {}
+    end
+
+    unarchived_id, issues = db.transaction(db_path, run_unarchive_tx)
+    if unarchived_id == false then
+        return nil, issues
+    end
+    return unarchived_id, issues
 end
 
 -- Runs validation on a batch of row values.
@@ -647,8 +834,10 @@ function entity.create_batch(db_path, entity_type, rows_values, author, source)
         source = {}
     end
 
-    -- DDL commits implicitly on MariaDB: settle the schema before the transaction.
-    extension.init_schema(db_path)
+    -- DDL commits implicitly on MariaDB: settle all companion/pool schemas before the transaction.
+    multi_fields = schema.multi_fields_by_name(db_path, entity_type)
+    polymorphic_fields = schema.polymorphic_fields_by_name(db_path, entity_type)
+    settle_entity_write_ddl(db_path, entity_type, multi_fields, polymorphic_fields)
 
     created_ids = {}
     function insert_batch_rows(check_alive)
@@ -864,8 +1053,8 @@ end
 --      untouched).
 --   3. Cold start or schema-set change: checks table existence once via
 --      `db.get_tables` and batches `SELECT COUNT(*)` in `UNION ALL` chunks.
-ACTIVE_COUNTS_STATE_KEY = "entity.active_counts_cache"
-COUNT_UNION_CHUNK_SIZE = 25
+const ACTIVE_COUNTS_STATE_KEY = "entity.active_counts_cache"
+const COUNT_UNION_CHUNK_SIZE = 25
 
 function to_int_or_zero(v)
     n = tonumber(v)
@@ -946,7 +1135,7 @@ function entity.counts_by_type(db_path, entity_types)
     table.sort(sorted_names)
     types_sig = table.concat(sorted_names, ",")
 
-    store_mod = require("store")
+    store_mod = store_lib
     max_ok, max_rows = pcall(db.query, db_path, "SELECT COALESCE(MAX(event_id), 0) AS max_id FROM entity_event;")
     cache_usable = (max_ok == true and max_rows != nil and max_rows[1] != nil)
     current_max_id = 0
@@ -1002,11 +1191,14 @@ function entity.counts_by_type(db_path, entity_types)
                         counts[k] = v
                     end
                 end
-                pcall(store_mod.set_text, db_path, ACTIVE_COUNTS_STATE_KEY, json.encode({
-                    max_event_id = current_max_id,
-                    types_sig = types_sig,
-                    counts = counts,
-                }))
+                post_ok, post_rows = pcall(db.query, db_path, "SELECT COALESCE(MAX(event_id), 0) AS max_id FROM entity_event;")
+                if post_ok == true and post_rows != nil and post_rows[1] != nil and to_int_or_zero(post_rows[1].max_id) == current_max_id then
+                    pcall(store_mod.set_text, db_path, ACTIVE_COUNTS_STATE_KEY, json.encode({
+                        max_event_id = current_max_id,
+                        types_sig = types_sig,
+                        counts = counts,
+                    }))
+                end
                 return counts
             end
         end
@@ -1014,11 +1206,14 @@ function entity.counts_by_type(db_path, entity_types)
 
     counts = run_batched_active_counts(db_path, type_names, existing_tables_set(db_path))
     if cache_usable then
-        pcall(store_mod.set_text, db_path, ACTIVE_COUNTS_STATE_KEY, json.encode({
-            max_event_id = current_max_id,
-            types_sig = types_sig,
-            counts = counts,
-        }))
+        post_ok, post_rows = pcall(db.query, db_path, "SELECT COALESCE(MAX(event_id), 0) AS max_id FROM entity_event;")
+        if post_ok == true and post_rows != nil and post_rows[1] != nil and to_int_or_zero(post_rows[1].max_id) == current_max_id then
+            pcall(store_mod.set_text, db_path, ACTIVE_COUNTS_STATE_KEY, json.encode({
+                max_event_id = current_max_id,
+                types_sig = types_sig,
+                counts = counts,
+            }))
+        end
     end
     return counts
 end
@@ -1026,7 +1221,7 @@ end
 -- Filtered siblings of entity.list/entity.count, for "every X that
 -- references this Y" (e.g. a mixture's ingredients) -- field_name/value
 -- are trusted the same way entity_type already is throughout this file
--- (schema-registered names from cgi.lua, not raw user input), quoted
+-- (schema-registered names from web.lua, not raw user input), quoted
 -- for safety regardless.
 function entity.list_by_field(db_path, entity_type, field_name, value, limit, offset, include_archived)
     if db.table_exists(db_path, entity_type) == false then
@@ -1208,32 +1403,34 @@ function entity.run_pending_jobs(db_path, limit)
     ran = 0
     failed = 0
     for _, job in ipairs(extension.pending_jobs(db_path, limit)) do
-        manifest, err = extension.load_manifest(ext_dir, job.extension_name)
-        if manifest == nil then
-            extension.mark_job_failed(db_path, job, "manifest error: " .. tostring(err))
-            failed = failed + 1
-        elseif extension.is_approved(db_path, manifest) == false then
-            extension.mark_job_failed(db_path, job,
-                "extension not approved (or capabilities changed since approval)")
-            failed = failed + 1
-        else
-            new_values = nil
-            if job.new_values_json != nil then
-                new_values = json.decode(job.new_values_json)
-            end
-            old_values = nil
-            if job.old_values_json != nil then
-                old_values = json.decode(job.old_values_json)
-            end
-            ctx = entity.build_ctx(db_path, manifest)
-            invoke_ok, result = extension.invoke(ext_dir, job.extension_name, manifest, "on_after",
-                new_values, old_values, ctx)
-            if invoke_ok then
-                extension.mark_job_done(db_path, job)
-                ran = ran + 1
-            else
-                extension.mark_job_failed(db_path, job, tostring(result))
+        if extension.claim_job(db_path, job.job_id) then
+            manifest, err = extension.load_manifest(ext_dir, job.extension_name)
+            if manifest == nil then
+                extension.mark_job_failed(db_path, job, "manifest error: " .. tostring(err))
                 failed = failed + 1
+            elseif extension.is_approved(db_path, manifest) == false then
+                extension.mark_job_failed(db_path, job,
+                    "extension not approved (or capabilities changed since approval)")
+                failed = failed + 1
+            else
+                new_values = nil
+                if job.new_values_json != nil then
+                    new_values = json.decode(job.new_values_json)
+                end
+                old_values = nil
+                if job.old_values_json != nil then
+                    old_values = json.decode(job.old_values_json)
+                end
+                ctx = entity.build_ctx(db_path, manifest)
+                invoke_ok, result = extension.invoke(ext_dir, job.extension_name, manifest, "on_after",
+                    new_values, old_values, ctx)
+                if invoke_ok then
+                    extension.mark_job_done(db_path, job)
+                    ran = ran + 1
+                else
+                    extension.mark_job_failed(db_path, job, tostring(result))
+                    failed = failed + 1
+                end
             end
         end
     end

@@ -14,10 +14,6 @@ teardown() {
     cleanup_test_env
 }
 
-store() {
-    sqlite3 "$TEST_DIR/.store/store.db" "$1"
-}
-
 has_table() {
     [ "$(store "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '$1';")" = "1" ]
 }
@@ -313,4 +309,21 @@ view|stock|SELECT 1|admin" ]
     [ "$(store "SELECT pool_active FROM document WHERE id = $d3;")" = "0" ]
     [ "$(store "SELECT document_count FROM knowledge_pool_state WHERE id = 1;")" = "2" ]
     [ "$(store "SELECT number_value >= 11 FROM system_state WHERE name = 'store.schema_version';")" = "1" ]
+}
+
+@test "migration 12 consolidates core module columns self-containedly without upward requires" {
+    store "ALTER TABLE entity_event DROP COLUMN reason;"
+    store "ALTER TABLE auth_user DROP COLUMN session_version;"
+    store "ALTER TABLE document_embedding DROP COLUMN vector_packed;"
+    store "ALTER TABLE knowledge_retrieval_hit DROP COLUMN aspect;"
+    rewind_to 11
+
+    run "$BIN" user list
+    [ "$status" -eq 0 ]
+
+    [ "$(store "SELECT COUNT(*) FROM pragma_table_info('entity_event') WHERE name = 'reason';")" = "1" ]
+    [ "$(store "SELECT COUNT(*) FROM pragma_table_info('auth_user') WHERE name = 'session_version';")" = "1" ]
+    [ "$(store "SELECT COUNT(*) FROM pragma_table_info('document_embedding') WHERE name = 'vector_packed';")" = "1" ]
+    [ "$(store "SELECT COUNT(*) FROM pragma_table_info('knowledge_retrieval_hit') WHERE name = 'aspect';")" = "1" ]
+    [ "$(store "SELECT number_value >= 12 FROM system_state WHERE name = 'store.schema_version';")" = "1" ]
 }

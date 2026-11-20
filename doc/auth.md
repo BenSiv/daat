@@ -1,6 +1,6 @@
 # Auth: how it's built and why
 
-daat's login, session, CSRF and account-recovery code is its own, in `src/auth.lua` and the routes in `src/cgi.lua`. This page records what each piece does, why it is built that way, what was considered instead, and what is knowingly left open. `doc/architecture.md`'s "Auth" section is the short version; this is the one to read before changing any of it.
+daat's login, session, CSRF and account-recovery code is its own, in `src/auth.lua` and the routes in `src/web.lua`. This page records what each piece does, why it is built that way, what was considered instead, and what is knowingly left open. `doc/architecture.md`'s "Auth" section is the short version; this is the one to read before changing any of it.
 
 The ground rule: daat writes the policy (who may do what, when a credential stops working), never the cryptography. Every primitive comes from a vetted library through a thin binding.
 
@@ -46,7 +46,7 @@ Double-submit token: at login the server sets a random `csrf` cookie (readable b
 
 - Why it works: another site can make the browser send daat's cookies, but it can't read them, so it can't put the matching value in the request.
 - Why double-submit instead of a server-stored token: same reason as sessions, no per-request server state. The token doesn't need signing because it's only compared with itself.
-- Every POST route in `cgi.lua` calls `require_csrf`. The exceptions are `/login`, `/forgot-password`, `/reset-password` and `/verify-email` (no session exists yet) and API-key requests (see below). When adding a route, add the check; `tst/integration/auth.bats` covers the pattern.
+- Every POST route in `web.lua` calls `require_csrf`. The exceptions are `/login`, `/forgot-password`, `/reset-password` and `/verify-email` (no session exists yet) and API-key requests (see below). When adding a route, add the check; `tst/integration/auth.bats` covers the pattern.
 
 ## Emailed links: reset, setup, verify
 
@@ -68,9 +68,9 @@ Shared rules, and why:
 - **Setting a password through a link ends all sessions** (via `set_password`).
 - **`/forgot-password` answers the same whether or not anything matched**, is limited to one link per account per 5 minutes, and only mails verified addresses. A send failure is logged, never shown. Otherwise the form would reveal which logins and emails exist.
 
-**Turning it on.** All of this is off until `platform.lua` sets `mail_provider`, `mail_from` and `public_url`. Until then `/forgot-password` and `/reset-password` return 404, and `daat user add` and the `/admin-users` form take a password directly. Two backends send real mail:
-- `mail_provider = "smtp"` takes `smtp_url` (e.g. `"smtp://smtp.gmail.com:587"`; TLS is always required), an optional `smtp_user`, and the password in the `PLATFORM_SMTP_PASSWORD` environment variable.
-- `mail_provider = "graph"` sends as `mail_from` through Microsoft Graph as an Entra app, for Microsoft 365 tenants where password SMTP is off. It takes `graph_tenant_id`, `graph_client_id` and the client secret in `PLATFORM_GRAPH_CLIENT_SECRET`. The app needs the Graph `Mail.Send` application permission, scoped by the tenant admin to that one mailbox.
+**Turning it on.** All of this is off until `config.lua` sets `mail_provider`, `mail_from` and `public_url`. Until then `/forgot-password` and `/reset-password` return 404, and `daat user add` and the `/admin-users` form take a password directly. Two backends send real mail:
+- `mail_provider = "smtp"` takes `smtp_url` (e.g. `"smtp://smtp.gmail.com:587"`; TLS is always required), an optional `smtp_user`, and the password in the `DAAT_SMTP_PASSWORD` environment variable.
+- `mail_provider = "graph"` sends as `mail_from` through Microsoft Graph as an Entra app, for Microsoft 365 tenants where password SMTP is off. It takes `graph_tenant_id`, `graph_client_id` and the client secret in `DAAT_GRAPH_CLIENT_SECRET`. The app needs the Graph `Mail.Send` application permission, scoped by the tenant admin to that one mailbox.
 
 **Why `verify` is separate from `setup`.** Before this split, setting an email on any account mailed a link that could set the password. Whoever read that unverified, possibly mistyped, address could take over an existing account, an Admin's included. A `verify` link now needs the account's current password, so it proves two things: the reader has the mailbox, and the reader owns the account. Only then does the address become a place reset links can go.
 
@@ -103,7 +103,7 @@ Known cost: a key is checked by running bcrypt against every active key (there's
 
 ## Response headers
 
-`print_response` adds these to every response (`security_header_lines` in `cgi.lua`). A route can override one by setting the same header itself.
+`print_response` adds these to every response (`security_header_lines` in `web.lua`). A route can override one by setting the same header itself.
 
 - **`Content-Security-Policy`**, which tells the browser what the page may load and run:
   - `script-src 'self' 'nonce-<per-request>'`: only daat's own script files and inline `<script>` blocks carrying this request's random nonce run. Every inline script daat writes carries it. An injected `<script>` or `onclick=` doesn't, so an escaping bug can't become running code. This is the important line. daat generated nonces before but stopped sending a CSP when the Fossil wrapper (which used to send one) was removed, so for a while the nonces protected nothing.

@@ -1,23 +1,23 @@
 -- Google Programmable Search (Custom Search JSON API) backend for
--- search_provider.lua's own facade -- selected by platform.lua's
+-- search_provider.lua's own facade -- selected by config.lua's
 -- search_provider = "google_cse", no longer hardcoded into the calling
 -- code the way the old, single-file web_search.lua was.
 --
 -- Requires GOOGLE_SEARCH_API_KEY and GOOGLE_SEARCH_ENGINE_ID in the
 -- environment (PassEnv'd the same way ANTHROPIC_API_KEY/
--- PLATFORM_MARIADB_PASSWORD already are -- see apache-platform.conf).
+-- DAAT_MARIADB_PASSWORD already are -- see apache-platform.conf).
 -- The engine id ("cx") comes from a Programmable Search Engine
 -- configured to search the whole web, created separately at
 -- programmablesearchengine.google.com -- no Terraform/gcloud path
 -- creates that half, only the API key itself.
 
-json = require("dkjson")
-external_tool = require("external_tool")
+const json = require("dkjson")
+const external_tool = require("external_tool")
 
-search_google_cse = {}
+const search_google_cse = {}
 
-SEARCH_API_URL = "https://www.googleapis.com/customsearch/v1"
-RESULT_COUNT = 5
+const SEARCH_API_URL = "https://www.googleapis.com/customsearch/v1"
+const RESULT_COUNT = 5
 
 function search_credentials()
     key = os.getenv("GOOGLE_SEARCH_API_KEY")

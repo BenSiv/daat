@@ -1,0 +1,40 @@
+.platform-header-actions { display: flex; align-items: center; gap: 12px; }
+.platform-subheading { font-size: 1.05rem; color: var(--platform-heading, #0f172a); margin: 28px 0 14px 0; }
+.platform-detail-fields {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 16px 24px;
+    padding: 20px;
+    background: var(--platform-bg, #f8fafc);
+    border: 1px solid var(--platform-border, #e2e8f0);
+    border-radius: var(--platform-radius-md, 12px);
+}
+.detail-row { display: flex; flex-direction: column; gap: 4px; }
+.detail-label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--platform-muted, #64748b); font-weight: 600; }
+.detail-value { font-size: 0.95rem; color: var(--platform-heading, #0f172a); word-break: break-word; }
+#history-table { width: 100%; border-collapse: separate; border-spacing: 0; min-width: 700px; }
+#history-table th, #history-table td {
+    padding: 12px 16px;
+    text-align: left;
+    border-bottom: 1px solid var(--platform-border, #e2e8f0);
+    font-size: 0.85rem;
+    vertical-align: top;
+}
+#history-table th {
+    background: var(--platform-bg-2, #f1f5f9);
+    font-weight: 600;
+    font-size: 0.75rem;
+    color: var(--platform-th-text, #475569);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+#history-table td { background: #ffffff; }
+.change-item { margin-bottom: 4px; }
+.change-item:last-child { margin-bottom: 0; }
+.diff-view { word-break: break-word; }
+.diff-removed { color: #991b1b; background: #fef2f2; text-decoration: line-through; padding: 0 2px; border-radius: 3px; }
+.diff-added { color: #166534; background: #f0fdf4; text-decoration: none; padding: 0 2px; border-radius: 3px; }
+.platform-print-label { display: inline-flex; align-items: center; gap: 8px; margin-left: 16px; }
+.platform-print-label select { padding: 6px 10px; border-radius: var(--platform-radius-sm, 8px); border: 1px solid var(--platform-border, #e2e8f0); }
+#platform-print-label-status { font-size: 0.85rem; color: var(--platform-muted, #64748b); }
+#platform-print-label-status.platform-admin-message-error { color: #991b1b; }

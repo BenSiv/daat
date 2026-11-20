@@ -30,16 +30,6 @@ teardown() {
 # external contract identical: callers still pipe its output through
 # extract_query_param "$resp" "session_id", so it still prints
 # "session_id=<value>" text.
-start_chat() {
-    local cookie="$1"
-    local csrf="$2"
-    local title="$3"
-    local resp sid
-    resp=$(raw_post_json "/api/chat-widget-start" "{\"title\":\"${title}\"}" "$cookie" "$csrf" "")
-    sid=$(json_body "$resp" | jq -r '.session_id')
-    printf 'session_id=%s' "$sid"
-}
-
 @test "GET /chat with no sessions shows the empty state" {
     run raw_get "/chat" "" "$COOKIE"
     [[ "$output" =~ "200 OK" ]]
@@ -85,7 +75,7 @@ start_chat() {
     [[ ! "$output" =~ "Untitled chat" ]]
 }
 
-@test "a deployment's theme.lua system_prompt_extra is appended to the agent's system prompt (task #70)" {
+@test "a deployment's theme.lua system_prompt_extra is appended to the agent's system prompt" {
     cat > theme.lua <<'EOF'
 return {system_prompt_extra = "This deployment tracks bioreactor runs -- always ask for the run ID before creating a sample."}
 EOF
@@ -211,7 +201,7 @@ EOF
 
     # Not asserting the document table is empty -- a real chat turn now
     # syncs the Knowledge Pool folder and this session's own transcript
-    # document (task #108 follow-up), even one that ends in
+    # document, even one that ends in
     # pending_approval. What must still be true: the specifically
     # *proposed* page was never created (entity list only prints ids,
     # not titles, so this checks the real column directly).
@@ -236,7 +226,7 @@ EOF
 
     # Not necessarily id 1 -- ledger ids are a single sequence shared
     # across every entity type, and this session's own transcript
-    # document (task #108 follow-up) has already been ledgered by the
+    # document has already been ledgered by the
     # time this page is approved. Look it up by title instead (entity
     # list only prints ids, not titles -- entity show is what confirms
     # content).
@@ -1280,7 +1270,7 @@ EOF
 
     # Not necessarily id 1 -- ledger ids are a single sequence shared
     # across every entity type (document included), and this session's
-    # own transcript document (task #108 follow-up) has already been
+    # own transcript document has already been
     # ledgered by the time this task is approved.
     task_id=$(sqlite3 "$TEST_DIR/.store/store.db" "SELECT id FROM task WHERE title = 'New task';")
     run "$BIN" entity show task "$task_id"
@@ -1414,7 +1404,7 @@ EOF
 
 @test "an entity.update with no field to change is refused before approval, not reported as done (found by the agent scorecard)" {
     write_task_schema
-    write_platform_config ', agent_max_turns = 2'
+    write_config 'agent = {max_turns = 2}'
     "$BIN" entity create task title="Old title" status=open >/dev/null
     resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
     session_id=$(extract_query_param "$resp" "session_id")
@@ -1553,7 +1543,7 @@ EOF
     [[ "$output" =~ "<strong>bold</strong>" ]]
 }
 
-@test "agent_max_turns (platform.lua) is configurable -- a lower limit ends the loop sooner than the default" {
+@test "agent_max_turns (config.lua) is configurable -- a lower limit ends the loop sooner than the default" {
     resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
     session_id=$(extract_query_param "$resp" "session_id")
 
@@ -1562,7 +1552,7 @@ EOF
     # agent_max_turns=2, it should stop at exactly 2: the second turn's
     # answer returns immediately since there's no budget left to act on
     # a critique (turn == max_turns skips self-check entirely).
-    write_platform_config ', agent_max_turns = 2'
+    write_config 'agent = {max_turns = 2}'
     printf '{"session_id":"%s","message":"how many"}' "$session_id" | \
         AGENT_TEST_RESPONSES="$(done_response "An answer.")" \
         AGENT_TEST_SELF_CHECK_RESPONSE="$(done_response "Not confirmed, check again.")" \
@@ -1587,7 +1577,7 @@ EOF
     # got to -- scripted here via AGENT_TEST_SELF_CHECK_RESPONSE, the
     # no-tools-call override shared by both call sites (see
     # agent_test.lua's own comment on that).
-    write_platform_config ', agent_max_turns = 2'
+    write_config 'agent = {max_turns = 2}'
     scripted="$(tool_call_response "entity.list_types" "{}")"$'\1'"$(tool_call_response "entity.list_types" "{}")"
     printf '{"session_id":"%s","message":"investigate something big"}' "$session_id" | \
         AGENT_TEST_RESPONSES="$scripted" \
@@ -1664,7 +1654,7 @@ EOF
     [ "$output" -eq 0 ]
 }
 
-@test "agent_query_row_cap (platform.lua) is configurable -- entity.query truncates at the configured cap, not just the 200 default" {
+@test "agent_query_row_cap (config.lua) is configurable -- entity.query truncates at the configured cap, not just the 200 default" {
     write_task_schema
     "$BIN" entity create task title="First" status=open >/dev/null
     "$BIN" entity create task title="Second" status=open >/dev/null
@@ -1673,7 +1663,7 @@ EOF
     session_id=$(extract_query_param "$resp" "session_id")
 
     scripted="$(tool_call_response "entity.query" '{"sql":"SELECT title FROM task"}')"$'\1'"$(done_response "Here.")"
-    write_platform_config ', agent_query_row_cap = 1'
+    write_config 'agent = {query_row_cap = 1}'
     printf '{"session_id":"%s","message":"list tasks"}' "$session_id" | \
         AGENT_TEST_RESPONSES="$scripted" \
         GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/chat-widget-send" QUERY_STRING="" \
@@ -1755,7 +1745,7 @@ EOF
     resp=$(start_chat "$COOKIE" "$CSRF" "Long chat")
     session_id=$(extract_query_param "$resp" "session_id")
 
-    write_platform_config ', agent_compaction_threshold = 30'
+    write_config 'agent = {compaction_threshold = 30}'
     scripted="$(tool_call_response "entity.list_types" "{}")"$'\1'"$(tool_call_response "entity.list_types" "{}")"$'\1'"$(done_response "want me to continue?")"
     printf '{"session_id":"%s","message":"compute the average doubling time per experiment"}' "$session_id" | \
         AGENT_TEST_RESPONSES="$scripted" \
@@ -1773,7 +1763,7 @@ EOF
     resp=$(start_chat "$COOKIE" "$CSRF" "Long chat")
     session_id=$(extract_query_param "$resp" "session_id")
 
-    write_platform_config ', agent_compaction_threshold = 30'
+    write_config 'agent = {compaction_threshold = 30}'
     for i in 1 2 3 4 5 6; do
         raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"message number ${i} with extra padding text\"}" \
             "$COOKIE" "$CSRF" "$(done_response "ok")" >/dev/null
@@ -1782,7 +1772,7 @@ EOF
     run raw_get "/api/chat-widget-history" "session_id=${session_id}" "$COOKIE"
     # "platform-chat-out-of-context" and the "Compacted summary" label
     # are both built client-side in JS from in_context/role (see
-    # html.lua's own render() -- ROLE_LABELS, and
+    # ui.lua's own render() -- ROLE_LABELS, and
     # 'platform-chat-' + msg.role) -- raw_get never runs that JS, so
     # check the real fields the JSON actually carries instead: at least
     # one compacted-out message (in_context = 0) and a real
@@ -1880,7 +1870,7 @@ EOF
     resp=$(start_chat "$COOKIE" "$CSRF" "Long chat")
     session_id=$(extract_query_param "$resp" "session_id")
 
-    write_platform_config ', agent_compaction_threshold = 30'
+    write_config 'agent = {compaction_threshold = 30}'
     # user, assistant(3 calls), 3 results, final answer -- then "continue"
     # makes 7 active rows, and the plain keep-last-4 cut would land on
     # the second tool result.
@@ -1921,15 +1911,15 @@ EOF
 
     # Explicitly pinned to the vertex provider -- this confirms
     # agent_vertex.lua's own direct REST call still works on its own,
-    # independent of which provider a deployment's platform.lua names.
+    # independent of which provider a deployment's config.lua names.
     cat > "${TEST_DIR}/vertex_check.lua" <<EOF
 package.path = "${PROJECT_ROOT}/src/?.lua;" .. package.path
 agent_provider = require("agent_provider")
 result, err = agent_provider.generate("gemini-3.5-flash-lite", "Reply in exactly one word, uppercase.", "What sound does a cow make?")
 print("RESULT:", result, "ERR:", err)
 EOF
-    cat > "${TEST_DIR}/platform.lua" <<EOF
-return {agent_provider = "vertex", vertex_project = "${VERTEX_PROJECT}", vertex_region = "${VERTEX_REGION:-global}"}
+    cat > "${TEST_DIR}/config.lua" <<EOF
+return {agent = {provider = "vertex", vertex_project = "${VERTEX_PROJECT}", vertex_region = "${VERTEX_REGION:-global}"}}
 EOF
     run_luam "${TEST_DIR}/vertex_check.lua"
     [ "$status" -eq 0 ]
@@ -1956,8 +1946,8 @@ if response != nil then
 end
 print("STOP:", stop, "ERR:", err)
 EOF
-    cat > "${TEST_DIR}/platform.lua" <<EOF
-return {agent_provider = "vertex", vertex_project = "${VERTEX_PROJECT}", vertex_region = "${VERTEX_REGION:-global}"}
+    cat > "${TEST_DIR}/config.lua" <<EOF
+return {agent = {provider = "vertex", vertex_project = "${VERTEX_PROJECT}", vertex_region = "${VERTEX_REGION:-global}"}}
 EOF
     run_luam "${TEST_DIR}/vertex_converse_check.lua"
     [ "$status" -eq 0 ]
@@ -2048,8 +2038,8 @@ if response2 != nil then
 end
 print("FINAL:", final_text)
 EOF
-    cat > "${TEST_DIR}/platform.lua" <<EOF
-return {agent_provider = "vertex", vertex_project = "${VERTEX_PROJECT}", vertex_region = "${VERTEX_REGION:-global}"}
+    cat > "${TEST_DIR}/config.lua" <<EOF
+return {agent = {provider = "vertex", vertex_project = "${VERTEX_PROJECT}", vertex_region = "${VERTEX_REGION:-global}"}}
 EOF
     run_luam "${TEST_DIR}/vertex_tool_check.lua"
     [ "$status" -eq 0 ]
@@ -2131,8 +2121,8 @@ stop2 = nil
 if response2 != nil then stop2 = response2.stopReason end
 print("STOP2:", stop2, "ERR2:", err2)
 EOF
-    cat > "${TEST_DIR}/platform.lua" <<EOF
-return {agent_provider = "vertex", vertex_project = "${VERTEX_PROJECT}", vertex_region = "${VERTEX_REGION:-global}"}
+    cat > "${TEST_DIR}/config.lua" <<EOF
+return {agent = {provider = "vertex", vertex_project = "${VERTEX_PROJECT}", vertex_region = "${VERTEX_REGION:-global}"}}
 EOF
     run_luam "${TEST_DIR}/vertex_parallel_tool_check.lua"
     [ "$status" -eq 0 ]
@@ -2379,7 +2369,7 @@ EOF
     [[ "$output" != "" ]]
 }
 
-@test "admin can open another user's chat session read-only (#23, brex 326591764); non-admins see a styled private-conversation page" {
+@test "admin can open another user's chat session read-only (#23); non-admins see a styled private-conversation page" {
     write_task_schema
     resp=$(start_chat "$COOKIE" "$CSRF" "Alice growth curve")
     session_id=$(extract_query_param "$resp" "session_id")

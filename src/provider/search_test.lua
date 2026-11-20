@@ -1,9 +1,9 @@
 -- A deterministic, cost-free provider for tests -- not a mock bolted
 -- onto agent.lua, just another named backend behind search_provider's
 -- own dynamic-loading facade, selected the same way agent_provider's
--- own "test" backend is (platform.lua's search_provider field, default
--- "test" in every bats test's own platform.lua -- see
--- tst/integration/test_helper.bash's write_platform_config). Running
+-- own "test" backend is (config.lua's search_provider field, default
+-- "test" in every bats test's own config.lua -- see
+-- tst/integration/test_helper.bash's write_config). Running
 -- the real internet_search.search tool against the real Google Search
 -- API on every test run would make the test suite slow, flaky
 -- (network), and genuinely cost money on every invocation.
@@ -13,9 +13,9 @@
 -- var name kept as-is from the pre-provider-split web_search.lua, no
 -- functional reason to rename it now that only the module has moved.
 
-json = require("dkjson")
+const json = require("dkjson")
 
-search_test = {}
+const search_test = {}
 
 function search_test.search(query)
     test_raw = os.getenv("WEB_SEARCH_TEST_RESULTS")

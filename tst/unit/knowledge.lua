@@ -1,6 +1,6 @@
 -- tst/unit/knowledge.lua
 -- Unit tests for src/knowledge.lua's remaining pure heuristics: reply
--- classification for chat evaluation (task #87). The tier/heat/dedup
+-- classification for chat evaluation. The tier/heat/dedup
 -- heuristics that used to live here moved to src/document.lua under
 -- task #106 (see tst/unit/document.lua) when knowledge_note was
 -- collapsed into `document` directly.
@@ -63,7 +63,7 @@ function tests.classify_reply_four_way_split()
 end
 
 function tests.co_retrieval_eligible_threshold_and_hub_ratio()
-    print("Testing co_retrieval_eligible's absolute threshold + hub-ratio guard (task #109)")
+    print("Testing co_retrieval_eligible's absolute threshold + hub-ratio guard")
     -- Below the absolute threshold (3) at all -- never eligible
     -- regardless of how favorable the ratio would be.
     check(knowledge.co_retrieval_eligible(2, 2, 2) == false, "co_count below CO_RETRIEVAL_LINK_THRESHOLD should never be eligible")
@@ -80,7 +80,7 @@ function tests.co_retrieval_eligible_threshold_and_hub_ratio()
 end
 
 function tests.due_for_link_review_first_time_and_reevaluation_step()
-    print("Testing due_for_link_review's first-time/decline/re-evaluation-step logic (task #109)")
+    print("Testing due_for_link_review's first-time/decline/re-evaluation-step logic")
     check(knowledge.due_for_link_review(nil, 3) == true, "a never-reviewed pair should be due")
     check(knowledge.due_for_link_review({decision = "linked", last_co_count = 3}, 10) == false, "an already-linked pair should never be re-evaluated")
     check(knowledge.due_for_link_review({decision = "declined", last_co_count = 3}, 4) == false, "co_count only 1 past a decline (< CO_RETRIEVAL_REEVALUATION_STEP=3) should not be due yet")
@@ -106,8 +106,8 @@ function tests.hand_rolled_sql_columns_text_covers_every_event_log_table()
 end
 
 function tests.search_review_mode_defaults_to_deferred()
-    print("Testing config.platform_config().search_review_mode defaults to deferred")
-    conf = require("config").platform_config()
+    print("Testing config.load().search_review_mode defaults to deferred")
+    conf = require("config").load()
     check(conf.search_review_mode == "deferred",
         "expected default search_review_mode == 'deferred', got " .. tostring(conf.search_review_mode))
 end

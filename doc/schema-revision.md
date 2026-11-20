@@ -142,8 +142,8 @@ Table model_judgment {      // memoized model verdicts (H)
 - **Copy, then swap, under MySQL's named lock** (`GET_LOCK`), as the `document_link` layout migration does. Copy into the new table, switch the code to read it, and rename the old table to `*_legacy` for one release before dropping it. Nothing is lost if a step fails.
 - **Before and after each change:** run `daat agent context-report` and the agent scorecard, plus that area's bats tests; for D, also a search-ranking comparison.
 - **Retention (B and F):** a small `daat repair prune-logs` on the jobs timer. It clears `knowledge_context.prompt` and deletes old retrieval-review detail beyond the retention period, and it never touches token counts, chat history, the ledger or anything a person wrote.
-  - The periods are deployment settings in `platform.lua`, not constants in daat: `prompt_retention_days` (default 90) and `retrieval_review_retention_days` (default 90). `nil` means keep forever.
-  - The same rule applies to every new threshold this work adds (masking window, caps, excerpt lengths): a `platform.lua` setting with a default, never a hard-coded value.
+  - The periods are deployment settings in `config.lua`, not constants in daat: `prompt_retention_days` (default 90) and `retrieval_review_retention_days` (default 90). `nil` means keep forever.
+  - The same rule applies to every new threshold this work adds (masking window, caps, excerpt lengths): a `config.lua` setting with a default, never a hard-coded value.
 - **Leftover SQLite store (K):** the prod server's `store.db` predates the switch to MySQL. daat never opens a SQLite file when `db_backend = "mariadb"`. A cleanup stage in the server startup script (`software/infra/gcp/lims/.../startup-platform.sh.tpl`) removes it, and any later stray copy, on every boot when the backend is MySQL. The script's comments that still describe `store.db` as live data get corrected in the same change.
 
 Suggested order: **B** (merged with Phase 0, so `knowledge_context` changes once); then **C, E, G, I** (small, low risk, one branch); then **D** and **F, H** (more code touched); **J** and **K** whenever you decide.

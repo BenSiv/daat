@@ -188,7 +188,7 @@ function tests.extension_without_tools_can_still_use_a_reserved_name()
 end
 
 -- capabilities.manual_triggers validation (admin manual-trigger
--- surface, brex 925561615) -- structurally the same shape as
+-- surface) -- structurally the same shape as
 -- capabilities.tools' own tests above, minus the reserved-name check:
 -- a trigger dispatches under /admin-triggers/<extension name>/<trigger
 -- name>, a namespace scoped by construction, so there's nothing for a
@@ -227,7 +227,7 @@ function tests.manual_trigger_entry_missing_name_is_rejected()
     check(err != nil, "expected a validation error for a missing name")
 end
 
--- capabilities_equal (approval invalidation, brex 925561615) -- like
+-- capabilities_equal (approval invalidation) -- like
 -- capabilities.ui/tools, a manual trigger's presence is a real grant
 -- (an admin-reachable entry point into the extension's own code), so
 -- adding one or editing an existing one's label/description has to
@@ -260,6 +260,26 @@ function tests.capabilities_equal_accepts_identical_manual_triggers()
     current = {manual_triggers = {{name = "refresh", label = "Refresh now", description = "x"}}}
     check(extension.capabilities_equal(approved, current) == true,
         "expected an unchanged manual_triggers list to still compare equal")
+end
+
+function tests.load_manifest_and_call_bounded_guards()
+    print("Testing extension.load_manifest rejects traversal names and call_bounded stops infinite loops")
+    for _, bad in ipairs({"../platform", "..", ".hidden", "a/b", "<script>"}) do
+        manifest, err = extension.load_manifest("/tmp", bad)
+        check(manifest == nil and err != nil and string.find(err, "invalid extension name", 1, true) != nil,
+            "expected extension.load_manifest to reject '" .. bad .. "': " .. tostring(err))
+    end
+
+    bad_manifest_err = extension.validate_manifest({name = "../escape", events = {}, entity_types = {}})
+    check(bad_manifest_err != nil and string.find(bad_manifest_err, "invalid extension name", 1, true) != nil,
+        "expected validate_manifest to reject traversal name: " .. tostring(bad_manifest_err))
+
+    function runaway_fn()
+        while true do end
+    end
+    ok, call_err = extension.call_bounded(runaway_fn)
+    check(ok == false and string.find(tostring(call_err), "instruction limit", 1, true) != nil,
+        "expected call_bounded to abort runaway extension function, got: " .. tostring(call_err))
 end
 
 unit.run(tests)

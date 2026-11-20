@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# task #84: multivalue fields (multi_select/multi_reference) -- storage
+# multivalue fields (multi_select/multi_reference) -- storage
 # via a companion junction table (schema.ensure_multi_field_table), not
 # a lossy semicolon/comma column, plus the named-dropdown-list system.
 
@@ -92,7 +92,7 @@ setup_full_schema() {
     # `values` list from the raw file; a `dropdown = "..."` reference
     # has no `values` of its own there at all -- those only ever get
     # resolved into entity_field.enum_values at sync time. The browser's
-    # own addRow() (html.lua) does `field.values.forEach(...)` for every
+    # own addRow() (ui.lua) does `field.values.forEach(...)` for every
     # select field with no guard, so a dropdown-referencing required
     # select field (the very first field on this schema, matching the
     # real cell_line.tissue_code bug) crashed the whole batch-entry

@@ -8,7 +8,7 @@
 -- deployment works end-to-end -- tool-calling chat, semantic search,
 -- distillation, curation -- with no cloud account, billed project or
 -- API key. Because the wire protocol is standard /v1/chat/completions
--- and /v1/embeddings, pointing platform.lua's `ollama_url` at another
+-- and /v1/embeddings, pointing config.lua's `ollama_url` at another
 -- OpenAI-compatible server (llama-server, vLLM, LM Studio, OpenRouter,
 -- or OpenAI itself) works without code changes; when OLLAMA_API_KEY (or
 -- OPENAI_API_KEY) is set in the environment, it is sent as a Bearer
@@ -29,9 +29,9 @@
 -- ollama_blocks_from_message handles all three: `<think>...</think>` is
 -- always stripped from visible text so raw tags never leak into replies,
 -- and captured reasoning is emitted as a canonical `thinking` block
--- whenever platform.lua's `agent_thinking` is `"summary"` or `"full"`.
+-- whenever config.lua's `agent_thinking` is `"summary"` or `"full"`.
 -- Outgoing `reasoning_effort` ("none" / "medium" / "high") is sent only
--- when platform.lua opts in with `ollama_reasoning_effort = true`,
+-- when config.lua opts in with `ollama_reasoning_effort = true`,
 -- because Ollama and strict OpenAI servers return HTTP 400 when
 -- `reasoning_effort` is sent to a model without thinking support
 -- (e.g. llama3.2, gemma3).
@@ -308,7 +308,7 @@ function effective_thinking_mode(thinking_mode)
     if thinking_mode != nil then
         return thinking_mode
     end
-    return config.platform_config().agent_thinking
+    return config.load().agent_thinking
 end
 
 function ollama_reasoning_effort(thinking_mode)

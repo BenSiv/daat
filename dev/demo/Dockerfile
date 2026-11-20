@@ -6,7 +6,7 @@
 #   docker build -f dev/demo/Dockerfile .
 #
 # No deployment-specific content is baked in: the host writes
-# platform.lua into /data, and the store is seeded with the public demo
+# config.lua into /data, and the store is seeded with the public demo
 # lab (tst/eval/demo-lab, doc/agent-eval.md) on first boot. See
 # dev/demo/README.md.
 
@@ -45,7 +45,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 COPY --from=daat-builder /daat/bin/daat /app/bin/daat
 COPY --from=daat-builder /daat/vnd /app/vnd
-ENV PLATFORM_VENDOR_DIR=/app/vnd
+ENV DAAT_VENDOR_DIR=/app/vnd
 
 # The demo-lab loader (tst/eval/load.lua) runs under luam against daat's
 # own sources rather than through the binary, so both ship in the image

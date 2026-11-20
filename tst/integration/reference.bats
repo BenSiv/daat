@@ -21,18 +21,9 @@ teardown() {
     cleanup_test_env
 }
 
-db() {
-    sqlite3 .store/store.db "$1"
-}
-
 new_entity() {
     "$BIN" entity create "$1" label="$2" >/dev/null
     db "SELECT id FROM $1 WHERE label = '$2' ORDER BY id DESC LIMIT 1;"
-}
-
-new_document() {
-    "$BIN" entity create document title="$1" content="$2" >/dev/null
-    db "SELECT id FROM document WHERE title = '$1';"
 }
 
 refs_of() {
@@ -88,7 +79,7 @@ refs_of() {
 
 @test "deployment aliases match how people write names" {
     exp=$(new_entity experiment "Exp185")
-    write_platform_config ', reference_aliases = {{"experiment%s*(%d)", "exp%1"}}'
+    write_config 'knowledge = {reference_aliases = {{"experiment%s*(%d)", "exp%1"}}}'
     d=$(new_document "Report" "Results of Experiment 185 are in.")
     [ "$(refs_of "$d")" = "experiment:${exp} " ]
 }

@@ -11,12 +11,12 @@
 -- "never clobber real content" convention as schema.sync_table's own
 -- add-column-only semantics.
 
-paths = require("paths")
-config = require("config")
+const paths = require("paths")
+const config = require("config")
 
-examples = {}
+const examples = {}
 
-EXAMPLE_CATEGORY_SCHEMA = """-- Example entity type (see doc/schema.md for the full field-type
+const EXAMPLE_CATEGORY_SCHEMA = """-- Example entity type (see doc/schema.md for the full field-type
 -- reference). "category" is referenced by the "widget" example below,
 -- to demonstrate the "reference" field type end to end.
 --
@@ -32,7 +32,7 @@ return {
 }
 """
 
-EXAMPLE_WIDGET_SCHEMA = """-- Example entity type demonstrating every field type this platform
+const EXAMPLE_WIDGET_SCHEMA = """-- Example entity type demonstrating every field type this platform
 -- supports: text, number (with an optional min/max UI hint), date,
 -- select (a fixed list of values), and reference (a link to another
 -- entity type, here "category" -- see category.lua alongside this
@@ -51,7 +51,7 @@ return {
 }
 """
 
-EXAMPLE_VIEW = """-- Example saved view: a named, read-only SELECT query rendered as a
+const EXAMPLE_VIEW = """-- Example saved view: a named, read-only SELECT query rendered as a
 -- table (see doc/schema.md). Every entity type's generated table has
 -- id/label/etc columns from its own schema plus the builtin ones
 -- (created_at, archived_at, ...) -- this one reads the "widget"
@@ -74,7 +74,7 @@ return {
 }
 """
 
-EXAMPLE_EXTENSION_MANIFEST = """-- Example extension manifest (see doc/extensibility.md). Declares
+const EXAMPLE_EXTENSION_MANIFEST = """-- Example extension manifest (see doc/extensibility.md). Declares
 -- what this extension is allowed to do -- an admin has to approve
 -- these exact capabilities before the extension actually runs; editing
 -- main.lua's logic doesn't need re-approval, but changing this
@@ -93,7 +93,7 @@ return {
 }
 """
 
-EXAMPLE_EXTENSION_MAIN = """-- Example before-hook: rejects a negative "quantity" on the "widget"
+const EXAMPLE_EXTENSION_MAIN = """-- Example before-hook: rejects a negative "quantity" on the "widget"
 -- example entity type. Before-hooks run synchronously inside the write
 -- and can return issues that block it outright (see
 -- doc/extensibility.md) -- this is where validation rules that a
@@ -125,7 +125,7 @@ return {
 }
 """
 
-EXAMPLE_TEMPLATE = """-- Example entry template (see src/template.lua's own header comment
+const EXAMPLE_TEMPLATE = """-- Example entry template (see src/template.lua's own header comment
 -- for the full shape reference). Produces a Markdown snippet a user
 -- copies into a new document -- templates never write a document
 -- directly, so this carries no execution risk and needs no admin
@@ -144,7 +144,7 @@ return {
 }
 """
 
-EXAMPLE_THEME_LUA = """-- Every field here is optional -- delete this file entirely for the
+const EXAMPLE_THEME_LUA = """-- Every field here is optional -- delete this file entirely for the
 -- plain generic default (indigo/slate, no logo, no extra chat
 -- instructions). Edit through Settings once the store is initialized,
 -- or by hand here before first boot -- config.save_theme overwrites
@@ -173,7 +173,7 @@ return {
 """
 
 -- Every field commented out on purpose -- unlike theme.lua (no
--- sensible default exists for a color palette), platform.lua's fields
+-- sensible default exists for a color palette), config.lua's fields
 -- already have documented defaults (see doc/architecture.md's own
 -- table). The example leads with the local open-weights provider
 -- (`ollama`: qwen3:8b + nomic-embed-text over localhost) rather than a
@@ -181,49 +181,59 @@ return {
 -- file changes nothing (sandbox.run on an all-comments file returns nil,
 -- same as no file at all) -- it's reference documentation of what's
 -- available, not a behavior change.
-EXAMPLE_PLATFORM_LUA = """-- Every field here is optional; see doc/architecture.md's own table
--- for the full list and current defaults. Uncomment and edit only what
--- this deployment actually needs to override.
+const EXAMPLE_CONFIG_LUA = """-- Deployment configuration (see doc/configuration.md for every section,
+-- field, default, and advanced tuning knob). Run `daat config check` to
+-- validate syntax and field names, or `daat config show` to inspect all
+-- effective settings.
+--
+-- Secrets never belong in this file; pass them as environment variables:
+--   DAAT_MARIADB_PASSWORD, DAAT_SMTP_PASSWORD, DAAT_GRAPH_CLIENT_SECRET,
+--   ANTHROPIC_API_KEY, OLLAMA_API_KEY / OPENAI_API_KEY,
+--   GOOGLE_SEARCH_API_KEY / GOOGLE_SEARCH_ENGINE_ID
 return {
-  -- Which backends to call (unset: that feature is off). The models
-  -- default to the chosen provider's own ("ollama", "vertex", "claude");
-  -- name one to pin it.
-  -- agent_provider = "ollama",
-  -- agent_model = "qwen3:8b",
-  -- agent_thinking = "summary",
-  -- agent_retention = "full",
-  -- agent_retention_override = {tool_trace_days = 30},
-  -- embedding_model = "nomic-embed-text",
-  -- search_provider = "google_cse",
-  -- The chosen provider's own settings, read by the provider itself:
-  -- ollama_url = "http://127.0.0.1:11434/v1",
-  -- vertex_project = "your-gcp-project",
-  -- vertex_region = "global",
-  -- agent_max_turns = 20,
-  -- agent_research_max_turns = 12,
-  -- agent_background_max_turns = 20,
-  -- agent_background_max_attempts = 3,
-  -- agent_search_excerpt_length = 1200,
-  -- agent_query_row_cap = 200,
-  -- agent_compaction_threshold = 48000,
-  -- agent_context_fixed_tokens = 3900,
-  -- agent_chars_per_token = 2.8,
-  -- agent_compaction_mid_turn = true,
-  -- platform_adhoc_row_cap = 1000,
-  -- extension_max_job_attempts = 5,
-  -- db_backend = "sqlite",
-  -- mariadb_host = "127.0.0.1",
-  -- mariadb_port = 3306,
-  -- mariadb_user = "platform",
-  -- mariadb_database = "platform",
-  -- Nav rail: reorder and/or hide built-in items (home/documents/data/
-  -- tasks/system) and approved extensions (ext:<name>) -- an item
-  -- unlisted in nav_order just keeps its default relative position;
-  -- an unrecognized key in either list is silently ignored. Can only
-  -- reorder/hide what a user's own capabilities would already show
-  -- them, never grant back something they can't otherwise see.
-  -- nav_order = {"data", "home", "documents"},
-  -- nav_hidden = {"tasks"},
+  database = {
+    -- backend = "sqlite",        -- "sqlite" (default, .store/store.db) or "mariadb"
+    -- host = "127.0.0.1",
+    -- port = 3306,
+    -- user = "daat",             -- password via DAAT_MARIADB_PASSWORD
+    -- database = "daat",
+  },
+  agent = {
+    -- provider = "ollama",       -- "ollama", "vertex", or "claude" (unset: chat off)
+    -- model = "qwen3:8b",
+    -- thinking = "summary",      -- "off" | "summary" | "full"
+    -- retention = "standard",    -- "full" | "standard" | "lean"
+    -- chat_attachments_enabled = false,
+    -- Provider-specific settings:
+    -- ollama_url = "http://127.0.0.1:11434/v1",
+    -- vertex_project = "your-gcp-project",
+    -- vertex_region = "global",
+  },
+  knowledge = {
+    -- embedding_model = "nomic-embed-text", -- changing requires `daat repair embeddings`
+    -- build_aspects = false,
+    -- search_aspects = false,
+    -- tag_restructure = false,
+  },
+  search = {
+    -- provider = "google_cse",   -- requires GOOGLE_SEARCH_API_KEY + GOOGLE_SEARCH_ENGINE_ID
+  },
+  mail = {
+    -- All three (provider, from, public_url) are required to enable forgot-password emails:
+    -- provider = "smtp",         -- "smtp" or "graph"
+    -- from = "noreply@example.com",
+    -- public_url = "https://daat.example.com",
+    -- smtp_url = "smtp://smtp.example.com:587",
+    -- smtp_user = "noreply@example.com",    -- password via DAAT_SMTP_PASSWORD
+  },
+  ui = {
+    -- nav_order = {"data", "home", "documents"},
+    -- nav_hidden = {"tasks"},
+    -- adhoc_row_cap = 1000,
+  },
+  extensions = {
+    -- max_job_attempts = 5,
+  },
 }
 """
 
@@ -277,9 +287,9 @@ function examples.write_all(root)
         table.insert(written, theme_path)
     end
 
-    platform_config_path = config.platform_config_path(root)
-    if write_if_missing(platform_config_path, EXAMPLE_PLATFORM_LUA) == true then
-        table.insert(written, platform_config_path)
+    config_path = config.config_path(root)
+    if write_if_missing(config_path, EXAMPLE_CONFIG_LUA) == true then
+        table.insert(written, config_path)
     end
 
     return written

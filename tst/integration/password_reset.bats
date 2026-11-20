@@ -7,11 +7,11 @@
 
 load test_helper.bash
 
-MAIL_CONFIG=', mail_provider = "test", mail_from = "noreply@example.com", public_url = "https://lims.example.com/"'
+MAIL_CONFIG='mail = {provider = "test", from = "noreply@example.com", public_url = "https://lims.example.com/"}'
 
 setup() {
     setup_test_env
-    write_platform_config "$MAIL_CONFIG"
+    write_config "$MAIL_CONFIG"
     "$BIN" init
     export MAIL_TEST_OUTBOX="$TEST_DIR/outbox"
 }
@@ -27,10 +27,6 @@ raw_form_post() {
     printf '%s' "$body" | \
         GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="$path_info" QUERY_STRING="" \
         HTTP_COOKIE="$cookie" "$BIN"
-}
-
-raw_login() {
-    raw_form_post "/login" "login=$1&password=$2"
 }
 
 outbox_count() {
@@ -64,7 +60,7 @@ add_user_with_email() {
 }
 
 @test "with no mail configured, /login has no forgot link and both reset routes 404" {
-    write_platform_config ""
+    write_config ""
     run raw_get "/login"
     [[ ! "$output" =~ "Forgot password?" ]]
     run raw_get "/forgot-password"
@@ -74,7 +70,7 @@ add_user_with_email() {
 }
 
 @test "mail_provider alone isn't enough -- public_url is required too" {
-    write_platform_config ', mail_provider = "test", mail_from = "noreply@example.com"'
+    write_config 'mail = {provider = "test", from = "noreply@example.com"}'
     run raw_get "/forgot-password"
     [[ "$output" =~ "404 Not Found" ]]
 }
@@ -404,7 +400,7 @@ admin_cookie() {
 }
 
 @test "without mail configured, admins create accounts with a password, as before" {
-    write_platform_config ""
+    write_config ""
     read csrf cookie < <(admin_cookie)
     run raw_get "/admin-users" "" "$cookie"
     [[ "$output" =~ 'placeholder="password"' ]]

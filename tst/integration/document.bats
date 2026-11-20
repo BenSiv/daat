@@ -71,7 +71,7 @@ raw_document_preview() {
     # Setup's <li> must be nested inside Guides' <details>, which is
     # nested inside Home's -- not just present anywhere on the page.
     # Collapsible <details>/<summary> nodes now, not a flat always-
-    # expanded <ul><li> -- see html.lua's render_document_tree_level.
+    # expanded <ul><li> -- see ui.lua's render_document_tree_level.
     # Folder rows toggle on a click of the title (plain text, no link);
     # only the small open arrow after it navigates to the folder page.
     [[ "$output" =~ 'Home</span><a class="platform-tree-open" href="document?entity_id=1" title="Open page" aria-label="Open Home">&#8599;</a></summary><ul><li><details><summary><span class="platform-tree-folder">Guides</span><a class="platform-tree-open" href="document?entity_id=2"' ]]
@@ -357,7 +357,7 @@ EOF
     [[ "$output" =~ "<strong>bold</strong>" ]]
 }
 
-@test "Markdown GFM tables and strikethrough render as real HTML, not raw pipe/tilde text (task #117)" {
+@test "Markdown GFM tables and strikethrough render as real HTML, not raw pipe/tilde text" {
     body='{"content": "| A | B |\n|---|---|\n| 1 | 2 |\n\n~~struck~~ text."}'
 
     run raw_document_preview "$body" "$CSRF"
@@ -399,7 +399,7 @@ EOF
     [[ "$output" =~ "No documents yet" ]]
 }
 
-@test "creating and updating a page auto-computes its embedding (task #105)" {
+@test "creating and updating a page auto-computes its embedding" {
     save_document "csrf_token=${CSRF}&title=Home&parent_id=&content=hello" >/dev/null
     run bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db 'SELECT COUNT(*) FROM document_embedding;'"
     [ "$output" = "1" ]
@@ -414,12 +414,12 @@ EOF
 
 @test "an unconfigured/failing embedding provider never fails the page save itself (best-effort)" {
     # Explicitly pinned to vertex with no vertex_project configured
-    # (platform.lua's own default field, see config.platform_config())
+    # (config.lua's own default field, see config.load())
     # -- agent_vertex.embeddings returns nil, err gracefully
     # (never throws) -- document.create_page must still succeed and
     # never propagate that failure.
-    cat > "${TEST_DIR}/platform.lua" <<'EOF'
-return {agent_provider = "vertex"}
+    cat > "${TEST_DIR}/config.lua" <<'EOF'
+return {agent = {provider = "vertex"}}
 EOF
     run save_document "csrf_token=${CSRF}&title=Home&parent_id=&content=hello"
     [[ "$output" =~ "302 Found" ]]
@@ -472,8 +472,8 @@ EOF
     # `daat repair embeddings` is how a store backfills those after the
     # fact, or after a provider outage silently dropped some
     # best-effort saves.
-    cat > "${TEST_DIR}/platform.lua" <<'EOF'
-return {agent_provider = "vertex"}
+    cat > "${TEST_DIR}/config.lua" <<'EOF'
+return {agent = {provider = "vertex"}}
 EOF
     save_document "csrf_token=${CSRF}&title=Home&parent_id=&content=hello" >/dev/null
     run bash -c "cd '$TEST_DIR' && sqlite3 .store/store.db 'SELECT COUNT(*) FROM document_embedding;'"
@@ -481,7 +481,7 @@ EOF
 
     # Back to the (working) test provider -- as if the deployment fixed
     # its Vertex configuration before running the backfill.
-    write_platform_config
+    write_config
     run "$BIN" repair embeddings
     [[ "$output" =~ "Reindexed 1 document(s), 0 failed" ]]
 

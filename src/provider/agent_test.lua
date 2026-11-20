@@ -1,7 +1,7 @@
 -- A deterministic, cost-free provider for tests -- not a mock bolted
 -- onto agent.lua, just another named backend behind agent_provider's
 -- own dynamic-loading facade, selected the same way Vertex is
--- (platform.lua's agent_provider field, see config.platform_config()).
+-- (config.lua's agent_provider field, see config.load()).
 -- Running the real turn loop/compaction logic
 -- against real Vertex AI on every test run would make the test suite
 -- slow, flaky (network), and genuinely cost money on every invocation
@@ -46,7 +46,7 @@ function test_thinking_for_generate()
     if explicit != nil and explicit != "" then
         return explicit
     end
-    if config.platform_config().agent_thinking == "off" then
+    if config.load().agent_thinking == "off" then
         return nil
     end
     shared = os.getenv("AGENT_TEST_THINKING")
@@ -60,7 +60,7 @@ function maybe_prepend_test_thinking(response)
     if response == nil or response.content == nil then
         return response
     end
-    if config.platform_config().agent_thinking == "off" then
+    if config.load().agent_thinking == "off" then
         return response
     end
     thinking = os.getenv("AGENT_TEST_THINKING")

@@ -30,6 +30,7 @@ fi
 
 MARIADB_EPHEMERAL_DIR=""
 MARIADB_EPHEMERAL_PID=""
+EVAL_EPHEMERAL_DIR=""
 
 cleanup_ephemeral_mariadb() {
     if [ -n "$MARIADB_EPHEMERAL_PID" ]; then
@@ -38,6 +39,9 @@ cleanup_ephemeral_mariadb() {
     fi
     if [ -n "$MARIADB_EPHEMERAL_DIR" ] && [ -d "$MARIADB_EPHEMERAL_DIR" ]; then
         rm -rf "$MARIADB_EPHEMERAL_DIR"
+    fi
+    if [ -n "$EVAL_EPHEMERAL_DIR" ] && [ -d "$EVAL_EPHEMERAL_DIR" ]; then
+        rm -rf "$EVAL_EPHEMERAL_DIR"
     fi
 }
 trap cleanup_ephemeral_mariadb EXIT
@@ -136,7 +140,14 @@ ensure_mariadb_test_server() {
 echo "Building"
 LUAM_DIR="$LUAM_DIR" ./bld/build.sh
 
-if command -v node > /dev/null 2>&1; then
+if [ "${DAAT_SKIP_JS_CHECK:-0}" = "1" ]; then
+    echo
+    echo "Skipping JS syntax check (DAAT_SKIP_JS_CHECK=1)"
+else
+    if ! command -v node > /dev/null 2>&1; then
+        echo "Error: node not found on PATH (needed to syntax-check src/**/*.js). Install nodejs or set DAAT_SKIP_JS_CHECK=1 to skip." >&2
+        exit 1
+    fi
     echo
     echo "Checking extracted JS syntax (src/**/*.js)"
     while IFS= read -r -d '' js_file; do
@@ -148,7 +159,7 @@ fi
 echo
 echo "Running Luam unit tests (tst/unit/)"
 export LUA_PATH="./tst/lib/?.lua;./src/?.lua;${LUAM_DIR}/lib/?.lua;${LUAM_DIR}/lib/?/init.lua;;"
-export LUA_CPATH="${LUAM_DIR}/bin/?.so;${LUAM_DIR}/lib/lfs/?.so;${LUAM_DIR}/lib/hmac/?.so;${LUAM_DIR}/lib/bcrypt/?.so;${LUAM_DIR}/lib/mariadb/?.so;;"
+export LUA_CPATH="${LUAM_DIR}/lib/?.so;${LUAM_DIR}/lib/?/?.so;${LUAM_DIR}/bin/?.so;;"
 for f in tst/unit/*.lua; do
     echo "--- $f ---"
     "$LUAM_DIR/bin/luam" "$f"
@@ -156,7 +167,10 @@ done
 
 echo
 echo "Running the agent scorecard in test mode (doc/agent-eval.md)"
-LUAM_DIR="$LUAM_DIR" ./bld/eval.sh --mode test
+EVAL_EPHEMERAL_DIR="$(mktemp -d)"
+DAAT_EVAL_RUN_DIR="$EVAL_EPHEMERAL_DIR/run" LUAM_DIR="$LUAM_DIR" ./bld/eval.sh --mode test
+rm -rf "$EVAL_EPHEMERAL_DIR"
+EVAL_EPHEMERAL_DIR=""
 
 echo
 ensure_mariadb_test_server

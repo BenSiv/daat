@@ -17,19 +17,20 @@
 --       active `tag.parent` forests, plus tier-ladder provenance (`tier > 0`
 --       implies `knowledge.can_hold_tier(source_type)`).
 
-db = require("database")
-json = require("dkjson")
-schema = require("schema")
-entity = require("entity")
-document = require("document")
-reference = require("reference")
-tag = require("tag")
-knowledge = require("knowledge")
+const db = require("database")
+const json = require("dkjson")
+const schema = require("schema")
+const entity = require("entity")
+const document = require("document")
+const reference = require("document.reference")
+const tag = require("tag")
+const knowledge = require("knowledge")
+const store = require("store")
 
-verify = {}
+const verify = {}
 
-VERIFY_LINK_PATTERN = "%[%[([^%[%]\n]+)%]%]"
-VERIFY_SKIPPED_NAME_TYPES = {
+const VERIFY_LINK_PATTERN = "%[%[([^%[%]\n]+)%]%]"
+const VERIFY_SKIPPED_NAME_TYPES = {
     document = true,
     document_tag = true,
     tag = true,
@@ -41,14 +42,7 @@ function sql_is_blank(v)
     return v == nil or tostring(v) == ""
 end
 
-function has_column(db_path, table_name, col_name)
-    for _, c in ipairs(db.get_columns(db_path, table_name)) do
-        if c == col_name then
-            return true
-        end
-    end
-    return false
-end
+const has_column = store.has_column
 
 function is_finite_number(x)
     if type(x) != "number" then
@@ -496,7 +490,7 @@ function verify.derived_indexes(db_path)
                 if dr.content != nil then
                     content_str = tostring(dr.content)
                 end
-                for raw_link in string.gmatch(content_str, VERIFY_LINK_PATTERN) do
+                for _, raw_link in ipairs(document.extract_links(content_str)) do
                     seen_lt[raw_link] = true
                 end
                 active_doc_links[did] = seen_lt
@@ -925,9 +919,7 @@ function verify.do_verify(cmd_args, db_path)
         end
     end
 
-    if not report.ok then
-        os.exit(1)
-    end
+    return report.ok
 end
 
 return verify

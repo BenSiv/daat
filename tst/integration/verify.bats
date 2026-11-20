@@ -13,10 +13,6 @@ teardown() {
     cleanup_test_env
 }
 
-db() {
-    sqlite3 .store/store.db "$1"
-}
-
 @test "daat store verify and --json succeed with exit 0 on a valid populated store" {
     mkdir -p schemas
     cat > schemas/reagent.lua <<'EOF'

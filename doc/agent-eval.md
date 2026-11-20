@@ -22,7 +22,7 @@ export DAAT_EVAL_MODEL=...                   # optional; default: the provider's
 ./bld/eval.sh --save-baseline-from eval-out/runs/<run>   # save a finished run as the baseline; no model calls
 ```
 
-Other options: `--repeat N`, `--set core|growth|all`, `--seed N`, and `--extra 'k = v, ...'`, which appends `platform.lua` fields to every run's copy of the lab, to compare a setting without rebuilding it.
+Other options: `--repeat N`, `--set core|growth|all`, `--seed N`, and `--extra 'k = v, ...'`, which appends `config.lua` fields to every run's copy of the lab, to compare a setting without rebuilding it.
 
 Each run writes `eval-out/runs/<timestamp>-<mode>/`: `report.md` (the scores, and the failing scenarios with links to their transcripts), `results.json` (summary and rows: what `--compare` reads), `results.jsonl`, `run.txt` (the branch, commit, provider, model and settings it ran on), and `work/<scenario>-<repeat>/` with each run's database and `transcript.md`. The scores are also printed. The command exits non-zero when any run fails a check, so test mode fails the build.
 
@@ -78,7 +78,7 @@ The agent also changes continuously: new tools, prompt changes, loop behaviour. 
 
 ## What already exists to build on
 
-- **A deployment is a folder:** `platform.lua`, `schemas/`, `dropdowns/`, `templates/`, `views/`, `docs/`, `extensions/`, `theme.lua`.
+- **A deployment is a folder:** `config.lua`, `schemas/`, `dropdowns/`, `templates/`, `views/`, `docs/`, `extensions/`, `theme.lua`.
 - **Data loads through the CLI:** `daat init`, `daat entity create`, `daat document create-json`, `daat document embed-pending`. The same is available over `/api/v1` (`doc/api.md`).
 - **Deterministic stand-ins:**
   - `agent_provider = "test"` (`src/provider/agent_test.lua`): scripted `generate`/`converse` through `AGENT_TEST_RESPONSES`, plus content-derived pseudo-embeddings with no semantic meaning;
@@ -101,7 +101,7 @@ The agent also changes continuously: new tools, prompt changes, loop behaviour. 
 - one junction field (medium to ingredients);
 - one `polymorphic_reference`;
 - one type (`equipment`) with no `display = true` field, mixing rows that carry an imported builtin `name` with locally registered rows whose `name` is unset;
-- `reference_aliases` in `platform.lua` (`"Experiment 027"` -> `exp027`);
+- `reference_aliases` in `config.lua` (`"Experiment 027"` -> `exp027`);
 - archivable rows.
 
 **Built-in traps:**
@@ -192,7 +192,7 @@ The checks live in `tst/eval/checks.lua`. All but `approval` and `state` read on
 
 - Each scenario runs in its own process (`tst/eval/run_scenario.lua`) on a fresh copy of the cached demo lab. It calls `agent.run_turn`, `agent.approve_pending` and `agent.deny_pending` directly: the same turn loop the web handlers run inline, without HTTP and login in between.
 - **test mode:** the scripted provider. Free, and the same result every run. It checks the workflow around the model: approval, tool handling, finishing a turn. It says nothing about quality. It runs inside `./bld/test.sh`, so a broken workflow fails the build. Side-effect model calls a turn can trigger (distillation, tier judgment, tag upkeep) read `AGENT_TEST_GENERATE_RESPONSES`, so they can't consume the scripted conversation.
-- **live mode:** the provider and model named in the eval `platform.lua`. Each scenario runs `--repeat` times (default 3). *Consistency* means all repeats give the same answer.
+- **live mode:** the provider and model named in the eval `config.lua`. Each scenario runs `--repeat` times (default 3). *Consistency* means all repeats give the same answer.
 - **Output:** `eval-out/runs/<timestamp>-<mode>/`: `results.jsonl` (one row per scenario per repeat, with token counts read from `agent_model_call`), `results.json` (summary + rows), `report.md`, and `work/<scenario>-<repeat>/` with each run's database and `transcript.md`.
 
 The report shows one line per score (`SCORES` in `tst/eval/report.lua`):

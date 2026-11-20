@@ -7,12 +7,12 @@
 -- raw assets (`ui/knowledge_graph.{css,html,js}`) with zero string
 -- interpolation inside JS or CSS.
 
-asset = require("asset")
-html_lib = require("html")
-json = require("dkjson")
-render_lib = require("render")
+const asset = require("asset")
+const html_lib = require("html")
+const json = require("dkjson")
+const render_lib = require("render")
 
-knowledge_graph = {}
+const knowledge_graph = {}
 
 function knowledge_graph.build_tier_legend(tier_labels, tier_colors)
     legend = {}

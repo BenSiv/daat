@@ -90,7 +90,7 @@ Approvals and denials are also written as `request` rows when they happen, so th
 ## Reasoning capture
 
 Principle 1 needs reasoning to exist. Today it doesn't:
-- **Thinking:** the deployed model returns no thought parts unless asked. `agent_thinking = "off" | "summary" | "full"` in `platform.lua` translates per provider (Vertex `thinkingConfig` with `includeThoughts` and `thinkingLevel` `"MEDIUM"`/`"HIGH"`; Claude `thinking` with `budget_tokens` `2048`/`8192`). Run the live scorecard with `off` and with `summary` (the cheaper level), with the bar set before the run: no worse on correctness, at most about a third more tokens. If `summary` passes, production runs it; `full` is for eval.
+- **Thinking:** the deployed model returns no thought parts unless asked. `agent_thinking = "off" | "summary" | "full"` in `config.lua` translates per provider (Vertex `thinkingConfig` with `includeThoughts` and `thinkingLevel` `"MEDIUM"`/`"HIGH"`; Claude `thinking` with `budget_tokens` `2048`/`8192`). Run the live scorecard with `off` and with `summary` (the cheaper level), with the bar set before the run: no worse on correctness, at most about a third more tokens. If `summary` passes, production runs it; `full` is for eval.
 - **Sub-agent text:** a research step's text is reasoning. It is kept as `reasoning` rows under its parent (Storage), not dropped.
 - **Self-check and compaction:** already kept. Typed as `reasoning`.
 
@@ -126,7 +126,7 @@ A deployment can keep raw transcripts searchable (`agent_transcript_documents`, 
 
 ## Retention
 
-Retention is set per type. A deployment picks a strategy and can override single values in `platform.lua`:
+Retention is set per type. A deployment picks a strategy and can override single values in `config.lua`:
 
 ```lua
 agent_retention = "standard",                      -- "full" | "standard" | "lean"

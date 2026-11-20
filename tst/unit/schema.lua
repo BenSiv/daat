@@ -85,7 +85,7 @@ function tests.every_real_field_type_individually()
     end
 end
 
--- task #84: multi_select/multi_reference field types
+-- multi_select/multi_reference field types
 
 function tests.multi_select_without_values_or_dropdown_rejected()
     print("Testing a 'multi_select' field with neither 'values' nor 'dropdown' is rejected")
@@ -167,7 +167,7 @@ function tests.normalize_multi_value_handles_nil_and_empty()
     check(#schema.normalize_multi_value("  ,  ,") == 0, "expected empty list for all-blank comma string")
 end
 
--- task #84: named dropdown value lists
+-- named dropdown value lists
 
 function tests.dropdown_requires_name_and_nonempty_values()
     print("Testing a dropdown definition requires a name and a non-empty values list")

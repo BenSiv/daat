@@ -35,22 +35,22 @@ if [ -z "${LUAM_DIR:-}" ]; then
     LUAM_DIR=$(cd ../luam && pwd)
 fi
 export LUA_PATH="$REPO_ROOT/src/?.lua;${LUAM_DIR}/lib/?.lua;${LUAM_DIR}/lib/?/init.lua;;"
-export LUA_CPATH="${LUAM_DIR}/bin/?.so;${LUAM_DIR}/lib/lfs/?.so;${LUAM_DIR}/lib/hmac/?.so;${LUAM_DIR}/lib/bcrypt/?.so;${LUAM_DIR}/lib/mariadb/?.so;;"
+export LUA_CPATH="${LUAM_DIR}/lib/?.so;${LUAM_DIR}/lib/?/?.so;${LUAM_DIR}/bin/?.so;;"
 
 case "$PROVIDER" in
     test)
-        PLATFORM='return {agent_provider = "test", search_provider = "test", agent_retention = "full", embedding_quiet_minutes = 0, tag_min_text = 0, agent_turn_mode = "inline", reference_aliases = {{"experiment%s*(%d)", "exp%1"}}}'
+        PLATFORM='return {agent = {provider = "test", retention = "full", turn_mode = "inline"}, search = {provider = "test"}, knowledge = {embedding_quiet_minutes = 0, tag_min_text = 0, reference_aliases = {{"experiment%s*(%d)", "exp%1"}}}}'
         ;;
     ollama)
         MODEL_FIELD=""
         if [ -n "${DAAT_EVAL_MODEL:-}" ]; then
-            MODEL_FIELD=", agent_model = \"${DAAT_EVAL_MODEL}\""
+            MODEL_FIELD=", model = \"${DAAT_EVAL_MODEL}\""
         fi
         URL_FIELD=""
         if [ -n "${DAAT_EVAL_OLLAMA_URL:-}" ]; then
             URL_FIELD=", ollama_url = \"${DAAT_EVAL_OLLAMA_URL}\""
         fi
-        PLATFORM="return {agent_provider = \"ollama\"${URL_FIELD}${MODEL_FIELD}, search_provider = \"test\", agent_retention = \"full\", embedding_quiet_minutes = 0, agent_turn_mode = \"inline\", reference_aliases = {{\"experiment%s*(%d)\", \"exp%1\"}}}"
+        PLATFORM="return {agent = {provider = \"ollama\"${URL_FIELD}${MODEL_FIELD}, retention = \"full\", turn_mode = \"inline\"}, search = {provider = \"test\"}, knowledge = {embedding_quiet_minutes = 0, reference_aliases = {{\"experiment%s*(%d)\", \"exp%1\"}}}}"
         ;;
     vertex)
         if [ -z "${DAAT_EVAL_VERTEX_PROJECT:-}" ]; then
@@ -59,9 +59,9 @@ case "$PROVIDER" in
         fi
         MODEL_FIELD=""
         if [ -n "${DAAT_EVAL_MODEL:-}" ]; then
-            MODEL_FIELD=", agent_model = \"${DAAT_EVAL_MODEL}\""
+            MODEL_FIELD=", model = \"${DAAT_EVAL_MODEL}\""
         fi
-        PLATFORM="return {agent_provider = \"vertex\", vertex_project = \"${DAAT_EVAL_VERTEX_PROJECT}\", vertex_region = \"${DAAT_EVAL_VERTEX_REGION:-global}\"${MODEL_FIELD}, search_provider = \"test\", agent_retention = \"full\", embedding_quiet_minutes = 0, agent_turn_mode = \"inline\", reference_aliases = {{\"experiment%s*(%d)\", \"exp%1\"}}}"
+        PLATFORM="return {agent = {provider = \"vertex\", vertex_project = \"${DAAT_EVAL_VERTEX_PROJECT}\", vertex_region = \"${DAAT_EVAL_VERTEX_REGION:-global}\"${MODEL_FIELD}, retention = \"full\", turn_mode = \"inline\"}, search = {provider = \"test\"}, knowledge = {embedding_quiet_minutes = 0, reference_aliases = {{\"experiment%s*(%d)\", \"exp%1\"}}}}"
         ;;
     *)
         echo "Error: --provider must be test, ollama, or vertex" >&2
@@ -76,7 +76,7 @@ if [ ! -f "$ENV_DIR/facts.json" ]; then
     rm -rf "$ENV_DIR.tmp"
     mkdir -p "$ENV_DIR.tmp"
     cp -r tst/eval/demo-lab/schemas "$ENV_DIR.tmp/schemas"
-    printf '%s\n' "$PLATFORM" > "$ENV_DIR.tmp/platform.lua"
+    printf '%s\n' "$PLATFORM" > "$ENV_DIR.tmp/config.lua"
     (cd "$ENV_DIR.tmp" && "$LUAM_DIR/bin/luam" "$REPO_ROOT/tst/eval/load.lua" "$REPO_ROOT" "$SEED" >&2)
     rm -rf "$ENV_DIR"
     mv "$ENV_DIR.tmp" "$ENV_DIR"

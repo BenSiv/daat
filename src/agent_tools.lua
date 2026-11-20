@@ -24,7 +24,7 @@ json = require("dkjson")
 knowledge = require("knowledge")
 ledger = require("ledger")
 schema = require("schema")
-reference = require("reference")
+reference = require("document.reference")
 search_provider = require("search_provider")
 stats = require("stats")
 template = require("template")
@@ -1421,7 +1421,7 @@ function entity_query(ctx, args)
     end
     lines = {}
     table.insert(lines, table.concat(column_names, " | "))
-    char_cap = config.platform_config().agent_query_char_cap
+    char_cap = config.load().agent_query_char_cap
     used = string.len(lines[1])
     shown = 0
     for _, row in ipairs(rows) do
@@ -1504,7 +1504,7 @@ function entity_get(ctx, args)
     if row == nil then
         return nil, "no such " .. tostring(args.entity_type) .. " #" .. tostring(target_id)
     end
-    limit = config.platform_config().agent_get_field_chars
+    limit = config.load().agent_get_field_chars
     if args.field != nil then
         value = row[args.field]
         if value == nil then
@@ -1702,7 +1702,7 @@ function knowledge_list(ctx, args)
     end
     -- One page at a time: listing the whole pool was ~50k characters
     -- per call in prod (doc/context-management-research.md).
-    page = config.platform_config().agent_knowledge_list_page
+    page = config.load().agent_knowledge_list_page
     first = tonumber(args.offset)
     if first == nil or first < 0 then
         first = 0
@@ -1791,7 +1791,7 @@ function view_run(ctx, args)
     if #rows == 0 then
         return "No rows."
     end
-    cap = config.platform_config().agent_query_row_cap
+    cap = config.load().agent_query_row_cap
     lines = {}
     for i = 1, math.min(cap, #rows) do
         parts = {}
@@ -1882,7 +1882,7 @@ function result_read(ctx, args)
     end
     length = tonumber(args.length)
     if length == nil or length <= 0 then
-        length = config.platform_config().agent_tool_result_cap
+        length = config.load().agent_tool_result_cap
     end
     total = string.len(text)
     out = string.format("result #%d, characters %d-%d of %d:\n", result_id, start, math.min(start + length, total), total) ..
@@ -2371,7 +2371,7 @@ end
 -- agent or the person typed -- even "use [[title]] links" -- became a
 -- link from the chat, and a chat turned into a hub in the graph.
 function agent_tools.sync_session_document(db_path, login, session_id)
-    if config.platform_config().agent_transcript_documents != "whole" then
+    if config.load().agent_transcript_documents != "whole" then
         return
     end
     session = agent.get_session(db_path, session_id, login)
@@ -2379,7 +2379,7 @@ function agent_tools.sync_session_document(db_path, login, session_id)
     if session != nil and session.title != nil and session.title != "" then
         title = session.title
     end
-    transcript = require("curate").conversation_full(db_path, session_id)
+    transcript = require("knowledge.curate").conversation_full(db_path, session_id)
     transcript = string.gsub(transcript, "%[%[", "\\[\\[")
     transcript = string.gsub(transcript, "%]%]", "\\]\\]")
     knowledge.sync_session_document(db_path, login, session_id, "Chat: " .. title, transcript)

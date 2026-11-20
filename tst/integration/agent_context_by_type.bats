@@ -78,7 +78,7 @@ teardown() {
 }
 
 @test "observation masking stubs older large tool results in research while keeping stored rows readable via result.read" {
-    write_platform_config ", agent_masking_keep_last = 1, agent_masking_min_chars = 100, agent_masking_batch_tokens = 0"
+    write_config "agent = {masking_keep_last = 1, masking_min_chars = 100, masking_batch_tokens = 0}"
     long_code=$(printf 'Z%.0s' $(seq 1 250))
     "$BIN" entity create sample "code=${long_code}" >/dev/null
 
@@ -116,7 +116,7 @@ teardown() {
     # Enable agent_carry_user_requests = true: verify via Lua API that
     # prior_requests_prompt_block carries Alice's request only, never Bob's
     # and never Alice's tool_trace!
-    write_platform_config ", agent_carry_user_requests = true"
+    write_config "agent = {carry_user_requests = true}"
     run_luam -e '
         config = require("config")
         agent = require("agent")
@@ -136,7 +136,7 @@ none
 none
 ## Open questions and next step
 none"
-    write_platform_config ", agent_compaction_threshold = 20000"
+    write_config "agent = {compaction_threshold = 20000}"
     chat=$(json_body "$(raw_post_json "/api/chat-widget-start" '{"title":"compact"}' "$ALICE_COOKIE" "$ALICE_CSRF" "")" | jq -r '.session_id')
 
     s1="$(tool_call_response "entity.fields" '{"entity_type":"sample"}')"$'\1'"$(done_response "Exact conclusion: medium M9 gave 2.76 h doubling time.")"

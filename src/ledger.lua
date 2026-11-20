@@ -8,10 +8,11 @@
 -- sequence needed, and it ties identity directly to the ledger rather
 -- than to whatever the projected table's storage happens to assign.
 
-db = require("database")
-json = require("dkjson")
+const db = require("database")
+const json = require("dkjson")
+const store_lib = require("store")
 
-ledger = {}
+const ledger = {}
 
 ledger.SCHEMA = """
 -- VARCHAR(255), not TEXT, on every column that's a primary or
@@ -25,7 +26,10 @@ ledger.SCHEMA = """
 -- columns elsewhere in this file are untouched.
 CREATE TABLE IF NOT EXISTS entity_type (
     name VARCHAR(255) PRIMARY KEY,
-    created_at TEXT DEFAULT (%s)
+    created_at TEXT DEFAULT (%s),
+    require_reason_on_update INTEGER DEFAULT 0,
+    require_reason_on_archive INTEGER DEFAULT 0,
+    admin_write_only INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS entity_field (
@@ -36,6 +40,9 @@ CREATE TABLE IF NOT EXISTS entity_field (
     enum_values TEXT,
     ref_entity_type TEXT,
     field_order INTEGER NOT NULL,
+    display INTEGER DEFAULT 0,
+    allowed_entity_types LONGTEXT,
+    identifier INTEGER DEFAULT 0,
     PRIMARY KEY (entity_type, name)
 );
 
@@ -64,14 +71,7 @@ CREATE TABLE IF NOT EXISTS entity_event (
 -- straight from ledger.SCHEMA above; an existing one needs this to
 -- pick it up.
 function ensure_entity_event_reason_column(db_path)
-    existing = db.get_columns(db_path, "entity_event")
-    have = {}
-    for _, name in ipairs(existing) do
-        have[name] = true
-    end
-    if have["reason"] == nil then
-        db.exec(db_path, "ALTER TABLE entity_event ADD COLUMN reason TEXT;")
-    end
+    store_lib.ensure_column(db_path, "entity_event", "reason", "TEXT")
 end
 
 function ledger.init_schema(db_path)
@@ -105,11 +105,16 @@ function ledger.append_create(db_path, entity_type, values, author, source)
     -- connection-scoped, so two concurrent creates can never collide on
     -- the same entity_id (see doc/mariadb-migration.md's "Bug found
     -- during this investigation" for the race this replaced).
-    _, entity_id = db.exec(db_path, statement)
-    db.exec(db_path, string.format(
-        "UPDATE entity_event SET entity_id = %d WHERE event_id = %d;", entity_id, entity_id
-    ))
-    return entity_id
+    -- Wrapped in db.transaction (re-entrant when already inside entity.create)
+    -- so entity_id = NULL is never observed or stranded on failure.
+    function write_create_event()
+        _, new_entity_id = db.exec(db_path, statement)
+        db.exec(db_path, string.format(
+            "UPDATE entity_event SET entity_id = %d WHERE event_id = %d;", new_entity_id, new_entity_id
+        ))
+        return new_entity_id
+    end
+    return db.transaction(db_path, write_create_event)
 end
 
 -- Appends an 'update' event for an existing entity_id. `field_changes`
@@ -157,7 +162,7 @@ end
 -- Full event history for one entity, oldest first.
 -- entity.fields('entity_event'): the same history every detail page
 -- shows a user, queryable by the agent via entity.query.
-ENTITY_EVENT_SQL_COLUMNS = {
+const ENTITY_EVENT_SQL_COLUMNS = {
     {name = "event_id", note = "primary key, in write order"},
     {name = "entity_id", note = "the entity's id -- ids come from one sequence shared by every entity type, so also filter entity_type"},
     {name = "entity_type", note = "registered entity type name (e.g. document)"},

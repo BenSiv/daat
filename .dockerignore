@@ -1,0 +1,19 @@
+# Exclude git history, build artifacts, local stores, and eval outputs/tokens
+.git
+.gitignore
+bin/
+obj/
+.store/
+eval-out/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.log
+*.swp
+*~

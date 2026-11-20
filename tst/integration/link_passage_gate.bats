@@ -10,7 +10,7 @@ load test_helper.bash
 setup() {
     setup_test_env
     # Test documents are short: a stub is under 20 characters here.
-    write_platform_config ", link_passage_gate = 0.6, passage_min_chars = 20"
+    write_config "knowledge = {link_passage_gate = 0.6, passage_min_chars = 20}"
     "$BIN" init >/dev/null
     "$BIN" user add alice secret123 i >/dev/null
     export AGENT_TEST_EMBEDDINGS=terms
@@ -88,7 +88,7 @@ connections() {
 }
 
 @test "with link_passage_gate = 0, every due pair goes to the model" {
-    write_platform_config ", link_passage_gate = 0"
+    write_config "knowledge = {link_passage_gate = 0}"
     "$BIN" entity create document title="Bioreactor Invoice" content="bioreactor invoice paid to the vendor, quarterly budget approval and finance signature" >/dev/null
     search
     search
@@ -108,7 +108,7 @@ connections() {
 
     # Within a cap too small to embed both sides, likewise.
     unset AGENT_TEST_EMBEDDINGS_FAIL
-    write_platform_config ", link_passage_gate = 0.6, passage_min_chars = 20, link_gate_max_embeds = 1"
+    write_config "knowledge = {link_passage_gate = 0.6, passage_min_chars = 20, link_gate_max_embeds = 1}"
     run "$BIN" knowledge link-score 1 2
     [[ "$output" =~ "Can't measure: no passages embedded" ]]
 }
@@ -139,7 +139,7 @@ ${filler} greenhouse
 The cleaning steps for the bioreactor procedure were repeated.
 # Week 3
 ${filler} lights" >/dev/null
-    write_platform_config ", link_passage_gate = 0.6, link_gate_passages_per_document = 1, passage_min_chars = 30"
+    write_config "knowledge = {link_passage_gate = 0.6, link_gate_passages_per_document = 1, passage_min_chars = 30}"
     before=$(embeddings)
     run "$BIN" knowledge link-score 1 2
     [[ "$output" =~ "The cleaning steps for the bioreactor procedure were repeated." ]]

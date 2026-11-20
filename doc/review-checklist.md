@@ -95,7 +95,7 @@ every change, the rule changes here first.
   written and silently never run. Scripts in `tst/eval/` have a `main()`
   like `src/main.lua`.
 - **A bats test runs Lua through `run_luam`**, never its own copy of the
-  luam paths. Fixtures (a schema, a view, `platform.lua`) are fine inline
+  luam paths. Fixtures (a schema, a view, `config.lua`) are fine inline
   as heredocs; a Lua *script* longer than a few lines, or used by more
   than one test, is a file.
 - **No real model, credentials or network in `./bld/test.sh`.** Agent

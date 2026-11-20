@@ -20,23 +20,25 @@ It also ships an extensible entity-tracking layer: an **entity type is data, not
 cd dev && ./deploy.sh
 ```
 
-`dev/Containerfile` installs the C toolchain, `cmark-gfm`, `bats`, and a built sibling `luam` checkout (see "Option B: manual" below for what each is for); `dev/deploy.sh` builds that image and drops you into a shell with the repo root bind-mounted at `/root/daat` -- edits you make on the host are what actually gets built and tested inside the container. The container is removed on exit (`--rm`); nothing but the image persists between runs. Re-run `./deploy.sh` after changing `Containerfile` to rebuild it.
+`dev/Containerfile` installs the C toolchain, `cmark-gfm`, `bats`, `jq`, `nodejs`, `python3`, `mariadb-server`/`mariadb-client`, and a built sibling `luam` checkout (see "Option B: manual" below for what each is for); `dev/deploy.sh` builds that image and drops you into a shell with the repo root bind-mounted at `/root/daat` -- edits you make on the host are what actually gets built and tested inside the container. The container is removed on exit (`--rm`); nothing but the image persists between runs. Re-run `./deploy.sh` after changing `Containerfile` to rebuild it.
 
 ### Option B: manual
 
-**Required** to build, run, and run most tests:
+**Required** to build, run, and run `./bld/test.sh`:
 
-- A sibling `luam` checkout, built (`../luam` with `obj/liblua.a` present, at or past the minimum commit in `bld/luam.commit`; optional exact pinning lives in `bld/luam.pin`) -- `bld/build.sh` looks there by default and verifies the commit; override the path with the `LUAM_DIR` env var.
+- A sibling `luam` checkout, built (`../luam` with `obj/liblua.a` present, at or past the minimum `luam` commit declared in `bld/package.lua`) -- `bld/build.sh` looks there by default and verifies the commit; override the path with the `LUAM_DIR` env var.
 - A C toolchain (`cc`/`make`) and the dev headers `bld/build.sh` compiles against: `libsqlite3-dev`, `libreadline-dev`, `libssl-dev`, `libcrypt-dev`.
 - `cmark-gfm` on `PATH` **at runtime** (`apt install cmark-gfm` / `brew install cmark-gfm`) -- Document rendering shells out to it; it is not compiled in. Not plain `cmark` -- a separate package/binary (GitHub's own fork, needed for the table/strikethrough/autolink extensions `document.lua` renders with); installing the wrong one is a real, previously-hit failure mode (missing `cmark-gfm` produces empty rendered content, not an error at install time).
 - `bats` on `PATH` (`apt install bats` / `brew install bats-core`) -- required to run `tst/integration/*.bats`.
-- `jq` on `PATH` (`apt install jq` / `brew install jq`) -- required by `tst/integration/agent.bats`, `knowledge.bats`, and `agent_model_call.bats`, which parse JSON responses through it.
+- `jq` and `python3` on `PATH` -- required by integration tests and `bld/test.sh`.
+- `node` (`nodejs`) on `PATH` -- `bld/test.sh` runs `node --check` on every `src/**/*.js` asset (set `DAAT_SKIP_JS_CHECK=1` to opt out).
+- `libmariadb-dev`, `mariadb-server`, and `mariadb-client` -- `bld/test.sh` starts an isolated ephemeral `mariadbd` by default so `tst/integration/mariadb_backend.bats` runs deterministically on every test pass (set `DAAT_SKIP_MARIADB=1` to run a SQLite-only pass; `bld/build.sh` itself still degrades gracefully without `libmariadb-dev`).
 - SQLite itself needs no setup; it's the default storage backend.
 
 **Optional** -- you do not need any of this to build, test, or run the app or its chat UI, because tests default to a deterministic stub LLM provider (see "Testing conventions"):
 
-- `curl` and `gcloud` (`gcloud auth application-default login` plus a `vertex_project` in `platform.lua`) -- only if you want to actually exercise the real Google Vertex AI chat backend.
-- `libmariadb-dev` -- only if you want the optional MariaDB storage backend compiled in; without it `bld/build.sh` silently builds a SQLite-only binary. `tst/integration/mariadb_backend.bats` skips itself (doesn't fail) when no real MariaDB server is configured.
+- `curl` and `gcloud` (`gcloud auth application-default login` plus a `vertex_project` in `config.lua`) -- only if you want to exercise the Google Vertex AI chat/embeddings backend.
+- `curl` and a local [Ollama](https://ollama.com/) server (or any OpenAI-compatible `/v1` endpoint configured via `agent_provider = "ollama"` and optional `ollama_url`, `agent_model`, `embedding_model`, and `OLLAMA_API_KEY`/`OPENAI_API_KEY` in `config.lua`) -- if you want to run tool-calling chat and embeddings locally with open-weights models (`qwen3:8b` and `nomic-embed-text` by default) and no cloud account.
 
 ### Build & test
 
@@ -60,18 +62,20 @@ cd dev && ./deploy.sh
 | `tst/eval/` | The agent scorecard: the demo-lab generator, scenarios, checks and report (`agent-eval.md`) |
 | `vnd/` | Vendored, checked-in frontend JS (Toast UI Editor, Zebra Browser Print) -- no CDN, no JS build step |
 
-`src/*.lua` at a glance -- each module's top-of-file comment has the full story:
+`src/` at a glance -- larger domains expose a `src/<domain>.lua` facade backed by acyclic submodules under `src/<domain>/`:
 
 - `main.lua` -- CLI/CGI entry point
-- `web.lua` -- route dispatch, capability checks (the low-level CGI/HTTP/cookie and `multipart/form-data` helpers live in `../luam/lib/cgi.lua` and `../luam/lib/multipart.lua`)
-- `entity.lua` / `ledger.lua` / `schema.lua` -- the entity/history/schema model
-- `auth.lua` -- login, sessions, CSRF
-- `document.lua` -- the Document entity type and its tree/links
-- `knowledge.lua` -- the knowledge pool (tiering/heat on documents)
+- `web.lua` + `web/` -- route dispatch, per-request context, and capability checks (`web/{auth_routes,admin_routes,entity_routes,document_routes,chat_routes,api_routes,attachment_routes}.lua`; the low-level CGI/HTTP/cookie and `multipart/form-data` helpers live in `../luam/lib/cgi.lua` and `../luam/lib/multipart.lua`)
+- `entity.lua` / `ledger.lua` / `schema.lua` / `store.lua` -- the entity/history/schema/DDL model
+- `auth.lua` -- login, sessions, CSRF, API keys, password reset
+- `tag.lua` + `tag/` -- the tag ontology (`tag/{terms,upkeep,build,broader,define,cli}.lua`)
+- `document.lua` + `document/` -- the Document entity type, hybrid search, and submodules (`document/{text,schema_pool,links,markdown,embeddings,passage,aspect,reference,duplicate}.lua`)
+- `knowledge.lua` + `knowledge/` -- the knowledge pool (`knowledge/{store,links,review,curate,synthesize,distill}.lua`)
+- `repair.lua` / `verify.lua` -- backfill, repair, and ledger/store integrity verification
 - `agent.lua` + `agent_tools.lua` -- the chat/assistant subsystem: the turn loop, approval gate and tool registry in `agent.lua`, the tool records and their handlers in `agent_tools.lua` (`agent-tools.md`)
-- `agent_provider.lua` + `provider/agent_*.lua` -- the pluggable LLM backends (Vertex, Claude, and the scripted `test` provider)
+- `agent_provider.lua` + `provider/agent_*.lua` -- the pluggable LLM backends (Vertex, Claude, Ollama/OpenAI-compatible `/v1`, and the scripted `test` provider)
 - `extension.lua` / `view.lua` -- the drop-in extensibility mechanisms (see below)
-- `ui.lua` / `template.lua` / `page.lua` -- rendering (`page.lua` is daat's own first-party page-section vocabulary, deliberately separate from `ui.lua`'s extension canvas -- see `doc/templating.md`; the low-level escaping and `{{ }}` interpolation modules `html.lua` and `render.lua` live in `../luam/lib/`)
+- `ui.lua` + `ui/` / `template.lua` / `page.lua` -- rendering (`ui/{common,data_pages,admin_pages,knowledge_pages}.lua` + `ui/css/*.css`; `page.lua` is daat's own first-party page-section vocabulary, deliberately separate from `ui.lua`'s extension canvas -- see `doc/templating.md`; the low-level escaping and `{{ }}` interpolation modules `html.lua` and `render.lua` live in `../luam/lib/`)
 - `config.lua` / `init.lua` / `label.lua` -- deployment config, `daat init`, ZPL labels (the storage adapter `database.lua` -- with the raw per-backend bindings one layer down in `database_adapter.lua` -- and the subprocess helper `external_tool.lua` are shared infrastructure in `../luam/lib/`, not daat's own `src/`)
 
 ## Architecture concepts to know before contributing
@@ -95,8 +99,8 @@ Three drop-in mechanisms, none requiring changes to `src/`:
 ## Testing conventions
 
 - `tst/unit/*.lua` test one module each, without the binary or CGI, run directly by the interpreter. They use the shared harness in `tst/lib/unit.lua`: `check = unit.check`, `tests = unit.suite()`, each test written as `function tests.<what_it_shows>()`, and `unit.run(tests)` as the last line. Every test in the suite runs, in the order written; a duplicate name is refused, and a test that raises counts as a failure without stopping the rest. A fixture built once for the file (a temp store's `db_path`) goes to every test through `unit.run(tests, db_path)`.
-- `tst/integration/*.bats` exercise the real compiled `bin/daat` binary with real CGI environment variables end to end. `tst/integration/test_helper.bash` provides the shared harness: `setup_test_env`/`cleanup_test_env` (a fresh scratch dir per test), `write_platform_config`, `login_test_user`, CGI-call helpers (`raw_get`, `raw_post`, `run_cgi`, `run_cgi_admin`, etc), and `run_luam <script.lua>` for a test that must call a module function directly.
-- **You will never need real LLM credentials to run the test suite.** `write_platform_config` defaults every test's `platform.lua` to `agent_provider = "test"`, which selects `src/provider/agent_test.lua` -- a deterministic stub scripted via the `AGENT_TEST_RESPONSES` env var (canned JSON responses matching `agent-protocol.md`'s shape). It lives in `src/` rather than `tst/` specifically so it gets bundled into the same binary the tests run against -- tests exercise the real production binary, never a separate test build.
+- `tst/integration/*.bats` exercise the real compiled `bin/daat` binary with real CGI environment variables end to end. `tst/integration/test_helper.bash` provides the shared harness: `setup_test_env`/`cleanup_test_env` (a fresh scratch dir per test), `write_config`, `login_test_user`, CGI-call helpers (`raw_get`, `raw_post`, `run_cgi`, `run_cgi_admin`, etc), and `run_luam <script.lua>` for a test that must call a module function directly.
+- **You will never need real LLM credentials to run the test suite.** `write_config` defaults every test's `config.lua` to `agent_provider = "test"`, which selects `src/provider/agent_test.lua` -- a deterministic stub scripted via the `AGENT_TEST_RESPONSES` env var (canned JSON responses matching `agent-protocol.md`'s shape). It lives in `src/` rather than `tst/` specifically so it gets bundled into the same binary the tests run against -- tests exercise the real production binary, never a separate test build.
 
 ## Working on the agent
 
@@ -114,15 +118,15 @@ A change to the agent's behaviour (a prompt, a tool, the turn loop) is judged by
 
 ## Docs that mix in private deployment details
 
-Two other files in this directory are written for the maintainer's own production hosting and contain some private infrastructure specifics (GCP project/instance names, Terraform paths, private-repo paths) mixed in with genuinely general content:
+A few design and migration notes in this directory record empirical measurements or cutover notes from the maintainer's reference LIMS deployment alongside general architecture:
 
 - `data-durability.md` -- the SQLite-durability reasoning is general and useful; skip the specific Terraform file paths and GCP instance names it references.
 - `mariadb-migration.md` -- the MariaDB-portability/dialect content (what changes between SQLite and MariaDB, why) is general and useful; skip the specific Cloud SQL instance names, container names, and private-repo paths it references partway through.
-
-Everything else in `doc/` (`architecture.md`, `performance.md`, `schema.md`, `extensibility.md`, `glossary.md`, `api.md`, `agent-protocol.md`, `heat-decay-redesign.md`) is fully general -- no private context needed.
+- Design/measurement notes (`agent-data.md`, `chat-history-migration.md`, `link-passage-gate.md`, `structure-layers.md`) cite read-only corpus counts from that reference deployment to motivate thresholds and schema choices; nothing in building, testing, or running `daat` depends on that deployment.
 
 ## Where to go next
 
+- `configuration.md` -- full `config.lua`, `theme.lua`, and environment-variable reference (`daat config check` / `daat config show`).
 - `architecture.md` -- the full entity-history model, sandboxing, and auth/session design (the big one -- start here for depth).
 - `performance.md` -- request lifecycle invariants, SQLite/MariaDB benchmarks, and saved optimization roadmap.
 - `schema.md` -- defining entity types.

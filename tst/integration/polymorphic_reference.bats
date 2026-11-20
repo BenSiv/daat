@@ -215,7 +215,7 @@ EOF
     setup_full_schema
     "$BIN" entity create plant label="Cocoa" >/dev/null
     run sqlite3 .store/store.db "SELECT to_type FROM entity_ref LIMIT 0;"
-    # Exercised indirectly via /data's relation diagram in cgi.bats --
+    # Exercised indirectly via /data's relation diagram in web.bats --
     # here just confirm schema.relationships (entity.relationships'
     # own backing query) actually lists both allowed target types for
     # the sample.source field, not just one collapsed edge.

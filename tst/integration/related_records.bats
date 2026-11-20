@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# task #112: master/detail data entry for "composite"-style entities
+# master/detail data entry for "composite"-style entities
 # (fixed fields + a variable list of "component" child rows) -- kept
 # purely as entities throughout: component.composite is a plain
 # `reference` field, no junction table, no new storage mechanism.

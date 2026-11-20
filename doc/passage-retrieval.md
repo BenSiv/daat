@@ -41,7 +41,7 @@ The best passages are chosen, at most `passages_per_document` (twice that with `
 
 A search from the `/documents` box counts as usage like the agent's: it's logged as a retrieval (with no chat session), and it reinforces the documents it returns. After a search, `knowledge.review_retrieval` can make model calls (tier judgments, link checks). On the page those run inside the web request, so a search can occasionally take longer; worth watching after rollout.
 
-## Settings (`platform.lua`)
+## Settings (`config.lua`)
 
 | Setting | Default | |
 |---|---|---|

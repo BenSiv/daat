@@ -12,9 +12,9 @@
 --   embeddings(model, text) -> (vector, err), optional.
 -- An implementation also names its own defaults, default_model and
 -- (with embeddings) default_embedding_model, so a model name never
--- appears in core: platform.lua's agent_model/embedding_model choose
+-- appears in core: config.lua's agent_model/embedding_model choose
 -- one, and when unset the provider's own default applies.
--- Loaded dynamically by name (config.platform_config().agent_provider,
+-- Loaded dynamically by name (config.load().agent_provider,
 -- no default: a deployment names its backend, e.g. "ollama" for
 -- src/provider/agent_ollama.lua) rather than required directly, so swapping providers -- or,
 -- just as importantly, swapping in the deterministic test provider for
@@ -34,12 +34,12 @@ agent_provider = {}
 -- e.g.) doesn't need to load/require the actual provider module to get
 -- it.
 function agent_provider.name()
-    return config.platform_config().agent_provider
+    return config.load().agent_provider
 end
 
 function agent_provider.load()
     if agent_provider.name() == nil then
-        return nil, "no agent_provider is set in platform.lua"
+        return nil, "no agent.provider is set in config.lua"
     end
     ok, mod = pcall(require, "provider.agent_" .. agent_provider.name())
     if ok == false or mod == nil then
@@ -48,10 +48,10 @@ function agent_provider.load()
     return mod
 end
 
--- The chat/generation model: platform.lua's agent_model, else the
+-- The chat/generation model: config.lua's agent_model, else the
 -- provider's default. nil when no provider loads.
 function agent_provider.model()
-    configured = config.platform_config().agent_model
+    configured = config.load().agent_model
     if configured != nil then
         return configured
     end
@@ -62,11 +62,11 @@ function agent_provider.model()
     return provider.default_model
 end
 
--- The embedding model, the same way: platform.lua's embedding_model,
+-- The embedding model, the same way: config.lua's embedding_model,
 -- else the provider's default. Stored with every vector
 -- (document_embedding.model), so a change of model is visible there.
 function agent_provider.embedding_model()
-    configured = config.platform_config().embedding_model
+    configured = config.load().embedding_model
     if configured != nil then
         return configured
     end

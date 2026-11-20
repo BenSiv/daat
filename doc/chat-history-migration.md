@@ -102,7 +102,7 @@ Settled 2026-11-08, each as recommended:
 ## TODO
 
 - [x] Ben: decisions 1-5 (2026-11-08).
-- [x] Piece 1: the backfill in the schema upgrade (store migration 8), with a test that a store with old rows comes out typed. MySQL check: brex 545369662.
+- [x] Piece 1: the backfill in the schema upgrade (store migration 8), with a test that a store with old rows comes out typed. MySQL check:
 - [x] Piece 2: `daat repair curate-chats` and `daat repair retire-transcripts` (with `--undo`), `tst/integration/curate.bats`.
 - [x] Piece 3: a test that the first prune keeps every token row (`tst/integration/agent_retention.bats`, SQLite + MariaDB).
 - [x] Run on daat-test, then on production, in the order above. Record before and after numbers here.

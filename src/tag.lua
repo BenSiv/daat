@@ -24,14 +24,78 @@
 -- changed, not on every write -- one outside job's apply writes thousands of
 -- memberships, and nothing reads evidence until judgment or display.
 
-db = require("database")
-entity = require("entity")
-config = require("config")
-json = require("dkjson")
+const db = require("database")
+const entity = require("entity")
+const schema_lib = require("schema")
+const config = require("config")
+const json = require("dkjson")
+const vector_lib = require("vector")
+const document_text = require("document.text")
+const store_lib = require("store")
 
-tag = {}
+const tag = {}
 
-TAG_CENTRE_SCHEMA = """
+const TAG_SCHEMA = {
+    name = "tag",
+    fields = {
+        {name = "label", type = "text", required = true, display = true},
+        {name = "description", type = "text", required = false},
+        {name = "terms", type = "text", required = false},
+        {name = "source", type = "select", required = true, values = {"computed", "manual", "broader"}},
+        {name = "computed_at", type = "text", required = false},
+        {name = "parent", type = "reference", required = false, entity_type = "tag"},
+    },
+}
+
+const DOCUMENT_TAG_SCHEMA = {
+    name = "document_tag",
+    fields = {
+        {name = "document", type = "reference", required = true, entity_type = "document"},
+        {name = "tag", type = "reference", required = true, entity_type = "tag"},
+        {name = "score", type = "number", required = false},
+        {name = "decision", type = "select", required = true, values = {"computed", "pinned", "excluded"}},
+        {name = "via", type = "select", required = false, values = {"text"}},
+    },
+}
+
+const TAG_RELATION_SCHEMA = {
+    name = "tag_relation",
+    fields = {
+        {name = "tag_a", type = "reference", required = true, entity_type = "tag"},
+        {name = "tag_b", type = "reference", required = true, entity_type = "tag"},
+        {name = "decision", type = "select", required = true, values = {"computed", "pinned", "excluded"}},
+        {name = "score", type = "number", required = false},
+        {name = "reason", type = "text", required = false},
+        {name = "evidence", type = "text", required = false},
+    },
+}
+
+const TAG_EVIDENCE_SCHEMA = {
+    name = "tag_evidence",
+    fields = {
+        {name = "tag_a", type = "reference", required = true, entity_type = "tag"},
+        {name = "tag_b", type = "reference", required = true, entity_type = "tag"},
+        {name = "kind", type = "text", required = true},
+        {name = "direction", type = "select", required = true, values = {"directed", "undirected"}},
+        {name = "weight", type = "number", required = true},
+        {name = "support", type = "number", required = false},
+        {name = "producer", type = "text", required = true},
+    },
+}
+
+tag.TAG_SCHEMA = TAG_SCHEMA
+tag.DOCUMENT_TAG_SCHEMA = DOCUMENT_TAG_SCHEMA
+tag.TAG_RELATION_SCHEMA = TAG_RELATION_SCHEMA
+tag.TAG_EVIDENCE_SCHEMA = TAG_EVIDENCE_SCHEMA
+
+function tag.register_schemas(db_path)
+    schema_lib.register(db_path, TAG_SCHEMA)
+    schema_lib.register(db_path, DOCUMENT_TAG_SCHEMA)
+    schema_lib.register(db_path, TAG_RELATION_SCHEMA)
+    schema_lib.register(db_path, TAG_EVIDENCE_SCHEMA)
+end
+
+const TAG_CENTRE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS tag_centre (
     tag_id INTEGER PRIMARY KEY,
     members INTEGER NOT NULL DEFAULT 0,
@@ -41,45 +105,26 @@ CREATE TABLE IF NOT EXISTS tag_centre (
 """
 
 
-ACTIVE = "(archived_at IS NULL OR archived_at = '')"
+const ACTIVE = "(archived_at IS NULL OR archived_at = '')"
 
 -- Evidence a pair rests on before its lift counts, and how far lift is
 -- pulled towards 1: PRIOR median-weights added to both sides.
-TAG_EVIDENCE_MIN_SUPPORT = 3
-TAG_EVIDENCE_PRIOR = 2.0
+const TAG_EVIDENCE_MIN_SUPPORT = 3
+const TAG_EVIDENCE_PRIOR = 2.0
+
+const _tag_schema_ready = {}
 
 function tag.init_schema(db_path)
+    key = db.cache_key(db_path)
+    if _tag_schema_ready[key] == true then
+        return
+    end
     db.exec(db_path, string.format(TAG_CENTRE_SCHEMA, db.now_expr(db_path)))
+    _tag_schema_ready[key] = true
 end
 
-function tag_unit(v, dims)
-    n = #v
-    if dims != nil and dims < n then
-        n = dims
-    end
-    out = {}
-    norm = 0.0
-    for i = 1, n do
-        out[i] = v[i]
-        norm = norm + v[i] * v[i]
-    end
-    if norm == 0.0 then
-        return nil
-    end
-    norm = math.sqrt(norm)
-    for i = 1, n do
-        out[i] = out[i] / norm
-    end
-    return out
-end
-
-function tag_dot(a, b)
-    s = 0.0
-    for i = 1, #a do
-        s = s + a[i] * b[i]
-    end
-    return s
-end
+const tag_unit = vector_lib.unit
+const tag_dot = vector_lib.dot
 
 -- For tag_upkeep.lua, which works on the same vectors.
 tag.unit = tag_unit
@@ -96,12 +141,16 @@ function tag.document_vector(db_path, document_id)
     if type(full) != "table" then
         return nil
     end
-    return tag_unit(full, config.platform_config().tag_dims)
+    return tag_unit(full, config.load().tag_dims)
 end
 
-function tag_load_centre(db_path, tag_id)
+function tag_load_centre(db_path, tag_id, for_update)
+    lock_clause = ""
+    if for_update == true and db.is_mariadb(db_path) then
+        lock_clause = " FOR UPDATE"
+    end
     rows = db.query(db_path, string.format(
-        "SELECT members, sum_json FROM tag_centre WHERE tag_id = %d;", tonumber(tag_id)))
+        "SELECT members, sum_json FROM tag_centre WHERE tag_id = %d%s;", tonumber(tag_id), lock_clause))
     if rows == nil or #rows == 0 then
         return 0, nil
     end
@@ -127,35 +176,39 @@ function tag.adjust_centre(db_path, tag_id, add, remove)
     if add == nil and remove == nil then
         return
     end
-    members, sum = tag_load_centre(db_path, tag_id)
-    length = 0
-    if add != nil then
-        length = #add
-    else
-        length = #remove
-    end
-    if sum == nil then
-        sum = {}
-        for i = 1, length do
-            sum[i] = 0.0
+    tag.init_schema(db_path)
+    function run_adjust_centre_tx()
+        members, sum = tag_load_centre(db_path, tag_id, true)
+        length = 0
+        if add != nil then
+            length = #add
+        else
+            length = #remove
         end
-    end
-    if #sum != length then
-        return
-    end
-    if add != nil then
-        for i = 1, length do
-            sum[i] = sum[i] + add[i]
+        if sum == nil then
+            sum = {}
+            for i = 1, length do
+                sum[i] = 0.0
+            end
         end
-        members = members + 1
-    end
-    if remove != nil and #remove == length then
-        for i = 1, length do
-            sum[i] = sum[i] - remove[i]
+        if #sum != length then
+            return
         end
-        members = members - 1
+        if add != nil then
+            for i = 1, length do
+                sum[i] = sum[i] + add[i]
+            end
+            members = members + 1
+        end
+        if remove != nil and #remove == length then
+            for i = 1, length do
+                sum[i] = sum[i] - remove[i]
+            end
+            members = members - 1
+        end
+        tag_save_centre(db_path, tag_id, members, sum)
     end
-    tag_save_centre(db_path, tag_id, members, sum)
+    db.transaction(db_path, run_adjust_centre_tx)
 end
 
 -- Every active tag's centre, unit length: {{id=, centre=}, ...}.
@@ -282,7 +335,7 @@ end
 -- on purpose -- a tier-3 record is one to three sentences -- so they
 -- always have a subject. Found 2026-10-29: 33 of 141 new records fell
 -- under tag_min_text and stayed out of every tag.
-TAG_LADDER_SOURCE_TYPES = {curated = true, reference = true, record = true}
+const TAG_LADDER_SOURCE_TYPES = {curated = true, reference = true, record = true}
 
 -- Too little text of its own to have a subject (tag_min_text): the
 -- embedding's body_chars, or nil when not known yet.
@@ -300,7 +353,7 @@ function tag_too_short(db_path, document_id)
     if body_chars == nil then
         return false
     end
-    return body_chars < config.platform_config().tag_min_text
+    return body_chars < config.load().tag_min_text
 end
 
 -- Join the nearest tag: the best-scoring active centre, plus the second
@@ -387,7 +440,7 @@ function tag.place_document(db_path, document_id)
     end
     wanted = {}
     wanted[best] = best_score
-    within = config.platform_config().tag_second_within
+    within = config.load().tag_second_within
     if second != nil and within != nil and best_score - second_score < within then
         wanted[second] = second_score
     end
@@ -586,7 +639,6 @@ end
 -- two documents) is one undirected edge between the two; it's an edge,
 -- so its own links aren't counted as links.
 function tag_core_evidence(db_path)
-    document = require("document")
     tags_of = tag_document_tags(db_path)
     rows = db.query(db_path, """
         SELECT l.from_document_id, l.to_document_id, f.title AS from_title
@@ -600,7 +652,7 @@ function tag_core_evidence(db_path)
     end
     for _, row in ipairs(rows) do
         from_id, to_id = tonumber(row.from_document_id), tonumber(row.to_document_id)
-        if document.is_connection_title(row.from_title) then
+        if document_text.is_connection_title(row.from_title) then
             if ends[from_id] == nil then
                 ends[from_id] = {}
             end
@@ -700,7 +752,7 @@ function tag.refresh_evidence(db_path)
         end
     end
     -- The fingerprint of core evidence's inputs when it was last computed.
-    require("store").set_text(db_path, "tag.evidence_fingerprint", tag_evidence_fingerprint(db_path))
+    store_lib.set_text(db_path, "tag.evidence_fingerprint", tag_evidence_fingerprint(db_path))
     return written
 end
 
@@ -773,30 +825,6 @@ function tag.lifts(rows, min_support)
         end
     end
     return out
-end
-
--- Every active evidence row with its lift, core's own rows refreshed
--- first if their inputs changed since they were computed.
-function tag.evidence(db_path)
-    if require("store").get_text(db_path, "tag.evidence_fingerprint") != tag_evidence_fingerprint(db_path) then
-        tag.refresh_evidence(db_path)
-    end
-    rows = db.query(db_path, string.format(
-        "SELECT tag_a, tag_b, kind, direction, weight, support, producer FROM tag_evidence WHERE %s;", ACTIVE))
-    if rows == nil then
-        rows = {}
-    end
-    plain = {}
-    for _, row in ipairs(rows) do
-        support = tonumber(row.support)
-        if support == nil then
-            support = 0
-        end
-        table.insert(plain, {tag_a = tonumber(row.tag_a), tag_b = tonumber(row.tag_b), kind = row.kind,
-            direction = row.direction, weight = tonumber(row.weight), support = support,
-            producer = row.producer})
-    end
-    return tag.lifts(plain, TAG_EVIDENCE_MIN_SUPPORT)
 end
 
 --------------------------------------------------------------------------

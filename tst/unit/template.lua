@@ -1,7 +1,7 @@
 -- tst/unit/template.lua
 -- Unit tests for src/template.lua: pure validation/rendering logic for
 -- reusable Entry templates, including the "lookup_view" section type
--- (inline per-experiment lookup tables, see html.lua's
+-- (inline per-experiment lookup tables, see ui.lua's
 -- expand_inline_views). No prior test coverage existed for this
 -- module at all before this file.
 
@@ -75,6 +75,25 @@ function tests.validate_still_rejects_invalid_section_type()
     def = {name = "t", sections = {{type = "not_a_real_type"}}}
     err = template.validate(def)
     check(err != nil, "an invalid section type should still be rejected")
+end
+
+function tests.load_rejects_path_traversal_and_accepts_hyphenated_names()
+    print("Testing template.load blocks traversal/special names and accepts hyphenated names")
+    schema_mod = require("schema")
+    check(schema_mod.valid_resource_name("widget-intake") == true, "hyphenated resource name should be valid")
+    check(schema_mod.valid_resource_name("prioritized_tasks") == true, "underscored resource name should be valid")
+    check(schema_mod.valid_resource_name("../platform") == false, "parent traversal must be rejected")
+    check(schema_mod.valid_resource_name("..") == false, "dot-dot must be rejected")
+    check(schema_mod.valid_resource_name(".hidden") == false, "leading dot must be rejected")
+    check(schema_mod.valid_resource_name("-dash") == false, "leading hyphen must be rejected")
+    check(schema_mod.valid_resource_name("a/b") == false, "slash must be rejected")
+    check(schema_mod.valid_resource_name("<img src=x>") == false, "HTML metacharacters must be rejected")
+
+    for _, bad in ipairs({"../platform", "..", "a/b", "<script>"}) do
+        def, err = template.load("/tmp", bad)
+        check(def == nil and err != nil and string.find(err, "invalid template name", 1, true) != nil,
+            "template.load should reject '" .. bad .. "': " .. tostring(err))
+    end
 end
 
 unit.run(tests)

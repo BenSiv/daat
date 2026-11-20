@@ -16,20 +16,6 @@ teardown() {
     cleanup_test_env
 }
 
-db() {
-    sqlite3 .store/store.db "$1"
-}
-
-new_document() {
-    "$BIN" entity create document title="$1" content="$1" >/dev/null
-    db "SELECT id FROM document WHERE title = '$1';"
-}
-
-new_tag() {
-    "$BIN" entity create tag label="$1" source=computed >/dev/null
-    db "SELECT id FROM tag WHERE label = '$1';"
-}
-
 embed() {
     db "INSERT OR REPLACE INTO document_embedding (document_id, model, vector_json) VALUES ($1, 'test', '$2');"
 }
@@ -225,7 +211,7 @@ members() {
 }
 
 @test "repair tags --place-untagged places untagged documents with a subject: short sources stay out, short ladder documents go in" {
-    write_platform_config ", tag_min_text = 200"
+    write_config "knowledge = {tag_min_text = 200}"
     a=$(new_document "Leaf callus")
     embed "$a" '[1, 0, 0, 0, 0, 0, 0, 0]'
     callus=$(new_tag "Callus induction")

@@ -68,17 +68,6 @@ function tests.override_wins_over_strategy()
     check(forever_ov.tool_trace_days == 14, "lean tool_trace_days kept")
 end
 
-function tests.prompt_retention_days_alias()
-    print("Testing legacy prompt_retention_days alias still works")
-    legacy_num = config.resolve_retention({prompt_retention_days = 15})
-    check(legacy_num.model_input_days == 15, "prompt_retention_days = 15 sets model_input_days")
-
-    legacy_zero = config.resolve_retention({prompt_retention_days = 0})
-    check(legacy_zero.model_input_days == "forever", "legacy prompt_retention_days = 0 keeps forever")
-
-    explicit_zero = config.resolve_retention({prompt_retention_days = 45, model_input_days = 0})
-    check(explicit_zero.model_input_days == 0, "model_input_days = 0 wins over prompt_retention_days and means not stored")
-end
 
 function tests.tool_trace_stub_and_repeat_pinned_guards()
     print("Testing tool_trace_stub shape and pruned-stub guards in find_repeat / pinned_schema_block")

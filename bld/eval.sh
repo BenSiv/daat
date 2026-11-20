@@ -4,7 +4,7 @@ set -euo pipefail
 # The agent scorecard -- see doc/agent-eval.md.
 #
 #   bld/eval.sh [--mode test|live] [--repeat N] [--only NAME] [--set core|growth|all] [--extra 'k = v, ...']
-#   --extra appends platform.lua fields to every run's copy of the demo
+#   --extra appends config.lua fields to every run's copy of the demo
 #   lab (e.g. --extra 'search_passages = true'), to compare settings
 #   without rebuilding or re-embedding the lab.
 #               [--compare eval-out/runs/<run>/results.json] [--seed N]
@@ -148,7 +148,7 @@ if [ -z "${LUAM_DIR:-}" ]; then
 fi
 export LUAM_DIR
 export LUA_PATH="$REPO_ROOT/src/?.lua;${LUAM_DIR}/lib/?.lua;${LUAM_DIR}/lib/?/init.lua;;"
-export LUA_CPATH="${LUAM_DIR}/bin/?.so;${LUAM_DIR}/lib/lfs/?.so;${LUAM_DIR}/lib/hmac/?.so;${LUAM_DIR}/lib/bcrypt/?.so;${LUAM_DIR}/lib/mariadb/?.so;;"
+export LUA_CPATH="${LUAM_DIR}/lib/?.so;${LUAM_DIR}/lib/?/?.so;${LUAM_DIR}/bin/?.so;;"
 LUAM="$LUAM_DIR/bin/luam"
 
 if [ -n "$RESCORE" ]; then
@@ -175,7 +175,7 @@ if [ -n "$RESCORE" ]; then
 fi
 
 ENV_DIR=$(./bld/eval-env.sh --provider "$PROVIDER" --seed "$SEED")
-RUN_DIR="$REPO_ROOT/eval-out/runs/$(date +%Y%m%d-%H%M%S)-$MODE"
+RUN_DIR="${DAAT_EVAL_RUN_DIR:-$REPO_ROOT/eval-out/runs/$(date +%Y%m%d-%H%M%S)-$MODE}"
 mkdir -p "$RUN_DIR/work"
 : > "$RUN_DIR/results.jsonl"
 printf '%s\n' "$EXTRA" > "$RUN_DIR/extra.txt"
@@ -190,7 +190,20 @@ for scenario in tst/eval/scenarios/*.lua; do
         work="$RUN_DIR/work/$name-$r"
         cp -r "$ENV_DIR" "$work"
         if [ -n "$EXTRA" ]; then
-            sed -i "\$ s/}[[:space:]]*\$/, ${EXTRA}}/" "$work/platform.lua"
+            CFG_OUT="$work/config.lua" CFG_OVER="$EXTRA" "$LUAM" -e '
+                data = require("data")
+                out_path = os.getenv("CFG_OUT")
+                base = data.load(out_path)
+                over = data.loads("return {" .. os.getenv("CFG_OVER") .. "}")
+                for sec, tbl in pairs(over) do
+                    if type(tbl) == "table" and type(base[sec]) == "table" then
+                        for k, v in pairs(tbl) do base[sec][k] = v end
+                    else
+                        base[sec] = tbl
+                    end
+                end
+                data.save(out_path, base)
+            '
         fi
         (
             cd "$work"

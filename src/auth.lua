@@ -1,4 +1,4 @@
--- Real login/session auth, replacing cgi.lua's Phase 0
+-- Real login/session auth, replacing web.lua's Phase 0
 -- AUTH_USER/AUTH_CAPABILITIES/AUTH_NONCE env-var stub.
 --
 -- Password storage: bcrypt (require("bcrypt"), luam/lib/bcrypt/bcrypt.c).
@@ -18,19 +18,21 @@
 -- request field/header must match) -- doesn't need HMAC signing since
 -- it's only ever compared to itself, not decoded or trusted alone.
 
-db = require("database")
-paths = require("paths")
-bcrypt = require("bcrypt")
-hmac = require("hmac")
-mail_provider = require("mail_provider")
+const db = require("database")
+const paths = require("paths")
+const bcrypt = require("bcrypt")
+const hmac = require("hmac")
+const mail_provider = require("mail_provider")
+const store_lib = require("store")
+const config_lib = require("config")
 
-auth = {}
+const auth = {}
 
 -- hex_encode used before its own definition below -- pre-declared,
 -- see ../../luam/doc/forward_references.md
 hex_encode = nil
 
-SESSION_TTL_SECONDS = 60 * 60 * 24 * 7 -- 7 days
+const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7 -- 7 days
 auth.SESSION_TTL_SECONDS = SESSION_TTL_SECONDS
 
 auth.SCHEMA = """
@@ -43,6 +45,9 @@ CREATE TABLE IF NOT EXISTS auth_user (
     -- VARCHAR(32), not TEXT -- see extension.lua's system_job.status
     -- for why: real MySQL 8.0 rejects a literal DEFAULT on TEXT columns.
     cap VARCHAR(32) NOT NULL DEFAULT '',
+    email VARCHAR(255) DEFAULT NULL,
+    email_verified_at INTEGER DEFAULT NULL,
+    session_version INTEGER NOT NULL DEFAULT 0,
     created_at TEXT DEFAULT (%s),
     archived_at TEXT
 );
@@ -56,6 +61,8 @@ CREATE TABLE IF NOT EXISTS auth_user (
 CREATE TABLE IF NOT EXISTS auth_email_link (
     token_hash VARCHAR(64) PRIMARY KEY,
     login VARCHAR(255) NOT NULL,
+    purpose VARCHAR(16) NOT NULL DEFAULT 'reset',
+    email VARCHAR(255) DEFAULT NULL,
     issued_at INTEGER NOT NULL,
     expires_at INTEGER NOT NULL,
     used_at INTEGER
@@ -74,31 +81,6 @@ CREATE TABLE IF NOT EXISTS auth_api_key (
     archived_at TEXT
 );
 """
-
-function has_column(db_path, table_name, column_name)
-    for _, name in ipairs(db.get_columns(db_path, table_name)) do
-        if name == column_name then
-            return true
-        end
-    end
-    return false
-end
-
--- Every request runs init_schema, so concurrent first requests after an
--- upgrade can all see a column missing and race to add it -- found
--- rehearsing against real MySQL 8, where the losers' ALTER raises
--- "Duplicate column name" (the same race document.lua's
--- ensure_document_link_indexes tolerates for indexes). A failed ALTER is
--- only an error if the column still doesn't exist afterwards.
-function add_column_if_missing(db_path, table_name, column_name, column_sql)
-    if has_column(db_path, table_name, column_name) then
-        return
-    end
-    ok, err = pcall(db.exec, db_path, "ALTER TABLE " .. table_name .. " ADD COLUMN " .. column_name .. " " .. column_sql .. ";")
-    if ok == false and not has_column(db_path, table_name, column_name) then
-        error(err)
-    end
-end
 
 -- Columns added after these tables already existed in real deployments,
 -- so migrations rather than SCHEMA edits (CREATE TABLE IF NOT EXISTS
@@ -125,11 +107,16 @@ end
 -- can't set one). auth_email_link.email: the address the link went to.
 -- A link only works while that is still the account's address.
 function ensure_auth_columns(db_path)
-    add_column_if_missing(db_path, "auth_user", "email", "VARCHAR(255) DEFAULT NULL")
-    add_column_if_missing(db_path, "auth_user", "email_verified_at", "INTEGER DEFAULT NULL")
-    add_column_if_missing(db_path, "auth_user", "session_version", "INTEGER NOT NULL DEFAULT 0")
-    add_column_if_missing(db_path, "auth_email_link", "purpose", "VARCHAR(16) NOT NULL DEFAULT 'reset'")
-    add_column_if_missing(db_path, "auth_email_link", "email", "VARCHAR(255) DEFAULT NULL")
+    store_mod = store_lib
+    store_mod.ensure_columns(db_path, "auth_user", {
+        {"email", "VARCHAR(255) DEFAULT NULL"},
+        {"email_verified_at", "INTEGER DEFAULT NULL"},
+        {"session_version", "INTEGER NOT NULL DEFAULT 0"},
+    })
+    store_mod.ensure_columns(db_path, "auth_email_link", {
+        {"purpose", "VARCHAR(16) NOT NULL DEFAULT 'reset'"},
+        {"email", "VARCHAR(255) DEFAULT NULL"},
+    })
 end
 
 function auth.init_schema(db_path)
@@ -138,28 +125,23 @@ function auth.init_schema(db_path)
     return ok, err
 end
 
--- A per-store HMAC secret, generated once from /dev/urandom and never
+-- A per-store HMAC secret, generated once via CSPRNG and never
 -- rotated automatically (rotating it invalidates every outstanding
 -- session cookie, so that's an explicit operator action, not implicit
 -- request-time behavior).
 function auth.ensure_session_secret(root)
-    config = require("config")
+    config = config_lib
     path = config.session_secret_path(root)
     if paths.file_exists(path) then
         return true
     end
 
-    urandom = io.open("/dev/urandom", "rb")
-    if urandom == nil then
-        return nil, "cannot open /dev/urandom"
-    end
-    raw = io.read(urandom, 32)
-    io.close(urandom)
-    if raw == nil or string.len(raw) != 32 then
-        return nil, "short read from /dev/urandom"
+    crypto_lib = require("crypto")
+    secret, rand_err = crypto_lib.random_hex(32)
+    if secret == nil then
+        return nil, rand_err
     end
 
-    secret = hex_encode(raw)
     file = io.open(path, "w")
     if file == nil then
         return nil, "cannot create session secret file: " .. path
@@ -170,7 +152,7 @@ function auth.ensure_session_secret(root)
 end
 
 function auth.session_secret(root)
-    config = require("config")
+    config = config_lib
     path = config.session_secret_path(root)
     file = io.open(path, "r")
     if file == nil then
@@ -181,25 +163,9 @@ function auth.session_secret(root)
     return secret
 end
 
-function hex_encode(bytes)
-    hex = {}
-    for i = 1, string.len(bytes) do
-        table.insert(hex, string.format("%02x", string.byte(bytes, i)))
-    end
-    return table.concat(hex)
-end
-
 function random_hex_token(num_bytes)
-    urandom = io.open("/dev/urandom", "rb")
-    if urandom == nil then
-        return nil, "cannot open /dev/urandom"
-    end
-    raw = io.read(urandom, num_bytes)
-    io.close(urandom)
-    if raw == nil or string.len(raw) != num_bytes then
-        return nil, "short read from /dev/urandom"
-    end
-    return hex_encode(raw)
+    crypto_lib = require("crypto")
+    return crypto_lib.random_hex(num_bytes)
 end
 
 -- Not a full constant-time comparison across arbitrary lengths (Lua's
@@ -301,7 +267,7 @@ end
 -- random string, so "has this account ever had a password?" is a
 -- fact the code can check (auth.has_password), not a guess. It can't
 -- match any password: bcrypt.verify rejects it as an invalid hash.
-NO_PASSWORD_HASH = "!no-password"
+const NO_PASSWORD_HASH = "!no-password"
 
 function auth.has_password(user)
     return user != nil and user.password_hash != nil and user.password_hash != NO_PASSWORD_HASH
@@ -647,10 +613,10 @@ end
 -- Forgot-password reset links
 --------------------------------------------------------------------------
 
-RESET_TTL_SECONDS = 60 * 60 -- 1 hour
+const RESET_TTL_SECONDS = 60 * 60 -- 1 hour
 -- At most one new link per account per window, so the (unauthenticated)
 -- request form can't be used to flood someone's inbox.
-RESET_THROTTLE_SECONDS = 5 * 60
+const RESET_THROTTLE_SECONDS = 5 * 60
 
 -- Keyed with the store's session secret rather than a bare digest, and
 -- deterministic (unlike bcrypt), so a token can be looked up directly by
@@ -705,13 +671,13 @@ end
 
 -- A setup link has longer to live than a reset one: it's the first
 -- email a new account gets, often read days after the admin sent it.
-SETUP_TTL_SECONDS = 7 * 24 * 60 * 60
+const SETUP_TTL_SECONDS = 7 * 24 * 60 * 60
 
 -- Issues one emailed link (purpose "reset" or "setup") to user.email and
 -- sends it. -> true | nil, err. The link is the same /reset-password
 -- page either way; only its lifetime and the email's wording differ.
 function send_account_link(root, db_path, user, purpose, site_name)
-    config = require("config")
+    config = config_lib
     secret, err = auth.session_secret(root)
     if secret == nil then
         return nil, err
@@ -731,7 +697,7 @@ function send_account_link(root, db_path, user, purpose, site_name)
         db.quote(token_hash), db.quote(user.login), now, now + ttl, db.quote(purpose), db.quote(user.email)
     ))
 
-    base_url = string.gsub(config.platform_config().public_url, "/+$", "")
+    base_url = string.gsub(config.load().public_url, "/+$", "")
     -- In the #fragment, not the query string: browsers never send a
     -- fragment to the server, so the token can't land in the web
     -- server's or a load balancer's access log. /reset-password's own
@@ -873,7 +839,7 @@ end
 -- The caller must show the same response for true and false alike, so
 -- the form never reveals whether an account exists.
 function auth.request_password_reset(root, db_path, identifier, site_name)
-    config = require("config")
+    config = config_lib
     user = find_reset_account(db_path, identifier)
     if user == nil then
         return false
@@ -1029,7 +995,7 @@ function auth.do_user(cmd_args, db_path)
 
     -- Run from the store root, like every other CLI command ("." below).
     if action == "invite" then
-        config = require("config")
+        config = config_lib
         login = cmd_args[2]
         email = cmd_args[3]
         cap = cmd_args[4]
@@ -1079,7 +1045,7 @@ function auth.do_user(cmd_args, db_path)
             return
         end
         print("Email updated for " .. login)
-        config = require("config")
+        config = config_lib
         user = auth.get_user(db_path, login)
         if config.password_reset_enabled() and user.email != nil and not auth.email_verified(user) then
             sent, send_err = auth.send_setup_link(".", db_path, login, config.load_theme(".").site_name)

@@ -1,0 +1,11 @@
+.platform-chat-sessions { list-style: none !important; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.platform-chat-session-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 18px; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-item, 10px); background: var(--platform-bg, #f8fafc); text-decoration: none !important; transition: var(--platform-transition, all 0.2s cubic-bezier(0.4, 0, 0.2, 1)); }
+.platform-chat-session-row:hover { border-color: var(--platform-accent, #4f46e5); box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
+.platform-chat-session-title { color: var(--platform-heading, #0f172a); font-weight: 600; }
+.platform-chat-session-active { border-color: var(--platform-accent, #4f46e5); }
+.platform-chat-session-active .platform-chat-session-title { color: var(--platform-accent, #4f46e5); }
+.platform-chat-session-started { font-size: 0.8rem; color: var(--platform-muted, #64748b); flex-shrink: 0; }
+.platform-chat-foreign-banner { margin-bottom: 24px; }
+.platform-chat-foreign-meta { font-size: 0.85rem; color: var(--platform-muted, #64748b); margin-bottom: 8px; }
+.platform-chat-unavailable { padding: 20px; border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); background: var(--platform-bg, #f8fafc); color: var(--platform-text, #334155); }
+.platform-chat-unavailable p { margin: 0 0 14px 0; }

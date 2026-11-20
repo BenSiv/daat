@@ -2,7 +2,7 @@
 -- Unit tests for src/page.lua: the first-party-only typed-section
 -- vocabulary (see doc/templating.md). No prior direct test coverage
 -- existed for this module -- the five real pages built on it
--- (html.render_login/_account/_admin_users/_admin_api_keys/_settings)
+-- (ui.render_login/_account/_admin_users/_admin_api_keys/_settings)
 -- are covered by tst/integration/*.bats, but only through each page's
 -- own real happy/error paths, never page.validate's error branches
 -- directly. This file exercises page.validate/page.render against the

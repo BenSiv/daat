@@ -11,13 +11,6 @@ teardown() {
     cleanup_test_env
 }
 
-raw_login() {
-    local login="$1"
-    local password="$2"
-    printf 'login=%s&password=%s' "$login" "$password" | \
-        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/login" QUERY_STRING="" "$BIN"
-}
-
 # A POST to one of the /admin-users-* routes with a real request body --
 # piping straight into `run "$BIN"` doesn't carry stdin through bats'
 # `run` correctly, so (matching raw_login above) this runs the binary
@@ -60,7 +53,7 @@ raw_admin_action() {
 }
 
 @test "the login page itself is wrapped in the real page shell, not a bare content fragment" {
-    # task #89 regression: /login used to print html.render_login's raw
+    # regression: /login used to print ui.render_login's raw
     # fragment directly, with no <head>/favicon <link>/theme :root{}
     # block at all -- a deployment's theme.lua colors/site name never
     # applied to the one page every user sees before authenticating,
@@ -83,7 +76,7 @@ raw_admin_action() {
     # link just bounces back to /login) and a chat widget someone could
     # actually try to type into. The backend already rejects an
     # unauthenticated /chat-start or /chat-message before it ever
-    # reaches the agent (cgi.handle_request's own session check runs
+    # reaches the agent (web.handle_request's own session check runs
     # first -- no billing/security exposure by itself), but showing
     # controls nobody can use is confusing UX and worth not doing.
     GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/login" QUERY_STRING="" run "$BIN"
@@ -227,7 +220,7 @@ EOF
 
     # Note: no HTTP_X_CSRF_TOKEN header here -- a plain HTML <form> POST
     # (unlike a JS fetch() call) can't attach a custom header at all, so
-    # this exercises the form-field fallback in cgi.lua's require_csrf.
+    # this exercises the form-field fallback in web.lua's require_csrf.
     cookie="session=${session}; csrf=${csrf}"
     body="csrf_token=${csrf}&login=bob&password=bobpass123&cap=i"
     run raw_admin_action "/admin-users-create" "$cookie" "$body"
@@ -503,7 +496,7 @@ csrf_from() {
 }
 
 @test "a route's own Referrer-Policy replaces the default instead of duplicating it" {
-    write_platform_config ', mail_provider = "test", mail_from = "noreply@example.com", public_url = "https://lims.example.com/"'
+    write_config 'mail = {provider = "test", from = "noreply@example.com", public_url = "https://lims.example.com/"}'
     run raw_get "/reset-password"
     [ "$(printf '%s' "$output" | grep -ci '^Referrer-Policy:')" = "1" ]
     [[ "$output" =~ "Referrer-Policy: no-referrer" ]]

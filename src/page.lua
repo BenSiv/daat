@@ -1,11 +1,11 @@
 -- First-party-only page-section vocabulary: daat's OWN trusted pages
 -- built as a typed table of sections instead of ad hoc string
 -- concatenation, dispatched to a renderer -- the same "typed-table ->
--- trusted renderer" shape template.lua and html.lua's own extension
+-- trusted renderer" shape template.lua and ui.lua's own extension
 -- canvas already use.
 --
--- Deliberately NOT the same mechanism as html.lua's canvas
--- (html.validate_canvas/html.render_canvas). That one exists to be a
+-- Deliberately NOT the same mechanism as ui.lua's canvas
+-- (ui.validate_canvas/ui.render_canvas). That one exists to be a
 -- narrow, deliberately-limited TRUST BOUNDARY: a plugin's page is
 -- restricted to a closed vocabulary specifically so untrusted,
 -- deployment-authored extension code can never emit arbitrary
@@ -23,12 +23,12 @@
 -- same discipline template.lua's own four types and the canvas's own
 -- four element types were grown under -- not speculatively.
 
-html_lib = require("html")
-render_lib = require("render")
+const html_lib = require("html")
+const render_lib = require("render")
 
-page = {}
+const page = {}
 
-FORM_FIELD_TYPES = {text = true, password = true, hidden = true, checkbox = true, file = true, textarea = true}
+const FORM_FIELD_TYPES = {text = true, password = true, hidden = true, checkbox = true, file = true, textarea = true}
 
 -- Validates one field list (a form's own top-level `fields`, or one of
 -- its `groups[i].fields` -- see `form`'s own validation below for why
@@ -257,7 +257,7 @@ end
 -- for a programmer mistake (a typo'd type, a missing field) instead of
 -- a silently blank or malformed page, the same role template.validate
 -- plays for template sections. Unlike template.validate/
--- html.validate_canvas, though, a failure here is never a real,
+-- ui.validate_canvas, though, a failure here is never a real,
 -- expected error path -- section lists are always hardcoded literals
 -- daat's own code just built two lines above the validate call, never
 -- external/untrusted data -- so callers are expected to `error()` on a
@@ -603,8 +603,8 @@ end
 -- real callers, not something worth inventing a new CSS class for one
 -- inline value.
 --
--- A button's optional `data` table (added for the admin manual-trigger
--- page, brex 925561615) mirrors the canvas system's own data-action/
+-- A button's optional `data` table (used by the admin manual-trigger
+-- page) mirrors the canvas system's own data-action/
 -- data-args convention: auxiliary values a click handler needs, carried
 -- as escaped data-* attributes rather than interpolated into inline JS
 -- text, so an extension-declared string (a trigger's own name) can

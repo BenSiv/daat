@@ -3,15 +3,21 @@
 -- one describes. This is the only place field-type -> SQL-type mapping
 -- happens.
 
-db = require("database")
-sandbox = require("sandbox")
-paths = require("paths")
-lfs = require("lfs")
+const db = require("database")
+const sandbox = require("sandbox")
+const paths = require("paths")
+const lfs = require("lfs")
+const config_lib = require("config")
+const extension_lib = require("extension")
+const store_lib = require("store")
+const json_lib = require("dkjson")
 
-schema = {}
+const schema = {}
 
 _fields_cache = {}
 _registered_cache = {}
+_multi_table_ready = {}
+_entity_source_ready = {}
 
 function schema_cache_key(db_path)
     return db.cache_key(db_path)
@@ -21,11 +27,15 @@ function invalidate_schema_cache(db_path)
     if db_path == nil then
         _fields_cache = {}
         _registered_cache = {}
+        _multi_table_ready = {}
+        _entity_source_ready = {}
         return
     end
     key = schema_cache_key(db_path)
     _fields_cache[key] = nil
     _registered_cache[key] = nil
+    _multi_table_ready[key] = nil
+    _entity_source_ready[key] = nil
 end
 
 schema.clear_cache = invalidate_schema_cache
@@ -38,7 +48,7 @@ function shallow_copy_list(items)
     return out
 end
 
-FIELD_TYPES = {"text", "number", "date", "select", "reference", "multi_select", "multi_reference", "sql_select", "polymorphic_reference", "multi_polymorphic_reference"}
+const FIELD_TYPES = {"text", "number", "date", "select", "reference", "multi_select", "multi_reference", "sql_select", "polymorphic_reference", "multi_polymorphic_reference"}
 
 -- Field types stored in a companion junction table (schema.
 -- ensure_multi_field_table) instead of as a column on the entity's own
@@ -47,7 +57,7 @@ FIELD_TYPES = {"text", "number", "date", "select", "reference", "multi_select", 
 -- a real link to another entity type), not one generic "multivalue"
 -- flag, since the junction table's second column differs (a literal
 -- value vs. a real FK).
-MULTI_FIELD_TYPES = {multi_select = true, multi_reference = true}
+const MULTI_FIELD_TYPES = {multi_select = true, multi_reference = true}
 
 function is_multi_field_type(t)
     return MULTI_FIELD_TYPES[t] == true
@@ -75,14 +85,10 @@ end
 -- inventing a single type with a cardinality flag, matching this
 -- codebase's own established convention (select/multi_select is the
 -- same split).
-POLYMORPHIC_FIELD_TYPES = {polymorphic_reference = true, multi_polymorphic_reference = true}
+const POLYMORPHIC_FIELD_TYPES = {polymorphic_reference = true, multi_polymorphic_reference = true}
 
 function is_polymorphic_field_type(t)
     return POLYMORPHIC_FIELD_TYPES[t] == true
-end
-
-function is_multivalue_polymorphic_field_type(t)
-    return t == "multi_polymorphic_reference"
 end
 
 --------------------------------------------------------------------------
@@ -99,7 +105,7 @@ end
 -- code needs no changes at all -- it already just decodes enum_values
 -- as a plain list, agnostic of whether it came from an inline list or a
 -- shared dropdown.
-DROPDOWN_SCHEMA = """
+const DROPDOWN_SCHEMA = """
 -- VARCHAR(255), not TEXT -- same MariaDB/InnoDB key-length reasoning as
 -- ledger.lua's own entity_type/entity_field (a bare TEXT/BLOB column
 -- can't be part of a key without an explicit bounded length).
@@ -171,18 +177,21 @@ end
 -- so the #def.values == 0 guard here is just defensive, not a real
 -- case for a well-formed file.
 function schema.register_dropdown(db_path, def)
-    db.exec(db_path, string.format("DELETE FROM entity_dropdown_value WHERE list_name = %s;", db.quote(def.name)))
-    if #def.values > 0 then
-        value_tuples = {}
-        for i, value in ipairs(def.values) do
-            table.insert(value_tuples, string.format("(%s, %s, %d)", db.quote(def.name), db.quote(value), i))
+    function write_dropdown_tx()
+        db.exec(db_path, string.format("DELETE FROM entity_dropdown_value WHERE list_name = %s;", db.quote(def.name)))
+        if #def.values > 0 then
+            value_tuples = {}
+            for i, value in ipairs(def.values) do
+                table.insert(value_tuples, string.format("(%s, %s, %d)", db.quote(def.name), db.quote(value), i))
+            end
+            db.exec(db_path, string.format(
+                "%s entity_dropdown_value (list_name, value, value_order) VALUES %s;",
+                db.insert_ignore(db_path), table.concat(value_tuples, ", ")
+            ))
         end
-        db.exec(db_path, string.format(
-            "%s entity_dropdown_value (list_name, value, value_order) VALUES %s;",
-            db.insert_ignore(db_path), table.concat(value_tuples, ", ")
-        ))
+        return true
     end
-    return true
+    return db.transaction(db_path, write_dropdown_tx)
 end
 
 -- The current value list for a named dropdown, in declaration order --
@@ -202,11 +211,6 @@ function schema.dropdown_values(db_path, name)
         table.insert(values, row.value)
     end
     return values
-end
-
-function schema.is_dropdown_registered(db_path, name)
-    rows = db.query(db_path, string.format("SELECT 1 FROM entity_dropdown_value WHERE list_name = %s LIMIT 1;", db.quote(name)))
-    return rows != nil and #rows > 0
 end
 
 -- A select/multi_select field's resolved allowed-values list -- inline
@@ -232,7 +236,7 @@ end
 -- db.now_expr's backend-specific default) that schema.validate itself
 -- is never given, and every name in it is a plain string literal
 -- anyway.
-RESERVED_FIELD_NAMES = {
+const RESERVED_FIELD_NAMES = {
     "id", "created_by", "created_at", "updated_by", "updated_at",
     "last_event_id", "external_id", "name", "archived_at",
 }
@@ -255,7 +259,7 @@ end
 -- behaves identically to a plain TEXT one there (verified directly:
 -- stores 500KB with no truncation, `pragma_table_info` reports the
 -- type as declared).
-SQL_TYPE = {
+const SQL_TYPE = {
     text = "LONGTEXT",
     number = "REAL",
     date = "TEXT",
@@ -318,11 +322,8 @@ function schema.validate(def)
     -- entity.update/entity.archive be given a non-empty `reason`
     -- before either is allowed to proceed for this type. Optional,
     -- default false either way -- most schemas set neither. Checked
-    -- via direct true/false comparison, not type(x) == "boolean" --
-    -- this Luam dialect's type() reports a real boolean as "flag", not
-    -- "boolean" (matches how every other boolean-ish field in this
-    -- file -- required, display -- is already checked elsewhere: ==
-    -- true/== false, never by type name).
+    -- via direct true/false comparison (matching how required, display,
+    -- and other boolean fields in this file are checked).
     if def.require_reason_on_update != nil and def.require_reason_on_update != true and def.require_reason_on_update != false then
         return string.format("schema '%s': 'require_reason_on_update' must be true or false", def.name)
     end
@@ -333,7 +334,7 @@ function schema.validate(def)
     -- above -- a schema can require Admin capability to create/update/
     -- archive rows of this type (e.g. label_template, whose `sql_select`
     -- field is genuinely executable). Anyone can still read/view rows
-    -- of the type; this only gates writes. Enforced in cgi.lua, not
+    -- of the type; this only gates writes. Enforced in web.lua, not
     -- here (schema.lua has no notion of an HTTP session/capability).
     if def.admin_write_only != nil and def.admin_write_only != true and def.admin_write_only != false then
         return string.format("schema '%s': 'admin_write_only' must be true or false", def.name)
@@ -388,7 +389,7 @@ function schema.validate(def)
         end
         -- Optional bounds on a "number" field -- UI-hint only for now
         -- (wired into the registration table's <input type="number">
-        -- min/max, see html.lua), not yet enforced server-side. A real
+        -- min/max, see ui.lua), not yet enforced server-side. A real
         -- bug found in production: without this, the registration
         -- table's number input had no min/max at all, so its native
         -- spinner arrows could be clicked past any sensible bound
@@ -414,136 +415,111 @@ end
 -- Registers a validated schema definition: upserts entity_type/entity_field
 -- rows, then creates or migrates the projected table.
 -- entity_field predates the `display` flag (see schema.fields()'s own
--- header comment on entity_display_label in html.lua) -- ledger.lua's
+-- header comment on entity_display_label in ui.lua) -- ledger.lua's
 -- CREATE TABLE IF NOT EXISTS never retrofits an existing table, so this
 -- migrates it the same way sync_table() already migrates per-type
 -- tables: additive, idempotent, safe to re-run on every sync.
 function ensure_entity_field_display_column(db_path)
-    existing = db.get_columns(db_path, "entity_field")
-    have = {}
-    for _, name in ipairs(existing) do
-        have[name] = true
-    end
-    if have["display"] == nil then
-        db.exec(db_path, "ALTER TABLE entity_field ADD COLUMN display INTEGER DEFAULT 0;")
-    end
-    -- entity_field predates polymorphic_reference/multi_polymorphic_
-    -- reference -- same migration pattern as `display` just above.
-    -- JSON-encoded list, same convention as enum_values, since a
-    -- polymorphic field's allowed target types are a list, not the one
-    -- fixed ref_entity_type a plain reference/multi_reference declares.
-    if have["allowed_entity_types"] == nil then
-        db.exec(db_path, "ALTER TABLE entity_field ADD COLUMN allowed_entity_types LONGTEXT;")
-    end
-    -- Same pattern again, for the `identifier` flag (see schema.validate).
-    if have["identifier"] == nil then
-        db.exec(db_path, "ALTER TABLE entity_field ADD COLUMN identifier INTEGER DEFAULT 0;")
-    end
+    store_lib.ensure_columns(db_path, "entity_field", {
+        {"display", "INTEGER DEFAULT 0"},
+        {"allowed_entity_types", "LONGTEXT"},
+        {"identifier", "INTEGER DEFAULT 0"},
+    })
 end
 
--- entity_type predates the require_reason_on_update/require_reason_on_
--- archive flags and admin_write_only -- same reasoning/pattern as
--- ensure_entity_field_display_column just above.
 function ensure_entity_type_reason_flag_columns(db_path)
-    existing = db.get_columns(db_path, "entity_type")
-    have = {}
-    for _, name in ipairs(existing) do
-        have[name] = true
-    end
-    if have["require_reason_on_update"] == nil then
-        db.exec(db_path, "ALTER TABLE entity_type ADD COLUMN require_reason_on_update INTEGER DEFAULT 0;")
-    end
-    if have["require_reason_on_archive"] == nil then
-        db.exec(db_path, "ALTER TABLE entity_type ADD COLUMN require_reason_on_archive INTEGER DEFAULT 0;")
-    end
-    if have["admin_write_only"] == nil then
-        db.exec(db_path, "ALTER TABLE entity_type ADD COLUMN admin_write_only INTEGER DEFAULT 0;")
-    end
+    store_lib.ensure_columns(db_path, "entity_type", {
+        {"require_reason_on_update", "INTEGER DEFAULT 0"},
+        {"require_reason_on_archive", "INTEGER DEFAULT 0"},
+        {"admin_write_only", "INTEGER DEFAULT 0"},
+    })
 end
 
 function schema.register(db_path, def)
     ensure_entity_field_display_column(db_path)
     ensure_entity_type_reason_flag_columns(db_path)
-    db.exec(db_path, string.format(
-        "%s entity_type (name) VALUES (%s);", db.insert_ignore(db_path), db.quote(def.name)
-    ))
 
-    -- A separate UPDATE, not folded into the INSERT OR IGNORE above --
-    -- that statement only ever fires once (first registration; IGNORE
-    -- means a second run touches nothing), but these two flags are
-    -- meant to track whatever the schema file currently says, re-applied
-    -- on every sync the same way field definitions already are.
-    require_reason_on_update_flag = 0
-    if def.require_reason_on_update == true then
-        require_reason_on_update_flag = 1
-    end
-    require_reason_on_archive_flag = 0
-    if def.require_reason_on_archive == true then
-        require_reason_on_archive_flag = 1
-    end
-    admin_write_only_flag = 0
-    if def.admin_write_only == true then
-        admin_write_only_flag = 1
-    end
-    db.exec(db_path, string.format(
-        "UPDATE entity_type SET require_reason_on_update = %d, require_reason_on_archive = %d, admin_write_only = %d WHERE name = %s;",
-        require_reason_on_update_flag, require_reason_on_archive_flag, admin_write_only_flag, db.quote(def.name)
-    ))
+    -- Sync DDL first (outside db.transaction so MariaDB never implicitly
+    -- commits a half-written metadata transaction, and before committing
+    -- entity_field so an incompatible multivalue change aborts cleanly).
+    schema.sync_table(db_path, def)
 
-    for i, field in ipairs(def.fields) do
-        enum_json = nil
-        if field.type == "select" or field.type == "multi_select" then
-            json = require("dkjson")
-            enum_json = json.encode(resolve_field_values(db_path, field))
+    function write_schema_metadata_tx()
+        db.exec(db_path, string.format(
+            "%s entity_type (name) VALUES (%s);", db.insert_ignore(db_path), db.quote(def.name)
+        ))
+
+        require_reason_on_update_flag = 0
+        if def.require_reason_on_update == true then
+            require_reason_on_update_flag = 1
         end
-        allowed_types_json = nil
-        if is_polymorphic_field_type(field.type) then
-            json = require("dkjson")
-            allowed_types_json = json.encode(field.allowed_entity_types)
+        require_reason_on_archive_flag = 0
+        if def.require_reason_on_archive == true then
+            require_reason_on_archive_flag = 1
         end
-        required_flag = 0
-        if field.required == true then
-            required_flag = 1
-        end
-        display_flag = 0
-        if field.display == true then
-            display_flag = 1
-        end
-        identifier_flag = 0
-        if field.identifier == true then
-            identifier_flag = 1
+        admin_write_only_flag = 0
+        if def.admin_write_only == true then
+            admin_write_only_flag = 1
         end
         db.exec(db_path, string.format(
-            "%s entity_field (entity_type, name, type, required, enum_values, ref_entity_type, field_order, display, allowed_entity_types, identifier) VALUES (%s, %s, %s, %d, %s, %s, %d, %d, %s, %d);",
-            db.replace_into(db_path),
-            db.quote(def.name), db.quote(field.name), db.quote(field.type),
-            required_flag,
-            db.literal(enum_json),
-            db.literal(field.entity_type),
-            i,
-            display_flag,
-            db.literal(allowed_types_json),
-            identifier_flag
+            "UPDATE entity_type SET require_reason_on_update = %d, require_reason_on_archive = %d, admin_write_only = %d WHERE name = %s;",
+            require_reason_on_update_flag, require_reason_on_archive_flag, admin_write_only_flag, db.quote(def.name)
         ))
+
+        for i, field in ipairs(def.fields) do
+            enum_json = nil
+            if field.type == "select" or field.type == "multi_select" then
+                enum_json = json_lib.encode(resolve_field_values(db_path, field))
+            end
+            allowed_types_json = nil
+            if is_polymorphic_field_type(field.type) then
+                allowed_types_json = json_lib.encode(field.allowed_entity_types)
+            end
+            required_flag = 0
+            if field.required == true then
+                required_flag = 1
+            end
+            display_flag = 0
+            if field.display == true then
+                display_flag = 1
+            end
+            identifier_flag = 0
+            if field.identifier == true then
+                identifier_flag = 1
+            end
+            db.exec(db_path, string.format(
+                "%s entity_field (entity_type, name, type, required, enum_values, ref_entity_type, field_order, display, allowed_entity_types, identifier) VALUES (%s, %s, %s, %d, %s, %s, %d, %d, %s, %d);",
+                db.replace_into(db_path),
+                db.quote(def.name), db.quote(field.name), db.quote(field.type),
+                required_flag,
+                db.literal(enum_json),
+                db.literal(field.entity_type),
+                i,
+                display_flag,
+                db.literal(allowed_types_json),
+                identifier_flag
+            ))
+        end
+
+        -- A field dropped from the schema file stops being a field: forms,
+        -- tables and validation all read entity_field, so its stale row
+        -- would keep it showing (and a required one would keep blocking
+        -- creates). Only the field's definition goes -- its column and every
+        -- value in it stay in the table (nothing is ever deleted), so
+        -- putting the field back restores it with its data.
+        current_names = {}
+        for _, field in ipairs(def.fields) do
+            table.insert(current_names, db.quote(field.name))
+        end
+        retired_sql = string.format("DELETE FROM entity_field WHERE entity_type = %s", db.quote(def.name))
+        if #current_names > 0 then
+            retired_sql = retired_sql .. " AND name NOT IN (" .. table.concat(current_names, ", ") .. ")"
+        end
+        db.exec(db_path, retired_sql .. ";")
+        return true
     end
 
-    -- A field dropped from the schema file stops being a field: forms,
-    -- tables and validation all read entity_field, so its stale row
-    -- would keep it showing (and a required one would keep blocking
-    -- creates). Only the field's definition goes -- its column and every
-    -- value in it stay in the table (nothing is ever deleted), so
-    -- putting the field back restores it with its data.
-    current_names = {}
-    for _, field in ipairs(def.fields) do
-        table.insert(current_names, db.quote(field.name))
-    end
-    retired_sql = string.format("DELETE FROM entity_field WHERE entity_type = %s", db.quote(def.name))
-    if #current_names > 0 then
-        retired_sql = retired_sql .. " AND name NOT IN (" .. table.concat(current_names, ", ") .. ")"
-    end
-    db.exec(db_path, retired_sql .. ";")
-
-    schema.sync_table(db_path, def)
+    db.transaction(db_path, write_schema_metadata_tx)
     invalidate_schema_cache(db_path)
     return true
 end
@@ -620,11 +596,38 @@ end
 -- existed still picks it up without a separate migration step.
 function schema.ensure_multi_field_table(db_path, entity_type, field)
     table_name = schema.multi_field_table_name(entity_type, field.name)
-    if db.table_exists(db_path, table_name) then
-        return
-    end
     parent_col = entity_type .. "_id"
     value_col = multi_field_value_column(field)
+    cache_key = schema_cache_key(db_path)
+    bucket = _multi_table_ready[cache_key]
+    if bucket != nil and bucket[table_name] == value_col then
+        return
+    end
+    if db.table_exists(db_path, table_name) then
+        has_value_col = false
+        for _, col in ipairs(db.get_columns(db_path, table_name)) do
+            if col == value_col then
+                has_value_col = true
+            end
+        end
+        if has_value_col then
+            if bucket == nil then
+                bucket = {}
+                _multi_table_ready[cache_key] = bucket
+            end
+            bucket[table_name] = value_col
+            return
+        end
+        existing_rows = db.query(db_path, string.format("SELECT 1 AS x FROM %s LIMIT 1;", table_name))
+        if existing_rows != nil and #existing_rows > 0 then
+            error(string.format(
+                "cannot change multivalue field '%s.%s' column to '%s' while companion table '%s' contains data",
+                entity_type, field.name, value_col, table_name
+            ))
+        end
+        db.exec(db_path, string.format("DROP TABLE %s;", table_name))
+    end
+    ddl_sql = nil
     if field.type == "multi_reference" then
         -- `field` arrives in two different shapes depending on caller:
         -- a raw schemas/*.lua field definition (schema.sync_table,
@@ -639,8 +642,8 @@ function schema.ensure_multi_field_table(db_path, entity_type, field)
         elseif field.entity_type != nil and field.entity_type != "" then
             ref_type = field.entity_type
         end
-        db.exec(db_path, string.format("""
-            CREATE TABLE %s (
+        ddl_sql = string.format("""
+            CREATE TABLE IF NOT EXISTS %s (
                 %s INTEGER NOT NULL,
                 %s INTEGER NOT NULL,
                 PRIMARY KEY (%s, %s),
@@ -648,20 +651,29 @@ function schema.ensure_multi_field_table(db_path, entity_type, field)
                 FOREIGN KEY (%s) REFERENCES %s(id)
             );
         """, table_name, parent_col, value_col, parent_col, value_col,
-             parent_col, entity_type, value_col, ref_type))
+             parent_col, entity_type, value_col, ref_type)
     else
         -- VARCHAR(255), not TEXT -- same MariaDB/InnoDB key-length
         -- reasoning as ledger.lua/document_link (a bare TEXT/BLOB
         -- column can't be part of a key without a bounded length).
-        db.exec(db_path, string.format("""
-            CREATE TABLE %s (
+        ddl_sql = string.format("""
+            CREATE TABLE IF NOT EXISTS %s (
                 %s INTEGER NOT NULL,
                 %s VARCHAR(255) NOT NULL,
                 PRIMARY KEY (%s, %s),
                 FOREIGN KEY (%s) REFERENCES %s(id)
             );
-        """, table_name, parent_col, value_col, parent_col, value_col, parent_col, entity_type))
+        """, table_name, parent_col, value_col, parent_col, value_col, parent_col, entity_type)
     end
+    ok_ddl, ddl_err = pcall(db.exec, db_path, ddl_sql)
+    if ok_ddl == false and db.table_exists(db_path, table_name) == false then
+        error(ddl_err)
+    end
+    if bucket == nil then
+        bucket = {}
+        _multi_table_ready[cache_key] = bucket
+    end
+    bucket[table_name] = value_col
 end
 
 -- Accepts either a real Lua array (already-parsed JSON, or a
@@ -776,10 +788,21 @@ end
 -- boundary reference/multi_reference already put on entity.lua rather
 -- than the database for their own existence checks.
 function schema.ensure_entity_source_table(db_path)
-    if db.table_exists(db_path, "entity_ref") then
+    cache_key = schema_cache_key(db_path)
+    if _entity_source_ready[cache_key] == true then
         return
     end
-    db.exec(db_path, "CREATE TABLE entity_ref (" ..
+    if db.table_exists(db_path, "entity_ref") then
+        if db.index_exists(db_path, "entity_ref", "idx_entity_source_from") == false then
+            ok_idx, idx_err = pcall(db.exec, db_path, "CREATE INDEX idx_entity_source_from ON entity_ref (from_type, from_id, field_name);")
+            if ok_idx == false and db.index_exists(db_path, "entity_ref", "idx_entity_source_from") == false then
+                error(idx_err)
+            end
+        end
+        _entity_source_ready[cache_key] = true
+        return
+    end
+    ok_tbl, tbl_err = pcall(db.exec, db_path, "CREATE TABLE IF NOT EXISTS entity_ref (" ..
         "id INTEGER PRIMARY KEY " .. db.autoincrement_keyword(db_path) .. ", " ..
         "from_type VARCHAR(255) NOT NULL, " ..
         "from_id INTEGER NOT NULL, " ..
@@ -788,7 +811,16 @@ function schema.ensure_entity_source_table(db_path)
         "to_id INTEGER NOT NULL, " ..
         "created_at TEXT DEFAULT (" .. db.now_expr(db_path) .. ")" ..
         ");")
-    db.exec(db_path, "CREATE INDEX idx_entity_source_from ON entity_ref (from_type, from_id, field_name);")
+    if ok_tbl == false and db.table_exists(db_path, "entity_ref") == false then
+        error(tbl_err)
+    end
+    if db.index_exists(db_path, "entity_ref", "idx_entity_source_from") == false then
+        ok_idx, idx_err = pcall(db.exec, db_path, "CREATE INDEX idx_entity_source_from ON entity_ref (from_type, from_id, field_name);")
+        if ok_idx == false and db.index_exists(db_path, "entity_ref", "idx_entity_source_from") == false then
+            error(idx_err)
+        end
+    end
+    _entity_source_ready[cache_key] = true
 end
 
 -- A single polymorphic item, in whichever shape the caller handed it:
@@ -986,10 +1018,8 @@ end
 -- its files from extension.owned_definitions, so the signature changes
 -- and the next request re-syncs.
 function schema.content_signature(db_path, root)
-    config = require("config")
-    extension = require("extension")
     paths_to_stat = {}
-    for _, dir in ipairs({config.dropdowns_dir(root), config.schemas_dir(root)}) do
+    for _, dir in ipairs({config_lib.dropdowns_dir(root), config_lib.schemas_dir(root)}) do
         attr = lfs.attributes(dir)
         if attr != nil and attr.mode == "directory" then
             for file_name in lfs.dir(dir) do
@@ -999,7 +1029,7 @@ function schema.content_signature(db_path, root)
             end
         end
     end
-    for _, owned in ipairs(extension.owned_definitions(db_path, config.extensions_dir(root), "schemas")) do
+    for _, owned in ipairs(extension_lib.owned_definitions(db_path, config_lib.extensions_dir(root), "schemas")) do
         table.insert(paths_to_stat, owned.path)
     end
     table.sort(paths_to_stat)
@@ -1019,17 +1049,14 @@ end
 -- plus the ones approved extensions own (see
 -- extension.definition_files). Each is {name, path, extension?}.
 function schema.definition_files(db_path, root)
-    config = require("config")
-    extension = require("extension")
-    return extension.definition_files(db_path, config.schemas_dir(root), config.extensions_dir(root), "schemas", true)
+    return extension_lib.definition_files(db_path, config_lib.schemas_dir(root), config_lib.extensions_dir(root), "schemas", true)
 end
 
 -- The file defining entity type `name`, or nil. schemas/<name>.lua is
 -- checked first, without touching extensions at all, since every
 -- /browse, /detail and /register request comes through here.
 function schema.definition_path(db_path, name, root)
-    config = require("config")
-    path = paths.joinpath(config.schemas_dir(root), name .. ".lua")
+    path = paths.joinpath(config_lib.schemas_dir(root), name .. ".lua")
     if paths.file_exists(path) then
         return path
     end
@@ -1049,11 +1076,11 @@ end
 -- of the last real schema.sync_all pass (see schema.content_signature
 -- for why it exists), kept in system_state.
 function schema.stored_sync_signature(db_path)
-    return require("store").get_text(db_path, "schema.sync_signature")
+    return store_lib.get_text(db_path, "schema.sync_signature")
 end
 
 function schema.store_sync_signature(db_path, signature)
-    require("store").set_text(db_path, "schema.sync_signature", signature)
+    store_lib.set_text(db_path, "schema.sync_signature", signature)
 end
 
 -- Scans the schemas directory, registers any schema files found,
@@ -1069,87 +1096,102 @@ end
 -- Skipped entirely when content_signature matches what was
 -- stored after the last real pass -- see that function's own comment.
 function schema.sync_all(db_path, root)
-    config = require("config")
+    config = config_lib
 
     signature = schema.content_signature(db_path, root)
     if signature == schema.stored_sync_signature(db_path) then
         return true
     end
 
-    dropdowns_dir = config.dropdowns_dir(root)
-    attr = lfs.attributes(dropdowns_dir)
-    if attr != nil and attr.mode == "directory" then
-        for file_name in lfs.dir(dropdowns_dir) do
-            if string.match(file_name, "%.lua$") != nil then
-                full_path = paths.joinpath(dropdowns_dir, file_name)
-                def, err = schema.load_dropdown_file(full_path)
-                if def != nil then
-                    schema.register_dropdown(db_path, def)
+    function run_locked_sync()
+        fresh_sig = schema.content_signature(db_path, root)
+        if fresh_sig == schema.stored_sync_signature(db_path) then
+            invalidate_schema_cache(db_path)
+            return true
+        end
+
+        dropdown_defs = {}
+        dropdowns_dir = config.dropdowns_dir(root)
+        attr = lfs.attributes(dropdowns_dir)
+        if attr != nil and attr.mode == "directory" then
+            dropdown_files = {}
+            for file_name in lfs.dir(dropdowns_dir) do
+                if string.match(file_name, "%.lua$") != nil then
+                    table.insert(dropdown_files, file_name)
                 end
             end
-        end
-    end
-
-    files, files_err = schema.definition_files(db_path, root)
-    if files == nil then
-        return false, files_err
-    end
-
-    defs = {}
-    for _, f in ipairs(files) do
-        def, load_err = schema.load_file(f.path)
-        if def == nil then
-            return false, "failed to load " .. f.path .. ": " .. tostring(load_err)
-        end
-        -- An extension may only define the types it declared -- its
-        -- declared names are what was approved.
-        if f.extension != nil and def.name != f.name then
-            return false, "extension '" .. f.extension .. "' declares schema '" .. f.name ..
-                "' but " .. f.path .. " defines '" .. tostring(def.name) .. "'"
-        end
-        table.insert(defs, def)
-    end
-
-    -- lfs.dir's order is filesystem-arbitrary, not dependency order -- a
-    -- multi_reference/multi_select field's junction table needs the
-    -- referenced entity type's own table to already exist for its FK.
-    -- Every previously-existing deployment happened to work because
-    -- schemas accumulated one at a time over real time (whatever a new
-    -- schema referenced already existed by then) -- a genuinely fresh
-    -- sync of every file at once, in undefined order, has no such
-    -- guarantee (confirmed live, 2026-09-01: a from-scratch sync failed
-    -- registering a schema whose multi_reference pointed at a type
-    -- lfs.dir happened to list later). Retry across passes instead of
-    -- registering strictly once per file, so file order stops mattering
-    -- -- a pass that registers nothing new means what's left is a real
-    -- error (an actual typo or a genuine cycle), not an ordering issue.
-    last_error = nil
-    while #defs > 0 do
-        still_pending = {}
-        registered_this_pass = 0
-        for _, def in ipairs(defs) do
-            ok, register_err = pcall(schema.register, db_path, def)
-            if ok == true then
-                registered_this_pass = registered_this_pass + 1
-            else
-                table.insert(still_pending, def)
-                last_error = register_err
+            table.sort(dropdown_files)
+            for _, file_name in ipairs(dropdown_files) do
+                full_path = paths.joinpath(dropdowns_dir, file_name)
+                def, err = schema.load_dropdown_file(full_path)
+                if def == nil then
+                    return false, "failed to load dropdown " .. full_path .. ": " .. tostring(err)
+                end
+                table.insert(dropdown_defs, def)
             end
         end
-        if registered_this_pass == 0 then
-            return false, "schema sync stalled, no progress in a pass -- last error: " .. tostring(last_error)
+
+        files, files_err = schema.definition_files(db_path, root)
+        if files == nil then
+            return false, files_err
         end
-        defs = still_pending
+
+        defs = {}
+        for _, f in ipairs(files) do
+            def, load_err = schema.load_file(f.path)
+            if def == nil then
+                return false, "failed to load " .. f.path .. ": " .. tostring(load_err)
+            end
+            -- An extension may only define the types it declared -- its
+            -- declared names are what was approved.
+            if f.extension != nil and def.name != f.name then
+                return false, "extension '" .. f.extension .. "' declares schema '" .. f.name ..
+                    "' but " .. f.path .. " defines '" .. tostring(def.name) .. "'"
+            end
+            table.insert(defs, def)
+        end
+
+        if #dropdown_defs > 0 then
+            function write_all_dropdowns_tx()
+                for _, ddef in ipairs(dropdown_defs) do
+                    schema.register_dropdown(db_path, ddef)
+                end
+                return true
+            end
+            db.transaction(db_path, write_all_dropdowns_tx)
+        end
+
+        last_error = nil
+        while #defs > 0 do
+            still_pending = {}
+            registered_this_pass = 0
+            for _, def in ipairs(defs) do
+                ok, register_err = pcall(schema.register, db_path, def)
+                if ok == true then
+                    registered_this_pass = registered_this_pass + 1
+                else
+                    table.insert(still_pending, def)
+                    last_error = register_err
+                end
+            end
+            if registered_this_pass == 0 then
+                return false, "schema sync stalled, no progress in a pass -- last error: " .. tostring(last_error)
+            end
+            defs = still_pending
+        end
+
+        schema.store_sync_signature(db_path, fresh_sig)
+        invalidate_schema_cache(db_path)
+        return true
     end
 
-    schema.store_sync_signature(db_path, signature)
-    return true
+    return db.with_lock(db_path, "daat_schema_sync", 120, run_locked_sync)
 end
 
 -- The schema layout as a plain Luam table: {name, fields = {{name, label,
 -- type, required, values?, ref_entity_type?}, ...}}. Shared by
 -- schema.show_json (JSON for the client-side registration table) and
--- the browse/detail HTML views (cgi.lua/html.lua) -- one source of
+-- the browse/detail HTML views (web.lua/ui.lua) -- one source of
 -- truth for "what does this entity type's layout look like", native
 -- consumers don't need to decode JSON just to get a Luam table back.
 -- Prefers labels from the version-controlled schema file if available,
@@ -1172,12 +1214,12 @@ function schema.layout(db_path, name)
         -- its own literal list) AND the resolved dropdown values --
         -- checking only the former sends no `values` array at all for
         -- a dropdown-referencing select field, and the register page's
-        -- own client-side JS (addRow(), html.lua) crashes on
+        -- own client-side JS (addRow(), ui.lua) crashes on
         -- `field.values.forEach` the instant it reaches one, breaking
         -- the whole batch-entry table for any entity type with a
         -- dropdown-based select (e.g. cell_line's required
         -- `tissue_code`), not just that one field.
-        dkjson = require("dkjson")
+        dkjson = json_lib
         db_fields_by_name = {}
         for _, f in ipairs(schema.fields(db_path, name)) do
             db_fields_by_name[f.name] = f
@@ -1223,7 +1265,7 @@ function schema.layout(db_path, name)
         end
         return result
     else
-        dkjson = require("dkjson")
+        dkjson = json_lib
         if schema.is_registered(db_path, name) == false then
             return nil, "unknown entity type: " .. name
         end
@@ -1262,8 +1304,7 @@ function schema.show_json(db_path, name)
     if layout == nil then
         return nil, err
     end
-    dkjson = require("dkjson")
-    return dkjson.encode(layout)
+    return json_lib.encode(layout)
 end
 
 -- Whether `name` has the shape a real registered entity-type name could
@@ -1279,12 +1320,19 @@ end
 -- call site happened to be safe only because it incidentally checked
 -- the name resolves via schema.layout/schema.fields first -- not a
 -- deliberate guard. This is that guard: a single charset check, applied
--- once, centrally, at every point in cgi.lua where `params.type`/
+-- once, centrally, at every point in web.lua where `params.type`/
 -- `params.ref_type`-shaped external input becomes an `entity_type`,
 -- before it can reach any raw SQL or path-building call.
 function schema.valid_name_syntax(name)
     return type(name) == "string" and string.match(name, "^[a-z_][a-z0-9_]*$") != nil
 end
+
+-- Resource filename guard for views, templates, and extensions, which
+-- may carry hyphens (e.g. "widgets-in-stock", "widget-intake") unlike SQL
+-- entity-type names, while still rejecting path separators, "..", leading
+-- dots/hyphens, whitespace, quotes, and HTML metacharacters before any
+-- paths.joinpath or sandbox.run call.
+schema.valid_resource_name = config_lib.valid_resource_name
 
 -- Whether `entity_type` has been registered at all. A registered type
 -- can legitimately have zero custom fields (e.g. a schema whose only
@@ -1369,7 +1417,7 @@ function schema.suggest_type(db_path, entity_type)
     return best
 end
 
--- Task #93's reason-for-change opt-in flags for one registered entity
+-- Reason-for-change opt-in flags for one registered entity
 -- type -- what entity.update/entity.archive check before requiring
 -- (or not) a non-empty `reason` argument. Defaults both false for an
 -- unregistered type rather than erroring -- callers already handle
@@ -1389,7 +1437,7 @@ function schema.reason_flags(db_path, entity_type)
 end
 
 -- Whether writes (create/update/archive) to this entity type
--- require Admin capability -- checked in cgi.lua, which has the HTTP
+-- require Admin capability -- checked in web.lua, which has the HTTP
 -- session's capabilities in scope (schema.lua/entity.lua don't).
 function schema.admin_write_only(db_path, entity_type)
     rows = db.query(db_path, string.format(
@@ -1483,7 +1531,7 @@ end
 -- {from_type, to_type, field_name}, one per reference-typed field, across
 -- every registered schema. Backs the Data page's entity-relation diagram;
 -- a pure introspection query (like schema.fields()), so it belongs here
--- rather than in html.lua/cgi.lua alongside the rendering.
+-- rather than in ui.lua/web.lua alongside the rendering.
 function schema.relationships(db_path, entity_types)
     types = entity_types
     if types == nil then
@@ -1497,7 +1545,7 @@ function schema.relationships(db_path, entity_types)
             if (field.type == "reference" or field.type == "multi_reference") and field.ref_entity_type != nil and field.ref_entity_type != "" then
                 -- field_type lets a caller tell a plain
                 -- `reference` (a real column on from_type -- reverse-
-                -- queryable directly, see cgi.lua's related_records)
+                -- queryable directly, see web.lua's related_records)
                 -- apart from `multi_reference` (stored in a separate
                 -- junction table instead, schema.ensure_multi_field_table
                 -- -- not reverse-queryable the same way).
@@ -1513,8 +1561,7 @@ function schema.relationships(db_path, entity_types)
                 -- existed at all, since there was nowhere for it to show
                 -- up in this list -- don't repeat that gap now that
                 -- there is one.
-                json = require("dkjson")
-                allowed_types = json.decode(field.allowed_entity_types)
+                allowed_types = json_lib.decode(field.allowed_entity_types)
                 if allowed_types != nil then
                     for _, to_type in ipairs(allowed_types) do
                         table.insert(edges, {from_type = t.name, to_type = to_type, field_name = field.name, field_type = field.type})

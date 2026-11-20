@@ -18,8 +18,8 @@ credentials, CI) is up to whoever runs it, and lives with them, not here.
 
 ## What the host provides
 
-- **A volume at `/data`**: the deployment root. It holds `platform.lua`, written by the host before the first seed, and the store.
-- **A model**: for local open models via Ollama (or any OpenAI-compatible server), `agent_provider = "ollama"` in `platform.lua` (defaults to `qwen3:8b` and `nomic-embed-text` at `http://127.0.0.1:11434/v1`; set `ollama_url` if the server runs elsewhere). For Vertex, `agent_provider = "vertex"` plus `vertex_project` in `platform.lua`. Demo and local dev deployments typically set `agent_retention = "full"` (`doc/agent-data.md`, "Retention").
+- **A volume at `/data`**: the deployment root. It holds `config.lua`, written by the host before the first seed, and the store.
+- **A model**: for local open models via Ollama (or any OpenAI-compatible server), `agent = {provider = "ollama", retention = "full"}` in `config.lua` (defaults to `qwen3:8b` and `nomic-embed-text` at `http://127.0.0.1:11434/v1`; set `agent.ollama_url` if the server runs elsewhere). For Vertex, `agent = {provider = "vertex", vertex_project = "...", retention = "full"}` in `config.lua` (see `doc/configuration.md`).
 - **First boot**:
 
   ```sh
@@ -28,7 +28,7 @@ credentials, CI) is up to whoever runs it, and lives with them, not here.
   ```
 
 - **TLS in front of port 8000**: `apache.conf` sets `HTTPS=on`, so cookies are always marked Secure.
-- **Background queues on a timer**: `daat agent run-pending-background`, `extension run-pending`, `document embed-pending`, `knowledge curate-pending 3`, and hourly `store prune`.
+- **Background queues on a timer**: `daat run-pending` (which drains extension after-hooks, `document embed-pending`, deferred retrieval reviews, `knowledge curate-pending`, and `agent run-pending-background` in order), plus hourly `daat store prune` (or `daat run-pending --prune`).
 
 Run every CLI command as `www-data` in `/data`, so the SQLite files stay
 owned by the web server.

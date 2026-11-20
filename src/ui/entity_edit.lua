@@ -5,13 +5,13 @@
 -- boot serialization in Luam while keeping the CSS, HTML shell, and
 -- form controller in standalone assets (`ui/entity_edit.{css,html,js}`).
 
-asset = require("asset")
-html_lib = require("html")
-json = require("dkjson")
-page_lib = require("page")
-render_lib = require("render")
+const asset = require("asset")
+const html_lib = require("html")
+const json = require("dkjson")
+const page_lib = require("page")
+const render_lib = require("render")
 
-entity_edit = {}
+const entity_edit = {}
 
 function entity_edit.render_actions()
     sections = {

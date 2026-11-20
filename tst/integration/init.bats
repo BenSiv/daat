@@ -10,7 +10,7 @@ teardown() {
     cleanup_test_env
 }
 
-@test "a plain init stays truly empty -- no seed content, no theme.lua (task #101)" {
+@test "a plain init stays truly empty -- no seed content, no theme.lua" {
     run "$BIN" init
     [[ "$output" =~ "Initialized store at" ]]
     [ -d schemas ]
@@ -24,13 +24,13 @@ teardown() {
     [ ! -f theme.lua ]
 }
 
-@test "init --with-examples writes one example of each kind plus theme.lua/platform.lua" {
-    # setup_test_env's own write_platform_config already seeded a
-    # minimal platform.lua (agent_provider = "test", for the
+@test "init --with-examples writes one example of each kind plus theme.lua/config.lua" {
+    # setup_test_env's own write_config already seeded a
+    # minimal config.lua (agent_provider = "test", for the
     # deterministic test provider) -- remove it first so this test
-    # exercises examples.write_all's real platform.lua stub, not the
+    # exercises examples.write_all's real config.lua stub, not the
     # harness's own scaffolding file.
-    rm -f platform.lua
+    rm -f config.lua
 
     run "$BIN" init --with-examples
     [[ "$output" =~ "Initialized store at" ]]
@@ -43,10 +43,10 @@ teardown() {
     [ -f extensions/widget-quantity-range/manifest.lua ]
     [ -f extensions/widget-quantity-range/main.lua ]
     [ -f theme.lua ]
-    [ -f platform.lua ]
-    run cat platform.lua
-    [[ "$output" =~ "-- agent_provider = \"ollama\"" ]]
-    [[ "$output" =~ "-- agent_model = \"qwen3:8b\"" ]]
+    [ -f config.lua ]
+    run cat config.lua
+    [[ "$output" =~ "-- provider = \"ollama\"" ]]
+    [[ "$output" =~ "-- model = \"qwen3:8b\"" ]]
 
     # The generated content is real, working config-as-code, not just
     # placeholder text -- both example schemas register successfully.
@@ -75,7 +75,7 @@ teardown() {
 
     # Same harness-scaffolding removal as the previous test -- see its
     # own comment.
-    rm -f platform.lua
+    rm -f config.lua
 
     run "$BIN" init --with-examples
     [[ "$output" =~ "Already initialized" ]]
@@ -103,4 +103,21 @@ EOF
     run "$BIN" schema add schemas/bad.lua
     [[ "$output" =~ "collides with a builtin column" ]]
     [[ ! "$output" =~ "Registered" ]]
+}
+
+@test "CLI exits non-zero on unknown commands, missing init, and --help exits zero" {
+    run "$BIN" --help
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "Usage: daat" ]]
+
+    run "$BIN"
+    [ "$status" -eq 1 ]
+
+    run "$BIN" not-a-command
+    [ "$status" -eq 1 ]
+    [[ "$output" =~ "not a valid command" ]]
+
+    run "$BIN" user list
+    [ "$status" -eq 1 ]
+    [[ "$output" =~ "Not initialized" ]]
 }

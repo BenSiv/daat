@@ -1,7 +1,7 @@
 -- reference.lua's pure rules: which names are distinctive enough to be
 -- reference targets, and which keys a text offers for lookup.
 
-reference = require("reference")
+reference = require("document.reference")
 
 unit = require("unit")
 check = unit.check

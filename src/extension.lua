@@ -7,19 +7,20 @@
 -- update_entity bindings). extension.invoke() takes an already-built ctx
 -- rather than building one itself.
 
-db = require("database")
-json = require("dkjson")
-paths = require("paths")
-lfs = require("lfs")
-sandbox = require("sandbox")
-config = require("config")
+const db = require("database")
+const json = require("dkjson")
+const paths = require("paths")
+const lfs = require("lfs")
+const sandbox = require("sandbox")
+const config = require("config")
+const store_lib = require("store")
 
-extension = {}
+const extension = {}
 
 -- How many retries make sense before giving up on a job plausibly
 -- depends on how flaky a given deployment's own extensions/network are
 -- -- not a bare hardcoded literal; read fresh from
--- config.platform_config() per call rather than resolved once at load.
+-- config.load() per call rather than resolved once at load.
 
 extension.SCHEMA = """
 -- VARCHAR(255), not TEXT -- MariaDB/InnoDB refuses a bare TEXT column
@@ -59,7 +60,7 @@ end
 -- enqueue_after_hooks), and on MariaDB any CREATE TABLE -- IF NOT EXISTS
 -- included -- commits the open transaction implicitly, which would
 -- split entity.create_batch's one transaction into one per row.
-extension_schema_ready = {}
+const extension_schema_ready = {}
 
 function extension_schema_key(db_path)
     return db.cache_key(db_path)
@@ -70,7 +71,7 @@ function extension.init_schema(db_path)
     if extension_schema_ready[key] == true then
         return true
     end
-    require("store").ensure_system_tables(db_path)
+    store_lib.ensure_system_tables(db_path)
     result = db.exec(db_path, extension_schema_sql(db_path))
     extension_schema_ready[key] = true
     return result
@@ -113,7 +114,7 @@ end
 -- An owned name becomes a file name (<kind>/<name>.lua) and, for a
 -- schema, a table name -- the schema pattern is schema.valid_name_syntax's
 -- own; view names may also carry hyphens (e.g. "widgets-in-stock").
-OWNED_NAME_PATTERNS = {
+const OWNED_NAME_PATTERNS = {
     schemas = "^[a-z_][a-z0-9_]*$",
     views = "^[a-z0-9_][a-z0-9_-]*$",
 }
@@ -123,6 +124,9 @@ OWNED_NAME_PATTERNS = {
 function extension.validate_manifest(manifest)
     if type(manifest.name) != "string" or manifest.name == "" then
         return "manifest must have a non-empty string 'name'"
+    end
+    if not config.valid_resource_name(manifest.name) then
+        return "manifest '" .. tostring(manifest.name) .. "' has an invalid extension name"
     end
     if type(manifest.events) != "table" then
         return "manifest '" .. tostring(manifest.name) .. "' must have an 'events' list"
@@ -203,8 +207,8 @@ function extension.validate_manifest(manifest)
         end
     end
     -- capabilities.manual_triggers declares admin-only "run this now"
-    -- buttons (brex 925561615's own blocker), listed and dispatched from
-    -- a dedicated /admin-triggers route (cgi.lua) -- never the chat
+    -- buttons, listed and dispatched from
+    -- a dedicated /admin-triggers route (web.lua) -- never the chat
     -- agent, never an ordinary user's own request. Unlike
     -- capabilities.tools there's no shared dispatch namespace to worry
     -- about (no is_reserved_tool_name-style check needed): the route path
@@ -236,6 +240,9 @@ end
 -- Loads a manifest from extensions/<name>/manifest.lua, sandboxed the
 -- same data-only way a schema file is (see doc/schema.md).
 function extension.load_manifest(ext_dir, name)
+    if not config.valid_resource_name(name) then
+        return nil, "invalid extension name: " .. tostring(name)
+    end
     manifest_path = paths.joinpath(ext_dir, name, "manifest.lua")
     source = paths.read_file(manifest_path)
     if source == nil then
@@ -253,6 +260,9 @@ function extension.load_manifest(ext_dir, name)
 end
 
 function extension.load_main_source(ext_dir, name)
+    if not config.valid_resource_name(name) then
+        return nil, "invalid extension name: " .. tostring(name)
+    end
     main_path = paths.joinpath(ext_dir, name, "main.lua")
     source = paths.read_file(main_path)
     if source == nil then
@@ -330,8 +340,8 @@ function extension.definition_files(db_path, dir, ext_dir, kind, dir_required)
 end
 
 -- Approved extensions that also declare capabilities.ui -- the one
--- list both the nav rail (html.page_shell) and the /ext/<name> route
--- dispatcher (cgi.lua) need; a bad manifest or an unapproved/no-ui
+-- list both the nav rail (ui.page_shell) and the /ext/<name> route
+-- dispatcher (web.lua) need; a bad manifest or an unapproved/no-ui
 -- extension is silently excluded here rather than surfaced as an
 -- error, same spirit as extension.matching's own filtering.
 function extension.approved_with_ui(db_path, ext_dir)
@@ -367,7 +377,7 @@ function extension.approved_with_tools(db_path, ext_dir)
 end
 
 -- Approved extensions that also declare capabilities.manual_triggers --
--- the one list the /admin-triggers route (cgi.lua) needs, same
+-- the one list the /admin-triggers route (web.lua) needs, same
 -- exclusion spirit as approved_with_ui/approved_with_tools.
 function extension.approved_with_manual_triggers(db_path, ext_dir)
     result = {}
@@ -579,7 +589,7 @@ end
 
 function extension.approved_capabilities(db_path, name)
     extension.init_schema(db_path)
-    approved = require("store").approved_content(db_path, "extension", name)
+    approved = store_lib.approved_content(db_path, "extension", name)
     if approved == nil then
         return nil
     end
@@ -599,12 +609,12 @@ function extension.approve(db_path, manifest, approved_by)
     caps = manifest.capabilities
     if caps == nil then caps = {} end
     caps_json = json.encode(caps)
-    require("store").approve(db_path, "extension", manifest.name, caps_json, approved_by)
+    store_lib.approve(db_path, "extension", manifest.name, caps_json, approved_by)
 end
 
 function extension.revoke(db_path, name)
     extension.init_schema(db_path)
-    require("store").revoke(db_path, "extension", name)
+    store_lib.revoke(db_path, "extension", name)
 end
 
 -- ---- Sandboxed invocation ----
@@ -620,7 +630,7 @@ end
 -- never one).
 --
 -- Shared by extension.invoke (entity hooks) and the UI-route/action
--- dispatch (cgi.lua) -- both need "load this extension's code, get its
+-- dispatch (web.lua) -- both need "load this extension's code, get its
 -- hooks table" and nothing else; what they call on that table differs
 -- per call site. Returns (nil, nil) -- not an error -- when main.lua
 -- doesn't return a hooks table at all, so a manifest can declare
@@ -644,6 +654,13 @@ function extension.load_hooks(ext_dir, name, manifest)
     return hooks, nil
 end
 
+function extension.call_bounded(fn, ...)
+    if sandbox.pcall_bounded != nil then
+        return sandbox.pcall_bounded(nil, fn, ...)
+    end
+    return pcall(fn, ...)
+end
+
 -- Calls hook_name (e.g. "on_before"/"on_after") from an extension's
 -- hooks table. `ctx` is built by the caller (entity.lua owns
 -- ctx.query/create_entity/update_entity, since it owns entity CRUD).
@@ -661,7 +678,7 @@ function extension.invoke(ext_dir, name, manifest, hook_name, new_values, old_va
     if type(hook_fn) != "function" then
         return true, nil
     end
-    return pcall(hook_fn, new_values, old_values, ctx)
+    return extension.call_bounded(hook_fn, new_values, old_values, ctx)
 end
 
 -- ---- After-hook job queue ----
@@ -690,17 +707,40 @@ function extension.enqueue_after_hooks(db_path, ext_dir, event_name, entity_type
     end
 end
 
+const JOB_STALE_CLAIM_SECONDS = 900
+
+function new_job_claim_token()
+    crypto_lib = require("crypto")
+    tok = crypto_lib.random_hex(8)
+    if tok == nil then
+        return tostring(os.time()) .. "_" .. tostring(math.random(100000, 999999))
+    end
+    return tok
+end
+
 function extension.pending_jobs(db_path, limit)
     extension.init_schema(db_path)
     if limit == nil then limit = 50 end
+    stale_expr = store_lib.ago_expr(db_path, JOB_STALE_CLAIM_SECONDS)
     rows = db.query(db_path, string.format(
-        "SELECT * FROM system_job WHERE status = 'pending' AND attempts < %d ORDER BY job_id ASC LIMIT %d;",
-        config.platform_config().extension_max_job_attempts, limit
+        "SELECT * FROM system_job WHERE (status = 'pending' OR (status LIKE 'running:%%' AND updated_at IS NOT NULL AND updated_at < %s)) AND attempts < %d ORDER BY job_id ASC LIMIT %d;",
+        stale_expr, config.load().extension_max_job_attempts, limit
     ))
     if rows == nil then
         return {}
     end
     return rows
+end
+
+function extension.claim_job(db_path, job_id)
+    extension.init_schema(db_path)
+    claim_status = "running:" .. new_job_claim_token()
+    stale_expr = store_lib.ago_expr(db_path, JOB_STALE_CLAIM_SECONDS)
+    _, _, changed = db.exec(db_path, string.format(
+        "UPDATE system_job SET status = %s, updated_at = %s WHERE job_id = %d AND (status = 'pending' OR (status LIKE 'running:%%' AND updated_at IS NOT NULL AND updated_at < %s));",
+        db.quote(claim_status), db.now_expr(db_path), tonumber(job_id), stale_expr
+    ))
+    return changed != nil and changed > 0
 end
 
 function extension.mark_job_done(db_path, job)
@@ -717,7 +757,7 @@ end
 function extension.mark_job_failed(db_path, job, message)
     attempts = tonumber(job.attempts) + 1
     status = "pending"
-    if attempts >= config.platform_config().extension_max_job_attempts then
+    if attempts >= config.load().extension_max_job_attempts then
         status = "failed"
     end
     db.exec(db_path, string.format(

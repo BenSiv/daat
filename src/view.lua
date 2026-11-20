@@ -8,18 +8,21 @@
 -- escalation-detection principle as extension.capabilities_equal, just
 -- keyed on the query text instead of a capabilities table).
 
-db = require("database")
-json = require("dkjson")
-paths = require("paths")
-lfs = require("lfs")
-sandbox = require("sandbox")
-schema = require("schema")
+const db = require("database")
+const json = require("dkjson")
+const paths = require("paths")
+const lfs = require("lfs")
+const sandbox = require("sandbox")
+const schema = require("schema")
+const store_lib = require("store")
+const config_lib = require("config")
+const extension_lib = require("extension")
 
-view = {}
+const view = {}
 
 -- Approvals live in system_approval (store.lua), kind 'view'.
 function view.init_schema(db_path)
-    require("store").ensure_system_tables(db_path)
+    store_lib.ensure_system_tables(db_path)
 end
 
 -- Rejects anything but a single, plain SELECT statement: no stacked
@@ -28,48 +31,212 @@ end
 -- substring search -- platform's own tables have columns like
 -- updated_at/updated_by, which a naive substring check for "update"
 -- would wrongly reject).
-FORBIDDEN_SQL_WORDS = {
+const FORBIDDEN_SQL_WORDS = {
     "insert", "update", "delete", "drop", "alter", "attach", "detach",
     "pragma", "create", "replace", "vacuum", "reindex", "trigger", "exec",
+    "outfile", "dumpfile", "load_file", "load_extension",
+    "get_lock", "release_lock", "release_all_locks", "sleep", "benchmark",
 }
+
+const FORBIDDEN_SQL_WORDS_SET = {}
+for _, w in ipairs(FORBIDDEN_SQL_WORDS) do
+    FORBIDDEN_SQL_WORDS_SET[w] = true
+end
+
+-- Lexical scanner over a single SQL query string. Produces a flat list of
+-- `{kind, value, raw, depth}` tokens (`kind` in `"word"`, `"ident"`,
+-- `"string"`, `"punct"`, `"number"`), stripping `--`, `#`, and standard
+-- `/* ... */` comments while rejecting MySQL executable comments
+-- (`/*! ... */`), unclosed literals/comments, and unbalanced parentheses.
+-- Quoted identifiers (`"..."`, `` `...` ``, `[...]`) are unquoted into
+-- `kind = "ident"` so table allowlists see the real identifier regardless
+-- of quoting style.
+function scan_sql_tokens(sql_text)
+    if type(sql_text) != "string" then
+        return nil, "query must be a string"
+    end
+    tokens = {}
+    len = string.len(sql_text)
+    i = 1
+    depth = 0
+
+    while i <= len do
+        ch = string.sub(sql_text, i, i)
+        ch2 = string.sub(sql_text, i, i + 1)
+
+        if string.match(ch, "%s") != nil then
+            i = i + 1
+        elseif ch2 == "--" or ch == "#" then
+            nl = string.find(sql_text, "\n", i + 1, true)
+            if nl == nil then
+                i = len + 1
+            else
+                i = nl + 1
+            end
+        elseif ch2 == "/*" then
+            if string.sub(sql_text, i + 2, i + 2) == "!" then
+                return nil, "executable SQL comments (/*! ... */) are not allowed"
+            end
+            close_pos = string.find(sql_text, "*/", i + 2, true)
+            if close_pos == nil then
+                return nil, "unclosed SQL block comment"
+            end
+            i = close_pos + 2
+        elseif ch == "'" then
+            j = i + 1
+            parts = {}
+            closed = false
+            while j <= len do
+                c = string.sub(sql_text, j, j)
+                if c == "'" then
+                    if j < len and string.sub(sql_text, j + 1, j + 1) == "'" then
+                        table.insert(parts, "'")
+                        j = j + 2
+                    else
+                        closed = true
+                        j = j + 1
+                        break
+                    end
+                else
+                    table.insert(parts, c)
+                    j = j + 1
+                end
+            end
+            if not closed then
+                return nil, "unclosed string literal"
+            end
+            inner = table.concat(parts)
+            table.insert(tokens, {kind = "string", value = inner, raw = inner, depth = depth})
+            i = j
+        elseif ch == "\"" or ch == "`" then
+            quote_ch = ch
+            j = i + 1
+            parts = {}
+            closed = false
+            while j <= len do
+                c = string.sub(sql_text, j, j)
+                if c == quote_ch then
+                    if j < len and string.sub(sql_text, j + 1, j + 1) == quote_ch then
+                        table.insert(parts, quote_ch)
+                        j = j + 2
+                    else
+                        closed = true
+                        j = j + 1
+                        break
+                    end
+                else
+                    table.insert(parts, c)
+                    j = j + 1
+                end
+            end
+            if not closed then
+                return nil, "unclosed quoted identifier"
+            end
+            ident_raw = table.concat(parts)
+            table.insert(tokens, {kind = "ident", value = string.lower(ident_raw), raw = ident_raw, depth = depth})
+            i = j
+        elseif ch == "[" then
+            close_br = string.find(sql_text, "]", i + 1, true)
+            if close_br == nil then
+                return nil, "unclosed bracket identifier"
+            end
+            ident_raw = string.sub(sql_text, i + 1, close_br - 1)
+            table.insert(tokens, {kind = "ident", value = string.lower(ident_raw), raw = ident_raw, depth = depth})
+            i = close_br + 1
+        elseif ch == "(" then
+            table.insert(tokens, {kind = "punct", value = "(", raw = "(", depth = depth})
+            depth = depth + 1
+            i = i + 1
+        elseif ch == ")" then
+            depth = depth - 1
+            if depth < 0 then
+                return nil, "unbalanced parentheses"
+            end
+            table.insert(tokens, {kind = "punct", value = ")", raw = ")", depth = depth})
+            i = i + 1
+        elseif ch == "," or ch == ";" or ch == "." then
+            table.insert(tokens, {kind = "punct", value = ch, raw = ch, depth = depth})
+            i = i + 1
+        else
+            _, num_end, num_txt = string.find(sql_text, "^(%d+%.?%d*)", i)
+            if num_txt != nil then
+                table.insert(tokens, {kind = "number", value = num_txt, raw = num_txt, depth = depth})
+                i = num_end + 1
+            else
+                _, word_end, word_txt = string.find(sql_text, "^([%a_][%w_$]*)", i)
+                if word_txt != nil then
+                    table.insert(tokens, {kind = "word", value = string.lower(word_txt), raw = word_txt, depth = depth})
+                    i = word_end + 1
+                else
+                    i = i + 1
+                end
+            end
+        end
+    end
+
+    if depth != 0 then
+        return nil, "unbalanced parentheses"
+    end
+    return tokens, nil
+end
 
 -- Nil when sql_text is a single plain SELECT, else why not -- naming
 -- the offending token, so the agent fixes the actual problem instead of
 -- guessing (seen in prod: REPLACE() refused as "not a plain SELECT").
 function view.select_only_problem(sql_text)
-    trimmed = string.gsub(sql_text, "^%s+", "")
-    trimmed = string.gsub(trimmed, "%s+$", "")
-    lowered = string.lower(trimmed)
-    -- A CTE ("WITH x AS (...) SELECT ...") is still a single read-only
-    -- statement -- allowed on the same footing as a plain SELECT, not a
-    -- looser check: the trailing FORBIDDEN_SQL_WORDS/no-semicolon checks
-    -- below still apply to the whole text either way.
-    if string.find(lowered, "^select") == nil and string.find(lowered, "^with%f[%A]") == nil then
+    if type(sql_text) != "string" then
+        return "must start with SELECT (or WITH ... SELECT)"
+    end
+    -- Conservative backslash guard: SQLite and default-mode MySQL disagree
+    -- on whether \' ends a literal, so when any backslash appears in the
+    -- query text, inspect every word across the raw text before trusting
+    -- literal boundaries.
+    if string.find(sql_text, "\\", 1, true) != nil then
+        raw_lower = string.lower(sql_text)
+        for _, word in ipairs(FORBIDDEN_SQL_WORDS) do
+            if string.find(raw_lower, "%f[%a]" .. word .. "%f[%A]") != nil then
+                return "contains '" .. word .. "' outside a quoted string -- refused anywhere, even as a function name like REPLACE()"
+            end
+        end
+    end
+
+    tokens, scan_err = scan_sql_tokens(sql_text)
+    if tokens == nil then
+        return scan_err
+    end
+    if #tokens == 0 then
+        return "must start with SELECT (or WITH ... SELECT)"
+    end
+    first = tokens[1]
+    if first.kind != "word" or (first.value != "select" and first.value != "with") then
         return "must start with SELECT (or WITH ... SELECT)"
     end
 
-    body = trimmed
-    if string.sub(trimmed, -1) == ";" then
-        body = string.sub(trimmed, 1, -2)
-    end
-    if string.find(body, ";") != nil then
-        return "contains ';' -- send one statement, no semicolons"
+    for idx, tok in ipairs(tokens) do
+        if tok.kind == "punct" and tok.value == ";" and idx < #tokens then
+            return "contains ';' -- send one statement, no semicolons"
+        end
     end
 
-    -- Keywords inside '...' literals are inert (event_type = 'create').
-    -- Only stripped when there's no backslash: SQLite and MariaDB
-    -- disagree on whether \' ends a literal, so with one present the
-    -- literal boundaries are ambiguous and every word is checked.
-    words_text = lowered
-    if string.find(lowered, "\\", 1, true) == nil then
-        words_text = string.gsub(lowered, "'[^']*'", "''")
-    end
-    for _, word in ipairs(FORBIDDEN_SQL_WORDS) do
-        if string.find(words_text, "%f[%a]" .. word .. "%f[%A]") != nil then
-            return "contains '" .. word .. "' outside a quoted string -- refused anywhere, even as a function name like REPLACE()"
+    for _, tok in ipairs(tokens) do
+        if tok.kind == "word" and FORBIDDEN_SQL_WORDS_SET[tok.value] == true then
+            return "contains '" .. tok.value .. "' outside a quoted string -- refused anywhere, even as a function name like REPLACE()"
         end
     end
     return nil
+end
+
+function has_top_level_limit(sql_text)
+    tokens, _ = scan_sql_tokens(sql_text)
+    if tokens == nil then
+        return false
+    end
+    for _, tok in ipairs(tokens) do
+        if tok.kind == "word" and tok.value == "limit" and tok.depth == 0 then
+            return true
+        end
+    end
+    return false
 end
 
 function view.is_select_only(sql_text)
@@ -82,7 +249,7 @@ end
 -- into the SQL text, so there's no injection surface from the value
 -- itself regardless of type. `type` controls the coercion applied
 -- before binding, not any kind of SQL-text validation.
-PARAM_TYPES = {"integer", "number", "text"}
+const PARAM_TYPES = {"integer", "number", "text"}
 
 function is_valid_param_type(t)
     for _, valid in ipairs(PARAM_TYPES) do
@@ -142,7 +309,7 @@ function view.validate(def)
     end
     -- Optional: which single entity type this view is primarily about,
     -- if any (a view can join across types, so there isn't always one --
-    -- see html.render_view's own comment). Purely a rendering hint for
+    -- see ui.render_view's own comment). Purely a rendering hint for
     -- the "+ Register new" link; not cross-checked against schema.list()
     -- here since view.load/validate has no db_path to check against --
     -- a typo'd name just means a broken register link, not a security
@@ -172,9 +339,7 @@ end
 -- Every view definition file this deployment loads: views/*.lua plus
 -- the ones approved extensions own (see extension.definition_files).
 function view.definition_files(db_path, root)
-    config = require("config")
-    extension = require("extension")
-    return extension.definition_files(db_path, config.views_dir(root), config.extensions_dir(root), "views", false)
+    return extension_lib.definition_files(db_path, config_lib.views_dir(root), config_lib.extensions_dir(root), "views", false)
 end
 
 -- An extension-owned view must define the name it declared, since
@@ -192,7 +357,10 @@ end
 -- views/<name>.lua first, without touching extensions at all -- the
 -- nav rail checks for prioritized_tasks on every request.
 function view.load(db_path, name, root)
-    config = require("config")
+    if not schema.valid_resource_name(name) then
+        return nil, "invalid view name: " .. tostring(name)
+    end
+    config = config_lib
     path = paths.joinpath(config.views_dir(root), name .. ".lua")
     if paths.file_exists(path) then
         return view.load_file(path)
@@ -247,7 +415,7 @@ end
 
 function view.approved_sql(db_path, name)
     view.init_schema(db_path)
-    return require("store").approved_content(db_path, "view", name)
+    return store_lib.approved_content(db_path, "view", name)
 end
 
 function view.is_approved(db_path, def)
@@ -260,12 +428,12 @@ end
 
 function view.approve(db_path, def, approved_by)
     view.init_schema(db_path)
-    require("store").approve(db_path, "view", def.name, view.approval_identity(def), approved_by)
+    store_lib.approve(db_path, "view", def.name, view.approval_identity(def), approved_by)
 end
 
 function view.revoke(db_path, name)
     view.init_schema(db_path)
-    require("store").revoke(db_path, "view", name)
+    store_lib.revoke(db_path, "view", name)
 end
 
 -- Runs an approved view's query. `param_value` is required iff the
@@ -327,7 +495,7 @@ end
 -- Ad-hoc, unsaved SELECT execution against the entity store -- for
 -- one-off exploration, not embeddable/shareable content, so unlike a
 -- named view there's nothing to approve (the caller enforcing Setup/
--- Admin capability -- see cgi.lua's /sql route -- already *is* the
+-- Admin capability -- see web.lua's /sql route -- already *is* the
 -- approval: nobody untrusted can reach this). Still SELECT-only via
 -- the same is_select_only guard, and returns column names separately
 -- from db.query's rows (which are unordered Lua tables keyed by
@@ -335,7 +503,7 @@ end
 -- an empty result set.
 -- Best-effort single-table guess for "which table is this query
 -- primarily about" -- used for the "id" self-reference special case in
--- cgi.lua (the queried table's own id column). Still just the first
+-- web.lua (the queried table's own id column). Still just the first
 -- `FROM <table>` match, alias discarded (a result column is looked up
 -- by its own name, not by qualified alias.column, so the alias itself
 -- is never needed). See guess_tables below for the full table list a
@@ -374,7 +542,7 @@ end
 
 -- {column_name -> ref_entity_type} for a set of tables' reference-type
 -- fields, via the same entity_field metadata schema.layout() already
--- exposes (see html.lua's display_field_value) -- used here directly by
+-- exposes (see ui.lua's display_field_value) -- used here directly by
 -- table name since an ad-hoc query has no schema.layout() call of its
 -- own. Accepts either a single table name (back-compat for callers that
 -- only ever guessed one table) or a list (see guess_tables) -- merged in
@@ -429,7 +597,7 @@ end
 -- a given deployment holds, how big a table a human reasonably wants to
 -- browse at once, how much context budget the configured AGENT_MODEL
 -- has -- so neither is a bare hardcoded literal; each is read fresh
--- from config.platform_config() per call (not resolved once at load).
+-- from config.load() per call (not resolved once at load).
 
 function view.run_adhoc(db_path, sql_text)
     problem = view.select_only_problem(sql_text)
@@ -437,14 +605,14 @@ function view.run_adhoc(db_path, sql_text)
         return nil, nil, "refusing to run: not a plain SELECT -- " .. problem
     end
 
-    config = require("config")
-    row_cap = config.platform_config().platform_adhoc_row_cap
+    config = config_lib
+    row_cap = config.load().adhoc_row_cap
     query_text = sql_text
     body = string.gsub(sql_text, "%s+$", "")
     if string.sub(body, -1) == ";" then
         body = string.sub(body, 1, -2)
     end
-    has_own_limit = string.find(string.lower(body), "%f[%a]limit%f[%A]") != nil
+    has_own_limit = has_top_level_limit(body)
     capped = false
     if has_own_limit == false then
         query_text = body .. string.format(" LIMIT %d;", row_cap + 1)
@@ -513,7 +681,7 @@ end
 -- individual entity.fields listing -- document_link/knowledge_pool_state
 -- are only ever named in prose, via document.knowledge_pool_sql_columns_text)
 -- but never the other way around.
-HAND_ROLLED_DOCUMENTED_TABLES = {
+const HAND_ROLLED_DOCUMENTED_TABLES = {
     document_link = true,
     entity_event = true,
     knowledge_pool_state = true,
@@ -530,123 +698,218 @@ HAND_ROLLED_DOCUMENTED_TABLES = {
 -- consistency check needs real cross-file access to this table.
 view.HAND_ROLLED_DOCUMENTED_TABLES = HAND_ROLLED_DOCUMENTED_TABLES
 
--- Collects every identifier immediately following `keyword` (word-
--- boundary matched, same convention as FORBIDDEN_SQL_WORDS -- so a
--- column literally named e.g. "from_date" is never mistaken for a
--- FROM clause), including old-style comma-joined table lists
--- ("FROM a, b" -- not just "FROM a JOIN b"). Scans the whole query
--- text, not just its top level, so a table referenced only inside a
--- subquery is still caught. A WITH-clause alias (see cte_names below)
--- is excluded from the allowlist check by the caller -- otherwise a
--- CTE's own name would be checked against the schema registry and
--- rejected as an unregistered "table", even though it's a local alias
--- the query defines itself, not a real table.
-function extract_after_keyword(lowered_sql, keyword, names)
-    start = 1
-    while true do
-        s, e = string.find(lowered_sql, "%f[%a]" .. keyword .. "%f[%A]%s+", start)
-        if s == nil then
-            return
-        end
-        rest = string.sub(lowered_sql, e + 1)
-        ident = string.match(rest, "^([%a_][%w_]*)")
-        if ident != nil then
-            table.insert(names, ident)
-            pos = e + string.len(ident)
-            while true do
-                tail = string.sub(lowered_sql, pos + 1)
-                comma_ident = string.match(tail, "^%s*,%s*([%a_][%w_]*)")
-                if comma_ident == nil then
+-- Words that terminate a FROM/JOIN table-reference item or cannot be a
+-- bare table alias.
+const SQL_CLAUSE_WORDS = {
+    ["as"] = true, where = true, on = true, using = true, join = true, straight_join = true,
+    left = true, right = true, inner = true, outer = true, cross = true, full = true,
+    natural = true, group = true, order = true, limit = true, offset = true,
+    union = true, intersect = true, except = true, having = true, window = true,
+    indexed = true, ["not"] = true, use = true, force = true, ignore = true,
+}
+
+const FROM_CLAUSE_TERMINATORS = {
+    where = true, on = true, using = true, join = true, straight_join = true,
+    left = true, right = true, inner = true, outer = true, cross = true, full = true,
+    natural = true, group = true, order = true, limit = true, offset = true,
+    union = true, intersect = true, except = true, having = true, window = true,
+}
+
+function is_ident_token(tok)
+    return tok != nil and (tok.kind == "word" or tok.kind == "ident")
+end
+
+-- Shared token-level extractor for every FROM / JOIN / STRAIGHT_JOIN
+-- clause across the query (including inside subqueries and CTE bodies).
+-- Handles bare and quoted identifiers (`"tbl"`, `` `tbl` ``, `[tbl]`),
+-- schema-qualified names (`db.tbl`), comments, subqueries followed by
+-- comma-joins (`FROM (SELECT ...) s, other_tbl`), and aliased comma-joins
+-- (`FROM a x, b y`). Returns `{entries = {{lower=, raw=, alias=}, ...}}`.
+function scan_table_references(sql_text)
+    tokens, _ = scan_sql_tokens(sql_text)
+    if tokens == nil then
+        return {}
+    end
+    entries = {}
+    n = #tokens
+    i = 1
+    while i <= n do
+        tok = tokens[i]
+        if tok.kind == "word" and (tok.value == "from" or tok.value == "join" or tok.value == "straight_join") then
+            clause_depth = tok.depth
+            is_from = (tok.value == "from")
+            k = i + 1
+            while k <= n do
+                cur = tokens[k]
+                if cur.depth < clause_depth then
                     break
                 end
-                table.insert(names, comma_ident)
-                _, comma_end = string.find(tail, "^%s*,%s*[%a_][%w_]*")
-                pos = pos + comma_end
+                if cur.kind == "word" and cur.value == "lateral" and cur.depth == clause_depth then
+                    k = k + 1
+                    cur = tokens[k]
+                end
+                if cur == nil then
+                    break
+                end
+
+                if cur.kind == "punct" and cur.value == "(" and cur.depth == clause_depth then
+                    -- Derived subquery or parenthesized join; its inner FROM/JOIN
+                    -- clauses are visited by the outer `i` scan, so advance past
+                    -- the matching `)` at `clause_depth` to see any trailing `, tbl`.
+                    k = k + 1
+                    while k <= n do
+                        t2 = tokens[k]
+                        if t2.kind == "punct" and t2.value == ")" and t2.depth == clause_depth then
+                            k = k + 1
+                            break
+                        end
+                        k = k + 1
+                    end
+                elseif is_ident_token(cur) and cur.depth == clause_depth then
+                    t_lower = cur.value
+                    t_raw = cur.raw
+                    k = k + 1
+                    -- Schema-qualified `schema.table` stays qualified so e.g.
+                    -- `main.auth_user` or `doc.auth_user` cannot match an
+                    -- unqualified registered table name.
+                    if k + 1 <= n and tokens[k].kind == "punct" and tokens[k].value == "."
+                            and tokens[k].depth == clause_depth and is_ident_token(tokens[k + 1]) then
+                        t_lower = t_lower .. "." .. tokens[k + 1].value
+                        t_raw = t_raw .. "." .. tokens[k + 1].raw
+                        k = k + 2
+                    end
+                    alias_lower = nil
+                    if k <= n and tokens[k].depth == clause_depth then
+                        if tokens[k].kind == "word" and tokens[k].value == "as" and k + 1 <= n and is_ident_token(tokens[k + 1]) then
+                            alias_lower = tokens[k + 1].value
+                            k = k + 2
+                        elseif is_ident_token(tokens[k]) and (tokens[k].kind == "ident" or SQL_CLAUSE_WORDS[tokens[k].value] != true) then
+                            alias_lower = tokens[k].value
+                            k = k + 1
+                        end
+                    end
+                    table.insert(entries, {lower = t_lower, raw = t_raw, alias = alias_lower, keyword = tok.value})
+                else
+                    break
+                end
+
+                if not is_from then
+                    break
+                end
+
+                -- Scan forward at `clause_depth` to either `,` (next comma-joined
+                -- table in this FROM clause) or the end of the FROM clause.
+                found_comma = false
+                while k <= n do
+                    tk = tokens[k]
+                    if tk.depth < clause_depth then
+                        break
+                    end
+                    if tk.depth == clause_depth then
+                        if tk.kind == "punct" and tk.value == "," then
+                            found_comma = true
+                            k = k + 1
+                            break
+                        end
+                        if tk.kind == "punct" and tk.value == ";" then
+                            break
+                        end
+                        if tk.kind == "word" and FROM_CLAUSE_TERMINATORS[tk.value] == true then
+                            break
+                        end
+                    end
+                    k = k + 1
+                end
+                if not found_comma then
+                    break
+                end
             end
         end
-        start = e + 1
+        i = i + 1
     end
+    return entries
 end
 
 function referenced_table_names(sql_text)
-    lowered = string.lower(sql_text)
     names = {}
-    extract_after_keyword(lowered, "from", names)
-    extract_after_keyword(lowered, "join", names)
+    for _, entry in ipairs(scan_table_references(sql_text)) do
+        table.insert(names, entry.lower)
+    end
     return names
 end
 
--- Names a WITH-clause defines ("WITH a AS (...), b AS (...) SELECT ...").
--- Still string-matching, not a real parser (same accepted rigor level
--- as guess_tables/referenced_table_names above): "<ident> AS (" is a
--- specific enough shape that it only matches a CTE definition, never a
--- column alias (which can't take a parenthesized value) or a derived-
--- table alias (there the "(" comes before "AS", not after).
+-- Names a leading WITH-clause defines at depth 0:
+--   WITH [RECURSIVE] a [(c1, c2)] AS (...), b AS (...) SELECT ...
+-- Token-scoped to depth 0 in the leading WITH header so `<ident> AS (`
+-- inside a string literal or comment can never whitelist a table name.
 function cte_names(sql_text)
     names = {}
-    lowered = string.lower(sql_text)
-    if string.find(lowered, "^%s*with%f[%A]") == nil then
+    tokens, _ = scan_sql_tokens(sql_text)
+    if tokens == nil or #tokens == 0 then
         return names
     end
-    for ident in string.gmatch(lowered, "([%a_][%w_]*)%s+as%s*%(") do
-        table.insert(names, ident)
+    if tokens[1].kind != "word" or tokens[1].value != "with" then
+        return names
+    end
+    k = 2
+    if k <= #tokens and tokens[k].kind == "word" and tokens[k].value == "recursive" then
+        k = k + 1
+    end
+    while k <= #tokens do
+        cte_tok = tokens[k]
+        if not is_ident_token(cte_tok) or cte_tok.depth != 0 then
+            break
+        end
+        cte_name = cte_tok.value
+        k = k + 1
+        -- Optional CTE column list: `WITH totals(day, n) AS (...)`
+        if k <= #tokens and tokens[k].kind == "punct" and tokens[k].value == "(" and tokens[k].depth == 0 then
+            k = k + 1
+            while k <= #tokens do
+                if tokens[k].kind == "punct" and tokens[k].value == ")" and tokens[k].depth == 0 then
+                    k = k + 1
+                    break
+                end
+                k = k + 1
+            end
+        end
+        if k + 1 > #tokens or tokens[k].kind != "word" or tokens[k].value != "as" or tokens[k].depth != 0 then
+            break
+        end
+        k = k + 1
+        if tokens[k].kind != "punct" or tokens[k].value != "(" or tokens[k].depth != 0 then
+            break
+        end
+        table.insert(names, cte_name)
+        -- Advance past the CTE body's closing `)` at depth 0
+        k = k + 1
+        while k <= #tokens do
+            if tokens[k].kind == "punct" and tokens[k].value == ")" and tokens[k].depth == 0 then
+                k = k + 1
+                break
+            end
+            k = k + 1
+        end
+        if k <= #tokens and tokens[k].kind == "punct" and tokens[k].value == "," and tokens[k].depth == 0 then
+            k = k + 1
+        else
+            break
+        end
     end
     return names
 end
-
--- Words that can follow a FROM/JOIN table name without being its alias.
-SQL_CLAUSE_WORDS = {
-    ["as"] = true, where = true, on = true, using = true, join = true, left = true, right = true,
-    inner = true, outer = true, cross = true, full = true, natural = true, group = true,
-    order = true, limit = true, offset = true, union = true, having = true, window = true,
-}
 
 -- view.query_aliases(sql_text) -> {name = table}: every table a FROM or
 -- JOIN clause names, under its own name and under its alias
 -- ("FROM experiment e", "JOIN project AS p", "FROM a x, b y"), all
 -- lowercased. For telling the model, when a query fails on a column,
--- which table that column's prefix stands for (#8). The same
--- string-matching rigor as referenced_table_names above, not a parser:
--- a subquery in FROM is skipped, not resolved.
+-- which table that column's prefix stands for (#8).
 function view.query_aliases(sql_text)
-    lowered = string.lower(tostring(sql_text))
     aliases = {}
-    for _, keyword in ipairs({"from", "join"}) do
-        start = 1
-        while true do
-            s, e = string.find(lowered, "%f[%a]" .. keyword .. "%f[%A]%s+", start)
-            if s == nil then
-                break
-            end
-            pos = e
-            while true do
-                tail = string.sub(lowered, pos + 1)
-                _, name_end, table_name = string.find(tail, "^([%a_][%w_]*)")
-                if table_name == nil then
-                    break
-                end
-                aliases[table_name] = table_name
-                consumed = name_end
-                after = string.sub(tail, name_end + 1)
-                alias = nil
-                _, alias_end, alias = string.find(after, "^%s+as%s+([%a_][%w_]*)")
-                if alias == nil then
-                    _, alias_end, alias = string.find(after, "^%s+([%a_][%w_]*)")
-                    if alias != nil and SQL_CLAUSE_WORDS[alias] == true then
-                        alias = nil
-                    end
-                end
-                if alias != nil then
-                    aliases[alias] = table_name
-                    consumed = name_end + alias_end
-                end
-                _, comma_end = string.find(string.sub(tail, consumed + 1), "^%s*,%s*")
-                if comma_end == nil then
-                    break
-                end
-                pos = pos + consumed + comma_end
-            end
-            start = e + 1
+    for _, entry in ipairs(scan_table_references(tostring(sql_text))) do
+        aliases[entry.lower] = entry.lower
+        if entry.alias != nil then
+            aliases[entry.alias] = entry.lower
         end
     end
     return aliases
@@ -716,7 +979,7 @@ function archived_rows_note(db_path, sql_text, referenced)
         ". Archived rows are deleted/superseded records -- unless you specifically want them, re-run with `<table>.archived_at IS NULL` for each."
 end
 
--- A separate, smaller default cap than platform_adhoc_row_cap -- that
+-- A separate, smaller default cap than adhoc_row_cap -- that
 -- one is sized for a human reading an HTML table in a browser; this
 -- result goes straight into the model's own prompt/context, where 1000
 -- rows would be wasteful at best and a real token-cost problem at
@@ -728,8 +991,8 @@ function view.run_agent_query(db_path, sql_text)
         return nil, nil, "refusing to run: not a plain SELECT -- " .. problem
     end
 
-    config = require("config")
-    row_cap = config.platform_config().agent_query_row_cap
+    config = config_lib
+    row_cap = config.load().agent_query_row_cap
     referenced = referenced_table_names(sql_text)
     if #referenced == 0 then
         return nil, nil, "refusing to run: no FROM/JOIN table found"
@@ -758,7 +1021,7 @@ function view.run_agent_query(db_path, sql_text)
             message = "refusing to run: '" .. name .. "' is not a registered entity type -- only registered entity tables can be queried this way"
             -- SQL written before daat's schema revision (in chat history
             -- or a compaction summary) can still use an old table name.
-            renamed = require("store").RENAMED_TABLES[name]
+            renamed = store_lib.RENAMED_TABLES[name]
             if renamed != nil then
                 message = message .. " ('" .. name .. "' was renamed to '" .. renamed .. "')"
             end
@@ -778,7 +1041,7 @@ function view.run_agent_query(db_path, sql_text)
     if string.sub(body, -1) == ";" then
         body = string.sub(body, 1, -2)
     end
-    has_own_limit = string.find(string.lower(body), "%f[%a]limit%f[%A]") != nil
+    has_own_limit = has_top_level_limit(body)
     capped = false
     if has_own_limit == false then
         query_text = body .. string.format(" LIMIT %d;", row_cap + 1)
@@ -821,7 +1084,7 @@ end
 -- doesn't guess (seen in prod: sqlite_master/julianday tried ~15 times
 -- against MariaDB).
 function view.sql_dialect_name()
-    config = require("config")
+    config = config_lib
     if config.db_backend() == "mariadb" then
         return "MariaDB/MySQL dialect: use DATEDIFF/TIMESTAMPDIFF, LN, window functions; ONLY_FULL_GROUP_BY applies; no sqlite_master/julianday"
     end
@@ -834,7 +1097,7 @@ end
 -- (found by the agent scorecard, doc/agent-eval.md). Everything else
 -- keeps the dialect note, since a wrong function or syntax is the
 -- common other cause.
-SCHEMA_ERROR_PATTERNS = {"no such column", "no such table", "unknown column", "unknown table", "doesn't exist"}
+const SCHEMA_ERROR_PATTERNS = {"no such column", "no such table", "unknown column", "unknown table", "doesn't exist"}
 
 function view.sql_error_hint(err_text)
     lowered = string.lower(tostring(err_text))

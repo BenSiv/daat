@@ -15,15 +15,6 @@ teardown() {
     cleanup_test_env
 }
 
-db() {
-    sqlite3 .store/store.db "$1"
-}
-
-new_tag() {
-    "$BIN" entity create tag label="$1" source=computed >/dev/null
-    db "SELECT id FROM tag WHERE label = '$1';"
-}
-
 # A tier-1 curated note in a tag.
 note_in() {
     local tag="$1" title="$2"

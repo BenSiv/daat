@@ -18,22 +18,13 @@ teardown() {
     cleanup_test_env
 }
 
-db() {
-    sqlite3 .store/store.db "$1"
-}
-
-new_document() {
-    "$BIN" entity create document title="$1" content="$2" >/dev/null
-    db "SELECT id FROM document WHERE title = '$1';"
-}
-
 # Moves a queued document's last save back past the quiet period.
 backdate_queue() {
     db "UPDATE document_embedding_due SET queued_at = '2000-01-01 00:00:00' WHERE document_id = $1;"
 }
 
 @test "a save waits for the quiet period, then is embedded once however many saves came before" {
-    write_platform_config ", embedding_quiet_minutes = 5"
+    write_config "knowledge = {embedding_quiet_minutes = 5}"
     id=$(new_document "Fermentation" "first draft")
     "$BIN" entity update document "$id" content="second draft" >/dev/null
     "$BIN" entity update document "$id" content="third draft" >/dev/null
@@ -54,7 +45,7 @@ backdate_queue() {
 @test "a queued document whose text came back unchanged isn't re-embedded" {
     id=$(new_document "Cocoa" "same text")
     db "UPDATE document_embedding SET updated_at = '2000-01-01 00:00:00' WHERE document_id = $id;"
-    write_platform_config ", embedding_quiet_minutes = 5"
+    write_config "knowledge = {embedding_quiet_minutes = 5}"
     db "INSERT INTO document_embedding_due (document_id, queued_at) VALUES ($id, '2000-01-01 00:00:00');"
 
     run "$BIN" document embed-pending
@@ -63,7 +54,7 @@ backdate_queue() {
 }
 
 @test "a document archived while queued leaves the queue without an embedding" {
-    write_platform_config ", embedding_quiet_minutes = 5"
+    write_config "knowledge = {embedding_quiet_minutes = 5}"
     id=$(new_document "Draft" "never kept")
     "$BIN" entity archive document "$id" >/dev/null
     db "INSERT INTO document_embedding_due (document_id, queued_at) VALUES ($id, '2000-01-01 00:00:00');"
@@ -147,7 +138,7 @@ backdate_queue() {
 }
 
 @test "embedding_skip leaves a sync's header lines out of the embedded text, not the content" {
-    write_platform_config ', embedding_quiet_minutes = 0, embedding_skip = {"^> %*%*Source:", "^>%s*$", "^%-%-%-%s*$", "([", 5}'
+    write_config 'knowledge = {embedding_quiet_minutes = 0, embedding_skip = {"^> %*%*Source:", "^>%s*$", "^%-%-%-%s*$", "([", 5}}'
     content=$'> **Source:** [Lab/Media/M9.xlsx](https://example.org/M9)\n>\n---\n\nM9 medium recipe for cotyledon cultures'
     id=$(new_document "M9" "$content")
     run "$BIN" document embedding-text "$id"
@@ -174,7 +165,7 @@ backdate_queue() {
     plain=$(new_document "Plain" "nothing to skip here")
     synced=$(new_document "Synced" $'> **Source:** somewhere\nthe real content')
     db "UPDATE document_embedding SET text_hash = NULL, updated_at = '2000-01-01 00:00:00';"
-    write_platform_config ', embedding_quiet_minutes = 0, embedding_skip = {"^> %*%*Source:"}'
+    write_config 'knowledge = {embedding_quiet_minutes = 0, embedding_skip = {"^> %*%*Source:"}}'
     run "$BIN" repair embeddings
     [[ "$output" =~ "Reindexed 1 document(s), 0 failed, 1 unchanged" ]]
     [ "$(db "SELECT updated_at FROM document_embedding WHERE document_id = $plain;")" = "2000-01-01 00:00:00" ]

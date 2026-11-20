@@ -1,0 +1,12 @@
+.platform-login-card { max-width: 360px; margin: 60px auto; padding: 28px; background: var(--platform-bg, #f8fafc); border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-md, 12px); }
+.platform-login-card h2 { margin: 0 0 18px 0; font-size: 1.4rem; font-weight: 700; color: var(--platform-heading, #0f172a); }
+.platform-login-card label { display: block; margin-bottom: 4px; font-size: 0.88rem; color: var(--platform-muted, #64748b); }
+.platform-login-card input[type=text], .platform-login-card input[type=password] {
+    width: 100%; box-sizing: border-box; padding: 8px 10px; margin-bottom: 14px;
+    border: 1px solid var(--platform-border, #e2e8f0); border-radius: var(--platform-radius-item, 10px); font-size: 0.95rem;
+}
+.platform-login-card .btn { width: 100%; }
+.platform-login-notice { color: #166534; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: var(--platform-radius-item, 10px); padding: 10px 12px; margin-bottom: 14px; font-size: 0.88rem; }
+.platform-login-card form { margin: 0; }
+.platform-login-footer { margin: 16px 0 0 0; text-align: center; font-size: 0.88rem; }
+.platform-login-footer a { color: var(--platform-accent, #4f46e5); }

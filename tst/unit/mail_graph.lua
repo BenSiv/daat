@@ -28,13 +28,13 @@ function read_file(path)
 end
 
 CONF = {graph_tenant_id = "celleste-bio.com", graph_client_id = "11111111-2222-3333-4444-555555555555"}
-config.platform_config = function() return CONF end
+config.load = function() return CONF end
 config.setting = function(key) return CONF[key] end
 
 SECRET = "s3cret-value"
 real_getenv = os.getenv
 os.getenv = function(name)
-    if name == "PLATFORM_GRAPH_CLIENT_SECRET" then
+    if name == "DAAT_GRAPH_CLIENT_SECRET" then
         return SECRET
     end
     return real_getenv(name)
@@ -122,7 +122,7 @@ function tests.missing_secret_and_bad_ids_fail_before_any_call()
     reset()
     SECRET = ""
     ok, err = mail_graph.send(MESSAGE)
-    check(ok == nil and contains(err, "PLATFORM_GRAPH_CLIENT_SECRET"), "expected missing-secret error, got: " .. tostring(err))
+    check(ok == nil and contains(err, "DAAT_GRAPH_CLIENT_SECRET"), "expected missing-secret error, got: " .. tostring(err))
     reset()
     CONF.graph_tenant_id = "evil.com/x?y="
     ok, err = mail_graph.send(MESSAGE)

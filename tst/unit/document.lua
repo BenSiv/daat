@@ -7,7 +7,7 @@
 -- heuristics (content_shape, title-guessing, content hashing) -- all
 -- ported/adapted from a Fossil SCM fork's ai_note/ai_retrieval system
 -- (see document.lua's own header). Moved here from tst/unit/knowledge.lua
--- under task #106, when these columns/heuristics moved from a separate
+-- under when these columns/heuristics moved from a separate
 -- knowledge_note table onto `document` itself.
 
 document = require("document")
@@ -53,7 +53,7 @@ function tests.promotion_duplicate_never_advances()
 end
 
 function tests.promotion_demotes_when_edited_down_to_a_smaller_shape()
-    print("Testing a document at tier 3 demotes if its current content no longer earns that shape (task #87, redesigned for content-maturity)")
+    print("Testing a document at tier 3 demotes if its current content no longer earns that shape (redesigned for content-maturity)")
     -- Recomputed fresh from the CURRENT body every review (no
     -- ratcheting) -- a document that was legitimately tier 3 once (an
     -- atomic-shaped edit) but has since been edited down to something
@@ -133,9 +133,21 @@ function tests.guess_title_empty_body_returns_untitled()
 end
 
 function tests.content_hash_is_deterministic()
-    print("Testing content_hash is deterministic and content-sensitive")
-    check(document.content_hash("hello world") == document.content_hash("hello world"), "same content should hash the same")
-    check(document.content_hash("hello world") != document.content_hash("hello there"), "different content should hash differently")
+    print("Testing content_hash is 64-char SHA-256 and content_hash_matches accepts legacy 8-char djb2")
+    h = document.content_hash("hello world")
+    check(string.len(h) == 64, "content_hash should be 64-char SHA-256 hex")
+    check(h == document.content_hash("hello world"), "same content should hash the same")
+    check(h != document.content_hash("hello there"), "different content should hash differently")
+    check(document.content_hash_matches(h, "hello world") == true, "64-char SHA-256 matches")
+    check(document.content_hash_matches(h, "hello there") == false, "64-char SHA-256 rejects changed content")
+    -- Pre-cutover 8-char djb2("hello world") == "7c9dc9b3":
+    legacy = string.format("%08x", (function(s)
+        acc = 5381
+        for i = 1, string.len(s) do acc = (acc * 33 + string.byte(s, i)) % 4294967296 end
+        return acc
+    end)("hello world"))
+    check(document.content_hash_matches(legacy, "hello world") == true, "legacy 8-char djb2 matches unchanged body")
+    check(document.content_hash_matches(legacy, "hello there") == false, "legacy 8-char djb2 rejects changed body")
 end
 
 function tests.pool_effective_heat_reads_raw_heat_unchanged_when_pool_scale_matches()
@@ -355,6 +367,30 @@ function tests.plot_spec_to_gnuplot_cfg_rejects_non_table_spec()
     cfg, err = document.plot_spec_to_gnuplot_cfg(nil)
     check(cfg == nil, "nil spec should be rejected")
     check(err != nil, "should return an error message")
+end
+
+function tests.plot_spec_to_gnuplot_cfg_enforces_series_with_allowlist()
+    print("Testing plot_spec_to_gnuplot_cfg allows valid series.with styles and blocks arbitrary gnuplot directives")
+    ok_cfg, ok_err = document.plot_spec_to_gnuplot_cfg({
+        series = {{x = {1, 2}, y = {3, 4}, with = "lines"}, {x = {1, 2}, y = {4, 5}, with = "scatter"}},
+    })
+    check(ok_err == nil and ok_cfg != nil, "known series.with styles must be accepted")
+    check(ok_cfg.data[1].with == "lines", "with=lines should map to lines")
+    check(ok_cfg.data[2].with == "points", "with=scatter alias should map to points")
+
+    bad_payloads = {
+        "lines; system 'id'",
+        "linespoints lw 2; set output '/tmp/pwn'",
+        "lines `id`",
+        123,
+    }
+    for _, bad in ipairs(bad_payloads) do
+        bad_cfg, bad_err = document.plot_spec_to_gnuplot_cfg({
+            series = {{x = {1, 2}, y = {3, 4}, with = bad}},
+        })
+        check(bad_cfg == nil and bad_err != nil,
+            "injected or unknown series.with must be rejected: " .. tostring(bad))
+    end
 end
 
 unit.run(tests)

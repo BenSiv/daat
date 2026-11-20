@@ -69,7 +69,7 @@ Today `daat agent prune-prompts` clears old prompts. Rather than add a second, s
 
 Each rule reports what it removed. `daat agent prune-prompts` stays as an alias for one release, so the running timer keeps working until the startup script switches to the new name.
 
-### Settings (`platform.lua`, all with defaults)
+### Settings (`config.lua`, all with defaults)
 
 | Setting | Default | What it does |
 |---|---|---|
@@ -91,7 +91,7 @@ Each rule reports what it removed. `daat agent prune-prompts` stays as an alias 
 | `src/provider/agent_vertex.lua` | Batched `:predict` (many instances), cut by count and size |
 | `src/provider/agent_test.lua` | Batch support, plus an opt-in word-based test embedding (`AGENT_TEST_EMBEDDINGS=terms`: hashed word counts, so texts sharing words are similar) so ranking tests mean something; the existing default is unchanged |
 | `src/document.lua` | `document.search` also returns the query vector; the cache table is created in `document.init_schema`; column notes for `/sql` |
-| `src/html.lua` / `src/cgi.lua` | The `/documents` search results use the same `passage.excerpt` (same setting, same fallback) |
+| `src/ui.lua` / `src/web.lua` | The `/documents` search results use the same `passage.excerpt` (same setting, same fallback) |
 | `src/agent_tools.lua` | `document.search` uses `passage.excerpt(...)` when `search_passages` is on, else `search_snippet` (also the fallback). `detail = "full"` doubles `passages_per_document` and uses the full excerpt length |
 | `src/config.lua` | The settings above |
 | `src/main.lua` | `daat store prune` (+ the `agent prune-prompts` alias) |
@@ -163,7 +163,7 @@ Each is tested on its own, on a `feature/passage-retrieval` branch.
 
 ## Decisions (2026-10-26)
 
-1. **`passage_cache_days` defaults to 30,** as a deployment setting in `platform.lua`, like every other value here. Nothing is hard-coded.
+1. **`passage_cache_days` defaults to 30,** as a deployment setting in `config.lua`, like every other value here. Nothing is hard-coded.
 2. **People and the agent see the same thing.** The `/documents` search page shows the same passages the agent gets, from the same function. This is a standing design rule for the whole system (`doc/architecture.md`, "The agent sees what a user sees"): anything that decides what a search, list or record shows decides it once, for both.
 
 Approved: the batched-embedding check against Vertex, and the live scorecard comparison.

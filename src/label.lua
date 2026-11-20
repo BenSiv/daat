@@ -1,6 +1,6 @@
 -- Label printing: renders a ZPL string for one entity row, ready to
 -- hand to a Zebra printer via the client-side Browser Print SDK (see
--- html.lua/cgi.lua's own pieces of this feature, and doc/schema.md's
+-- ui.lua/web.lua's own pieces of this feature, and doc/schema.md's
 -- own "Label printing" section for the full design).
 --
 -- The template itself is a real, user-created, ledgered entity row
@@ -12,10 +12,10 @@
 -- query runner (view.run_sql) -- a label_template row's `sql` field is
 -- genuinely just a single-parameter view, structurally.
 
-db = require("database")
-view = require("view")
+const db = require("database")
+const view = require("view")
 
-label = {}
+const label = {}
 
 -- ZPL's own command-prefix characters -- a substituted field value
 -- containing either one unescaped would corrupt the label (e.g. break
@@ -33,7 +33,7 @@ end
 -- Finds the one label_template row for this entity_type, if any.
 -- entity_type here is always an already-registered schema name (the
 -- caller's own /detail-route type= param, the same trust level every
--- other entity_type use in cgi.lua already has), not raw free text.
+-- other entity_type use in web.lua already has), not raw free text.
 function find_template(db_path, entity_type)
     if db.table_exists(db_path, "label_template") == false then
         return nil
