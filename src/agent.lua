@@ -2947,70 +2947,6 @@ function agent.session_confirmed_schema(db_path, session_id, budget)
     return pinned_schema_block(rows, budget)
 end
 
-function agent.user_prior_requests(db_path, login, exclude_session_id, limit)
-    if db_path == nil or login == nil or login == "" then
-        return {}
-    end
-    if limit == nil then
-        limit = config.load().agent_carry_user_requests_limit
-    end
-    if limit == nil or limit <= 0 then
-        return {}
-    end
-    exclude_clause = ""
-    if exclude_session_id != nil and exclude_session_id != "" then
-        exclude_clause = " AND s.id <> " .. db.quote(exclude_session_id)
-    end
-    rows = db.query(db_path, string.format(
-        "SELECT m.id, m.session_id, m.role, m.content FROM agent_message m " ..
-        "JOIN agent_session s ON s.id = m.session_id " ..
-        "WHERE s.login = %s%s AND m.parent_message_id IS NULL " ..
-        "AND (m.data_type = 'request' OR ((m.data_type IS NULL OR m.data_type = '') AND m.role IN ('user', 'decision'))) " ..
-        "ORDER BY m.id DESC LIMIT %d;",
-        db.quote(login), exclude_clause, tonumber(limit)
-    ))
-    if rows == nil then
-        return {}
-    end
-    ordered = {}
-    for i = #rows, 1, -1 do
-        row = rows[i]
-        text = row.content
-        if row.role == "user" then
-            text = agent.display_content(row.content, "user")
-        end
-        if text != nil and string.gsub(text, "%s", "") != "" then
-            table.insert(ordered, {
-                id = tonumber(row.id),
-                session_id = row.session_id,
-                role = row.role,
-                text = cap_text(text, COMPACTION_ARGS_CAP),
-            })
-        end
-    end
-    return ordered
-end
-
-function agent.prior_requests_prompt_block(db_path, login, session_id)
-    conf = config.load()
-    if conf.agent_carry_user_requests != true then
-        return nil
-    end
-    prior = agent.user_prior_requests(db_path, login, session_id, conf.agent_carry_user_requests_limit)
-    if #prior == 0 then
-        return nil
-    end
-    lines = {"**Recent requests and decisions from this user's earlier chats (context only; verify current data with tools):**"}
-    for _, item in ipairs(prior) do
-        prefix = ""
-        if item.role == "decision" then
-            prefix = "[Decision] "
-        end
-        table.insert(lines, format_user_request(prefix .. item.text))
-    end
-    return table.concat(lines, "\n")
-end
-
 -- Sub-agent initial context (#19 option 2, #36): the conversation's
 -- `request` rows, confirmed schema from the main loop (within
 -- agent_pinned_schema_chars), and the specific sub-question -- never the
@@ -3624,10 +3560,6 @@ function agent.run_turn(db_path, session_id, login, system_prompt, model, user_m
     agent_tools = require("agent_tools")
     if system_prompt == nil or system_prompt == "" then
         system_prompt = agent_tools.default_system_prompt()
-    end
-    prior_block = agent.prior_requests_prompt_block(db_path, login, session_id)
-    if prior_block != nil then
-        system_prompt = system_prompt .. "\n\n" .. prior_block
     end
 
     if user_message != nil and user_message != "" then
