@@ -16,12 +16,14 @@ FROM debian:12-slim AS luam-builder
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git build-essential libreadline-dev libsqlite3-dev libcrypt-dev libssl-dev libmariadb-dev ca-certificates wget perl \
     && rm -rf /var/lib/apt/lists/*
-# LUAM_REF overrides bld/luam.pin; when both are empty, builds latest main.
-# Full clone (not --depth 1) so bld/build.sh's ancestor check against
-# bld/luam.commit works as main moves ahead.
+# LUAM_REF overrides an optional luam_pin in bld/package.lua; when both
+# are empty, builds latest main. Full clone (not --depth 1) so
+# lib/static/build.lua's ancestor check against bld/package.lua's luam
+# floor works as main moves ahead.
 ARG LUAM_REF=""
-COPY bld/luam.pin /tmp/luam.pin
-RUN ref="${LUAM_REF:-$(sed 's/#.*//' /tmp/luam.pin | tr -d '[:space:]')}" \
+COPY bld/package.lua /tmp/package.lua
+RUN pin=$(sed -n 's/^[[:space:]]*luam_pin[[:space:]]*=[[:space:]]*["\x27]\([^"\x27]*\)["\x27].*/\1/p' /tmp/package.lua | head -n 1) \
+    && ref="${LUAM_REF:-$pin}" \
     && git clone https://github.com/BenSiv/luam.git /luam \
     && git -C /luam checkout "${ref:-main}"
 WORKDIR /luam
