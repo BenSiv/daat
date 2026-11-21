@@ -234,7 +234,7 @@ function render_reference_value(db_path, ref_entity_type, value)
     if label != nil then
         link_text = html_escape(label)
     end
-    preview_src = "api/preview?type=" .. escaped_type .. "&entity_id=" .. escaped_id
+    preview_src = "api/v1/entities/" .. escaped_type .. "/" .. escaped_id .. "/preview"
     return "<a href=\"detail?type=" .. escaped_type .. "&entity_id=" .. escaped_id ..
         "\" class=\"platform-entity-ref platform-popover-trigger\" data-platform-popover-src=\"" .. preview_src ..
         "\" tabindex=\"0\">" .. link_text .. "<span class=\"platform-popover\"></span></a>"

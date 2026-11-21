@@ -30,7 +30,7 @@ search_for_bioreactor() {
     resp=$(start_chat)
     session_id=$(extract_query_param "$resp" "session_id")
     scripted="$(tool_call_response "document.search" '{"query":"bioreactor"}')"$'\1'"$(done_response "Found it.")"
-    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"find bioreactor pages\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+    raw_post_json "/api/v1/chat/sessions/${session_id}/messages" "{\"message\":\"find bioreactor pages\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 }
 
 # Same as search_for_bioreactor, but with an optional extra scripted
@@ -52,7 +52,7 @@ search_for_bioreactor_extra() {
         scripted="${scripted}"$'\1'"${extra_response}"
     fi
     scripted="${scripted}"$'\1'"$(done_response "Found it.")"
-    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"find bioreactor pages\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+    raw_post_json "/api/v1/chat/sessions/${session_id}/messages" "{\"message\":\"find bioreactor pages\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
     # A transcript is searchable like any document, so this chat's own
     # ("find bioreactor pages") would join later searches' co-retrieval
     # and its review calls would take the scripted slots above -- set
@@ -69,7 +69,7 @@ search_for_bioreactor_extra() {
     "$BIN" entity create document title="Bioreactor SOP" content="How to run the bioreactor."
     resp=$(start_chat)
     session_id=$(extract_query_param "$resp" "session_id")
-    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"use [[title]] links\"}" "$COOKIE" "$CSRF" "$(done_response "See [[Bioreactor SOP]].")" >/dev/null
+    raw_post_json "/api/v1/chat/sessions/${session_id}/messages" "{\"message\":\"use [[title]] links\"}" "$COOKIE" "$CSRF" "$(done_response "See [[Bioreactor SOP]].")" >/dev/null
     transcript=$(sqlite3 .store/store.db "SELECT id FROM document WHERE source_type = 'chat_session';")
     [ -n "$transcript" ]
     [ "$(sqlite3 .store/store.db "SELECT COUNT(*) FROM document_link WHERE from_document_id = ${transcript};")" = "0" ]
@@ -297,7 +297,7 @@ Assistant: Rinse, then autoclave."
     resp=$(start_chat)
     session_id=$(extract_query_param "$resp" "session_id")
     scripted="$(tool_call_response "document.search" '{"query":"bioreactor"}')"$'\1'"$(done_response "Found it.")"
-    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"find bioreactor pages\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+    raw_post_json "/api/v1/chat/sessions/${session_id}/messages" "{\"message\":\"find bioreactor pages\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
     # The linked neighbor ("Cleaning Checklist") never matched the query
     # directly, so its retrieval_count stays 0 -- but it should still
@@ -343,7 +343,7 @@ Assistant: Rinse, then autoclave."
     resp=$(start_chat)
     session_id=$(extract_query_param "$resp" "session_id")
     scripted="$(tool_call_response "document.search" '{"query":"bioreactor"}')"$'\1'"$(done_response "Found it.")"
-    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"find bioreactor pages\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+    raw_post_json "/api/v1/chat/sessions/${session_id}/messages" "{\"message\":\"find bioreactor pages\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
     reinforced_delta=$(sqlite3 .store/store.db "
         SELECT krd.reinforcement_delta FROM knowledge_retrieval_hit krd
@@ -367,7 +367,7 @@ Assistant: Rinse, then autoclave."
     resp=$(start_chat)
     session_id=$(extract_query_param "$resp" "session_id")
     scripted="$(tool_call_response "knowledge.stats" '{}')"$'\1'"$(done_response "Here you go.")"
-    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"summarize the knowledge pool\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+    raw_post_json "/api/v1/chat/sessions/${session_id}/messages" "{\"message\":\"summarize the knowledge pool\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
     # Reported live: this test used to assert against /chat's own
     # rendered page, which deliberately strips tool calls/results for
@@ -428,7 +428,7 @@ Assistant: Rinse, then autoclave."
     run bash -c "GATEWAY_INTERFACE=CGI/1.1 REQUEST_METHOD=GET PATH_INFO=/knowledge-graph QUERY_STRING= HTTP_COOKIE='session=${dave_session}' '$BIN'"
     [[ "$output" =~ "200 OK" ]]
     [[ "$output" =~ "Knowledge Graph" ]]
-    [[ "$output" =~ "knowledge-graph-data" ]]
+    [[ "$output" =~ "api/v1/knowledge/graph" ]]
 }
 
 @test "/knowledge-graph renders for a plain baseline user" {
@@ -467,7 +467,7 @@ Assistant: Rinse, then autoclave."
     raw_post "/document-save" "csrf_token=${erin_csrf}&title=Graph+Node+A&parent_id=&content=First+node." "session=${erin_session}; csrf=${erin_csrf}" "" >/dev/null
     raw_post "/document-save" "csrf_token=${erin_csrf}&title=Graph+Node+B&parent_id=&content=Links+to+%5B%5BGraph+Node+A%5D%5D." "session=${erin_session}; csrf=${erin_csrf}" "" >/dev/null
 
-    resp=$(GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/knowledge-graph-data" QUERY_STRING="" HTTP_COOKIE="session=${erin_session}" "$BIN")
+    resp=$(GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/api/v1/knowledge/graph" QUERY_STRING="" HTTP_COOKIE="session=${erin_session}" "$BIN")
     body=$(json_body "$resp")
 
     node_titles=$(echo "$body" | jq -r '.nodes[].title')
@@ -505,7 +505,7 @@ Assistant: Rinse, then autoclave."
     "$BIN" entity create document_tag document=$doc tag=$t1 score=0.9 decision=computed >/dev/null
     "$BIN" entity create document_tag document=$doc tag=$t3 decision=excluded >/dev/null
 
-    body=$(json_body "$(raw_get "/knowledge-graph-data" "" "$COOKIE")")
+    body=$(json_body "$(raw_get "/api/v1/knowledge/graph" "" "$COOKIE")")
     tags=$(echo "$body" | jq -c --argjson id "$doc" '.nodes[] | select(.id == $id) | .tags')
     [ "$tags" = '["Cryopreservation","Tissue culture"]' ]
     # An untagged node still gets an array, not an object or null.
@@ -528,7 +528,7 @@ Assistant: Rinse, then autoclave."
     "$BIN" entity create document_tag document=$doc tag=$t2 score=0.8 decision=computed >/dev/null
     "$BIN" entity create document_tag document=$doc tag=$t3 score=0.5 decision=computed >/dev/null
 
-    body=$(json_body "$(raw_get "/knowledge-graph-data" "" "$COOKIE")")
+    body=$(json_body "$(raw_get "/api/v1/knowledge/graph" "" "$COOKIE")")
     node=$(echo "$body" | jq -c --argjson id "$doc" '.nodes[] | select(.id == $id) | {tags, groups}')
     [ "$node" = '{"tags":["Fermentation","Flavour","Standalone"],"groups":["Cocoa science","Standalone"]}' ]
 }
@@ -538,8 +538,8 @@ Assistant: Rinse, then autoclave."
     [[ "$output" =~ '<option value="subtag">Colour by sub-tag</option>' ]]
 }
 
-@test "/knowledge-graph-data renders for a plain baseline user" {
-    run raw_get "/knowledge-graph-data" "" "$COOKIE"
+@test "/api/v1/knowledge/graph renders for a plain baseline user" {
+    run raw_get "/api/v1/knowledge/graph" "" "$COOKIE"
     [[ "$output" =~ "200 OK" ]]
 }
 

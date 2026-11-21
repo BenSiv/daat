@@ -202,9 +202,9 @@ teardown() {
     [[ "$output" =~ "Canvas Demo" ]]
 }
 
-@test "POST /ext/<name>/action runs the named action, gated by write.entity, and returns the re-rendered canvas" {
+@test "POST /api/v1/extensions/<name>/actions runs the named action, gated by write.entity, and returns the re-rendered canvas" {
     "$BIN" extension approve canvas-demo
-    output=$(raw_post_json "/ext/canvas-demo/action" '{"action":"bump","args":{}}' \
+    output=$(raw_post_json "/api/v1/extensions/canvas-demo/actions" '{"action":"bump","args":{}}' \
         "session=${TEST_SESSION_COOKIE}; csrf=${TEST_CSRF_TOKEN}" "${TEST_CSRF_TOKEN}")
     [[ "$output" =~ "200 OK" ]]
     [[ "$output" =~ "Bumped!" ]]
@@ -214,10 +214,10 @@ teardown() {
     [[ "$output" =~ "extension:canvas-demo" ]]
 }
 
-@test "POST /ext/<name>/action requires the matching CSRF token" {
+@test "POST /api/v1/extensions/<name>/actions requires the matching CSRF token" {
     "$BIN" extension approve canvas-demo
     output=$(printf '%s' '{"action":"bump","args":{}}' | \
-        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/ext/canvas-demo/action" QUERY_STRING="" \
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/v1/extensions/canvas-demo/actions" QUERY_STRING="" \
         HTTP_COOKIE="session=${TEST_SESSION_COOKIE}; csrf=${TEST_CSRF_TOKEN}" "$BIN")
     [[ "$output" =~ "403 Forbidden" ]]
 
@@ -225,9 +225,9 @@ teardown() {
     [[ ! "$output" =~ "#1" ]]
 }
 
-@test "POST /ext/<name>/action 404s for an unknown action name" {
+@test "POST /api/v1/extensions/<name>/actions 404s for an unknown action name" {
     "$BIN" extension approve canvas-demo
-    output=$(raw_post_json "/ext/canvas-demo/action" '{"action":"not_a_real_action","args":{}}' \
+    output=$(raw_post_json "/api/v1/extensions/canvas-demo/actions" '{"action":"not_a_real_action","args":{}}' \
         "session=${TEST_SESSION_COOKIE}; csrf=${TEST_CSRF_TOKEN}" "${TEST_CSRF_TOKEN}")
     [[ "$output" =~ "404 Not Found" ]]
 }
@@ -242,7 +242,7 @@ teardown() {
     session_id=$(extract_query_param "$resp" "session_id")
 
     scripted="$(tool_call_response "tool-demo.lookup" '{"label":"gadget"}')"$'\1'"$(done_response "Found it.")"
-    run raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"look up gadget\"}" "$cookie" "$TEST_CSRF_TOKEN" "$scripted"
+    run raw_post_json "/api/v1/chat/sessions/${session_id}/messages" "{\"message\":\"look up gadget\"}" "$cookie" "$TEST_CSRF_TOKEN" "$scripted"
     [[ "$output" =~ "200 OK" ]]
     [[ "$(json_body "$output" | jq -r '.pending')" = "null" ]]
 
@@ -258,7 +258,7 @@ peek() {
     resp=$(start_chat "$cookie" "$TEST_CSRF_TOKEN")
     session_id=$(extract_query_param "$resp" "session_id")
     scripted="$(tool_call_response "tool-demo.peek" "$1")"$'\1'"$(done_response "Done.")"
-    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"peek\"}" "$cookie" "$TEST_CSRF_TOKEN" "$scripted" > /dev/null
+    raw_post_json "/api/v1/chat/sessions/${session_id}/messages" "{\"message\":\"peek\"}" "$cookie" "$TEST_CSRF_TOKEN" "$scripted" > /dev/null
     latest_tool_result "$session_id"
 }
 
@@ -288,7 +288,7 @@ peek() {
     session_id=$(extract_query_param "$resp" "session_id")
 
     scripted="$(tool_call_response "tool-demo.bump" '{}')"
-    send_resp=$(raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"bump it\"}" "$cookie" "$TEST_CSRF_TOKEN" "$scripted")
+    send_resp=$(raw_post_json "/api/v1/chat/sessions/${session_id}/messages" "{\"message\":\"bump it\"}" "$cookie" "$TEST_CSRF_TOKEN" "$scripted")
     [[ "$(json_body "$send_resp" | jq -r '.pending.tool')" = "tool-demo" ]]
     [[ "$(json_body "$send_resp" | jq -r '.pending.method')" = "bump" ]]
 
@@ -296,7 +296,7 @@ peek() {
     [ "$output" -eq 0 ]
 
     pending_id=$(json_body "$send_resp" | jq -r '.pending.id')
-    run raw_post_json "/api/chat-widget-approve" "{\"pending_id\":${pending_id},\"session_id\":\"${session_id}\"}" "$cookie" "$TEST_CSRF_TOKEN" "$(done_response "Bumped.")"
+    run raw_post_json "/api/v1/chat/sessions/${session_id}/approve" "{\"pending_id\":${pending_id}}" "$cookie" "$TEST_CSRF_TOKEN" "$(done_response "Bumped.")"
     [[ "$output" =~ "200 OK" ]]
 
     run sqlite3 "$TEST_DIR/.store/store.db" "SELECT COUNT(*) FROM widget WHERE label = 'bumped-by-tool';"
@@ -344,7 +344,7 @@ peek() {
     resp=$(start_chat "$cookie" "$TEST_CSRF_TOKEN")
     session_id=$(extract_query_param "$resp" "session_id")
     scripted="$(tool_call_response "tool-demo.peek" '{"type":"widget"}')"$'\1'"$(done_response "Done.")"
-    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"peek\"}" "$cookie" "$TEST_CSRF_TOKEN" "$scripted" > /dev/null
+    raw_post_json "/api/v1/chat/sessions/${session_id}/messages" "{\"message\":\"peek\"}" "$cookie" "$TEST_CSRF_TOKEN" "$scripted" > /dev/null
     run latest_tool_result "$session_id"
     [[ "$output" =~ "ERROR: unknown tool tool-demo.peek" ]]
     [[ ! "$output" =~ "peek rows" ]]
@@ -421,9 +421,9 @@ EOF
     [[ "$output" =~ "No approved extension currently declares a manual trigger." ]]
 }
 
-@test "POST /admin-triggers/<ext>/<trigger> runs the handler, threads the real admin login through meta, and returns its message" {
+@test "POST /api/v1/admin/triggers/<ext>/<trigger> runs the handler, threads the real admin login through meta, and returns its message" {
     "$BIN" extension approve trigger-demo
-    output=$(raw_post_json "/admin-triggers/trigger-demo/refresh" '{}' \
+    output=$(raw_post_json "/api/v1/admin/triggers/trigger-demo/refresh" '{}' \
         "session=${ADMIN_SESSION_COOKIE}; csrf=${ADMIN_CSRF_TOKEN}" "${ADMIN_CSRF_TOKEN}")
     [[ "$output" =~ "200 OK" ]]
     [[ "$output" =~ "Refreshed!" ]]
@@ -433,9 +433,9 @@ EOF
     [[ "$output" =~ "extension:trigger-demo" ]]
 }
 
-@test "POST /admin-triggers/<ext>/<trigger> requires Admin capability, even with a valid CSRF token" {
+@test "POST /api/v1/admin/triggers/<ext>/<trigger> requires Admin capability, even with a valid CSRF token" {
     "$BIN" extension approve trigger-demo
-    output=$(raw_post_json "/admin-triggers/trigger-demo/refresh" '{}' \
+    output=$(raw_post_json "/api/v1/admin/triggers/trigger-demo/refresh" '{}' \
         "session=${TEST_SESSION_COOKIE}; csrf=${TEST_CSRF_TOKEN}" "${TEST_CSRF_TOKEN}")
     [[ "$output" =~ "403 Forbidden" ]]
 
@@ -443,10 +443,10 @@ EOF
     [[ ! "$output" =~ "#1" ]]
 }
 
-@test "POST /admin-triggers/<ext>/<trigger> requires the matching CSRF token" {
+@test "POST /api/v1/admin/triggers/<ext>/<trigger> requires the matching CSRF token" {
     "$BIN" extension approve trigger-demo
     output=$(printf '%s' '{}' | \
-        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/admin-triggers/trigger-demo/refresh" QUERY_STRING="" \
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/v1/admin/triggers/trigger-demo/refresh" QUERY_STRING="" \
         HTTP_COOKIE="session=${ADMIN_SESSION_COOKIE}; csrf=${ADMIN_CSRF_TOKEN}" "$BIN")
     [[ "$output" =~ "403 Forbidden" ]]
 
@@ -454,15 +454,15 @@ EOF
     [[ ! "$output" =~ "#1" ]]
 }
 
-@test "POST /admin-triggers/<ext>/<trigger> 404s for an unknown trigger name" {
+@test "POST /api/v1/admin/triggers/<ext>/<trigger> 404s for an unknown trigger name" {
     "$BIN" extension approve trigger-demo
-    output=$(raw_post_json "/admin-triggers/trigger-demo/does-not-exist" '{}' \
+    output=$(raw_post_json "/api/v1/admin/triggers/trigger-demo/does-not-exist" '{}' \
         "session=${ADMIN_SESSION_COOKIE}; csrf=${ADMIN_CSRF_TOKEN}" "${ADMIN_CSRF_TOKEN}")
     [[ "$output" =~ "404 Not Found" ]]
 }
 
-@test "POST /admin-triggers/<ext>/<trigger> 404s for an unapproved extension" {
-    output=$(raw_post_json "/admin-triggers/trigger-demo/refresh" '{}' \
+@test "POST /api/v1/admin/triggers/<ext>/<trigger> 404s for an unapproved extension" {
+    output=$(raw_post_json "/api/v1/admin/triggers/trigger-demo/refresh" '{}' \
         "session=${ADMIN_SESSION_COOKIE}; csrf=${ADMIN_CSRF_TOKEN}" "${ADMIN_CSRF_TOKEN}")
     [[ "$output" =~ "404 Not Found" ]]
 
@@ -479,7 +479,7 @@ EOF
     run "$BIN" extension show trigger-demo
     [[ "$output" =~ "NOT APPROVED" ]]
 
-    output=$(raw_post_json "/admin-triggers/trigger-demo/refresh" '{}' \
+    output=$(raw_post_json "/api/v1/admin/triggers/trigger-demo/refresh" '{}' \
         "session=${ADMIN_SESSION_COOKIE}; csrf=${ADMIN_CSRF_TOKEN}" "${ADMIN_CSRF_TOKEN}")
     [[ "$output" =~ "404 Not Found" ]]
 

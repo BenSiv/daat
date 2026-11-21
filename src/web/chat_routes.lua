@@ -1,5 +1,4 @@
--- Chat history browser (/chat) and floating widget JSON API
--- (/api/chat-widget-*).
+-- Chat history browser (/chat) and /api/v1/chat/* JSON endpoints.
 
 const config = require("config")
 const agent = require("agent")
@@ -11,14 +10,14 @@ const web_ctx = require("web.context")
 
 const chat_routes = {}
 
-function chat_widget_state(db_path, session_id, viewer_login)
+function chat_session_state(db_path, session_id, viewer_login)
     owner = agent.session_login(db_path, session_id)
     read_only = viewer_login != nil and owner != nil and owner != viewer_login
     running = agent.turn_status(db_path, session_id) == "running"
     messages = agent.all_messages(db_path, session_id, false)
     for _, msg in ipairs(messages) do
         if ui.CHAT_MARKDOWN_ROLES[msg.role] == true then
-            msg.content = document.render_markdown(msg.content)
+            msg.content_html = document.render_markdown(msg.content)
         end
     end
     pending_out = nil
@@ -38,7 +37,7 @@ function chat_widget_state(db_path, session_id, viewer_login)
         session_id = session_id,
         owner = owner,
         read_only = read_only,
-        messages = messages,
+        messages = web_ctx.as_json_array(messages),
         pending = pending_out,
         last_query_sql = last_query_sql,
         running = running,
@@ -59,7 +58,6 @@ end
 
 function chat_routes.handle(req)
     path_info = req.path_info
-    method = req.method
     db_path = req.db_path
     author = req.author
 
@@ -90,86 +88,147 @@ function chat_routes.handle(req)
         return web_ctx.render_page(req, "Chat", "chat", body, page_context)
     end
 
-    if path_info == "/api/chat-widget-start" and method == "POST" then
-        if not web_ctx.require_csrf(req) then
-            return web_ctx.respond(req, "403 Forbidden", "application/json", json.encode({error = "CSRF check failed"}))
+    return false
+end
+
+function chat_routes.handle_api_v1(req)
+    path_info = req.path_info
+    method = req.method
+    db_path = req.db_path
+    author = req.author
+
+    if path_info == "/api/v1/chat/sessions" then
+        if method == "GET" then
+            sessions = agent.list_sessions(db_path, author)
+            return web_ctx.respond_json(req, "200 OK", {sessions = web_ctx.as_json_array(sessions)})
         end
-        body_data, _, err = json.decode(io.read("*all"))
-        if body_data == nil then
-            return web_ctx.respond(req, "400 Bad Request", "application/json", json.encode({error = "Invalid JSON: " .. tostring(err)}))
+        if method == "POST" then
+            body_data, ok_body = web_ctx.read_write_json(req, true)
+            if not ok_body then
+                return true
+            end
+            new_session_id, create_err = agent.create_session(db_path, author, body_data.title)
+            if new_session_id == nil then
+                return web_ctx.respond_json(req, "500 Internal Server Error", {error = tostring(create_err)})
+            end
+            return web_ctx.respond_json(req, "200 OK", chat_session_state(db_path, new_session_id, author))
         end
-        new_session_id, create_err = agent.create_session(db_path, author, body_data.title)
-        if new_session_id == nil then
-            return web_ctx.respond(req, "500 Internal Server Error", "application/json", json.encode({error = tostring(create_err)}))
-        end
-        return web_ctx.respond(req, "200 OK", "application/json", json.encode(chat_widget_state(db_path, new_session_id)))
+        web_ctx.read_body()
+        return web_ctx.method_not_allowed(req)
     end
 
-    if path_info == "/api/chat-widget-send" and method == "POST" then
-        if not web_ctx.require_csrf(req) then
-            return web_ctx.respond(req, "403 Forbidden", "application/json", json.encode({error = "CSRF check failed"}))
+    if path_info == "/api/v1/chat/attachments/extract" then
+        if method != "POST" then
+            web_ctx.read_body()
+            return web_ctx.method_not_allowed(req)
         end
-        body_data, _, err = json.decode(io.read("*all"))
-        if body_data == nil then
-            return web_ctx.respond(req, "400 Bad Request", "application/json", json.encode({error = "Invalid JSON: " .. tostring(err)}))
-        end
-        if agent.get_session(db_path, body_data.session_id, author) == nil then
-            return web_ctx.respond(req, "404 Not Found", "application/json", json.encode({error = "no such chat session"}))
-        end
-        if agent.turn_status(db_path, body_data.session_id) == "running" then
-            return web_ctx.respond(req, "409 Conflict", "application/json", json.encode({error = "the assistant is still answering the previous message"}))
-        end
-        run_chat_turn(db_path, req.root, body_data.session_id, author, body_data.message)
-        return web_ctx.respond(req, "200 OK", "application/json", json.encode(chat_widget_state(db_path, body_data.session_id)))
-    end
-
-    if path_info == "/api/chat-widget-stop" and method == "POST" then
-        if not web_ctx.require_csrf(req) then
-            return web_ctx.respond(req, "403 Forbidden", "application/json", json.encode({error = "CSRF check failed"}))
-        end
-        body_data, _, err = json.decode(io.read("*all"))
-        if body_data == nil then
-            return web_ctx.respond(req, "400 Bad Request", "application/json", json.encode({error = "Invalid JSON: " .. tostring(err)}))
-        end
-        if agent.request_cancel(db_path, body_data.session_id, author) == false then
-            return web_ctx.respond(req, "404 Not Found", "application/json", json.encode({error = "no such chat session"}))
-        end
-        return web_ctx.respond(req, "200 OK", "application/json", json.encode({ok = true}))
-    end
-
-    if path_info == "/api/chat-widget-attach" and method == "POST" then
+        raw_body = web_ctx.read_body()
         if config.load().chat_attachments_enabled != true then
-            return web_ctx.respond(req, "404 Not Found", "application/json", json.encode({error = "not found"}))
+            return web_ctx.respond_json(req, "404 Not Found", {error = "not found"})
         end
-        if not web_ctx.require_csrf(req) then
-            return web_ctx.respond(req, "403 Forbidden", "application/json", json.encode({error = "CSRF check failed"}))
+        if not web_ctx.require_write_auth(req) then
+            return true
         end
-        raw_body = io.read("*all")
         if raw_body != nil and string.len(raw_body) > 15 * 1024 * 1024 then
-            return web_ctx.respond(req, "400 Bad Request", "application/json", json.encode({error = "File too large (max 15MB)."}))
+            return web_ctx.respond_json(req, "400 Bad Request", {error = "File too large (max 15MB)."})
         end
         form = multipart.parse(os.getenv("CONTENT_TYPE"), raw_body)
         uploaded = form.file
         if type(uploaded) != "table" or uploaded.data == nil or uploaded.data == "" then
-            return web_ctx.respond(req, "400 Bad Request", "application/json", json.encode({error = "No file given."}))
+            return web_ctx.respond_json(req, "400 Bad Request", {error = "No file given."})
         end
         text, err = document.extract_attachment_text(uploaded.filename, uploaded.data)
         if text == nil then
-            return web_ctx.respond(req, "400 Bad Request", "application/json", json.encode({error = err}))
+            return web_ctx.respond_json(req, "400 Bad Request", {error = err})
         end
-        return web_ctx.respond(req, "200 OK", "application/json", json.encode({text = text, filename = uploaded.filename}))
+        return web_ctx.respond_json(req, "200 OK", {text = text, filename = uploaded.filename})
     end
 
-    if path_info == "/api/chat-widget-approve" and method == "POST" then
-        if not web_ctx.require_csrf(req) then
-            return web_ctx.respond(req, "403 Forbidden", "application/json", json.encode({error = "CSRF check failed"}))
+    msg_id_str = string.match(path_info, "^/api/v1/chat/messages/(%d+)/feedback$")
+    if msg_id_str != nil then
+        if method != "POST" then
+            web_ctx.read_body()
+            return web_ctx.method_not_allowed(req)
         end
-        body_data, _, err = json.decode(io.read("*all"))
-        if body_data == nil then
-            return web_ctx.respond(req, "400 Bad Request", "application/json", json.encode({error = "Invalid JSON: " .. tostring(err)}))
+        body_data, ok_body = web_ctx.read_write_json(req, false)
+        if not ok_body then
+            return true
         end
-        if agent.get_session(db_path, body_data.session_id, author) == nil then
-            return web_ctx.respond(req, "404 Not Found", "application/json", json.encode({error = "no such chat session"}))
+        message_id = tonumber(msg_id_str)
+        session_id = agent.message_session_id(db_path, message_id)
+        if session_id == nil or agent.get_session(db_path, session_id, author) == nil then
+            return web_ctx.respond_json(req, "404 Not Found", {error = "no such message"})
+        end
+        ok = agent.record_reply_feedback(db_path, message_id, body_data.feedback)
+        return web_ctx.respond_json(req, "200 OK", {ok = ok})
+    end
+
+    sid_raw, action = string.match(path_info, "^/api/v1/chat/sessions/([^/]+)/([a-z]+)$")
+    if sid_raw == nil then
+        sid_raw = string.match(path_info, "^/api/v1/chat/sessions/([^/]+)$")
+    end
+    if sid_raw == nil then
+        return false
+    end
+    sid = web_ctx.percent_decode(sid_raw)
+
+    if action == nil then
+        if method != "GET" then
+            web_ctx.read_body()
+            return web_ctx.method_not_allowed(req)
+        end
+        session, _ = agent.get_session_for_reader(db_path, sid, author, req.show_admin_nav)
+        if session == nil then
+            return web_ctx.respond_json(req, "404 Not Found", {error = "no such chat session"})
+        end
+        return web_ctx.respond_json(req, "200 OK", chat_session_state(db_path, sid, author))
+    end
+
+    if action == "messages" then
+        if method != "POST" then
+            web_ctx.read_body()
+            return web_ctx.method_not_allowed(req)
+        end
+        body_data, ok_body = web_ctx.read_write_json(req, false)
+        if not ok_body then
+            return true
+        end
+        if agent.get_session(db_path, sid, author) == nil then
+            return web_ctx.respond_json(req, "404 Not Found", {error = "no such chat session"})
+        end
+        if agent.turn_status(db_path, sid) == "running" then
+            return web_ctx.respond_json(req, "409 Conflict", {error = "the assistant is still answering the previous message"})
+        end
+        run_chat_turn(db_path, req.root, sid, author, body_data.message)
+        return web_ctx.respond_json(req, "200 OK", chat_session_state(db_path, sid, author))
+    end
+
+    if action == "stop" then
+        if method != "POST" then
+            web_ctx.read_body()
+            return web_ctx.method_not_allowed(req)
+        end
+        _, ok_body = web_ctx.read_write_json(req, true)
+        if not ok_body then
+            return true
+        end
+        if agent.request_cancel(db_path, sid, author) == false then
+            return web_ctx.respond_json(req, "404 Not Found", {error = "no such chat session"})
+        end
+        return web_ctx.respond_json(req, "200 OK", {ok = true})
+    end
+
+    if action == "approve" then
+        if method != "POST" then
+            web_ctx.read_body()
+            return web_ctx.method_not_allowed(req)
+        end
+        body_data, ok_body = web_ctx.read_write_json(req, false)
+        if not ok_body then
+            return true
+        end
+        if agent.get_session(db_path, sid, author) == nil then
+            return web_ctx.respond_json(req, "404 Not Found", {error = "no such chat session"})
         end
         model = agent.default_model()
         inline = config.load().agent_turn_mode == "inline"
@@ -177,36 +236,20 @@ function chat_routes.handle(req)
         if inline == false and result != nil then
             agent.start_detached_turn(db_path, req.root, result.session_id)
         end
-        return web_ctx.respond(req, "200 OK", "application/json", json.encode(chat_widget_state(db_path, body_data.session_id, author)))
+        return web_ctx.respond_json(req, "200 OK", chat_session_state(db_path, sid, author))
     end
 
-    if path_info == "/api/chat-widget-feedback" and method == "POST" then
-        if not web_ctx.require_csrf(req) then
-            return web_ctx.respond(req, "403 Forbidden", "application/json", json.encode({error = "CSRF check failed"}))
+    if action == "deny" then
+        if method != "POST" then
+            web_ctx.read_body()
+            return web_ctx.method_not_allowed(req)
         end
-        body_data, _, err = json.decode(io.read("*all"))
-        if body_data == nil then
-            return web_ctx.respond(req, "400 Bad Request", "application/json", json.encode({error = "Invalid JSON: " .. tostring(err)}))
+        body_data, ok_body = web_ctx.read_write_json(req, false)
+        if not ok_body then
+            return true
         end
-        message_id = tonumber(body_data.message_id)
-        session_id = agent.message_session_id(db_path, message_id)
-        if session_id == nil or agent.get_session(db_path, session_id, author) == nil then
-            return web_ctx.respond(req, "404 Not Found", "application/json", json.encode({error = "no such message"}))
-        end
-        ok = agent.record_reply_feedback(db_path, message_id, body_data.feedback)
-        return web_ctx.respond(req, "200 OK", "application/json", json.encode({ok = ok}))
-    end
-
-    if path_info == "/api/chat-widget-deny" and method == "POST" then
-        if not web_ctx.require_csrf(req) then
-            return web_ctx.respond(req, "403 Forbidden", "application/json", json.encode({error = "CSRF check failed"}))
-        end
-        body_data, _, err = json.decode(io.read("*all"))
-        if body_data == nil then
-            return web_ctx.respond(req, "400 Bad Request", "application/json", json.encode({error = "Invalid JSON: " .. tostring(err)}))
-        end
-        if agent.get_session(db_path, body_data.session_id, author) == nil then
-            return web_ctx.respond(req, "404 Not Found", "application/json", json.encode({error = "no such chat session"}))
+        if agent.get_session(db_path, sid, author) == nil then
+            return web_ctx.respond_json(req, "404 Not Found", {error = "no such chat session"})
         end
         model = agent.default_model()
         inline = config.load().agent_turn_mode == "inline"
@@ -214,15 +257,7 @@ function chat_routes.handle(req)
         if inline == false and result != nil then
             agent.start_detached_turn(db_path, req.root, result.session_id)
         end
-        return web_ctx.respond(req, "200 OK", "application/json", json.encode(chat_widget_state(db_path, body_data.session_id, author)))
-    end
-
-    if path_info == "/api/chat-widget-history" then
-        session, _ = agent.get_session_for_reader(db_path, req.params.session_id, author, req.show_admin_nav)
-        if session == nil then
-            return web_ctx.respond(req, "404 Not Found", "application/json", json.encode({error = "no such chat session"}))
-        end
-        return web_ctx.respond(req, "200 OK", "application/json", json.encode(chat_widget_state(db_path, req.params.session_id, author)))
+        return web_ctx.respond_json(req, "200 OK", chat_session_state(db_path, sid, author))
     end
 
     return false

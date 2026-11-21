@@ -15,7 +15,7 @@ setup() {
     read session csrf < <(login_test_user "alice" "i")
     COOKIE="session=${session}; csrf=${csrf}"
     CSRF="$csrf"
-    CHAT=$(json_body "$(raw_post_json "/api/chat-widget-start" '{"title":"x"}' "$COOKIE" "$CSRF" "")" | jq -r '.session_id')
+    CHAT=$(json_body "$(raw_post_json "/api/v1/chat/sessions" '{"title":"x"}' "$COOKIE" "$CSRF" "")" | jq -r '.session_id')
     # A long document whose answer sits in its last section.
     filler=$(printf 'Plants were watered and the greenhouse lights were checked. %.0s' $(seq 1 40))
     late="The incubator held the cultures at twenty five degrees with constant shaking overnight."
@@ -30,8 +30,8 @@ teardown() {
 # Each search in a fresh chat: a repeat in the same chat would be
 # answered from context (doc/context-management-plan.md, Phase 1).
 agent_search() {
-    chat=$(json_body "$(raw_post_json "/api/chat-widget-start" '{"title":"s"}' "$COOKIE" "$CSRF" "")" | jq -r '.session_id')
-    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${chat}\",\"message\":\"q\"}" "$COOKIE" "$CSRF" \
+    chat=$(json_body "$(raw_post_json "/api/v1/chat/sessions" '{"title":"s"}' "$COOKIE" "$CSRF" "")" | jq -r '.session_id')
+    raw_post_json "/api/v1/chat/sessions/${chat}/messages" "{\"message\":\"q\"}" "$COOKIE" "$CSRF" \
         "$(tool_call_response "document.search" "{\"query\":\"$1\"}")"$'\1'"$(done_response "Done.")" >/dev/null
     sqlite3 "$TEST_DIR/.store/store.db" "SELECT content FROM agent_message WHERE session_id = '${chat}' AND role = 'tool_result' ORDER BY id DESC LIMIT 1;"
 }
@@ -131,7 +131,7 @@ embedded_lines() {
 }
 
 @test "the agent can't query the passage cache; entity.fields describes nothing secret there" {
-    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${CHAT}\",\"message\":\"q\"}" "$COOKIE" "$CSRF" \
+    raw_post_json "/api/v1/chat/sessions/${CHAT}/messages" "{\"message\":\"q\"}" "$COOKIE" "$CSRF" \
         "$(tool_call_response "entity.query" '{"sql":"SELECT * FROM document_passage_cache"}')"$'\1'"$(done_response "Done.")" >/dev/null
     run latest_tool_result "$CHAT"
     [[ "$output" =~ "refusing to run" ]]

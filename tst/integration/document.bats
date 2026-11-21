@@ -39,7 +39,7 @@ get_route() {
 raw_document_preview() {
     local body="$1"
     local csrf_header="$2"
-    printf '%s' "$body" | GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/document-preview" \
+    printf '%s' "$body" | GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/v1/documents/render" \
         QUERY_STRING="" HTTP_COOKIE="$COOKIE" HTTP_X_CSRF_TOKEN="$csrf_header" "$BIN"
 }
 
@@ -388,10 +388,10 @@ EOF
     [[ ! "$output" =~ "Internal Server Error" ]]
 }
 
-@test "archiving a document (via the generic /api/archive route) removes it from the /documents tree" {
+@test "archiving a document (via the generic /api/v1/entities/document/<id>/archive route) removes it from the /documents tree" {
     save_document "csrf_token=${CSRF}&title=Home&parent_id=&content=" >/dev/null
 
-    GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/archive" QUERY_STRING="type=document&entity_id=1" \
+    GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/v1/entities/document/1/archive" QUERY_STRING="" \
         HTTP_COOKIE="$COOKIE" HTTP_X_CSRF_TOKEN="$CSRF" run "$BIN"
     [[ "$output" =~ '"success":true' ]]
 
@@ -574,7 +574,7 @@ EOF
     [[ "$output" =~ "Usage: daat document <create-json|embed-pending|embedding-text>" ]]
 }
 
-@test "/api/document-search returns canonical [[title]] and [[folder/title]] refs, omitting exclude_id and archived pages" {
+@test "/api/v1/documents/link-search returns canonical [[title]] and [[folder/title]] refs, omitting exclude_id and archived pages" {
     save_document "csrf_token=${CSRF}&title=Home&parent_id=&content=Welcome." >/dev/null
     save_document "csrf_token=${CSRF}&title=Guides&parent_id=&content=Folder." >/dev/null
     save_document "csrf_token=${CSRF}&title=Setup&parent_id=&content=Root setup." >/dev/null
@@ -582,7 +582,7 @@ EOF
     save_document "csrf_token=${CSRF}&title=Setup+Old&parent_id=&content=Archived." >/dev/null
     "$BIN" entity archive document 5 >/dev/null
 
-    run get_route "/api/document-search" "query=Set&exclude_id=1"
+    run get_route "/api/v1/documents/link-search" "query=Set&exclude_id=1"
     [ "$status" -eq 0 ]
     [[ "$output" =~ "200 OK" ]]
     [[ "$output" =~ '"link_ref":"[[Setup]]"' ]]
@@ -591,7 +591,7 @@ EOF
     [[ ! "$output" =~ "Setup Old" ]]
 
     # Editing document #3 excludes #3 itself from suggestions.
-    run get_route "/api/document-search" "query=Setup&exclude_id=3"
+    run get_route "/api/v1/documents/link-search" "query=Setup&exclude_id=3"
     [[ "$output" =~ '"link_ref":"[[Guides/Setup]]"' ]]
     [[ ! "$output" =~ '"link_ref":"[[Setup]]"' ]]
 }
@@ -600,8 +600,8 @@ EOF
     run get_route "/document-edit" ""
     [ "$status" -eq 0 ]
     [[ "$output" =~ "200 OK" ]]
-    [[ "$output" =~ "api/document-search" ]]
-    [[ "$output" =~ "api/entity-search" ]]
+    [[ "$output" =~ "api/v1/documents/link-search" ]]
+    [[ "$output" =~ "api/v1/entities?query=" ]]
     [[ "$output" =~ "platform-mention-results" ]]
 }
 

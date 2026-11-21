@@ -24,8 +24,9 @@
         // typed input's value would vanish on the wire. A plain object
         // literal as the merge target sidesteps the ambiguity entirely.
         var args = Object.assign({}, staticArgs, collectInputArgs());
+        var actionUrl = window.location.pathname.replace(/\/ext\/([^/]+)\/?$/, '/api/v1/extensions/$1/actions');
         btn.disabled = true;
-        PlatformJS.postJSON(window.location.pathname + '/action', {action: action, args: args})
+        PlatformJS.postJSON(actionUrl, {action: action, args: args})
             .then(function(result){
                 btn.disabled = false;
                 if (result && result.html != null) { container.innerHTML = result.html; }

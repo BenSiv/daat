@@ -94,11 +94,11 @@ raw_admin_action() {
 }
 
 @test "an unauthenticated /chat-start or /chat-message never reaches the agent" {
-    GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/chat-widget-start" QUERY_STRING="" run "$BIN"
+    GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/v1/chat/sessions" QUERY_STRING="" run "$BIN"
     [[ "$output" =~ "302 Found" ]]
     [[ "$output" =~ "Location: /login" ]]
 
-    GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/chat-widget-send" QUERY_STRING="" run "$BIN"
+    GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/v1/chat/sessions/fake/messages" QUERY_STRING="" run "$BIN"
     [[ "$output" =~ "302 Found" ]]
     [[ "$output" =~ "Location: /login" ]]
 }
@@ -184,12 +184,12 @@ EOF
     session=$(printf '%s' "$raw" | grep -o 'Set-Cookie: session=[^;]*' | sed 's/Set-Cookie: session=//')
     csrf=$(printf '%s' "$raw" | grep -o 'Set-Cookie: csrf=[^;]*' | sed 's/Set-Cookie: csrf=//')
 
-    GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/archive" QUERY_STRING="type=widget&entity_id=1" \
+    GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/v1/entities/widget/1/archive" QUERY_STRING="" \
         HTTP_COOKIE="session=${session}; csrf=${csrf}" run "$BIN"
     [[ "$output" =~ "403 Forbidden" ]]
     [[ "$output" =~ "CSRF check failed" ]]
 
-    GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/archive" QUERY_STRING="type=widget&entity_id=1" \
+    GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/v1/entities/widget/1/archive" QUERY_STRING="" \
         HTTP_COOKIE="session=${session}; csrf=${csrf}" HTTP_X_CSRF_TOKEN="${csrf}" run "$BIN"
     [[ "$output" =~ '"success":true' ]]
 }

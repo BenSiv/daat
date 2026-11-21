@@ -52,7 +52,7 @@ teardown() {
 @test "creating a label_template row requires Admin capability -- rejected for a plain user" {
     read TEST_SESSION_COOKIE TEST_CSRF_TOKEN < <(login_test_user "plainuser" "i")
     payload='[{"for_entity_type":"sample","sql":"SELECT lab_name FROM sample WHERE id = ?","zpl":"^XA^FD{{lab_name}}^FS^XZ"}]'
-    output=$(printf '%s' "$payload" | GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/submit" QUERY_STRING="type=label_template" \
+    output=$(printf '%s' "$payload" | GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/v1/entities/label_template" QUERY_STRING="" \
         HTTP_COOKIE="session=${TEST_SESSION_COOKIE}; csrf=${TEST_CSRF_TOKEN}" HTTP_X_CSRF_TOKEN="${TEST_CSRF_TOKEN}" "$BIN")
     [[ "$output" =~ "403 Forbidden" ]]
     [[ "$output" =~ "Admin capability required" ]]
@@ -61,7 +61,7 @@ teardown() {
 @test "creating a label_template row succeeds for an Admin user" {
     read TEST_SESSION_COOKIE TEST_CSRF_TOKEN < <(login_test_user "admin1" "ia")
     payload='[{"for_entity_type":"sample","sql":"SELECT lab_name FROM sample WHERE id = ?","zpl":"^XA^FD{{lab_name}}^FS^XZ"}]'
-    output=$(printf '%s' "$payload" | GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/submit" QUERY_STRING="type=label_template" \
+    output=$(printf '%s' "$payload" | GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/v1/entities/label_template" QUERY_STRING="" \
         HTTP_COOKIE="session=${TEST_SESSION_COOKIE}; csrf=${TEST_CSRF_TOKEN}" HTTP_X_CSRF_TOKEN="${TEST_CSRF_TOKEN}" "$BIN")
     [[ "$output" =~ "200 OK" ]]
     [[ "$output" =~ '"success":true' ]]
@@ -70,13 +70,13 @@ teardown() {
 @test "a non-SELECT sql value is rejected at save time, even for an Admin user" {
     read TEST_SESSION_COOKIE TEST_CSRF_TOKEN < <(login_test_user "admin2" "ia")
     payload='[{"for_entity_type":"sample","sql":"DELETE FROM sample WHERE id = ?","zpl":"^XA^XZ"}]'
-    output=$(printf '%s' "$payload" | GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/submit" QUERY_STRING="type=label_template" \
+    output=$(printf '%s' "$payload" | GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/v1/entities/label_template" QUERY_STRING="" \
         HTTP_COOKIE="session=${TEST_SESSION_COOKIE}; csrf=${TEST_CSRF_TOKEN}" HTTP_X_CSRF_TOKEN="${TEST_CSRF_TOKEN}" "$BIN")
     [[ "$output" =~ "must be a single, plain SELECT statement" ]]
     [[ ! "$output" =~ '"success":true' ]]
 }
 
-@test "GET /label renders correct ZPL for a real entity, including a cross-entity value from the template's own JOIN" {
+@test "GET /api/v1/entities/<type>/<id>/label renders correct ZPL for a real entity, including a cross-entity value from the template's own JOIN" {
     "$BIN" entity create experiment title="Exp One"
     "$BIN" entity create sample lab_name="Sample A" experiment=1
     "$BIN" entity create-json label_template <<'EOF'
@@ -84,7 +84,7 @@ teardown() {
 EOF
 
     read TEST_SESSION_COOKIE TEST_CSRF_TOKEN < <(login_test_user "viewer1" "i")
-    GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/label" QUERY_STRING="type=sample&entity_id=2" \
+    GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/api/v1/entities/sample/2/label" QUERY_STRING="" \
         HTTP_COOKIE="session=${TEST_SESSION_COOKIE}; csrf=${TEST_CSRF_TOKEN}" run "$BIN"
     [[ "$output" =~ "200 OK" ]]
     [[ "$output" =~ "Sample A" ]]
@@ -98,18 +98,18 @@ EOF
 EOF
 
     read TEST_SESSION_COOKIE TEST_CSRF_TOKEN < <(login_test_user "viewer2" "i")
-    GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/label" QUERY_STRING="type=sample&entity_id=1" \
+    GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/api/v1/entities/sample/1/label" QUERY_STRING="" \
         HTTP_COOKIE="session=${TEST_SESSION_COOKIE}; csrf=${TEST_CSRF_TOKEN}" run "$BIN"
     [[ "$output" =~ "WeirdNameHere" ]]
     [[ ! "$output" =~ "Weird^Name" ]]
     [[ ! "$output" =~ "Name~Here" ]]
 }
 
-@test "GET /label 404s when no label template exists for the entity type" {
+@test "GET /api/v1/entities/<type>/<id>/label 404s when no label template exists for the entity type" {
     "$BIN" entity create experiment title="Exp Alone"
 
     read TEST_SESSION_COOKIE TEST_CSRF_TOKEN < <(login_test_user "viewer3" "i")
-    GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/label" QUERY_STRING="type=experiment&entity_id=1" \
+    GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/api/v1/entities/experiment/1/label" QUERY_STRING="" \
         HTTP_COOKIE="session=${TEST_SESSION_COOKIE}; csrf=${TEST_CSRF_TOKEN}" run "$BIN"
     [[ "$output" =~ "404 Not Found" ]]
 }
@@ -135,12 +135,12 @@ EOF
 @test "creating and editing a label_template row is ledgered exactly like any other entity" {
     read TEST_SESSION_COOKIE TEST_CSRF_TOKEN < <(login_test_user "admin3" "ia")
     payload='[{"for_entity_type":"sample","sql":"SELECT lab_name FROM sample WHERE id = ?","zpl":"^XA^FD{{lab_name}}^FS^XZ"}]'
-    output=$(printf '%s' "$payload" | GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/submit" QUERY_STRING="type=label_template" \
+    output=$(printf '%s' "$payload" | GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/v1/entities/label_template" QUERY_STRING="" \
         HTTP_COOKIE="session=${TEST_SESSION_COOKIE}; csrf=${TEST_CSRF_TOKEN}" HTTP_X_CSRF_TOKEN="${TEST_CSRF_TOKEN}" "$BIN")
     [[ "$output" =~ '"success":true' ]]
 
     update_payload='{"zpl":"^XA^FD{{lab_name}} v2^FS^XZ"}'
-    output=$(printf '%s' "$update_payload" | GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/update" QUERY_STRING="type=label_template&entity_id=1" \
+    output=$(printf '%s' "$update_payload" | GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="PATCH" PATH_INFO="/api/v1/entities/label_template/1" QUERY_STRING="" \
         HTTP_COOKIE="session=${TEST_SESSION_COOKIE}; csrf=${TEST_CSRF_TOKEN}" HTTP_X_CSRF_TOKEN="${TEST_CSRF_TOKEN}" "$BIN")
     [[ "$output" =~ '"success":true' ]]
 

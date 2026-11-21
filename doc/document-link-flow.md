@@ -7,7 +7,7 @@ flowchart LR
     subgraph SRC["sources of change -- all write content"]
         A1["UI save<br/>/document-save"]
         A2["Agent / CLI<br/>document create &middot; update"]
-        A3["Generic entity API<br/>/api/submit, /api/update, /api/v1<br/>agent entity.create / entity.update"]
+        A3["Generic entity API<br/>/api/v1/entities/document<br/>agent entity.create / entity.update"]
         A4["Co-retrieval YES<br/>creates a connection document"]
     end
 
@@ -18,7 +18,7 @@ flowchart LR
 
     subgraph READ["readers -- query only, active rows"]
         R1["spread_activation()"]
-        R2["/knowledge-graph-data"]
+        R2["/api/v1/knowledge/graph"]
         R3["links()<br/>Connections list, agent document.links<br/>+ context read from content"]
     end
 
@@ -40,7 +40,7 @@ A link is `[[target]]` or `[[folder/target]]` on a single line, with no brackets
 
 ## One writer: content, on every write path
 
-`document.sync_links` runs from entity's own document hooks -- `document.on_entity_created` (called by `entity.create`) and `document.on_entity_updated` (called by `entity.update` on a real change to `content`) -- so every write path keeps the index in step with content: the UI's `/document-save`, the agent's document tools, the generic entity paths (`/api/submit`, `/api/update`, `/api/v1`, the agent's `entity.create`/`entity.update`, `entity create-json`/`update-json`), and the knowledge pool's own notes. The same hooks compute the document's embedding.
+`document.sync_links` runs from entity's own document hooks -- `document.on_entity_created` (called by `entity.create`) and `document.on_entity_updated` (called by `entity.update` on a real change to `content`) -- so every write path keeps the index in step with content: the UI's `/document-save`, the agent's document tools, the generic entity paths (`/api/v1/entities/document`, the agent's `entity.create`/`entity.update`, `entity create-json`/`update-json`), and the knowledge pool's own notes. The same hooks compute the document's embedding.
 
 `sync_links` makes a document's rows match its content: every `[[link]]` in it goes through `document.upsert_link`, and every active row whose link text no longer appears is archived, not deleted, so `raw_strength` survives the link being retyped later -- retyping a deleted link reintroduces the same row at its old strength rather than starting over at `BASE_LINK_STRENGTH`. `upsert_link` also heals a dangling row (`to_document_id` NULL) once its target resolves, and never replaces a target it already has.
 

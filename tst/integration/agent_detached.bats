@@ -28,7 +28,7 @@ teardown() {
 
 # A busy timeout: the worker writes the store while the test polls it.
 new_session() {
-    json_body "$(raw_post_json "/api/chat-widget-start" '{"title":"Chat"}' "$COOKIE" "$CSRF" "")" | jq -r '.session_id'
+    json_body "$(raw_post_json "/api/v1/chat/sessions" '{"title":"Chat"}' "$COOKIE" "$CSRF" "")" | jq -r '.session_id'
 }
 
 # Waits (up to 10 s) for the worker to set the session idle.
@@ -44,13 +44,13 @@ wait_idle() {
 
 @test "a send answers at once with running, and a worker writes the reply" {
     sid=$(new_session)
-    run raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${sid}\",\"message\":\"What is 2+2?\"}" "$COOKIE" "$CSRF" "$(done_response "2+2 is 4.")"
+    run raw_post_json "/api/v1/chat/sessions/${sid}/messages" "{\"message\":\"What is 2+2?\"}" "$COOKIE" "$CSRF" "$(done_response "2+2 is 4.")"
     [[ "$output" =~ "200 OK" ]]
     [ "$(json_body "$output" | jq -r '.running')" = "true" ]
     [ "$(json_body "$output" | jq -r '.messages[-1].role')" = "user" ]
 
     wait_idle "$sid"
-    run raw_get "/api/chat-widget-history" "session_id=${sid}" "$COOKIE"
+    run raw_get "/api/v1/chat/sessions/${sid}" "" "$COOKIE"
     [ "$(json_body "$output" | jq -r '.running')" = "false" ]
     [[ "$(json_body "$output" | jq -r '.messages[-1].content')" =~ "2+2 is 4." ]]
     [ -n "$(store "SELECT turn_heartbeat_at FROM agent_session WHERE id = '${sid}';")" ]
@@ -59,7 +59,7 @@ wait_idle() {
 @test "a second message while a turn is running is refused" {
     sid=$(new_session)
     store "UPDATE agent_session SET turn_state = 'running', turn_heartbeat_at = '$(date -u '+%Y-%m-%d %H:%M:%S')' WHERE id = '${sid}';"
-    run raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${sid}\",\"message\":\"again\"}" "$COOKIE" "$CSRF" "$(done_response "x")"
+    run raw_post_json "/api/v1/chat/sessions/${sid}/messages" "{\"message\":\"again\"}" "$COOKIE" "$CSRF" "$(done_response "x")"
     [[ "$output" =~ "409 Conflict" ]]
     [ "$(store "SELECT COUNT(*) FROM agent_message WHERE session_id = '${sid}';")" = "0" ]
 }
@@ -67,10 +67,10 @@ wait_idle() {
 @test "a running turn with no heartbeat for too long is reported once, as an error row, and the session freed" {
     sid=$(new_session)
     store "UPDATE agent_session SET turn_state = 'running', turn_heartbeat_at = '2000-01-01 00:00:00' WHERE id = '${sid}';"
-    run raw_get "/api/chat-widget-history" "session_id=${sid}" "$COOKIE"
+    run raw_get "/api/v1/chat/sessions/${sid}" "" "$COOKIE"
     [ "$(json_body "$output" | jq -r '.running')" = "false" ]
     [[ "$(json_body "$output" | jq -r '.messages[-1].content')" =~ "stopped before finishing" ]]
-    run raw_get "/api/chat-widget-history" "session_id=${sid}" "$COOKIE"
+    run raw_get "/api/v1/chat/sessions/${sid}" "" "$COOKIE"
     [ "$(store "SELECT COUNT(*) FROM agent_message WHERE session_id = '${sid}' AND role = 'error';")" = "1" ]
     [ "$(store "SELECT turn_state FROM agent_session WHERE id = '${sid}';")" = "idle" ]
 }
@@ -84,11 +84,11 @@ wait_idle() {
     export AGENT_TEST_CONVERSE_DELAY=1
     sid=$(new_session)
     scripted="$(tool_call_response "research.investigate" '{"question":"what types exist"}')"$'\1'"$(tool_call_response "entity.list_types" "{}")"$'\1'"$(tool_call_response "entity.list_types" "{}")"$'\1'"$(done_response "There is a task type.")"$'\1'"$(done_response "Found it: task.")"
-    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${sid}\",\"message\":\"investigate the types\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+    raw_post_json "/api/v1/chat/sessions/${sid}/messages" "{\"message\":\"investigate the types\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
 
     # Poll the way the widget does -- each read settles a stale turn.
     for i in $(seq 1 60); do
-        run raw_get "/api/chat-widget-history" "session_id=${sid}" "$COOKIE"
+        run raw_get "/api/v1/chat/sessions/${sid}" "" "$COOKIE"
         [ "$(json_body "$output" | jq -r '.running')" = "false" ] && break
         sleep 0.25
     done
@@ -99,16 +99,16 @@ wait_idle() {
 @test "denying a pending action hands the rest of the turn to a worker" {
     sid=$(new_session)
     scripted="$(tool_call_response "document.create" '{"title":"Denied Page","content":"hello"}')"
-    send_resp=$(raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${sid}\",\"message\":\"create a page\"}" "$COOKIE" "$CSRF" "$scripted")
+    send_resp=$(raw_post_json "/api/v1/chat/sessions/${sid}/messages" "{\"message\":\"create a page\"}" "$COOKIE" "$CSRF" "$scripted")
     wait_idle "$sid"
-    pending_id=$(json_body "$(raw_get "/api/chat-widget-history" "session_id=${sid}" "$COOKIE")" | jq -r '.pending.id')
+    pending_id=$(json_body "$(raw_get "/api/v1/chat/sessions/${sid}" "" "$COOKIE")" | jq -r '.pending.id')
     [ "$pending_id" != "null" ]
 
-    run raw_post_json "/api/chat-widget-deny" "{\"pending_id\":${pending_id},\"session_id\":\"${sid}\"}" "$COOKIE" "$CSRF" "$(done_response "Understood, not creating it.")"
+    run raw_post_json "/api/v1/chat/sessions/${sid}/deny" "{\"pending_id\":${pending_id}}" "$COOKIE" "$CSRF" "$(done_response "Understood, not creating it.")"
     [[ "$output" =~ "200 OK" ]]
     wait_idle "$sid"
     [ "$(store "SELECT COUNT(*) FROM document WHERE title = 'Denied Page';")" = "0" ]
-    run raw_get "/api/chat-widget-history" "session_id=${sid}" "$COOKIE"
+    run raw_get "/api/v1/chat/sessions/${sid}" "" "$COOKIE"
     [[ "$(json_body "$output" | jq -r '.messages[-1].content')" =~ "Understood, not creating it." ]]
 }
 
@@ -117,7 +117,7 @@ wait_idle() {
     sid=$(new_session)
     malformed='{"content":[],"stopReason":"error","errorMessage":"Vertex AI stopped generating (finishReason: MALFORMED_FUNCTION_CALL)"}'
     scripted="${malformed}"$'\1'"$(done_response "Recovered.")"
-    run raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${sid}\",\"message\":\"hi\"}" "$COOKIE" "$CSRF" "$scripted"
+    run raw_post_json "/api/v1/chat/sessions/${sid}/messages" "{\"message\":\"hi\"}" "$COOKIE" "$CSRF" "$scripted"
     [[ "$(json_body "$output" | jq -r '.messages[-1].content')" =~ "Recovered." ]]
     [ "$(store "SELECT COUNT(*) FROM agent_message WHERE session_id = '${sid}' AND role = 'error';")" = "0" ]
     # Both attempts were real calls, so both are recorded for step 1.
@@ -134,7 +134,7 @@ wait_idle() {
     sid=$(new_session)
     malformed='{"content":[],"stopReason":"error","errorMessage":"empty response (finishReason: MALFORMED_RESPONSE)"}'
     scripted="${malformed}"$'\1'"$(done_response "Recovered.")"
-    run raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${sid}\",\"message\":\"hi\"}" "$COOKIE" "$CSRF" "$scripted"
+    run raw_post_json "/api/v1/chat/sessions/${sid}/messages" "{\"message\":\"hi\"}" "$COOKIE" "$CSRF" "$scripted"
     [[ "$(json_body "$output" | jq -r '.messages[-1].content')" =~ "Recovered." ]]
     [ "$(store "SELECT COUNT(*) FROM agent_message WHERE session_id = '${sid}' AND role = 'error';")" = "0" ]
 }
@@ -153,10 +153,10 @@ wait_idle() {
     export AGENT_TEST_SELF_CHECK_RESPONSE="$(done_response "Listed the types; checking fields next.")"
     sid=$(new_session)
     scripted="$(tool_call_response "entity.list_types" '{}')"$'\1'"$(done_response "Final answer.")"
-    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${sid}\",\"message\":\"what types are there?\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+    raw_post_json "/api/v1/chat/sessions/${sid}/messages" "{\"message\":\"what types are there?\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
     wait_idle "$sid"
     [ "$(store "SELECT COUNT(*) FROM agent_message WHERE session_id = '${sid}' AND role = 'progress';")" = "1" ]
-    run raw_get "/api/chat-widget-history" "session_id=${sid}" "$COOKIE"
+    run raw_get "/api/v1/chat/sessions/${sid}" "" "$COOKIE"
     [ "$(json_body "$output" | jq -r '.messages[-1].is_final')" = "true" ]
     [[ "$(json_body "$output" | jq -r '.messages[-1].content')" =~ "Final answer." ]]
     [[ "$(json_body "$output" | jq -r '[.messages[] | select(.role == "progress")][0].content')" =~ "checking fields next" ]]
@@ -167,10 +167,10 @@ wait_idle() {
     export AGENT_TEST_SELF_CHECK_RESPONSE="$(done_response "Status: still looking.")"
     sid=$(new_session)
     # One scripted tool call, repeated: every step budget ends unanswered.
-    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${sid}\",\"message\":\"dig\"}" "$COOKIE" "$CSRF" "$(tool_call_response "entity.list_types" '{}')" >/dev/null
+    raw_post_json "/api/v1/chat/sessions/${sid}/messages" "{\"message\":\"dig\"}" "$COOKIE" "$CSRF" "$(tool_call_response "entity.list_types" '{}')" >/dev/null
     wait_idle "$sid"
     [ "$(store "SELECT COUNT(*) FROM agent_message WHERE session_id = '${sid}' AND role = 'progress';")" = "1" ]
-    run raw_get "/api/chat-widget-history" "session_id=${sid}" "$COOKIE"
+    run raw_get "/api/v1/chat/sessions/${sid}" "" "$COOKIE"
     [ "$(json_body "$output" | jq -r '.messages[-1].role')" = "assistant" ]
     [[ "$(json_body "$output" | jq -r '.messages[-1].content')" =~ "Status: still looking." ]]
 }
@@ -179,7 +179,7 @@ wait_idle() {
     write_config 'agent = {turn_mode = "inline", max_turns = 1, auto_continue_max = 3}'
     export AGENT_TEST_SELF_CHECK_RESPONSE="$(done_response "Status: out of steps.")"
     sid=$(new_session)
-    run raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${sid}\",\"message\":\"dig\"}" "$COOKIE" "$CSRF" "$(tool_call_response "entity.list_types" '{}')"
+    run raw_post_json "/api/v1/chat/sessions/${sid}/messages" "{\"message\":\"dig\"}" "$COOKIE" "$CSRF" "$(tool_call_response "entity.list_types" '{}')"
     [[ "$(json_body "$output" | jq -r '.messages[-1].content')" =~ "Status: out of steps." ]]
     [ "$(store "SELECT COUNT(*) FROM agent_message WHERE session_id = '${sid}' AND role = 'progress';")" = "0" ]
 }
@@ -190,11 +190,11 @@ wait_idle() {
     write_config 'agent = {turn_mode = "detached", max_turns = 1, auto_continue_max = 5, auto_continue_minutes = 0}'
     export AGENT_TEST_SELF_CHECK_RESPONSE="$(done_response "Status: out of time.")"
     sid=$(new_session)
-    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${sid}\",\"message\":\"dig\"}" "$COOKIE" "$CSRF" "$(tool_call_response "entity.list_types" '{}')" >/dev/null
+    raw_post_json "/api/v1/chat/sessions/${sid}/messages" "{\"message\":\"dig\"}" "$COOKIE" "$CSRF" "$(tool_call_response "entity.list_types" '{}')" >/dev/null
     wait_idle "$sid"
     [ "$(store "SELECT COUNT(*) FROM agent_message WHERE session_id = '${sid}' AND role = 'progress';")" = "0" ]
     [ "$(store "SELECT COUNT(*) FROM agent_message WHERE session_id = '${sid}' AND role = 'tool_result';")" = "1" ]
-    run raw_get "/api/chat-widget-history" "session_id=${sid}" "$COOKIE"
+    run raw_get "/api/v1/chat/sessions/${sid}" "" "$COOKIE"
     [ "$(json_body "$output" | jq -r '.messages[-1].role')" = "assistant" ]
     [[ "$(json_body "$output" | jq -r '.messages[-1].content')" =~ "Status: out of time." ]]
 }
@@ -207,15 +207,15 @@ wait_idle() {
     export AGENT_TEST_SELF_CHECK_RESPONSE="$(done_response "Stopped after listing the types.")"
     sid=$(new_session)
     scripted="$(tool_call_response "entity.list_types" '{}')"$'\1'"$(tool_call_response "entity.relationships" '{}')"$'\1'"$(done_response "Never reached.")"
-    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${sid}\",\"message\":\"dig\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+    raw_post_json "/api/v1/chat/sessions/${sid}/messages" "{\"message\":\"dig\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
     sleep 1
-    run raw_post_json "/api/chat-widget-stop" "{\"session_id\":\"${sid}\"}" "$COOKIE" "$CSRF"
+    run raw_post_json "/api/v1/chat/sessions/${sid}/stop" "{}" "$COOKIE" "$CSRF"
     [[ "$output" =~ "200 OK" ]]
     wait_idle "$sid"
 
     [ "$(store "SELECT COUNT(*) FROM agent_message WHERE session_id = '${sid}' AND role = 'tool_result';")" = "1" ]
     [ "$(store "SELECT COUNT(*) FROM agent_message WHERE session_id = '${sid}' AND content LIKE '%entity.relationships%';")" = "0" ]
-    run raw_get "/api/chat-widget-history" "session_id=${sid}" "$COOKIE"
+    run raw_get "/api/v1/chat/sessions/${sid}" "" "$COOKIE"
     [[ "$(json_body "$output" | jq -r '.messages[-1].content')" =~ "Stopped after listing the types." ]]
     [[ ! "$output" =~ "Never reached." ]]
     [ "$(store "SELECT cancel_requested FROM agent_session WHERE id = '${sid}';")" = "0" ]
@@ -224,12 +224,12 @@ wait_idle() {
 @test "approving a pending action hands the rest of the turn to a worker, which runs the write once and answers" {
     sid=$(new_session)
     scripted="$(tool_call_response "document.create" '{"title":"Approved Page","content":"hello"}')"
-    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${sid}\",\"message\":\"create a page\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+    raw_post_json "/api/v1/chat/sessions/${sid}/messages" "{\"message\":\"create a page\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
     wait_idle "$sid"
-    pending_id=$(json_body "$(raw_get "/api/chat-widget-history" "session_id=${sid}" "$COOKIE")" | jq -r '.pending.id')
+    pending_id=$(json_body "$(raw_get "/api/v1/chat/sessions/${sid}" "" "$COOKIE")" | jq -r '.pending.id')
     [ "$pending_id" != "null" ]
 
-    run raw_post_json "/api/chat-widget-approve" "{\"pending_id\":${pending_id},\"session_id\":\"${sid}\"}" "$COOKIE" "$CSRF" "$(done_response "Created it.")"
+    run raw_post_json "/api/v1/chat/sessions/${sid}/approve" "{\"pending_id\":${pending_id}}" "$COOKIE" "$CSRF" "$(done_response "Created it.")"
     [[ "$output" =~ "200 OK" ]]
     wait_idle "$sid"
     [ "$(store "SELECT COUNT(*) FROM document WHERE title = 'Approved Page';")" = "1" ]
@@ -237,7 +237,7 @@ wait_idle() {
     run "$BIN" entity show document "$page_id"
     [[ "$output" =~ created_by[[:space:]]+alice ]]
     [ "$(store "SELECT status FROM agent_pending_action WHERE id = ${pending_id};")" = "approved" ]
-    run raw_get "/api/chat-widget-history" "session_id=${sid}" "$COOKIE"
+    run raw_get "/api/v1/chat/sessions/${sid}" "" "$COOKIE"
     [ "$(json_body "$output" | jq -r '.pending')" = "null" ]
     [[ "$(json_body "$output" | jq -r '.messages[-1].content')" =~ "Created it." ]]
 }
@@ -248,7 +248,7 @@ wait_idle() {
         sid=$(new_session)
         malformed="{\"content\":[],\"stopReason\":\"error\",\"errorMessage\":\"stopped generating (finishReason: ${reason})\"}"
         scripted="${malformed}"$'\1'"${malformed}"$'\1'"$(done_response "Never reached.")"
-        run raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${sid}\",\"message\":\"hi\"}" "$COOKIE" "$CSRF" "$scripted"
+        run raw_post_json "/api/v1/chat/sessions/${sid}/messages" "{\"message\":\"hi\"}" "$COOKIE" "$CSRF" "$scripted"
         [ "$(json_body "$output" | jq -r '.messages[-1].role')" = "error" ]
         [[ "$(json_body "$output" | jq -r '.messages[-1].content')" =~ "$reason" ]]
         [ "$(store "SELECT COUNT(*) FROM agent_message WHERE session_id = '${sid}' AND role = 'error';")" = "1" ]

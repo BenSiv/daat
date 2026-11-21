@@ -102,39 +102,39 @@ teardown() {
 @test "/data shows an entity search box" {
     run_cgi "/data" ""
     [[ "$output" =~ "platform-entity-search-input" ]]
-    [[ "$output" =~ "api/entity-search" ]]
+    [[ "$output" =~ "api/v1/entities?query=" ]]
 }
 
-@test "/api/entity-search finds a matching row via a schema's display=true field" {
-    run_cgi "/api/entity-search" "query=Cohen"
+@test "/api/v1/entities?query=... finds a matching row via a schema's display=true field" {
+    run_cgi "/api/v1/entities" "query=Cohen"
     [[ "$output" =~ "200 OK" ]]
     [[ "$output" =~ '"entity_type":"person"' ]]
     [[ "$output" =~ '"label":"Dr. Cohen"' ]]
 }
 
-@test "/api/entity-search finds a matching row via a schema's display=true field on a different type" {
-    run_cgi "/api/entity-search" "query=Contamination"
+@test "/api/v1/entities?query=... finds a matching row via a schema's display=true field on a different type" {
+    run_cgi "/api/v1/entities" "query=Contamination"
     [[ "$output" =~ '"entity_type":"experiment"' ]]
     [[ "$output" =~ '"label":"Contamination trial"' ]]
 }
 
-@test "/api/entity-search skips a type with no name column value and no display=true field" {
+@test "/api/v1/entities?query=... skips a type with no name column value and no display=true field" {
     # sample's own schema (setup()) has no display=true field and never
     # gets its builtin name column populated -- confirms it's skipped
     # entirely rather than matched against arbitrary content columns.
-    run_cgi "/api/entity-search" "query=LOT-42"
+    run_cgi "/api/v1/entities" "query=LOT-42"
     [[ "$output" =~ "200 OK" ]]
     [[ ! "$output" =~ "LOT-42" ]]
 }
 
-@test "/api/entity-search excludes archived rows" {
-    run_cgi "/api/archive" "type=person&entity_id=1" "POST"
-    run_cgi "/api/entity-search" "query=Cohen"
+@test "/api/v1/entities?query=... excludes archived rows" {
+    run_cgi "/api/v1/entities/person/1/archive" "" "POST"
+    run_cgi "/api/v1/entities" "query=Cohen"
     [[ ! "$output" =~ "Dr. Cohen" ]]
 }
 
-@test "/api/entity-search returns an empty list for an empty query, not every row" {
-    run_cgi "/api/entity-search" "query="
+@test "/api/v1/entities?query=... returns an empty list for an empty query, not every row" {
+    run_cgi "/api/v1/entities" "query="
     [[ "$output" =~ "200 OK" ]]
     [[ ! "$output" =~ '"entity_type"' ]]
 }
@@ -153,8 +153,8 @@ teardown() {
     [[ "$output" =~ "Edit sample #3" ]]
     # the row's current values are embedded as JSON for the client JS to prefill
     [[ "$output" =~ '"lot_number":"LOT-42"' ]]
-    # posts to the existing /api/update endpoint, not a new/duplicate write path
-    [[ "$output" =~ "/api/update" ]]
+    # patches the unified /api/v1/entities/<type>/<id> endpoint
+    [[ "$output" =~ "/api/v1/entities/" ]]
 }
 
 @test "/entity-edit 404s for a nonexistent entity id" {
@@ -261,20 +261,20 @@ EOF
     [[ "$output" =~ "400 Bad Request" ]]
 }
 
-@test "/api/preview rejects a 'type' shaped like a SQL-injection payload" {
-    run_cgi "/api/preview" "type=sample%3B+DROP+TABLE+sample%3B--&entity_id=1"
+@test "/api/v1/entities/<type>/<id>/preview rejects a 'type' shaped like a SQL-injection payload" {
+    run_cgi "/api/v1/entities/sample%3B+DROP+TABLE+sample%3B--/1/preview" ""
     [ "$status" -eq 0 ]
     [[ "$output" =~ "400 Bad Request" ]]
 }
 
-@test "/api/preview resolves a reference field to the referenced entity's name, not its raw id" {
+@test "/api/v1/entities/<type>/<id>/preview resolves a reference field to the referenced entity's name, not its raw id" {
     # Reported live 2026-07-18: the hover-popover preview showed a
     # sample's "experiment"/"container"-style reference fields as raw
     # foreign-key ids, not the referenced entity's name -- confirmed the
     # link text itself (render_reference_value) already resolved fine,
     # this was isolated to handle_preview's own field_lines loop, which
     # never reference-resolved anything.
-    run_cgi "/api/preview" "type=experiment&entity_id=2"
+    run_cgi "/api/v1/entities/experiment/2/preview" ""
     [ "$status" -eq 0 ]
     [[ "$output" =~ "Dr. Cohen" ]]
 }
@@ -318,7 +318,7 @@ EOF
     "$BIN" entity create sampling label="Sampling A" source="plant:${plant_id}" >/dev/null
     sampling_id=$(sqlite3 "$TEST_DIR/.store/store.db" "SELECT id FROM sampling WHERE label = 'Sampling A';")
 
-    run_cgi "/api/preview" "type=sampling&entity_id=${sampling_id}"
+    run_cgi "/api/v1/entities/sampling/${sampling_id}/preview" ""
     [ "$status" -eq 0 ]
     [[ ! "$output" =~ "table: 0x" ]]
     [[ "$output" =~ "Rosemary #1" ]]
@@ -583,8 +583,8 @@ EOF
     [[ "$output" =~ "not approved" ]]
 }
 
-@test "/api/archive excludes an entity from /browse but keeps it reachable via /detail" {
-    run_cgi "/api/archive" "type=sample&entity_id=3" "POST"
+@test "/api/v1/entities/<type>/<id>/archive excludes an entity from /browse but keeps it reachable via /detail" {
+    run_cgi "/api/v1/entities/sample/3/archive" "" "POST"
     [ "$status" -eq 0 ]
     [[ "$output" =~ '"success":true' ]]
 
@@ -595,7 +595,7 @@ EOF
     [[ "$output" =~ "LOT-42" ]]
 }
 
-@test "/api/archive requires a reason when the schema opts in via require_reason_on_archive" {
+@test "/api/v1/entities/<type>/<id>/archive requires a reason when the schema opts in via require_reason_on_archive" {
     cat > schemas/reagent_regulated.lua <<'EOF'
 return {
   name = "reagent_regulated",
@@ -610,21 +610,21 @@ EOF
     # entity ids are a single global sequence, not per-type -- setup()
     # already created person=1/experiment=2/sample=3, so this row is #4.
 
-    run_cgi "/api/archive" "type=reagent_regulated&entity_id=4" "POST"
+    run_cgi "/api/v1/entities/reagent_regulated/4/archive" "" "POST"
     [[ "$output" =~ '"success":false' ]]
     [[ "$output" =~ "reason for archiving is required" ]]
 
     run_cgi "/browse" "type=reagent_regulated"
     [[ "$output" =~ "LOT-R1" ]]
 
-    run_cgi "/api/archive" "type=reagent_regulated&entity_id=4&reason=Contaminated" "POST"
+    run_cgi "/api/v1/entities/reagent_regulated/4/archive" "reason=Contaminated" "POST"
     [[ "$output" =~ '"success":true' ]]
 
     run_cgi "/detail" "type=reagent_regulated&entity_id=4"
     [[ "$output" =~ "Reason: Contaminated" ]]
 }
 
-@test "/api/update requires a reason when the schema opts in via require_reason_on_update" {
+@test "PATCH /api/v1/entities/<type>/<id> requires a reason when the schema opts in via require_reason_on_update" {
     cat > schemas/reagent_regulated_upd.lua <<'EOF'
 return {
   name = "reagent_regulated_upd",
@@ -640,8 +640,8 @@ EOF
     # already created person=1/experiment=2/sample=3, so this row is #4.
 
     run bash -c "printf '%s' '{\"lot_number\":\"LOT-R2\"}' | \
-        GATEWAY_INTERFACE=CGI/1.1 REQUEST_METHOD=POST PATH_INFO=/api/update \
-        QUERY_STRING='type=reagent_regulated_upd&entity_id=4' \
+        GATEWAY_INTERFACE=CGI/1.1 REQUEST_METHOD=PATCH PATH_INFO=/api/v1/entities/reagent_regulated_upd/4 \
+        QUERY_STRING='' \
         HTTP_COOKIE='session=${TEST_SESSION_COOKIE}; csrf=${TEST_CSRF_TOKEN}' \
         HTTP_X_CSRF_TOKEN='${TEST_CSRF_TOKEN}' '$BIN'"
     [[ "$output" =~ '"success":false' ]]
@@ -651,8 +651,8 @@ EOF
     [[ "$output" =~ "LOT-R1" ]]
 
     run bash -c "printf '%s' '{\"lot_number\":\"LOT-R2\"}' | \
-        GATEWAY_INTERFACE=CGI/1.1 REQUEST_METHOD=POST PATH_INFO=/api/update \
-        QUERY_STRING='type=reagent_regulated_upd&entity_id=4&reason=Recount' \
+        GATEWAY_INTERFACE=CGI/1.1 REQUEST_METHOD=PATCH PATH_INFO=/api/v1/entities/reagent_regulated_upd/4 \
+        QUERY_STRING='reason=Recount' \
         HTTP_COOKIE='session=${TEST_SESSION_COOKIE}; csrf=${TEST_CSRF_TOKEN}' \
         HTTP_X_CSRF_TOKEN='${TEST_CSRF_TOKEN}' '$BIN'"
     [[ "$output" =~ '"success":true' ]]
@@ -662,16 +662,16 @@ EOF
     [[ "$output" =~ "Reason: Recount" ]]
 }
 
-@test "/api/unarchive restores an entity to /browse" {
-    run_cgi "/api/archive" "type=sample&entity_id=3" "POST"
-    run_cgi "/api/unarchive" "type=sample&entity_id=3" "POST"
+@test "/api/v1/entities/<type>/<id>/unarchive restores an entity to /browse" {
+    run_cgi "/api/v1/entities/sample/3/archive" "" "POST"
+    run_cgi "/api/v1/entities/sample/3/unarchive" "" "POST"
     [[ "$output" =~ '"success":true' ]]
 
     run_cgi "/browse" "type=sample"
     [[ "$output" =~ "LOT-42" ]]
 }
 
-@test "/api/autocomplete matches display, identifier, and first schema fields while excluding archived rows" {
+@test "/api/v1/entities/<type>/autocomplete matches display, identifier, and first schema fields while excluding archived rows" {
     cat > schemas/instrument.lua <<'EOF'
 return {
   name = "instrument",
@@ -687,18 +687,18 @@ EOF
     "$BIN" entity archive instrument "$archived_inst"
 
     # Matches via identifier=true field, returns display=true label, and excludes archived row.
-    run_cgi "/api/autocomplete" "type=instrument&query=INST"
+    run_cgi "/api/v1/entities/instrument/autocomplete" "query=INST"
     [[ "$output" =~ "200 OK" ]]
     [[ "$output" =~ '"name":"Spectrometer"' ]]
     [[ ! "$output" =~ "Spectrometer Old" ]]
 
     # Also matches display-less/identifier-less schema via its first user field without hardcoding field names.
-    run_cgi "/api/autocomplete" "type=sample&query=LOT-42"
+    run_cgi "/api/v1/entities/sample/autocomplete" "query=LOT-42"
     [[ "$output" =~ "200 OK" ]]
     [[ "$output" =~ '"name":"LOT-42"' ]]
 
     "$BIN" entity archive sample 3
-    run_cgi "/api/autocomplete" "type=sample&query=LOT-42"
+    run_cgi "/api/v1/entities/sample/autocomplete" "query=LOT-42"
     [[ "$output" =~ "200 OK" ]]
     [[ ! "$output" =~ "LOT-42" ]]
 }

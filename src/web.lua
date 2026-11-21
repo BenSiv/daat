@@ -148,11 +148,6 @@ function handle_extension_ui(req)
     end
 
     ext_name = string.match(req.path_info, "^/ext/([^/]+)$")
-    is_action_path = false
-    if ext_name == nil then
-        ext_name = string.match(req.path_info, "^/ext/([^/]+)/action$")
-        is_action_path = true
-    end
     if ext_name == nil then
         return web_ctx.respond(req, "404 Not Found", "text/plain", "Not Found")
     end
@@ -165,7 +160,7 @@ function handle_extension_ui(req)
         return web_ctx.respond(req, "404 Not Found", "text/plain", "Not Found")
     end
 
-    if is_action_path == false and req.method == "GET" then
+    if req.method == "GET" then
         page_context = {page_type = "extension", title = manifest.capabilities.ui.label}
         hooks, _ = extension.load_hooks(ext_dir, ext_name, manifest)
         if hooks == nil or type(hooks.render) != "function" then
@@ -193,45 +188,6 @@ function handle_extension_ui(req)
         end
         body = ui.render_plugin_page(manifest.capabilities.ui.label, elements, req.nonce)
         return web_ctx.render_page(req, manifest.capabilities.ui.label, "ext:" .. ext_name, body, page_context)
-    end
-
-    if is_action_path == true and req.method == "POST" then
-        if not web_ctx.require_csrf(req) then
-            return web_ctx.respond(req, "403 Forbidden", "application/json", json.encode({error = "CSRF check failed"}))
-        end
-        body_data, _, _ = json.decode(io.read("*all"))
-        if body_data == nil or type(body_data.action) != "string" then
-            return web_ctx.respond(req, "400 Bad Request", "application/json", json.encode({error = "Invalid request"}))
-        end
-        hooks, _ = extension.load_hooks(ext_dir, ext_name, manifest)
-        action_fn = nil
-        if hooks != nil and type(hooks.actions) == "table" then
-            action_fn = hooks.actions[body_data.action]
-        end
-        if type(action_fn) != "function" then
-            return web_ctx.respond(req, "404 Not Found", "application/json", json.encode({error = "unknown action"}))
-        end
-        action_args = body_data.args
-        if action_args == nil then
-            action_args = {}
-        end
-        ctx = entity.build_ctx(req.db_path, manifest)
-        action_ok, action_result = extension.call_bounded(action_fn, ctx, action_args)
-        if action_ok == false then
-            return web_ctx.respond(req, "500 Internal Server Error", "application/json", json.encode({error = tostring(action_result)}))
-        end
-        elements = nil
-        if type(action_result) == "table" then
-            elements = action_result.elements
-        end
-        if elements == nil then
-            elements = {}
-        end
-        validate_err = ui.validate_canvas(elements)
-        if validate_err != nil then
-            return web_ctx.respond(req, "500 Internal Server Error", "application/json", json.encode({error = "invalid canvas: " .. validate_err}))
-        end
-        return web_ctx.respond(req, "200 OK", "application/json", json.encode({html = ui.render_canvas(elements)}))
     end
 
     return web_ctx.respond(req, "404 Not Found", "text/plain", "Not Found")

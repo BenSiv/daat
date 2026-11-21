@@ -114,7 +114,7 @@ teardown() {
     read TEST_SESSION_COOKIE TEST_CSRF_TOKEN < <(login_test_user "creator1" "i")
 
     payload='[{"composite": "1", "amount": 99}]'
-    output=$(printf '%s' "$payload" | GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/submit" QUERY_STRING="type=component" \
+    output=$(printf '%s' "$payload" | GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/v1/entities/component" QUERY_STRING="" \
         HTTP_COOKIE="session=${TEST_SESSION_COOKIE}; csrf=${TEST_CSRF_TOKEN}" HTTP_X_CSRF_TOKEN="${TEST_CSRF_TOKEN}" "$BIN")
     [[ "$output" =~ '"success":true' ]]
 

@@ -116,8 +116,8 @@ old_context_tables() {
     "$BIN" user add admin secret123 ia >/dev/null
     read session csrf < <(login_test_user "carol" "i")
     cookie="session=${session}; csrf=${csrf}"
-    chat=$(json_body "$(raw_post_json "/api/chat-widget-start" '{"title":"x"}' "$cookie" "$csrf" "")" | jq -r '.session_id')
-    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${chat}\",\"message\":\"hi\"}" "$cookie" "$csrf" "$(done_response "Hello.")" >/dev/null
+    chat=$(json_body "$(raw_post_json "/api/v1/chat/sessions" '{"title":"x"}' "$cookie" "$csrf" "")" | jq -r '.session_id')
+    raw_post_json "/api/v1/chat/sessions/${chat}/messages" "{\"message\":\"hi\"}" "$cookie" "$csrf" "$(done_response "Hello.")" >/dev/null
     [ "$(store "SELECT MIN(id) > 8 FROM agent_model_call WHERE session_id = '${chat}';")" = "1" ]
 }
 
@@ -209,9 +209,9 @@ view|stock|SELECT 1|admin" ]
     "$BIN" user add admin secret123 ia >/dev/null
     read session csrf < <(login_test_user "dora" "i")
     cookie="session=${session}; csrf=${csrf}"
-    chat=$(json_body "$(raw_post_json "/api/chat-widget-start" '{"title":"x"}' "$cookie" "$csrf" "")" | jq -r '.session_id')
+    chat=$(json_body "$(raw_post_json "/api/v1/chat/sessions" '{"title":"x"}' "$cookie" "$csrf" "")" | jq -r '.session_id')
     scripted="$(tool_call_response "entity.query" '{"sql":"SELECT * FROM entity_source"}')"$'\1'"$(done_response "Done.")"
-    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${chat}\",\"message\":\"lineage\"}" "$cookie" "$csrf" "$scripted" >/dev/null
+    raw_post_json "/api/v1/chat/sessions/${chat}/messages" "{\"message\":\"lineage\"}" "$cookie" "$csrf" "$scripted" >/dev/null
     run latest_tool_result "$chat"
     [[ "$output" =~ "'entity_source' was renamed to 'entity_ref'" ]]
 }

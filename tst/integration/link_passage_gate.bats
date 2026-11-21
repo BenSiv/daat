@@ -33,13 +33,13 @@ teardown() {
 # knowledge.bats' search_for_bioreactor_extra).
 search() {
     local extra="${1:-}"
-    session_id=$(json_body "$(raw_post_json "/api/chat-widget-start" '{"title":"Chat"}' "$COOKIE" "$CSRF" "")" | jq -r '.session_id')
+    session_id=$(json_body "$(raw_post_json "/api/v1/chat/sessions" '{"title":"Chat"}' "$COOKIE" "$CSRF" "")" | jq -r '.session_id')
     scripted="$(tool_call_response "document.search" '{"query":"bioreactor"}')"
     if [ -n "$extra" ]; then
         scripted="${scripted}"$'\1'"${extra}"
     fi
     scripted="${scripted}"$'\1'"$(done_response "Found it.")"
-    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"find bioreactor pages\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+    raw_post_json "/api/v1/chat/sessions/${session_id}/messages" "{\"message\":\"find bioreactor pages\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
     # The chat's own transcript is searchable too; set aside so only the
     # documents under test are retrieved together.
     sqlite3 "$TEST_DIR/.store/store.db" "UPDATE document SET archived_at = '2026-01-01 00:00:00' WHERE source_type = 'chat_session';"

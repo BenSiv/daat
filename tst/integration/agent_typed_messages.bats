@@ -77,7 +77,7 @@ calling_message() {
     [[ ! "$transcript" =~ "entity.list_types" ]]
     [[ ! "$transcript" =~ "Tool result" ]]
 
-    run raw_get "/api/chat-widget-history" "session_id=${chat}" "session=${session}; csrf=${csrf}"
+    run raw_get "/api/v1/chat/sessions/${chat}" "" "session=${session}; csrf=${csrf}"
     [[ "$output" =~ "Here are the types." ]]
     [[ ! "$output" =~ "entity.list_types" ]]
 }
@@ -121,7 +121,7 @@ calling_message() {
 propose_create() {
     local cookie="session=$1; csrf=$2"
     local resp
-    resp=$(raw_post_json "/api/chat-widget-send" "{\"session_id\":\"$3\",\"message\":\"create a page\"}" "$cookie" "$2" "$(tool_call_response "document.create" "$4")")
+    resp=$(raw_post_json "/api/v1/chat/sessions/$3/messages" "{\"message\":\"create a page\"}" "$cookie" "$2" "$(tool_call_response "document.create" "$4")")
     json_body "$resp" | jq -r '.pending.id'
 }
 
@@ -129,7 +129,7 @@ propose_create() {
     read session csrf < <(session_for admin secret123)
     chat=$(start_chat "$session" "$csrf" "Decide")
     pending=$(propose_create "$session" "$csrf" "$chat" '{"title":"Approved Page","content":"hello"}')
-    raw_post_json "/api/chat-widget-approve" "{\"pending_id\":${pending},\"session_id\":\"${chat}\"}" "session=${session}; csrf=${csrf}" "$csrf" "$(done_response "Created.")" > /dev/null
+    raw_post_json "/api/v1/chat/sessions/${chat}/approve" "{\"pending_id\":${pending}}" "session=${session}; csrf=${csrf}" "$csrf" "$(done_response "Created.")" > /dev/null
 
     run store "SELECT role || ':' || COALESCE(data_type, '') || ':' || in_context FROM agent_message WHERE session_id = '${chat}' AND role IN ('assistant', 'decision', 'tool_result') ORDER BY id LIMIT 3;"
     [ "${lines[0]}" = "assistant:answer:1" ]
@@ -141,11 +141,11 @@ propose_create() {
     [[ ! "$output" =~ "Reason:" ]]
 
     # Shown in the conversation, labelled as a decision.
-    run raw_get "/api/chat-widget-history" "session_id=${chat}" "session=${session}; csrf=${csrf}"
+    run raw_get "/api/v1/chat/sessions/${chat}" "" "session=${session}; csrf=${csrf}"
     [[ "$output" =~ "Approved document.create" ]]
 
     # A second approval loses the claim and writes nothing more.
-    raw_post_json "/api/chat-widget-approve" "{\"pending_id\":${pending},\"session_id\":\"${chat}\"}" "session=${session}; csrf=${csrf}" "$csrf" "$(done_response "Again.")" > /dev/null
+    raw_post_json "/api/v1/chat/sessions/${chat}/approve" "{\"pending_id\":${pending}}" "session=${session}; csrf=${csrf}" "$csrf" "$(done_response "Again.")" > /dev/null
     [ "$(store "SELECT COUNT(*) FROM agent_message WHERE session_id = '${chat}' AND role = 'decision';")" = "1" ]
 }
 
@@ -154,7 +154,7 @@ propose_create() {
     cookie="session=${session}; csrf=${csrf}"
     chat=$(start_chat "$session" "$csrf" "Deny")
     pending=$(propose_create "$session" "$csrf" "$chat" '{"title":"Denied Page","content":"hello"}')
-    raw_post_json "/api/chat-widget-deny" "{\"pending_id\":${pending},\"session_id\":\"${chat}\",\"reason\":\"  still in use for Exp412  \"}" "$cookie" "$csrf" "$(done_response "Understood.")" > /dev/null
+    raw_post_json "/api/v1/chat/sessions/${chat}/deny" "{\"pending_id\":${pending},\"reason\":\"  still in use for Exp412  \"}" "$cookie" "$csrf" "$(done_response "Understood.")" > /dev/null
 
     run store "SELECT content FROM agent_message WHERE session_id = '${chat}' AND role = 'decision';"
     [[ "$output" =~ "Denied document.create (pending action #${pending}): " ]]
@@ -164,7 +164,7 @@ propose_create() {
 
     chat2=$(start_chat "$session" "$csrf" "Deny again")
     pending2=$(propose_create "$session" "$csrf" "$chat2" '{"title":"Other Page","content":"hello"}')
-    raw_post_json "/api/chat-widget-deny" "{\"pending_id\":${pending2},\"session_id\":\"${chat2}\",\"reason\":\"   \"}" "$cookie" "$csrf" "$(done_response "Understood.")" > /dev/null
+    raw_post_json "/api/v1/chat/sessions/${chat2}/deny" "{\"pending_id\":${pending2},\"reason\":\"   \"}" "$cookie" "$csrf" "$(done_response "Understood.")" > /dev/null
     run store "SELECT content FROM agent_message WHERE session_id = '${chat2}' AND role = 'decision';"
     [[ "$output" =~ "Denied document.create" ]]
     [[ ! "$output" =~ "Reason:" ]]
@@ -177,7 +177,7 @@ propose_create() {
     chat=$(start_chat "$session" "$csrf" "Long")
     long=$(printf 'x%.0s' $(seq 1 2000))
     pending=$(propose_create "$session" "$csrf" "$chat" "{\"title\":\"Long Page\",\"content\":\"${long}\"}")
-    raw_post_json "/api/chat-widget-deny" "{\"pending_id\":${pending},\"session_id\":\"${chat}\"}" "session=${session}; csrf=${csrf}" "$csrf" "$(done_response "Ok.")" > /dev/null
+    raw_post_json "/api/v1/chat/sessions/${chat}/deny" "{\"pending_id\":${pending}}" "session=${session}; csrf=${csrf}" "$csrf" "$(done_response "Ok.")" > /dev/null
     length=$(store "SELECT LENGTH(content) FROM agent_message WHERE session_id = '${chat}' AND role = 'decision';")
     [ "$length" -lt 400 ]
 }
@@ -249,7 +249,7 @@ none" AGENT_TEST_GENERATE_THINKING="compaction-monologue" \
         AGENT_TEST_THINKING="wrapup-monologue" \
         AGENT_TEST_RESPONSES="$(tool_call_response "entity.list_types" "{}")" \
         AGENT_TEST_SELF_CHECK_RESPONSE="$(done_response "Stopped after 1 step; reply to continue.")" \
-        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/chat-widget-send" QUERY_STRING="" \
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/v1/chat/sessions/$wrap_chat/messages" QUERY_STRING="" \
         HTTP_COOKIE="session=${session}; csrf=${csrf}" HTTP_X_CSRF_TOKEN="${csrf}" "$BIN" > /dev/null
     wrap_content=$(store "SELECT content FROM agent_message WHERE session_id = '${wrap_chat}' AND role = 'assistant' AND parent_message_id IS NULL ORDER BY id DESC LIMIT 1;")
     [[ "$wrap_content" =~ "wrapup-monologue" ]]

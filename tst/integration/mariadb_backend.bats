@@ -338,7 +338,7 @@ EOF
 JSON
 
     read TEST_SESSION_COOKIE TEST_CSRF_TOKEN < <(login_test_user "mdb_label_viewer" "i")
-    GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/label" QUERY_STRING="type=sample&entity_id=1" \
+    GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/api/v1/entities/sample/1/label" QUERY_STRING="" \
         HTTP_COOKIE="session=${TEST_SESSION_COOKIE}; csrf=${TEST_CSRF_TOKEN}" run "$BIN"
     [[ "$output" =~ "200 OK" ]]
     [[ "$output" =~ "Test Sample" ]]
@@ -423,13 +423,13 @@ EOF2
 
     # Trigger agent table creation, then rewind to the pre-migration-9 MariaDB
     # layout (plain TEXT = 65,535-byte cap) to verify store.migrate widens it.
-    resp=$(raw_post_json "/api/chat-widget-start" '{"title":"Long thinking"}' "$cookie" "$csrf" "")
+    resp=$(raw_post_json "/api/v1/chat/sessions" '{"title":"Long thinking"}' "$cookie" "$csrf" "")
     sid=$(json_body "$resp" | jq -r '.session_id')
     q "ALTER TABLE agent_message MODIFY COLUMN content TEXT NOT NULL;"
     q "UPDATE system_state SET number_value = 8 WHERE name = 'store.schema_version';"
 
     export AGENT_TEST_THINKING="$(python3 -c "print('T' * 75000)")"
-    run raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${sid}\",\"message\":\"Hello\"}" "$cookie" "$csrf" "$(done_response "Answer after 75 KB thinking.")"
+    run raw_post_json "/api/v1/chat/sessions/${sid}/messages" "{\"message\":\"Hello\"}" "$cookie" "$csrf" "$(done_response "Answer after 75 KB thinking.")"
     [[ "$output" =~ "200 OK" ]]
     [[ "$output" =~ "Answer after 75 KB thinking." ]]
     [ "$(q "SELECT MAX(CHAR_LENGTH(content)) > 75000 FROM agent_message;")" = "1" ]
@@ -445,10 +445,10 @@ EOF2
     cookie="session=${session}; csrf=${csrf}"
     q() { mariadb -N -h "$DAAT_MARIADB_HOST" -P "$DAAT_MARIADB_PORT" -u "$DAAT_MARIADB_USER" -p"$DAAT_MARIADB_PASSWORD" "$DAAT_MARIADB_DATABASE" -e "$1" 2>/dev/null; }
 
-    resp=$(raw_post_json "/api/chat-widget-start" '{"title":"MariaDB prune"}' "$cookie" "$csrf" "")
+    resp=$(raw_post_json "/api/v1/chat/sessions" '{"title":"MariaDB prune"}' "$cookie" "$csrf" "")
     sid=$(json_body "$resp" | jq -r '.session_id')
     scripted="$(tool_call_response "entity.list_types" "{}")"$'\1'"$(done_response "Done on MariaDB.")"
-    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${sid}\",\"message\":\"Check types\"}" "$cookie" "$csrf" "$scripted" >/dev/null
+    raw_post_json "/api/v1/chat/sessions/${sid}/messages" "{\"message\":\"Check types\"}" "$cookie" "$csrf" "$scripted" >/dev/null
 
     q "UPDATE agent_message SET created_at = '2020-01-01 00:00:00' WHERE session_id = '${sid}';"
     q "UPDATE agent_model_call SET created_at = '2020-01-01 00:00:00' WHERE session_id = '${sid}';"
@@ -559,26 +559,26 @@ EOF
             HTTP_X_API_KEY="$key" "$BIN"
     }
 
-    run api_write "POST" "/api/v1/widget" '{"label":"alpha"}'
+    run api_write "POST" "/api/v1/entities/widget" '{"label":"alpha"}'
     [[ "$output" =~ "200 OK" ]]
     [[ "$output" =~ '"created_id":1' ]]
 
-    run api_write "PATCH" "/api/v1/widget/1" '{"label":"alpha-v2"}'
+    run api_write "PATCH" "/api/v1/entities/widget/1" '{"label":"alpha-v2"}'
     [[ "$output" =~ "200 OK" ]]
     [[ "$output" =~ '"updated_id":1' ]]
 
-    run api_get "/api/v1/widget/1"
+    run api_get "/api/v1/entities/widget/1"
     [[ "$output" =~ "200 OK" ]]
     [[ "$output" =~ '"label":"alpha-v2"' ]]
 
-    run api_write "POST" "/api/v1/widget/1/archive" '{}'
+    run api_write "POST" "/api/v1/entities/widget/1/archive" '{}'
     [[ "$output" =~ "200 OK" ]]
-    run api_get "/api/v1/widget"
+    run api_get "/api/v1/entities/widget"
     [[ ! "$output" =~ '"label":"alpha-v2"' ]]
 
-    run api_write "POST" "/api/v1/widget/1/unarchive" '{}'
+    run api_write "POST" "/api/v1/entities/widget/1/unarchive" '{}'
     [[ "$output" =~ "200 OK" ]]
-    run api_get "/api/v1/widget"
+    run api_get "/api/v1/entities/widget"
     [[ "$output" =~ '"label":"alpha-v2"' ]]
 }
 

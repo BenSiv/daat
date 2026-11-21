@@ -14,7 +14,7 @@ function handle_login(req)
     show_forgot_link = config.password_reset_enabled()
 
     if req.method == "POST" then
-        body = io.read("*all")
+        body = web_ctx.read_body()
         form = web_ctx.parse_query(body)
         cap, _ = auth.login(req.db_path, form.login, form.password)
         if cap == nil then
@@ -56,7 +56,7 @@ function handle_forgot_password(req)
 
     sent = false
     if req.method == "POST" then
-        form = web_ctx.parse_query(io.read("*all"))
+        form = web_ctx.parse_query(web_ctx.read_body())
         result, err = auth.request_password_reset(req.root, req.db_path, form.identifier, req.theme.site_name)
         if result == nil then
             io.write(io.stderr, "forgot-password: could not send reset email: " .. tostring(err) .. "\n")
@@ -78,7 +78,7 @@ function handle_reset_password(req)
     error_message = nil
     invalid = false
     if req.method == "POST" then
-        form = web_ctx.parse_query(io.read("*all"))
+        form = web_ctx.parse_query(web_ctx.read_body())
         token = form.token
         if auth.check_password_reset(req.root, req.db_path, token) == nil then
             invalid = true
@@ -108,7 +108,7 @@ function handle_verify_email(req)
     error_message = nil
     invalid = false
     if req.method == "POST" then
-        form = web_ctx.parse_query(io.read("*all"))
+        form = web_ctx.parse_query(web_ctx.read_body())
         token = form.token
         if auth.check_email_verification(req.root, req.db_path, token) == nil then
             invalid = true
@@ -146,7 +146,7 @@ function auth_routes.handle(req)
         account_user = auth.get_user(req.db_path, req.author)
         csrf_val = web_ctx.default_value(req.cookies.csrf, "")
         if req.method == "POST" then
-            form = web_ctx.parse_query(io.read("*all"))
+            form = web_ctx.parse_query(web_ctx.read_body())
             if not web_ctx.require_csrf(req, form.csrf_token) then
                 body = ui.render_account(req.author, account_user, csrf_val, "CSRF check failed.", true)
                 return web_ctx.render_page(req, "Account", "", body, nil, "403 Forbidden")
@@ -168,6 +168,59 @@ function auth_routes.handle(req)
         body = ui.render_account(req.author, account_user, csrf_val, nil, false)
         return web_ctx.render_page(req, "Account", "", body)
     end
+    return false
+end
+
+function auth_routes.handle_api_v1(req)
+    path_info = req.path_info
+    method = req.method
+
+    if path_info == "/api/v1/account" then
+        if method != "GET" then
+            return web_ctx.method_not_allowed(req)
+        end
+        payload = {
+            author = req.author,
+            capabilities = req.capabilities,
+            via_api_key = req.via_api_key,
+            login = nil,
+            email = nil,
+            email_verified = false,
+        }
+        if req.via_api_key == false then
+            account_user = auth.get_user(req.db_path, req.author)
+            payload.login = req.author
+            if account_user != nil then
+                payload.email = account_user.email
+                payload.email_verified = auth.email_verified(account_user)
+            end
+        end
+        return web_ctx.respond_json(req, "200 OK", payload)
+    end
+
+    if path_info == "/api/v1/account/password" then
+        if method != "POST" then
+            web_ctx.read_body()
+            return web_ctx.method_not_allowed(req)
+        end
+        body_data, ok_body = web_ctx.read_write_json(req, false)
+        if not ok_body then
+            return true
+        end
+        if req.via_api_key == true then
+            return web_ctx.respond_json(req, "400 Bad Request", {error = "Password change requires a user session"})
+        end
+        if auth.login(req.db_path, req.author, web_ctx.default_value(body_data.current_password, "")) == nil then
+            return web_ctx.respond_json(req, "403 Forbidden", {error = "Current password is incorrect."})
+        end
+        ok, err = auth.set_password(req.db_path, req.author, body_data.new_password)
+        if ok == nil then
+            return web_ctx.respond_json(req, "400 Bad Request", {error = tostring(err)})
+        end
+        cookie_headers = web_ctx.fresh_session_cookie_headers(req.root, req.db_path, req.author)
+        return web_ctx.respond_json(req, "200 OK", {success = true}, cookie_headers)
+    end
+
     return false
 end
 

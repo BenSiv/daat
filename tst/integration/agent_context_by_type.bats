@@ -36,19 +36,19 @@ teardown() {
 }
 
 @test "research.investigate and background.start receive conversation requests and confirmed schema, never main-loop tool_trace" {
-    chat=$(json_body "$(raw_post_json "/api/chat-widget-start" '{"title":"subagent ctx"}' "$ALICE_COOKIE" "$ALICE_CSRF" "")" | jq -r '.session_id')
+    chat=$(json_body "$(raw_post_json "/api/v1/chat/sessions" '{"title":"subagent ctx"}' "$ALICE_COOKIE" "$ALICE_CSRF" "")" | jq -r '.session_id')
     "$BIN" entity create sample code=SECRET_MAIN_TRACE_ROW_999 >/dev/null
 
     # Turn 1: main loop confirms schema (entity.fields) AND runs a
     # non-schema query whose tool_trace holds SECRET_MAIN_TRACE_ROW_999.
     t1="$(tool_call_response "entity.fields" '{"entity_type":"sample"}')"$'\1'"$(tool_call_response "entity.query" '{"sql":"SELECT code FROM sample"}')"$'\1'"$(done_response "Checked sample schema and rows.")"
-    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${chat}\",\"message\":\"Check sample codes for batch alpha\"}" "$ALICE_COOKIE" "$ALICE_CSRF" "$t1" >/dev/null
+    raw_post_json "/api/v1/chat/sessions/${chat}/messages" "{\"message\":\"Check sample codes for batch alpha\"}" "$ALICE_COOKIE" "$ALICE_CSRF" "$t1" >/dev/null
 
     # Turn 2: main loop delegates to research.investigate, which itself
     # runs a query (SECRET_SUBAGENT_TRACE_777) and returns a finding + method.
     "$BIN" entity create sample code=SECRET_SUBAGENT_TRACE_777 >/dev/null
     t2="$(tool_call_response "research.investigate" '{"question":"count samples matching batch"}')"$'\1'"$(tool_call_response "entity.query" '{"sql":"SELECT code FROM sample ORDER BY id DESC LIMIT 1"}')"$'\1'"$(done_response "Finding: 2 samples total.\nMethod & coverage: SELECT COUNT(*) FROM sample; checked all 2 rows.")"$'\1'"$(done_response "There are 2 samples in total.")"
-    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${chat}\",\"message\":\"Now investigate sample counts\"}" "$ALICE_COOKIE" "$ALICE_CSRF" "$t2" >/dev/null
+    raw_post_json "/api/v1/chat/sessions/${chat}/messages" "{\"message\":\"Now investigate sample counts\"}" "$ALICE_COOKIE" "$ALICE_CSRF" "$t2" >/dev/null
 
     # 1. Sub-agent's first model call prompt has the user's requests and
     #    confirmed schema (entity.fields sample), and NOT SECRET_MAIN_TRACE_ROW_999!
@@ -67,7 +67,7 @@ teardown() {
 
     # 3. Same guarantee for background.start!
     t3="$(tool_call_response "background.start" '{"question":"background audit of samples"}')"$'\1'"$(done_response "Queued background task.")"
-    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${chat}\",\"message\":\"Run a full background check\"}" "$ALICE_COOKIE" "$ALICE_CSRF" "$t3" >/dev/null
+    raw_post_json "/api/v1/chat/sessions/${chat}/messages" "{\"message\":\"Run a full background check\"}" "$ALICE_COOKIE" "$ALICE_CSRF" "$t3" >/dev/null
     AGENT_TEST_RESPONSES="$(done_response "Finding: all good. Method & coverage: checked all 2 rows.")" "$BIN" agent run-pending-background >/dev/null
 
     bg_prompt=$(sqlite3 "$DB" "SELECT prompt FROM agent_model_call WHERE session_id = '${chat}' AND kind = 'background' AND step = 1 LIMIT 1;")
@@ -82,9 +82,9 @@ teardown() {
     long_code=$(printf 'Z%.0s' $(seq 1 250))
     "$BIN" entity create sample "code=${long_code}" >/dev/null
 
-    chat=$(json_body "$(raw_post_json "/api/chat-widget-start" '{"title":"masking"}' "$ALICE_COOKIE" "$ALICE_CSRF" "")" | jq -r '.session_id')
+    chat=$(json_body "$(raw_post_json "/api/v1/chat/sessions" '{"title":"masking"}' "$ALICE_COOKIE" "$ALICE_CSRF" "")" | jq -r '.session_id')
     scripted="$(tool_call_response "research.investigate" '{"question":"check twice"}')"$'\1'"$(tool_call_response "entity.query" '{"sql":"SELECT code FROM sample"}')"$'\1'"$(tool_call_response "entity.query" '{"sql":"SELECT code, id FROM sample"}')"$'\1'"$(done_response "Finding: 1 sample. Method & coverage: queried sample.")"$'\1'"$(done_response "Done.")"
-    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${chat}\",\"message\":\"run research\"}" "$ALICE_COOKIE" "$ALICE_CSRF" "$scripted" >/dev/null
+    raw_post_json "/api/v1/chat/sessions/${chat}/messages" "{\"message\":\"run research\"}" "$ALICE_COOKIE" "$ALICE_CSRF" "$scripted" >/dev/null
 
     # On research step 3, the first query result is older than keep_last=1,
     # so the prompt sent to the model has the stub, while the DB row keeps long_code!
@@ -102,16 +102,16 @@ teardown() {
 
     "$BIN" entity create sample code=ALICE_OLDER_TRACE_SECRET >/dev/null
 
-    bob_chat=$(json_body "$(raw_post_json "/api/chat-widget-start" '{"title":"bob"}' "$bob_cookie" "$bob_csrf" "")" | jq -r '.session_id')
-    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${bob_chat}\",\"message\":\"BOB_PRIVATE_PREFERENCE_42\"}" "$bob_cookie" "$bob_csrf" "$(done_response "Noted.")" >/dev/null
+    bob_chat=$(json_body "$(raw_post_json "/api/v1/chat/sessions" '{"title":"bob"}' "$bob_cookie" "$bob_csrf" "")" | jq -r '.session_id')
+    raw_post_json "/api/v1/chat/sessions/${bob_chat}/messages" "{\"message\":\"BOB_PRIVATE_PREFERENCE_42\"}" "$bob_cookie" "$bob_csrf" "$(done_response "Noted.")" >/dev/null
 
-    alice_c1=$(json_body "$(raw_post_json "/api/chat-widget-start" '{"title":"alice 1"}' "$ALICE_COOKIE" "$ALICE_CSRF" "")" | jq -r '.session_id')
+    alice_c1=$(json_body "$(raw_post_json "/api/v1/chat/sessions" '{"title":"alice 1"}' "$ALICE_COOKIE" "$ALICE_CSRF" "")" | jq -r '.session_id')
     t_alice1="$(tool_call_response "entity.query" '{"sql":"SELECT code FROM sample"}')"$'\1'"$(done_response "Checked.")"
-    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${alice_c1}\",\"message\":\"ALICE_CORRECTION_USE_MOLASSES_MEDIUM\"}" "$ALICE_COOKIE" "$ALICE_CSRF" "$t_alice1" >/dev/null
+    raw_post_json "/api/v1/chat/sessions/${alice_c1}/messages" "{\"message\":\"ALICE_CORRECTION_USE_MOLASSES_MEDIUM\"}" "$ALICE_COOKIE" "$ALICE_CSRF" "$t_alice1" >/dev/null
 
     # Default (agent_carry_user_requests = false): new session does not carry prior request.
-    alice_c2=$(json_body "$(raw_post_json "/api/chat-widget-start" '{"title":"alice 2"}' "$ALICE_COOKIE" "$ALICE_CSRF" "")" | jq -r '.session_id')
-    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${alice_c2}\",\"message\":\"hello\"}" "$ALICE_COOKIE" "$ALICE_CSRF" "$(done_response "Hi.")" >/dev/null
+    alice_c2=$(json_body "$(raw_post_json "/api/v1/chat/sessions" '{"title":"alice 2"}' "$ALICE_COOKIE" "$ALICE_CSRF" "")" | jq -r '.session_id')
+    raw_post_json "/api/v1/chat/sessions/${alice_c2}/messages" "{\"message\":\"hello\"}" "$ALICE_COOKIE" "$ALICE_CSRF" "$(done_response "Hi.")" >/dev/null
 
     # Enable agent_carry_user_requests = true: verify via Lua API that
     # prior_requests_prompt_block carries Alice's request only, never Bob's
@@ -137,13 +137,13 @@ none
 ## Open questions and next step
 none"
     write_config "agent = {compaction_threshold = 20000}"
-    chat=$(json_body "$(raw_post_json "/api/chat-widget-start" '{"title":"compact"}' "$ALICE_COOKIE" "$ALICE_CSRF" "")" | jq -r '.session_id')
+    chat=$(json_body "$(raw_post_json "/api/v1/chat/sessions" '{"title":"compact"}' "$ALICE_COOKIE" "$ALICE_CSRF" "")" | jq -r '.session_id')
 
     s1="$(tool_call_response "entity.fields" '{"entity_type":"sample"}')"$'\1'"$(done_response "Exact conclusion: medium M9 gave 2.76 h doubling time.")"
-    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${chat}\",\"message\":\"What was the M9 doubling time?\"}" "$ALICE_COOKIE" "$ALICE_CSRF" "$s1" >/dev/null
+    raw_post_json "/api/v1/chat/sessions/${chat}/messages" "{\"message\":\"What was the M9 doubling time?\"}" "$ALICE_COOKIE" "$ALICE_CSRF" "$s1" >/dev/null
     s2="$(tool_call_response "entity.fields" '{"entity_type":"document"}')"$'\1'"$(done_response "Listed document fields.")"
-    AGENT_TEST_PROMPT_TOKENS=50000 raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${chat}\",\"message\":\"And document fields?\"}" "$ALICE_COOKIE" "$ALICE_CSRF" "$s2" >/dev/null
-    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${chat}\",\"message\":\"continue\"}" "$ALICE_COOKIE" "$ALICE_CSRF" "$(done_response "Continuing.")" >/dev/null
+    AGENT_TEST_PROMPT_TOKENS=50000 raw_post_json "/api/v1/chat/sessions/${chat}/messages" "{\"message\":\"And document fields?\"}" "$ALICE_COOKIE" "$ALICE_CSRF" "$s2" >/dev/null
+    raw_post_json "/api/v1/chat/sessions/${chat}/messages" "{\"message\":\"continue\"}" "$ALICE_COOKIE" "$ALICE_CSRF" "$(done_response "Continuing.")" >/dev/null
 
     summary=$(sqlite3 "$DB" "SELECT content FROM agent_message WHERE session_id = '${chat}' AND role = 'compaction_summary' AND in_context = 1;")
     [[ "$summary" =~ "- What was the M9 doubling time?" ]]

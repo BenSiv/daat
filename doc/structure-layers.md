@@ -78,7 +78,7 @@ daat defines what a tag is and shows it. An outside program computes it.
 | Display: graph colour and filters, tags on a document's page | Naming (terms plus a model call); keeping names stable across runs by member overlap |
 | Access: the existing REST API ([api.md](api.md)) | Reading documents and writing tags through that API with an API key |
 
-Because `tag` and `document_tag` are entity types, the job needs **no new extension capability**. It reads `GET /api/v1/document` and writes `POST`/`PATCH /api/v1/tag|document_tag`, and every write lands in the ledger as `api:<key label>`. To keep recomputes from flooding the ledger, it writes only what changed since the last run, and archives (never deletes) memberships that drop out.
+Because `tag` and `document_tag` are entity types, the job needs **no new extension capability**. It reads `GET /api/v1/entities/document` and writes `POST`/`PATCH /api/v1/entities/tag|document_tag`, and every write lands in the ledger as `api:<key label>`. To keep recomputes from flooding the ledger, it writes only what changed since the last run, and archives (never deletes) memberships that drop out.
 
 Scope: every active document, not only literature.
 
@@ -98,7 +98,7 @@ A `clusters` extension connects the job to daat at the UI level and computes not
 
 - **`/ext/clusters`:** a table of tags (name, member count, source, last computed). Clicking a tag lists its members.
 - **Manual controls:** rename a tag; pin or remove a document's membership. Each goes through `ctx.update_entity` and is stored as `manual`.
-- **"Recompute clusters" trigger:** creates a `cluster_run` entity with `status = requested` and returns. The job, on a timer in `software/infra`, polls `GET /api/v1/cluster_run?status=requested`, recomputes, writes tags, and sets the run to `done` with a summary, which the page shows.
+- **"Recompute clusters" trigger:** creates a `cluster_run` entity with `status = requested` and returns. The job, on a timer in `software/infra`, polls `GET /api/v1/entities/cluster_run?filter_field=status&filter_value=requested`, recomputes, writes tags, and sets the run to `done` with a summary, which the page shows.
 
 The request is an entity, so it's ledgered. The extension needs no sockets, and no compute runs inside daat. `tag` and `document_tag` belong in core, because core's graph view reads them. `cluster_run` is specific to this job, so it lives in the deployment (`lims/schemas`).
 

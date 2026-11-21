@@ -989,7 +989,7 @@
         wakeSimulation(coldStart ? 1.0 : 0.65);
     }
 
-    fetch('knowledge-graph-data').then(function(r) {
+    fetch('api/v1/knowledge/graph').then(function(r) {
         if (!r.ok) { throw new Error('status ' + r.status); }
         return r.json();
     }).then(function(data) {

@@ -16,7 +16,7 @@
     }
 
     var doSearch = PlatformJS.debounce(function(query){
-        PlatformJS.fetchJSON('api/entity-search?query=' + encodeURIComponent(query)).then(render);
+        PlatformJS.fetchJSON('api/v1/entities?query=' + encodeURIComponent(query)).then(render);
     }, 200);
     input.addEventListener('input', function(){
         var query = input.value.trim();

@@ -1,15 +1,12 @@
--- Entity CRUD pages, views, SQL console, and browser UI JSON endpoints
--- (/data, /register, /browse, /detail, /entity-edit, /label, /view, /sql,
--- /api/autocomplete, /api/entity-search, /api/document-search, /api/preview,
--- /api/document-preview, /api/validate, /api/submit, /api/update,
--- /api/archive, /api/unarchive).
+-- Entity CRUD pages, saved SQL views, ad-hoc SQL console, and their
+-- /api/v1 counterparts (/api/v1/schemas*, /api/v1/entities*, /api/v1/views*,
+-- /api/v1/sql).
 
 const db = require("database")
 const schema = require("schema")
 const entity = require("entity")
 const ledger = require("ledger")
 const view = require("view")
-const document = require("document")
 const label = require("label")
 const json = require("dkjson")
 const ui = require("ui")
@@ -17,25 +14,14 @@ const web_ctx = require("web.context")
 
 const entity_routes = {}
 
-function handle_autocomplete(req)
-    db_path = req.db_path
-    params = req.params
-    ref_type = params.type
-    query_str = web_ctx.default_value(params.query, "")
-    if ref_type == nil or ref_type == "" then
-        return web_ctx.respond(req, "400 Bad Request", "application/json", json.encode({error = "Missing type"}))
-    end
-    if not schema.valid_name_syntax(ref_type) then
-        return web_ctx.respond(req, "400 Bad Request", "application/json", json.encode({error = "Invalid type"}))
-    end
-
+function autocomplete_rows(db_path, ref_type, query_str)
     if not db.table_exists(db_path, ref_type) then
-        return web_ctx.respond(req, "200 OK", "application/json", "[]")
+        return {}
     end
 
     cols = db.get_columns(db_path, ref_type)
     if #cols == 0 then
-        return web_ctx.respond(req, "200 OK", "application/json", "[]")
+        return {}
     end
 
     col_set = {}
@@ -139,28 +125,17 @@ function handle_autocomplete(req)
     q = q .. " LIMIT 15;"
 
     rows = db.query(db_path, q)
-    result = web_ctx.default_value(rows, {})
-    return web_ctx.respond(req, "200 OK", "application/json", json.encode(result))
+    return web_ctx.default_value(rows, {})
 end
 
-function handle_preview(req)
-    db_path = req.db_path
-    params = req.params
-    entity_type = params.type
-    entity_id = tonumber(params.entity_id)
-    if entity_type == nil or entity_type == "" or entity_id == nil then
-        return web_ctx.respond(req, "400 Bad Request", "application/json", json.encode({error = "Missing type or entity_id"}))
-    end
-    if not schema.valid_name_syntax(entity_type) then
-        return web_ctx.respond(req, "400 Bad Request", "application/json", json.encode({error = "Invalid type"}))
-    end
+function build_preview(db_path, entity_type, entity_id)
     if not db.table_exists(db_path, entity_type) then
-        return web_ctx.respond(req, "200 OK", "application/json", json.encode({html = "Unknown entity type."}))
+        return nil
     end
 
-    rows = db.query(db_path, "SELECT * FROM " .. entity_type .. " WHERE id = " .. db.quote(entity_id) .. ";")
+    rows = db.query(db_path, "SELECT * FROM " .. db.quote_ident(entity_type) .. " WHERE id = " .. db.quote(entity_id) .. ";")
     if rows == nil or rows[1] == nil then
-        return web_ctx.respond(req, "200 OK", "application/json", json.encode({html = "Not found."}))
+        return nil
     end
     entity.apply_computed_field_overrides(db_path, entity_type, rows)
     row = rows[1]
@@ -177,6 +152,7 @@ function handle_preview(req)
     end
 
     field_lines = ""
+    preview_fields = {}
     shown = 0
     for _, field in ipairs(fields) do
         if shown < 5 then
@@ -188,8 +164,15 @@ function handle_preview(req)
                 is_empty = true
             end
             if is_empty == false then
+                rendered_val = ui.display_field_value(db_path, field, value)
                 field_lines = field_lines .. "<div><strong>" .. ui.html_escape(field.label) .. ":</strong> " ..
-                    ui.display_field_value(db_path, field, value) .. "</div>"
+                    rendered_val .. "</div>"
+                table.insert(preview_fields, {
+                    name = field.name,
+                    label = field.label,
+                    value = value,
+                    display_html = rendered_val,
+                })
                 shown = shown + 1
             end
         end
@@ -201,15 +184,46 @@ function handle_preview(req)
     preview_html = "<strong>" .. ui.html_escape(title) .. "</strong>" ..
         "<hr style=\"margin:6px 0;border:none;border-top:1px solid #e2e8f0;\">" ..
         field_lines
-    return web_ctx.respond(req, "200 OK", "application/json", json.encode({html = preview_html}))
+    return {
+        title = title,
+        fields = web_ctx.as_json_array(preview_fields),
+        html = preview_html,
+    }
+end
+
+function schemas_with_counts(db_path)
+    entity_types = schema.list(db_path)
+    counts_by_name = entity.counts_by_type(db_path, entity_types)
+    for _, row in ipairs(entity_types) do
+        c = counts_by_name[row.name]
+        if c == nil then
+            c = 0
+        end
+        row.count = c
+    end
+    table.sort(entity_types, function(a, b)
+        if a.count != b.count then
+            return a.count > b.count
+        end
+        return a.name < b.name
+    end)
+    edges = schema.relationships(db_path, entity_types)
+    return entity_types, edges
+end
+
+function sql_reference_columns(db_path, sql_text)
+    from_table = view.guess_from_table(sql_text)
+    ref_columns = view.reference_columns(db_path, view.guess_tables(sql_text))
+    if from_table != nil and schema.is_registered(db_path, from_table) then
+        ref_columns["id"] = from_table
+    end
+    return ref_columns
 end
 
 function entity_routes.handle(req)
     path_info = req.path_info
-    method = req.method
     db_path = req.db_path
     params = req.params
-    author = req.author
 
     if path_info == "/register" then
         entity_type = params.type
@@ -276,22 +290,7 @@ function entity_routes.handle(req)
     end
 
     if path_info == "/data" then
-        entity_types = schema.list(db_path)
-        counts_by_name = entity.counts_by_type(db_path, entity_types)
-        for _, row in ipairs(entity_types) do
-            c = counts_by_name[row.name]
-            if c == nil then
-                c = 0
-            end
-            row.count = c
-        end
-        table.sort(entity_types, function(a, b)
-            if a.count != b.count then
-                return a.count > b.count
-            end
-            return a.name < b.name
-        end)
-        edges = schema.relationships(db_path, entity_types)
+        entity_types, edges = schemas_with_counts(db_path)
         body = ui.render_index(db_path, entity_types, edges, req.nonce)
         return web_ctx.render_page(req, "Data", "data", body)
     end
@@ -353,23 +352,6 @@ function entity_routes.handle(req)
         return web_ctx.render_page(req, "Edit " .. entity_type .. " #" .. tostring(entity_id), "data", body, page_context)
     end
 
-    if path_info == "/label" then
-        entity_type = params.type
-        entity_id = tonumber(params.entity_id)
-        if entity_type == nil or entity_type == "" or entity_id == nil then
-            return web_ctx.respond(req, "400 Bad Request", "text/plain", "Missing 'type' or 'entity_id' parameter")
-        end
-        if not schema.valid_name_syntax(entity_type) then
-            return web_ctx.respond(req, "400 Bad Request", "text/plain", "Invalid 'type' parameter")
-        end
-
-        zpl, err = label.render(db_path, entity_type, entity_id)
-        if zpl == nil then
-            return web_ctx.respond(req, "404 Not Found", "text/plain", tostring(err))
-        end
-        return web_ctx.respond(req, "200 OK", "text/plain", zpl)
-    end
-
     if path_info == "/view" then
         view_name = params.view_name
         if view_name == nil or view_name == "" then
@@ -420,11 +402,7 @@ function entity_routes.handle(req)
             sql_text = "SELECT * FROM sample LIMIT 20;"
         elseif sql_text != "" then
             column_names, rows, sql_err, truncated = view.run_adhoc(db_path, sql_text)
-            from_table = view.guess_from_table(sql_text)
-            ref_columns = view.reference_columns(db_path, view.guess_tables(sql_text))
-            if from_table != nil and schema.is_registered(db_path, from_table) then
-                ref_columns["id"] = from_table
-            end
+            ref_columns = sql_reference_columns(db_path, sql_text)
         end
         body = ui.render_sql(db_path, sql_text, column_names, rows, sql_err, ref_columns, req.nonce, params.embed == "1", req.theme, truncated)
         if params.embed == "1" then
@@ -434,171 +412,434 @@ function entity_routes.handle(req)
             {page_type = "sql", title = "SQL", query_ran = (params.q != nil)})
     end
 
-    if path_info == "/api/autocomplete" then
-        return handle_autocomplete(req)
+    return false
+end
+
+function handle_api_v1_entities(req, tail)
+    db_path = req.db_path
+    method = req.method
+    params = req.params
+    author = req.author
+
+    v1_type_raw, v1_rest = string.match(tail, "^([^/]+)(.*)$")
+    if v1_type_raw == nil then
+        return false
+    end
+    v1_type = web_ctx.percent_decode(v1_type_raw)
+
+    if not schema.valid_name_syntax(v1_type) then
+        if method != "GET" and method != "HEAD" then
+            web_ctx.read_body()
+        end
+        return web_ctx.respond_json(req, "400 Bad Request", {error = "Invalid type"})
+    end
+    if not schema.is_registered(db_path, v1_type) then
+        if method != "GET" and method != "HEAD" then
+            web_ctx.read_body()
+        end
+        return web_ctx.respond_json(req, "404 Not Found", {error = "Unknown type: " .. v1_type})
     end
 
-    if path_info == "/api/entity-search" then
+    v1_source = web_ctx.request_source(req)
+
+    if v1_rest == "" then
+        if method == "GET" then
+            layout = schema.layout(db_path, v1_type)
+            v1_filter_field = nil
+            if params.filter_field != nil and params.filter_field != "" and params.filter_value != nil and layout != nil then
+                for _, field in ipairs(layout.fields) do
+                    if field.name == params.filter_field then
+                        v1_filter_field = params.filter_field
+                    end
+                end
+            end
+            v1_limit = tonumber(params.limit)
+            if v1_limit == nil then
+                v1_limit = web_ctx.BROWSE_PAGE_SIZE
+            end
+            v1_offset = tonumber(params.offset)
+            if v1_offset == nil then
+                v1_offset = 0
+            end
+            v1_total = nil
+            v1_rows = nil
+            if v1_filter_field != nil then
+                v1_total = entity.count_by_field(db_path, v1_type, v1_filter_field, params.filter_value)
+                v1_rows = entity.list_by_field(db_path, v1_type, v1_filter_field, params.filter_value, v1_limit, v1_offset)
+            else
+                v1_total = entity.count(db_path, v1_type)
+                v1_rows = entity.list(db_path, v1_type, v1_limit, v1_offset)
+            end
+            return web_ctx.respond_json(req, "200 OK", {
+                rows = web_ctx.as_json_array(v1_rows),
+                total = v1_total,
+            })
+        end
+
+        if method == "POST" then
+            decoded, ok_body = web_ctx.read_write_json(req, false)
+            if not ok_body then
+                return true
+            end
+            if not web_ctx.require_write_capability(req, v1_type) then
+                return web_ctx.respond_json(req, "403 Forbidden", {error = "Admin capability required to write this entity type"})
+            end
+
+            if decoded[1] != nil then
+                created_ids, batch_issues = entity.create_batch(db_path, v1_type, decoded, author, v1_source)
+                response = {issues = web_ctx.as_json_array(batch_issues)}
+                if created_ids != nil then
+                    response.created_ids = web_ctx.as_json_array(created_ids)
+                    response.success = true
+                else
+                    response.success = false
+                end
+                return web_ctx.respond_json(req, "200 OK", response)
+            end
+
+            created_id, issues = entity.create(db_path, v1_type, decoded, author, v1_source)
+            response = {issues = web_ctx.as_json_array(issues)}
+            if created_id != nil then
+                response.created_id = created_id
+                response.success = true
+            else
+                response.success = false
+            end
+            return web_ctx.respond_json(req, "200 OK", response)
+        end
+
+        web_ctx.read_body()
+        return web_ctx.method_not_allowed(req)
+    end
+
+    if v1_rest == "/validate" then
+        if method != "POST" then
+            web_ctx.read_body()
+            return web_ctx.method_not_allowed(req)
+        end
+        rows_values, ok_body = web_ctx.read_write_json(req, false)
+        if not ok_body then
+            return true
+        end
+        if rows_values[1] == nil and next(rows_values) != nil then
+            rows_values = {rows_values}
+        end
+        batch_issues = entity.validate_batch(db_path, v1_type, rows_values)
+        return web_ctx.respond_json(req, "200 OK", {
+            valid = (#batch_issues == 0),
+            issues = web_ctx.as_json_array(batch_issues),
+        })
+    end
+
+    if v1_rest == "/autocomplete" then
+        if method != "GET" then
+            web_ctx.read_body()
+            return web_ctx.method_not_allowed(req)
+        end
         query_str = web_ctx.default_value(params.query, "")
-        results = entity.search_across_types(db_path, query_str, 5, 20)
-        return web_ctx.respond(req, "200 OK", "application/json", json.encode(results))
+        rows = autocomplete_rows(db_path, v1_type, query_str)
+        return web_ctx.respond_json(req, "200 OK", web_ctx.as_json_array(rows))
     end
 
-    if path_info == "/api/document-search" then
-        query_str = web_ctx.default_value(params.query, "")
-        results = document.search_for_link(db_path, query_str, 20, params.exclude_id)
-        return web_ctx.respond(req, "200 OK", "application/json", json.encode(results))
+    v1_id_str, v1_action = string.match(v1_rest, "^/(%d+)/([a-z_]+)$")
+    if v1_id_str == nil then
+        v1_id_str = string.match(v1_rest, "^/(%d+)$")
+    end
+    if v1_id_str == nil then
+        return false
+    end
+    v1_entity_id = tonumber(v1_id_str)
+
+    if v1_action == nil then
+        if method == "GET" then
+            row = entity.get(db_path, v1_type, v1_entity_id)
+            if row == nil then
+                return web_ctx.respond_json(req, "404 Not Found", {error = "Not found"})
+            end
+            return web_ctx.respond_json(req, "200 OK", {row = row})
+        end
+
+        if method == "PATCH" then
+            values, ok_body = web_ctx.read_write_json(req, false)
+            if not ok_body then
+                return true
+            end
+            if not web_ctx.require_write_capability(req, v1_type) then
+                return web_ctx.respond_json(req, "403 Forbidden", {error = "Admin capability required to write this entity type"})
+            end
+            updated_id, issues = entity.update(db_path, v1_type, v1_entity_id, values, author, v1_source, params.reason)
+            response = {issues = web_ctx.as_json_array(issues)}
+            if updated_id != nil then
+                response.updated_id = updated_id
+                response.success = true
+            else
+                response.success = false
+            end
+            return web_ctx.respond_json(req, "200 OK", response)
+        end
+
+        web_ctx.read_body()
+        return web_ctx.method_not_allowed(req)
     end
 
-    if path_info == "/api/preview" then
-        return handle_preview(req)
-    end
-
-    if path_info == "/api/document-preview" and method == "POST" then
-        if not web_ctx.require_csrf(req) then
-            return web_ctx.respond(req, "403 Forbidden", "application/json", json.encode({error = "CSRF check failed"}))
+    if v1_action == "archive" then
+        if method != "POST" then
+            web_ctx.read_body()
+            return web_ctx.method_not_allowed(req)
         end
-        body_data, _, err = json.decode(io.read("*all"))
-        if body_data == nil then
-            return web_ctx.respond(req, "400 Bad Request", "application/json", json.encode({error = "Invalid JSON: " .. tostring(err)}))
+        _, ok_body = web_ctx.read_write_json(req, true)
+        if not ok_body then
+            return true
         end
-        rendered = document.render_html(db_path, body_data.content)
-        rendered = ui.expand_inline_views(db_path, rendered)
-        return web_ctx.respond(req, "200 OK", "application/json", json.encode({html = rendered}))
-    end
-
-    if path_info == "/api/validate" and method == "POST" then
-        if not web_ctx.require_csrf(req) then
-            return web_ctx.respond(req, "403 Forbidden", "application/json", json.encode({error = "CSRF check failed"}))
+        if not web_ctx.require_write_capability(req, v1_type) then
+            return web_ctx.respond_json(req, "403 Forbidden", {error = "Admin capability required to write this entity type"})
         end
-        entity_type = params.type
-        if entity_type == nil or entity_type == "" then
-            return web_ctx.respond(req, "400 Bad Request", "application/json", json.encode({error = "Missing type"}))
-        end
-        if not schema.valid_name_syntax(entity_type) then
-            return web_ctx.respond(req, "400 Bad Request", "application/json", json.encode({error = "Invalid type"}))
-        end
-        rows_values, _, err = json.decode(io.read("*all"))
-        if rows_values == nil then
-            return web_ctx.respond(req, "400 Bad Request", "application/json", json.encode({error = "Invalid JSON: " .. tostring(err)}))
-        end
-        batch_issues = entity.validate_batch(db_path, entity_type, rows_values)
-        return web_ctx.respond(req, "200 OK", "application/json", json.encode(batch_issues))
-    end
-
-    if path_info == "/api/submit" and method == "POST" then
-        if not web_ctx.require_csrf(req) then
-            return web_ctx.respond(req, "403 Forbidden", "application/json", json.encode({error = "CSRF check failed"}))
-        end
-        entity_type = params.type
-        if entity_type == nil or entity_type == "" then
-            return web_ctx.respond(req, "400 Bad Request", "application/json", json.encode({error = "Missing type"}))
-        end
-        if not schema.valid_name_syntax(entity_type) then
-            return web_ctx.respond(req, "400 Bad Request", "application/json", json.encode({error = "Invalid type"}))
-        end
-        if not web_ctx.require_write_capability(req, entity_type) then
-            return web_ctx.respond(req, "403 Forbidden", "application/json", json.encode({error = "Admin capability required to write this entity type"}))
-        end
-        rows_values, _, err = json.decode(io.read("*all"))
-        if rows_values == nil then
-            return web_ctx.respond(req, "400 Bad Request", "application/json", json.encode({error = "Invalid JSON: " .. tostring(err)}))
-        end
-
-        created_ids, batch_issues = entity.create_batch(db_path, entity_type, rows_values, author, web_ctx.source_from_params(params))
-        response = {issues = batch_issues}
-        if created_ids != nil then
-            response.created_ids = created_ids
-            response.success = true
-        else
-            response.success = false
-        end
-        return web_ctx.respond(req, "200 OK", "application/json", json.encode(response))
-    end
-
-    if path_info == "/api/update" and method == "POST" then
-        if not web_ctx.require_csrf(req) then
-            return web_ctx.respond(req, "403 Forbidden", "application/json", json.encode({error = "CSRF check failed"}))
-        end
-        entity_type = params.type
-        entity_id = tonumber(params.entity_id)
-        if entity_type == nil or entity_type == "" or entity_id == nil then
-            return web_ctx.respond(req, "400 Bad Request", "application/json", json.encode({error = "Missing type or entity_id"}))
-        end
-        if not schema.valid_name_syntax(entity_type) then
-            return web_ctx.respond(req, "400 Bad Request", "application/json", json.encode({error = "Invalid type"}))
-        end
-        if not web_ctx.require_write_capability(req, entity_type) then
-            return web_ctx.respond(req, "403 Forbidden", "application/json", json.encode({error = "Admin capability required to write this entity type"}))
-        end
-        values, _, err = json.decode(io.read("*all"))
-        if values == nil then
-            return web_ctx.respond(req, "400 Bad Request", "application/json", json.encode({error = "Invalid JSON: " .. tostring(err)}))
-        end
-
-        updated_id, issues = entity.update(db_path, entity_type, entity_id, values, author, web_ctx.source_from_params(params), params.reason)
-        response = {issues = issues}
-        if updated_id != nil then
-            response.updated_id = updated_id
-            response.success = true
-        else
-            response.success = false
-        end
-        return web_ctx.respond(req, "200 OK", "application/json", json.encode(response))
-    end
-
-    if path_info == "/api/archive" and method == "POST" then
-        if not web_ctx.require_csrf(req) then
-            return web_ctx.respond(req, "403 Forbidden", "application/json", json.encode({error = "CSRF check failed"}))
-        end
-        entity_type = params.type
-        entity_id = tonumber(params.entity_id)
-        if entity_type == nil or entity_type == "" or entity_id == nil then
-            return web_ctx.respond(req, "400 Bad Request", "application/json", json.encode({error = "Missing type or entity_id"}))
-        end
-        if not schema.valid_name_syntax(entity_type) then
-            return web_ctx.respond(req, "400 Bad Request", "application/json", json.encode({error = "Invalid type"}))
-        end
-        if not web_ctx.require_write_capability(req, entity_type) then
-            return web_ctx.respond(req, "403 Forbidden", "application/json", json.encode({error = "Admin capability required to write this entity type"}))
-        end
-
-        archived_id, issues = entity.archive(db_path, entity_type, entity_id, author, web_ctx.source_from_params(params), params.reason)
-        response = {issues = issues}
+        archived_id, issues = entity.archive(db_path, v1_type, v1_entity_id, author, v1_source, params.reason)
+        response = {issues = web_ctx.as_json_array(issues)}
         if archived_id != nil then
             response.archived_id = archived_id
             response.success = true
         else
             response.success = false
         end
-        return web_ctx.respond(req, "200 OK", "application/json", json.encode(response))
+        return web_ctx.respond_json(req, "200 OK", response)
     end
 
-    if path_info == "/api/unarchive" and method == "POST" then
-        if not web_ctx.require_csrf(req) then
-            return web_ctx.respond(req, "403 Forbidden", "application/json", json.encode({error = "CSRF check failed"}))
+    if v1_action == "unarchive" then
+        if method != "POST" then
+            web_ctx.read_body()
+            return web_ctx.method_not_allowed(req)
         end
-        entity_type = params.type
-        entity_id = tonumber(params.entity_id)
-        if entity_type == nil or entity_type == "" or entity_id == nil then
-            return web_ctx.respond(req, "400 Bad Request", "application/json", json.encode({error = "Missing type or entity_id"}))
+        _, ok_body = web_ctx.read_write_json(req, true)
+        if not ok_body then
+            return true
         end
-        if not schema.valid_name_syntax(entity_type) then
-            return web_ctx.respond(req, "400 Bad Request", "application/json", json.encode({error = "Invalid type"}))
+        if not web_ctx.require_write_capability(req, v1_type) then
+            return web_ctx.respond_json(req, "403 Forbidden", {error = "Admin capability required to write this entity type"})
         end
-        if not web_ctx.require_write_capability(req, entity_type) then
-            return web_ctx.respond(req, "403 Forbidden", "application/json", json.encode({error = "Admin capability required to write this entity type"}))
-        end
-
-        unarchived_id, issues = entity.unarchive(db_path, entity_type, entity_id, author, web_ctx.source_from_params(params))
-        response = {issues = issues}
+        unarchived_id, issues = entity.unarchive(db_path, v1_type, v1_entity_id, author, v1_source, params.reason)
+        response = {issues = web_ctx.as_json_array(issues)}
         if unarchived_id != nil then
             response.unarchived_id = unarchived_id
             response.success = true
         else
             response.success = false
         end
-        return web_ctx.respond(req, "200 OK", "application/json", json.encode(response))
+        return web_ctx.respond_json(req, "200 OK", response)
+    end
+
+    if v1_action == "history" then
+        if method != "GET" then
+            web_ctx.read_body()
+            return web_ctx.method_not_allowed(req)
+        end
+        if entity.get(db_path, v1_type, v1_entity_id) == nil then
+            return web_ctx.respond_json(req, "404 Not Found", {error = "Not found"})
+        end
+        events = ledger.history(db_path, v1_entity_id)
+        return web_ctx.respond_json(req, "200 OK", {events = web_ctx.as_json_array(events)})
+    end
+
+    if v1_action == "related" then
+        if method != "GET" then
+            web_ctx.read_body()
+            return web_ctx.method_not_allowed(req)
+        end
+        if entity.get(db_path, v1_type, v1_entity_id) == nil then
+            return web_ctx.respond_json(req, "404 Not Found", {error = "Not found"})
+        end
+        related = web_ctx.related_records(db_path, v1_type, v1_entity_id)
+        return web_ctx.respond_json(req, "200 OK", {related = web_ctx.as_json_array(related)})
+    end
+
+    if v1_action == "preview" then
+        if method != "GET" then
+            web_ctx.read_body()
+            return web_ctx.method_not_allowed(req)
+        end
+        prev = build_preview(db_path, v1_type, v1_entity_id)
+        if prev == nil then
+            return web_ctx.respond_json(req, "404 Not Found", {error = "Not found", html = "Not found."})
+        end
+        return web_ctx.respond_json(req, "200 OK", prev)
+    end
+
+    if v1_action == "label" then
+        if method != "GET" then
+            web_ctx.read_body()
+            return web_ctx.method_not_allowed(req)
+        end
+        zpl, err = label.render(db_path, v1_type, v1_entity_id)
+        if zpl == nil then
+            return web_ctx.respond_json(req, "404 Not Found", {error = tostring(err)})
+        end
+        return web_ctx.respond_json(req, "200 OK", {zpl = zpl})
+    end
+
+    return false
+end
+
+function entity_routes.handle_api_v1(req)
+    path_info = req.path_info
+    method = req.method
+    db_path = req.db_path
+    params = req.params
+
+    if path_info == "/api/v1/schemas" then
+        if method != "GET" then
+            web_ctx.read_body()
+            return web_ctx.method_not_allowed(req)
+        end
+        entity_types, edges = schemas_with_counts(db_path)
+        return web_ctx.respond_json(req, "200 OK", {
+            schemas = web_ctx.as_json_array(entity_types),
+            relationships = web_ctx.as_json_array(edges),
+        })
+    end
+
+    if string.sub(path_info, 1, 16) == "/api/v1/schemas/" then
+        type_name = web_ctx.percent_decode(string.sub(path_info, 17))
+        if string.find(type_name, "/", 1, true) != nil then
+            return false
+        end
+        if method != "GET" then
+            web_ctx.read_body()
+            return web_ctx.method_not_allowed(req)
+        end
+        if not schema.valid_name_syntax(type_name) then
+            return web_ctx.respond_json(req, "400 Bad Request", {error = "Invalid type"})
+        end
+        layout, _ = schema.layout(db_path, type_name)
+        if layout == nil then
+            return web_ctx.respond_json(req, "404 Not Found", {error = "Unknown type: " .. type_name})
+        end
+        return web_ctx.respond_json(req, "200 OK", {
+            layout = layout,
+            admin_write_only = schema.admin_write_only(db_path, type_name),
+            reason_flags = schema.reason_flags(db_path, type_name),
+            has_label_template = label.has_template(db_path, type_name),
+        })
+    end
+
+    if path_info == "/api/v1/entities" then
+        if method != "GET" then
+            web_ctx.read_body()
+            return web_ctx.method_not_allowed(req)
+        end
+        query_str = web_ctx.default_value(params.query, "")
+        results = entity.search_across_types(db_path, query_str, 5, 20)
+        return web_ctx.respond_json(req, "200 OK", web_ctx.as_json_array(results))
+    end
+
+    if string.sub(path_info, 1, 17) == "/api/v1/entities/" then
+        return handle_api_v1_entities(req, string.sub(path_info, 18))
+    end
+
+    if path_info == "/api/v1/views" then
+        if method != "GET" then
+            web_ctx.read_body()
+            return web_ctx.method_not_allowed(req)
+        end
+        all_entries = view.all(db_path, req.root)
+        items = {}
+        for _, entry in ipairs(all_entries) do
+            if entry.def != nil then
+                def = entry.def
+                table.insert(items, {
+                    name = def.name,
+                    label = def.label,
+                    description = def.description,
+                    param = def.param,
+                    columns = def.columns,
+                    approved = view.is_approved(db_path, def),
+                })
+            elseif entry.err != nil then
+                table.insert(items, {
+                    name = entry.name,
+                    approved = false,
+                    error = entry.err,
+                })
+            end
+        end
+        return web_ctx.respond_json(req, "200 OK", {views = web_ctx.as_json_array(items)})
+    end
+
+    if string.sub(path_info, 1, 14) == "/api/v1/views/" then
+        view_name = web_ctx.percent_decode(string.sub(path_info, 15))
+        if string.find(view_name, "/", 1, true) != nil then
+            return false
+        end
+        if method != "GET" then
+            web_ctx.read_body()
+            return web_ctx.method_not_allowed(req)
+        end
+        if not schema.valid_resource_name(view_name) then
+            return web_ctx.respond_json(req, "400 Bad Request", {error = "Invalid view name"})
+        end
+        view_def, err = view.load(db_path, view_name, req.root)
+        if view_def == nil then
+            return web_ctx.respond_json(req, "404 Not Found", {error = tostring(err)})
+        end
+        if view.is_approved(db_path, view_def) == false then
+            return web_ctx.respond_json(req, "403 Forbidden", {error = "view '" .. view_name .. "' is not approved"})
+        end
+        param_value = nil
+        if view_def.param != nil then
+            param_value = params[view_def.param.name]
+        end
+        rows, run_err = view.run(db_path, view_def, param_value)
+        if rows == nil then
+            return web_ctx.respond_json(req, "500 Internal Server Error", {error = tostring(run_err)})
+        end
+        return web_ctx.respond_json(req, "200 OK", {
+            view = {
+                name = view_def.name,
+                label = view_def.label,
+                description = view_def.description,
+                columns = view_def.columns,
+                param = view_def.param,
+            },
+            param_value = param_value,
+            rows = web_ctx.as_json_array(rows),
+        })
+    end
+
+    if path_info == "/api/v1/sql" then
+        if method != "GET" and method != "POST" then
+            web_ctx.read_body()
+            return web_ctx.method_not_allowed(req)
+        end
+        if web_ctx.has_capability(req.capabilities, "s") == false and web_ctx.has_capability(req.capabilities, "a") == false then
+            if method == "POST" then
+                web_ctx.read_body()
+            end
+            return web_ctx.respond_json(req, "403 Forbidden", {error = "Setup or Admin capability required"})
+        end
+        sql_text = nil
+        if method == "POST" then
+            body_data, ok_body = web_ctx.read_write_json(req, false)
+            if not ok_body then
+                return true
+            end
+            sql_text = body_data.q
+        else
+            sql_text = params.q
+        end
+        if sql_text == nil or sql_text == "" then
+            return web_ctx.respond_json(req, "400 Bad Request", {error = "Missing 'q' SQL query"})
+        end
+        column_names, rows, sql_err, truncated = view.run_adhoc(db_path, sql_text)
+        if sql_err != nil then
+            return web_ctx.respond_json(req, "400 Bad Request", {sql = sql_text, error = tostring(sql_err)})
+        end
+        ref_columns = sql_reference_columns(db_path, sql_text)
+        return web_ctx.respond_json(req, "200 OK", {
+            sql = sql_text,
+            columns = web_ctx.as_json_array(column_names),
+            rows = web_ctx.as_json_array(rows),
+            ref_columns = ref_columns,
+            truncated = (truncated == true),
+        })
     end
 
     return false

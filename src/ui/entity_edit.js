@@ -65,8 +65,8 @@
         msg.style.display = "block";
 
         const reasonEl = document.getElementById("platform-edit-reason");
-        const reasonParam = reasonEl.value ? `&reason=${encodeURIComponent(reasonEl.value)}` : "";
-        PlatformJS.postJSON(`${baseUrl}/api/update?type=${encodeURIComponent(entityType)}&entity_id=${encodeURIComponent(entityId)}${reasonParam}`, payload)
+        const reasonParam = reasonEl.value ? `?reason=${encodeURIComponent(reasonEl.value)}` : "";
+        PlatformJS.patchJSON(`${baseUrl}/api/v1/entities/${encodeURIComponent(entityType)}/${encodeURIComponent(entityId)}${reasonParam}`, payload)
         .then(data => {
             if (data.success) {
                 window.location.href = `${baseUrl}/detail?type=${encodeURIComponent(entityType)}&entity_id=${encodeURIComponent(entityId)}`;

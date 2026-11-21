@@ -56,7 +56,7 @@
                 var isFinal = msg.role === 'assistant' && msg.is_final === true;
                 var userLabel = (isReadOnly && state.owner) ? state.owner : ROLE_LABELS.user;
                 var label = isFinal ? 'Answer' : (msg.role === 'user' ? userLabel : (ROLE_LABELS[msg.role] || msg.role));
-                var body = MARKDOWN_ROLES[msg.role] ? msg.content : PlatformJS.escapeHtml(msg.content);
+                var body = MARKDOWN_ROLES[msg.role] ? (msg.content_html != null ? msg.content_html : msg.content) : PlatformJS.escapeHtml(msg.content);
                 var extraClass = '';
                 if (isFinal) {
                     extraClass = ' platform-chat-final';
@@ -146,7 +146,7 @@
     function ensureSession() {
         var sessionId = localStorage.getItem(STORAGE_KEY);
         if (sessionId) return Promise.resolve(sessionId);
-        return PlatformJS.postJSON('api/chat-widget-start', {}).then(function(state){
+        return PlatformJS.postJSON('api/v1/chat/sessions', {}).then(function(state){
             localStorage.setItem(STORAGE_KEY, state.session_id);
             return state.session_id;
         });
@@ -318,7 +318,7 @@
         var thinkingEl = showThinking(sessionId);
         turnStarted();
         var timer = setInterval(function(){
-            fetch('api/chat-widget-history?session_id=' + encodeURIComponent(sessionId))
+            fetch('api/v1/chat/sessions/' + encodeURIComponent(sessionId))
                 .then(function(res){ if (!res.ok) { throw new Error('poll failed'); } return res.json(); })
                 .then(function(state){
                     if (settled) { return; }
@@ -391,7 +391,7 @@
         turnStarted();
         var timer = setInterval(function(){
             attempts++;
-            fetch('api/chat-widget-history?session_id=' + encodeURIComponent(sessionId))
+            fetch('api/v1/chat/sessions/' + encodeURIComponent(sessionId))
                 .then(function(res){ if (!res.ok) { throw new Error('poll failed'); } return res.json(); })
                 .then(function(freshState){
                     render(freshState);
@@ -465,7 +465,7 @@
             attachBtn.disabled = true;
             var formData = new FormData();
             formData.append('file', file);
-            fetch('api/chat-widget-attach', {
+            fetch('api/v1/chat/attachments/extract', {
                 method: 'POST',
                 headers: {'X-CSRF-Token': PlatformJS.getCsrfToken()},
                 body: formData
@@ -529,25 +529,25 @@
         }
         appendOptimisticUserMessage(typedText);
         ensureSession().then(function(sessionId){
-            return pollWhilePending(sessionId, PlatformJS.postJSON('api/chat-widget-send', {session_id: sessionId, message: text}));
+            return pollWhilePending(sessionId, PlatformJS.postJSON('api/v1/chat/sessions/' + encodeURIComponent(sessionId) + '/messages', {message: text}));
         }).catch(function(){ showFetchError(); input.value = typedText; });
     });
 
     messagesEl.addEventListener('click', function(e){
         var sessionId = localStorage.getItem(STORAGE_KEY);
         if (e.target.hasAttribute('data-approve')) {
-            pollWhilePending(sessionId, PlatformJS.postJSON('api/chat-widget-approve', {pending_id: e.target.getAttribute('data-approve'), session_id: sessionId}))
+            pollWhilePending(sessionId, PlatformJS.postJSON('api/v1/chat/sessions/' + encodeURIComponent(sessionId) + '/approve', {pending_id: e.target.getAttribute('data-approve')}))
                 .catch(function(){ showFetchError(); });
         } else if (e.target.hasAttribute('data-deny')) {
             // The optional reason beside Deny goes to the decision row
             // and the result the model reads (doc/approval-request-rows.md).
             var reasonEl = e.target.parentNode.querySelector('.platform-chat-deny-reason');
             var reason = reasonEl ? reasonEl.value : '';
-            pollWhilePending(sessionId, PlatformJS.postJSON('api/chat-widget-deny', {pending_id: e.target.getAttribute('data-deny'), session_id: sessionId, reason: reason}))
+            pollWhilePending(sessionId, PlatformJS.postJSON('api/v1/chat/sessions/' + encodeURIComponent(sessionId) + '/deny', {pending_id: e.target.getAttribute('data-deny'), reason: reason}))
                 .catch(function(){ showFetchError(); });
         } else if (e.target.hasAttribute('data-stop')) {
             // Fire-and-forget: this doesn't resolve the in-flight
-            // chat-widget-send call itself -- it just flags the session
+            // messages call itself -- it just flags the session
             // so run_turn's own loop (agent.lua) notices and stops
             // between turns, which is what makes that original call
             // resolve sooner. pollWhilePending's own poll/resolve
@@ -558,7 +558,7 @@
             // clicks.
             e.target.disabled = true;
             e.target.textContent = 'Stopping…';
-            PlatformJS.postJSON('api/chat-widget-stop', {session_id: e.target.getAttribute('data-stop')}).catch(function(){});
+            PlatformJS.postJSON('api/v1/chat/sessions/' + encodeURIComponent(e.target.getAttribute('data-stop')) + '/stop', {}).catch(function(){});
         } else if (e.target.hasAttribute('data-feedback')) {
             var messageId = e.target.getAttribute('data-feedback-message');
             var feedback = e.target.getAttribute('data-feedback');
@@ -575,7 +575,7 @@
             function showFeedbackError() {
                 if (container) { container.innerHTML = '<span class="platform-chat-feedback-error">Couldn\'t record feedback.</span>'; }
             }
-            PlatformJS.postJSON('api/chat-widget-feedback', {message_id: messageId, feedback: feedback}).then(function(result){
+            PlatformJS.postJSON('api/v1/chat/messages/' + encodeURIComponent(messageId) + '/feedback', {feedback: feedback}).then(function(result){
                 if (!container) return;
                 if (result && result.ok) {
                     container.innerHTML = feedback === 'up' ? 'Thanks for the feedback 👍' : 'Thanks for the feedback 👎';
@@ -609,7 +609,7 @@
 
     updateToggleState();
     if (initialSessionId) {
-        fetch('api/chat-widget-history?session_id=' + encodeURIComponent(initialSessionId))
+        fetch('api/v1/chat/sessions/' + encodeURIComponent(initialSessionId))
             .then(function(res){ if (!res.ok) { throw new Error('no session'); } return res.json(); })
             .then(function(state){
                 render(state);

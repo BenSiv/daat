@@ -74,8 +74,8 @@ teardown() {
     # answer (only tool calls/raw tool results are filtered out of the
     # human-facing view; thinking is real reasoning a person reading the
     # conversation wants to see).
-    run env GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/api/chat-widget-history" \
-        QUERY_STRING="session_id=${chat_session}" HTTP_COOKIE="session=${session}; csrf=${csrf}" "$BIN"
+    run env GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/api/v1/chat/sessions/${chat_session}" \
+        QUERY_STRING="" HTTP_COOKIE="session=${session}; csrf=${csrf}" "$BIN"
     [[ "$output" =~ "Hello there!" ]]
     [[ "$output" =~ "the user said hi" ]]
 }
@@ -87,7 +87,7 @@ teardown() {
 return {agent = {provider = "nonexistent-provider", turn_mode = "inline"}}
 EOF
     printf '{"session_id":"%s","message":"hi"}' "$chat_session" | \
-        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/chat-widget-send" QUERY_STRING="" \
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/v1/chat/sessions/$chat_session/messages" QUERY_STRING="" \
         HTTP_COOKIE="session=${session}; csrf=${csrf}" HTTP_X_CSRF_TOKEN="${csrf}" "$BIN" > /dev/null
 
     run sqlite3 .store/store.db "SELECT reply_kind, quality_status FROM agent_model_call WHERE reply_kind IS NOT NULL ORDER BY id DESC LIMIT 1;"
@@ -109,7 +109,7 @@ EOF
 return {agent = {provider = "nonexistent-provider", turn_mode = "inline"}}
 EOF
     resp=$(printf '{"session_id":"%s","message":"hi"}' "$chat_session" | \
-        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/chat-widget-send" QUERY_STRING="" \
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/v1/chat/sessions/$chat_session/messages" QUERY_STRING="" \
         HTTP_COOKIE="session=${session}; csrf=${csrf}" HTTP_X_CSRF_TOKEN="${csrf}" "$BIN")
 
     body=$(json_body "$resp")
@@ -139,9 +139,9 @@ EOF
     [ "$output" -eq 0 ]
 
     pending_id=$(sqlite3 .store/store.db "SELECT id FROM agent_pending_action;")
-    printf '{"pending_id":%s,"session_id":"%s"}' "$pending_id" "$chat_session" | \
+    printf '{"pending_id":%s}' "$pending_id" | \
         AGENT_TEST_RESPONSES="$(done_response "Distilled.")" \
-        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/chat-widget-approve" QUERY_STRING="" \
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/v1/chat/sessions/${chat_session}/approve" QUERY_STRING="" \
         HTTP_COOKIE="session=${session}; csrf=${csrf}" HTTP_X_CSRF_TOKEN="${csrf}" "$BIN" > /dev/null
 
     run sqlite3 .store/store.db "SELECT tier, source_type, source_id FROM document WHERE title = 'Core idea';"
@@ -181,7 +181,7 @@ EOF
     message_id=$(sqlite3 .store/store.db "SELECT id FROM agent_message WHERE role='assistant' ORDER BY id DESC LIMIT 1;")
 
     output=$(printf '{"message_id":%s,"feedback":"up"}' "$message_id" | \
-        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/chat-widget-feedback" QUERY_STRING="" \
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/v1/chat/messages/$message_id/feedback" QUERY_STRING="" \
         HTTP_COOKIE="session=${session}; csrf=${csrf}" HTTP_X_CSRF_TOKEN="${csrf}" "$BIN")
     [[ "$output" =~ '"ok":true' ]]
     run sqlite3 .store/store.db "SELECT user_feedback FROM agent_model_call WHERE message_id = ${message_id} AND reply_kind IS NOT NULL;"
@@ -189,7 +189,7 @@ EOF
 
     read alice_session alice_csrf < <(session_for alice secret123)
     output=$(printf '{"message_id":%s,"feedback":"down"}' "$message_id" | \
-        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/chat-widget-feedback" QUERY_STRING="" \
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/v1/chat/messages/$message_id/feedback" QUERY_STRING="" \
         HTTP_COOKIE="session=${alice_session}; csrf=${alice_csrf}" HTTP_X_CSRF_TOKEN="${alice_csrf}" "$BIN")
     [[ "$output" =~ "404 Not Found" ]]
     run sqlite3 .store/store.db "SELECT user_feedback FROM agent_model_call WHERE message_id = ${message_id} AND reply_kind IS NOT NULL;"

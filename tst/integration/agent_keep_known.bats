@@ -10,7 +10,7 @@ setup() {
     read session csrf < <(login_test_user "alice" "i")
     COOKIE="session=${session}; csrf=${csrf}"
     CSRF="$csrf"
-    CHAT=$(json_body "$(raw_post_json "/api/chat-widget-start" '{"title":"x"}' "$COOKIE" "$CSRF" "")" | jq -r '.session_id')
+    CHAT=$(json_body "$(raw_post_json "/api/v1/chat/sessions" '{"title":"x"}' "$COOKIE" "$CSRF" "")" | jq -r '.session_id')
 }
 
 teardown() {

@@ -21,6 +21,14 @@ window.PlatformJS = (function(){
         }).then(function(res){ return res.json(); });
     }
 
+    function patchJSON(url, body) {
+        return fetch(url, {
+            method: 'PATCH',
+            headers: {'Content-Type': 'application/json', 'X-CSRF-Token': getCsrfToken()},
+            body: JSON.stringify(body)
+        }).then(function(res){ return res.json(); });
+    }
+
     function debounce(fn, waitMs) {
         var timer;
         return function() {
@@ -95,7 +103,7 @@ window.PlatformJS = (function(){
             if (resultsContainer) { resultsContainer.remove(); resultsContainer = null; }
         }
         var doSearch = debounce(function(query) {
-            fetchJSON(baseUrl + '/api/autocomplete?type=' + refType + '&query=' + encodeURIComponent(query))
+            fetchJSON(baseUrl + '/api/v1/entities/' + encodeURIComponent(refType) + '/autocomplete?query=' + encodeURIComponent(query))
                 .then(function(data) {
                     closeResults();
                     if (!data || data.length === 0) return;
@@ -150,7 +158,7 @@ window.PlatformJS = (function(){
         }
         var doSearch = debounce(function(query) {
             var refType = typeSelect.value;
-            fetchJSON(baseUrl + '/api/autocomplete?type=' + refType + '&query=' + encodeURIComponent(query))
+            fetchJSON(baseUrl + '/api/v1/entities/' + encodeURIComponent(refType) + '/autocomplete?query=' + encodeURIComponent(query))
                 .then(function(data) {
                     closeResults();
                     if (!data || data.length === 0) return;
@@ -299,7 +307,7 @@ window.PlatformJS = (function(){
 
     return {
         getCsrfToken: getCsrfToken, escapeHtml: escapeHtml,
-        fetchJSON: fetchJSON, postJSON: postJSON,
+        fetchJSON: fetchJSON, postJSON: postJSON, patchJSON: patchJSON,
         debounce: debounce, onOutsideClick: onOutsideClick,
         showStatus: showStatus,
         clearCellError: clearCellError, highlightError: highlightError, clearAllErrors: clearAllErrors,

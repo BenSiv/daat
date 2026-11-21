@@ -888,6 +888,14 @@ function document.do_document(cmd_args, db_path)
 end
 
 entity.register_lifecycle_listener({
+    on_validate = function(db_path, entity_type, values, old, is_update)
+        if entity_type == "document" and is_update and old != nil and old.id != nil and values.parent_id != nil and values.parent_id != "" then
+            if document.would_create_cycle(db_path, old.id, values.parent_id) then
+                return {{field = "parent_id", severity = "error", message = "Can't move a document underneath its own sub-document."}}
+            end
+        end
+        return nil
+    end,
     on_settle_write_ddl = function(db_path, entity_type)
         if entity_type == "document" then
             document.ensure_pool_state(db_path)

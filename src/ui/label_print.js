@@ -41,11 +41,12 @@
         showStatus('Printing...', false);
         var entityType = btn.getAttribute('data-entity-type') || '';
         var entityId = btn.getAttribute('data-entity-id') || '';
-        var url = 'label?type=' + encodeURIComponent(entityType) + '&entity_id=' + encodeURIComponent(entityId);
+        var url = 'api/v1/entities/' + encodeURIComponent(entityType) + '/' + encodeURIComponent(entityId) + '/label';
         fetch(url).then(function(resp){
             if(!resp.ok){ throw new Error('label render failed'); }
-            return resp.text();
-        }).then(function(zpl){
+            return resp.json();
+        }).then(function(data){
+            var zpl = (data && data.zpl) ? data.zpl : '';
             device.send(zpl, function(){
                 showStatus('Sent to ' + device.name + '.', false);
             }, function(err){

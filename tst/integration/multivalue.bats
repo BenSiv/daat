@@ -228,13 +228,13 @@ EOF
     [[ "$output" =~ '"type":"multi_select"' ]]
 }
 
-@test "/api/submit accepts real JSON arrays for multi_reference/multi_select fields" {
+@test "/api/v1/entities/<type> accepts real JSON arrays for multi_reference/multi_select fields" {
     setup_full_schema
     "$BIN" entity create plant label="Trinidad C2"
     read session csrf < <(login_test_user alice i)
 
     payload='[{"label":"S1","source_plants":[1],"process":["cultivation","harvest"]}]'
-    output=$(printf '%s' "$payload" | GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/submit" QUERY_STRING="type=sample" \
+    output=$(printf '%s' "$payload" | GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="POST" PATH_INFO="/api/v1/entities/sample" QUERY_STRING="" \
         HTTP_COOKIE="session=${session}; csrf=${csrf}" HTTP_X_CSRF_TOKEN="${csrf}" "$BIN")
     [[ "$output" =~ '"success":true' ]]
 

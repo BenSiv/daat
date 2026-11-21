@@ -198,7 +198,7 @@ members() {
 
 @test "#tags a program wrote (an import, a sync) aren't synced, and a person's edit asserts only the #tags it adds" {
     key=$("$BIN" api-key create sharepoint-sync i | tail -1)
-    run api_write POST "/api/v1/document" "$key" '{"title":"Imported sheet","content":"Totals #pending-review"}'
+    run api_write POST "/api/v1/entities/document" "$key" '{"title":"Imported sheet","content":"Totals #pending-review"}'
     [[ "$output" =~ '"success":true' ]]
     d=$(db "SELECT id FROM document WHERE title = 'Imported sheet';")
     [ "$(db "SELECT COUNT(*) FROM document_tag WHERE document = $d;")" = "0" ]

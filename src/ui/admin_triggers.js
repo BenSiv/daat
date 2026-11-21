@@ -10,7 +10,7 @@
         btn.disabled = true;
         status.className = "status-msg";
         status.innerText = "Running...";
-        PlatformJS.postJSON('/admin-triggers/' + encodeURIComponent(ext) + '/' + encodeURIComponent(trigger), {})
+        PlatformJS.postJSON('api/v1/admin/triggers/' + encodeURIComponent(ext) + '/' + encodeURIComponent(trigger), {})
             .then(function(result){
                 btn.disabled = false;
                 if (result && result.success) {

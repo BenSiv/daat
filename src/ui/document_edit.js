@@ -146,13 +146,13 @@
     }
 
     var searchDocuments = PlatformJS.debounce(function(query, seq){
-        var url = 'api/document-search?query=' + encodeURIComponent(query);
+        var url = 'api/v1/documents/link-search?query=' + encodeURIComponent(query);
         if (currentDocId) { url += '&exclude_id=' + encodeURIComponent(currentDocId); }
         PlatformJS.fetchJSON(url).then(function(items){ renderDocumentItems(items, seq); });
     }, 150);
 
     var searchEntities = PlatformJS.debounce(function(query, seq){
-        PlatformJS.fetchJSON('api/entity-search?query=' + encodeURIComponent(query)).then(function(items){ renderEntityItems(items, seq); });
+        PlatformJS.fetchJSON('api/v1/entities?query=' + encodeURIComponent(query)).then(function(items){ renderEntityItems(items, seq); });
     }, 200);
 
     function safeSelectedText(startPos, endPos) {

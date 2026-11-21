@@ -317,7 +317,19 @@ function entity.validate(db_path, entity_type, values, old)
         end
     end
 
-    -- Run before-hooks if there are no severe structural errors
+    -- Run lifecycle validators and before-hooks if there are no severe structural errors
+    if not has_error(issues) then
+        for _, listener in ipairs(lifecycle_listeners) do
+            if listener.on_validate != nil then
+                listener_issues = listener.on_validate(db_path, entity_type, values, old, is_update)
+                if listener_issues != nil then
+                    for _, issue in ipairs(listener_issues) do
+                        table.insert(issues, issue)
+                    end
+                end
+            end
+        end
+    end
     if not has_error(issues) then
         hooks_issues = run_before_hooks(db_path, entity_type, values, old, is_update)
         for _, issue in ipairs(hooks_issues) do
@@ -754,7 +766,7 @@ end
 -- Reverses entity.archive -- also never deletes anything, just another
 -- additive ledger event (an 'update' clearing archived_at, the same
 -- shape any other field-level edit takes).
-function entity.unarchive(db_path, entity_type, entity_id, author, source)
+function entity.unarchive(db_path, entity_type, entity_id, author, source, reason)
     initial = entity.get(db_path, entity_type, entity_id)
     if initial == nil then
         return nil, {{field = nil, severity = "error", message = "no such entity"}}
@@ -776,7 +788,7 @@ function entity.unarchive(db_path, entity_type, entity_id, author, source)
         end
 
         field_changes = {archived_at = {old = current.archived_at, new = nil}}
-        event_id = ledger.append_update(db_path, entity_type, entity_id, field_changes, author, source)
+        event_id = ledger.append_update(db_path, entity_type, entity_id, field_changes, author, source, reason)
 
         _, _, changed = db.exec(db_path, string.format(
             "UPDATE %s SET archived_at = NULL, updated_by = %s, last_event_id = %d WHERE %s;",

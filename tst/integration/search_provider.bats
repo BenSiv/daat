@@ -30,7 +30,7 @@ teardown() {
     session_id=$(extract_query_param "$resp" "session_id")
 
     scripted="$(tool_call_response "internet_search.search" '{"query":"celleste bio"}')"
-    run raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"search for celleste bio\"}" "$COOKIE" "$CSRF" "$scripted"
+    run raw_post_json "/api/v1/chat/sessions/${session_id}/messages" "{\"message\":\"search for celleste bio\"}" "$COOKIE" "$CSRF" "$scripted"
     [[ "$output" =~ "200 OK" ]]
     [[ "$(json_body "$output" | jq -r '.pending.tool')" = "internet_search" ]]
     [[ "$(json_body "$output" | jq -r '.pending.method')" = "search" ]]
@@ -45,11 +45,11 @@ teardown() {
     session_id=$(extract_query_param "$resp" "session_id")
 
     scripted="$(tool_call_response "internet_search.search" '{"query":"celleste bio"}')"
-    send_resp=$(raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"search for celleste bio\"}" "$COOKIE" "$CSRF" "$scripted")
+    send_resp=$(raw_post_json "/api/v1/chat/sessions/${session_id}/messages" "{\"message\":\"search for celleste bio\"}" "$COOKIE" "$CSRF" "$scripted")
     pending_id=$(json_body "$send_resp" | jq -r '.pending.id')
 
     export WEB_SEARCH_TEST_RESULTS='{"items":[{"title":"Celleste Bio","link":"https://celleste-bio.example/","snippet":"Celleste Bio official site."}]}'
-    run raw_post_json "/api/chat-widget-approve" "{\"pending_id\":${pending_id},\"session_id\":\"${session_id}\"}" "$COOKIE" "$CSRF" "$(done_response "Found it, see the link.")"
+    run raw_post_json "/api/v1/chat/sessions/${session_id}/approve" "{\"pending_id\":${pending_id}}" "$COOKIE" "$CSRF" "$(done_response "Found it, see the link.")"
     unset WEB_SEARCH_TEST_RESULTS
     [[ "$output" =~ "200 OK" ]]
 
@@ -63,7 +63,7 @@ teardown() {
     session_id=$(extract_query_param "$resp" "session_id")
 
     scripted="$(tool_call_response "internet_search.search" '{"query":"celleste bio"}')"
-    send_resp=$(raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"search for celleste bio\"}" "$COOKIE" "$CSRF" "$scripted")
+    send_resp=$(raw_post_json "/api/v1/chat/sessions/${session_id}/messages" "{\"message\":\"search for celleste bio\"}" "$COOKIE" "$CSRF" "$scripted")
     pending_id=$(json_body "$send_resp" | jq -r '.pending.id')
 
     # Deliberately no WEB_SEARCH_TEST_RESULTS set -- if the backend were
@@ -72,7 +72,7 @@ teardown() {
     # denial message below, making this a real (not just asserted)
     # check that denial short-circuits before search_provider.search
     # runs at all.
-    run raw_post_json "/api/chat-widget-deny" "{\"pending_id\":${pending_id},\"session_id\":\"${session_id}\"}" "$COOKIE" "$CSRF" "$(done_response "Understood.")"
+    run raw_post_json "/api/v1/chat/sessions/${session_id}/deny" "{\"pending_id\":${pending_id}}" "$COOKIE" "$CSRF" "$(done_response "Understood.")"
     [[ "$output" =~ "200 OK" ]]
 
     run latest_tool_result "$session_id"
@@ -84,10 +84,10 @@ teardown() {
     session_id=$(extract_query_param "$resp" "session_id")
 
     scripted="$(tool_call_response "internet_search.search" '{"query":"celleste bio"}')"
-    send_resp=$(raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${session_id}\",\"message\":\"search for celleste bio\"}" "$COOKIE" "$CSRF" "$scripted")
+    send_resp=$(raw_post_json "/api/v1/chat/sessions/${session_id}/messages" "{\"message\":\"search for celleste bio\"}" "$COOKIE" "$CSRF" "$scripted")
     pending_id=$(json_body "$send_resp" | jq -r '.pending.id')
 
-    run raw_post_json "/api/chat-widget-approve" "{\"pending_id\":${pending_id},\"session_id\":\"${session_id}\"}" "$COOKIE" "$CSRF" "$(done_response "Handled.")"
+    run raw_post_json "/api/v1/chat/sessions/${session_id}/approve" "{\"pending_id\":${pending_id}}" "$COOKIE" "$CSRF" "$(done_response "Handled.")"
     [[ "$output" =~ "200 OK" ]]
 
     run latest_tool_result "$session_id"

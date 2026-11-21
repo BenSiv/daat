@@ -201,6 +201,17 @@ raw_post_json() {
         HTTP_COOKIE="$cookie" HTTP_X_CSRF_TOKEN="$csrf" "$BIN"
 }
 
+raw_patch_json() {
+    local path_info="$1"
+    local json_body="$2"
+    local cookie="$3"
+    local csrf="$4"
+    local query_string="${5:-}"
+    printf '%s' "$json_body" | \
+        GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="PATCH" PATH_INFO="$path_info" QUERY_STRING="$query_string" \
+        HTTP_COOKIE="$cookie" HTTP_X_CSRF_TOKEN="$csrf" "$BIN"
+}
+
 # A CGI response is headers, a blank line, then the body -- pull just
 # the JSON body back out (chat-widget routes always return exactly one
 # JSON object) so callers can pipe straight into `jq` without also
@@ -237,7 +248,7 @@ start_chat() {
         csrf="$2"
         title="${3-Chat}"
     fi
-    resp=$(raw_post_json "/api/chat-widget-start" "{\"title\":\"${title}\"}" "$cookie" "$csrf" "")
+    resp=$(raw_post_json "/api/v1/chat/sessions" "{\"title\":\"${title}\"}" "$cookie" "$csrf" "")
     sid=$(json_body "$resp" | jq -r '.session_id')
     if [ "$emit_kv" -eq 1 ]; then
         printf 'session_id=%s' "$sid"
@@ -251,11 +262,11 @@ send_message() {
     local cookie="session=${session}; csrf=${csrf}"
     local escaped="${message//\\/\\\\}"
     escaped="${escaped//\"/\\\"}"
-    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${chat_session_id}\",\"message\":\"${escaped}\"}" "$cookie" "$csrf" "$scripted"
+    raw_post_json "/api/v1/chat/sessions/${chat_session_id}/messages" "{\"message\":\"${escaped}\"}" "$cookie" "$csrf" "$scripted"
 }
 
 send() {
-    raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${CHAT}\",\"message\":\"$1\"}" "$COOKIE" "$CSRF" "$2" >/dev/null
+    raw_post_json "/api/v1/chat/sessions/${CHAT}/messages" "{\"message\":\"$1\"}" "$COOKIE" "$CSRF" "$2" >/dev/null
 }
 
 # Runs the binary in real CGI mode -- the same GATEWAY_INTERFACE

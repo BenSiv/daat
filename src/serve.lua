@@ -121,7 +121,13 @@ class DaatCGIHandler(http.server.BaseHTTPRequestHandler):
     def do_PUT(self):
         self._dispatch_cgi()
 
+    def do_PATCH(self):
+        self._dispatch_cgi()
+
     def do_DELETE(self):
+        self._dispatch_cgi()
+
+    def do_OPTIONS(self):
         self._dispatch_cgi()
 
 class SyncReusableHTTPServer(http.server.HTTPServer):

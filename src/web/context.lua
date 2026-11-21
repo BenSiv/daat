@@ -7,6 +7,8 @@
 
 const cgi_lib = require("cgi")
 const auth = require("auth")
+const json = require("dkjson")
+const lfs = require("lfs")
 const schema = require("schema")
 const entity = require("entity")
 const ui = require("ui")
@@ -248,6 +250,108 @@ function web_ctx.require_write_capability(req, entity_type)
         return true
     end
     return web_ctx.has_capability(req.capabilities, "a")
+end
+
+function web_ctx.as_json_array(list)
+    if list == nil or #list == 0 then
+        return setmetatable({}, {__jsontype = "array"})
+    end
+    return list
+end
+
+function web_ctx.percent_decode(str)
+    if str == nil then
+        return ""
+    end
+    return (string.gsub(str, "%%(%x%x)", function(h)
+        return string.char(tonumber(h, 16))
+    end))
+end
+
+function web_ctx.respond_json(req, status, payload, extra_headers)
+    return web_ctx.respond(req, status, "application/json", json.encode(payload), extra_headers)
+end
+
+function web_ctx.method_not_allowed(req)
+    return web_ctx.respond_json(req, "405 Method Not Allowed", {error = "Method not allowed"})
+end
+
+function web_ctx.require_write_auth(req, form_token)
+    if req.via_api_key == true then
+        return true
+    end
+    if web_ctx.require_csrf(req, form_token) then
+        return true
+    end
+    web_ctx.respond_json(req, "403 Forbidden", {error = "CSRF check failed"})
+    return false
+end
+
+function web_ctx.require_admin_json(req)
+    if web_ctx.has_capability(req.capabilities, "a") then
+        return true
+    end
+    web_ctx.respond_json(req, "403 Forbidden", {error = "Admin capability required"})
+    return false
+end
+
+function web_ctx.read_body()
+    content_len = tonumber(os.getenv("CONTENT_LENGTH"))
+    if content_len != nil then
+        if content_len <= 0 then
+            return ""
+        end
+        return web_ctx.default_value(io.read(content_len), "")
+    end
+    stdin_mode = lfs.attributes("/proc/self/fd/0", "mode")
+    if stdin_mode == "char device" then
+        return ""
+    end
+    return web_ctx.default_value(io.read("*all"), "")
+end
+
+function web_ctx.read_json_body(req, allow_empty)
+    raw = web_ctx.read_body()
+    if (raw == nil or raw == "") and allow_empty == true then
+        return {}, true
+    end
+    decoded, _, err = json.decode(raw)
+    if decoded == nil or type(decoded) != "table" then
+        msg = tostring(err)
+        if decoded != nil then
+            msg = "expected JSON object or array"
+        end
+        web_ctx.respond_json(req, "400 Bad Request", {error = "Invalid JSON: " .. msg})
+        return nil, false
+    end
+    return decoded, true
+end
+
+function web_ctx.read_write_json(req, allow_empty)
+    raw = web_ctx.read_body()
+    if not web_ctx.require_write_auth(req) then
+        return nil, false
+    end
+    if (raw == nil or raw == "") and allow_empty == true then
+        return {}, true
+    end
+    decoded, _, err = json.decode(raw)
+    if decoded == nil or type(decoded) != "table" then
+        msg = tostring(err)
+        if decoded != nil then
+            msg = "expected JSON object or array"
+        end
+        web_ctx.respond_json(req, "400 Bad Request", {error = "Invalid JSON: " .. msg})
+        return nil, false
+    end
+    return decoded, true
+end
+
+function web_ctx.request_source(req)
+    if req.via_api_key == true then
+        return {api_key = req.author}
+    end
+    return web_ctx.source_from_params(req.params)
 end
 
 return web_ctx

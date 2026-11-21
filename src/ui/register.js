@@ -128,8 +128,8 @@
         msg.innerText = "Validating and submitting...";
         msg.style.display = "block";
 
-        const entryParam = notebookEntry ? `&entry=${encodeURIComponent(notebookEntry)}` : "";
-        PlatformJS.postJSON(`${baseUrl}/api/submit?type=${encodeURIComponent(entityType)}${entryParam}`, payload)
+        const entryParam = notebookEntry ? `?entry=${encodeURIComponent(notebookEntry)}` : "";
+        PlatformJS.postJSON(`${baseUrl}/api/v1/entities/${encodeURIComponent(entityType)}${entryParam}`, payload)
         .then(data => {
             if (data.success) {
                 msg.className = "status-msg success";

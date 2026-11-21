@@ -43,10 +43,10 @@ teardown() {
 
     raw_get "/documents" "q=bioreactor" "$COOKIE" >/dev/null
 
-    resp=$(raw_post_json "/api/chat-widget-start" '{"title":"Deferred chat"}' "$COOKIE" "$CSRF" "")
+    resp=$(raw_post_json "/api/v1/chat/sessions" '{"title":"Deferred chat"}' "$COOKIE" "$CSRF" "")
     sid=$(json_body "$resp" | jq -r '.session_id')
     scripted="$(tool_call_response "document.search" '{"query":"bioreactor"}')"$'\1'"$(done_response "Found both protocols.")"
-    run raw_post_json "/api/chat-widget-send" "{\"session_id\":\"${sid}\",\"message\":\"find bioreactor protocols\"}" "$COOKIE" "$CSRF" "$scripted"
+    run raw_post_json "/api/v1/chat/sessions/${sid}/messages" "{\"message\":\"find bioreactor protocols\"}" "$COOKIE" "$CSRF" "$scripted"
     [[ "$output" =~ "200 OK" ]]
 
     # All 3 retrievals are queued as pending with raw hits logged, and zero post-search mutations ran inline.
