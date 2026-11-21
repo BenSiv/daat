@@ -2,7 +2,7 @@
 
 The extension system exists so that behavior specific to one deployment's own needs -- a validation rule, a reaction to an entity being created or changed -- never has to be written into the platform itself. An extension is a small script, version-controlled the same way an entity type definition is, that declares up front what it needs and gets exactly that and nothing more.
 
-This whole document describes one of three trust tiers -- deployment-authored, sandboxed, capability-checked, admin-approval-gated. It's the only one of the three that isn't first-party code: `agent_provider.lua`/`search_provider.lua` and their implementations under `src/provider/` are the middle tier (ships with daat, full access, but swappable via config); everything else in `src/` is core (also full access, not swappable). See doc/architecture.md's "Providers" section for the full three-tier picture and why the line is drawn where it is.
+This whole document describes one of three trust tiers -- deployment-authored, sandboxed, capability-checked, admin-approval-gated. It's the only one of the three that isn't first-party code: `agent_provider.lua`, `search_provider.lua`, and `mail_provider.lua` and their implementations under `src/provider/` are the middle tier (ships with daat, full access, but swappable via `config.lua`); everything else in `src/` is core (also full access, not swappable). See doc/architecture.md's "Providers" section for the full three-tier picture and why the line is drawn where it is.
 
 ## Extension layout
 
@@ -62,7 +62,7 @@ return {
 
 Before-hooks and after-hooks are deliberately different code paths, not a timing flag on the same one: a slow or broken after-hook must never be able to hang or corrupt someone's data entry, so it doesn't get the chance to run as part of it at all.
 
-**"Queued," concretely**: an after-hook doesn't run the instant its event fires. Creating, updating, or archiving an entity records a pending job in the same transaction as the change itself, and that job only actually executes when something later asks the platform to run its pending jobs (`entity run-pending`, wired up on whatever schedule a deployment chooses) -- not as an automatic side effect of the write. Unarchiving an entity does **not** enqueue an after-hook today (only archiving does) -- not a deliberate design stance, just not wired up yet.
+**"Queued," concretely**: an after-hook doesn't run the instant its event fires. Creating, updating, or archiving an entity records a pending job in the same transaction as the change itself, and that job only actually executes when something later asks the platform to run its pending jobs (`daat extension run-pending`, or `daat run-pending` to drain all background queues together on whatever schedule a deployment chooses) -- not as an automatic side effect of the write. Unarchiving an entity does **not** enqueue an after-hook today (only archiving does) -- not a deliberate design stance, just not wired up yet.
 
 ## Capabilities
 

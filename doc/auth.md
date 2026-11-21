@@ -1,6 +1,6 @@
 # Auth: how it's built and why
 
-daat's login, session, CSRF and account-recovery code is its own, in `src/auth.lua` and the routes in `src/web.lua`. This page records what each piece does, why it is built that way, what was considered instead, and what is knowingly left open. `doc/architecture.md`'s "Auth" section is the short version; this is the one to read before changing any of it.
+daat's login, session, CSRF and account-recovery code is its own, in `src/auth.lua` and the routes/context in `src/web/{context,auth_routes,admin_routes}.lua` (`src/web.lua`). This page records what each piece does, why it is built that way, what was considered instead, and what is knowingly left open. `doc/architecture.md`'s "Auth" section is the short version; this is the one to read before changing any of it.
 
 The ground rule: daat writes the policy (who may do what, when a credential stops working), never the cryptography. Every primitive comes from a vetted library through a thin binding.
 
@@ -46,7 +46,7 @@ Double-submit token: at login the server sets a random `csrf` cookie (readable b
 
 - Why it works: another site can make the browser send daat's cookies, but it can't read them, so it can't put the matching value in the request.
 - Why double-submit instead of a server-stored token: same reason as sessions, no per-request server state. The token doesn't need signing because it's only compared with itself.
-- Every POST route in `web.lua` calls `require_csrf`. The exceptions are `/login`, `/forgot-password`, `/reset-password` and `/verify-email` (no session exists yet) and API-key requests (see below). When adding a route, add the check; `tst/integration/auth.bats` covers the pattern.
+- Every state-changing (`POST`/`PATCH`/`PUT`/`DELETE`) route in `src/web/*.lua` calls `web_ctx.require_csrf`. The exceptions are `/login`, `/forgot-password`, `/reset-password` and `/verify-email` (no session exists yet) and API-key requests (see below). When adding a route, add the check; `tst/integration/auth.bats` covers the pattern.
 
 ## Emailed links: reset, setup, verify
 
@@ -62,15 +62,15 @@ Shared rules, and why:
 
 - **The token is 32 random bytes and only its HMAC is stored**, so a leaked table can't be turned into working links. HMAC rather than bcrypt because the token is already high-entropy: there's nothing for a slow hash to protect, and a deterministic hash can be looked up directly.
 - **The token travels in the URL fragment** (`#token=...`), which browsers never send to the server, so it can't land in Apache or load-balancer access logs. The page's script moves it into the form, which POSTs it. Those pages also send `Referrer-Policy: no-referrer` and `Cache-Control: no-store`.
-- **The link's host comes from the configured `public_url`**, never the request's `Host` header. Otherwise an attacker could request a reset with their own Host header and get a link to their server mailed to the victim.
+- **The link's host comes from the configured `mail.public_url`**, never the request's `Host` header. Otherwise an attacker could request a reset with their own Host header and get a link to their server mailed to the victim.
 - **A link only works while the address it was sent to is still the account's address**, and changing or clearing an address voids every outstanding link (`void_account_links`). This closes the mistyped-address hole: an admin types `maya@celebste-bio.com`, notices, fixes it, and the stranger at the typo address is cut off. Both checks exist because either alone could be undone by a future change elsewhere.
 - **Using any link voids all of that account's other links.**
 - **Setting a password through a link ends all sessions** (via `set_password`).
 - **`/forgot-password` answers the same whether or not anything matched**, is limited to one link per account per 5 minutes, and only mails verified addresses. A send failure is logged, never shown. Otherwise the form would reveal which logins and emails exist.
 
-**Turning it on.** All of this is off until `config.lua` sets `mail_provider`, `mail_from` and `public_url`. Until then `/forgot-password` and `/reset-password` return 404, and `daat user add` and the `/admin-users` form take a password directly. Two backends send real mail:
-- `mail_provider = "smtp"` takes `smtp_url` (e.g. `"smtp://smtp.gmail.com:587"`; TLS is always required), an optional `smtp_user`, and the password in the `DAAT_SMTP_PASSWORD` environment variable.
-- `mail_provider = "graph"` sends as `mail_from` through Microsoft Graph as an Entra app, for Microsoft 365 tenants where password SMTP is off. It takes `graph_tenant_id`, `graph_client_id` and the client secret in `DAAT_GRAPH_CLIENT_SECRET`. The app needs the Graph `Mail.Send` application permission, scoped by the tenant admin to that one mailbox.
+**Turning it on.** All of this is off until `config.lua`'s `mail` section sets `mail.provider`, `mail.from`, and `mail.public_url` (`doc/configuration.md`). Until then `/forgot-password` and `/reset-password` return 404, and `daat user add` and the `/admin-users` form take a password directly. Two backends send real mail (`mail.provider = "test"` selects `src/provider/mail_test.lua` in tests):
+- `mail.provider = "smtp"` takes `mail.smtp_url` (e.g. `"smtp://smtp.gmail.com:587"`; TLS is always required), an optional `mail.smtp_user`, and the password in the `DAAT_SMTP_PASSWORD` environment variable.
+- `mail.provider = "graph"` sends as `mail.from` through Microsoft Graph as an Entra app, for Microsoft 365 tenants where password SMTP is off. It takes `mail.graph_tenant_id`, `mail.graph_client_id`, and the client secret in `DAAT_GRAPH_CLIENT_SECRET`. The app needs the Graph `Mail.Send` application permission, scoped by the tenant admin to that one mailbox.
 
 **Why `verify` is separate from `setup`.** Before this split, setting an email on any account mailed a link that could set the password. Whoever read that unverified, possibly mistyped, address could take over an existing account, an Admin's included. A `verify` link now needs the account's current password, so it proves two things: the reader has the mailbox, and the reader owns the account. Only then does the address become a place reset links can go.
 
@@ -103,7 +103,7 @@ Known cost: a key is checked by running bcrypt against every active key (there's
 
 ## Response headers
 
-`print_response` adds these to every response (`security_header_lines` in `web.lua`). A route can override one by setting the same header itself.
+`web_ctx.respond` adds these to every response (`security_header_lines` in `src/web/context.lua`, using per-request `req.nonce`). A route can override one by setting the same header itself.
 
 - **`Content-Security-Policy`**, which tells the browser what the page may load and run:
   - `script-src 'self' 'nonce-<per-request>'`: only daat's own script files and inline `<script>` blocks carrying this request's random nonce run. Every inline script daat writes carries it. An injected `<script>` or `onclick=` doesn't, so an escaping bug can't become running code. This is the important line. daat generated nonces before but stopped sending a CSP when the Fossil wrapper (which used to send one) was removed, so for a while the nonces protected nothing.
@@ -135,9 +135,9 @@ Deliberately not done yet, in rough priority order:
 
 ## Changing this code
 
-- New POST route: call `require_csrf` (unless it's API-key only), and add a test like the ones in `tst/integration/auth.bats`.
+- New state-changing route: call `web_ctx.require_csrf` (unless it's API-key only), and add a test like the ones in `tst/integration/auth.bats`.
 - New way to change a password: go through `auth.set_password`, so sessions end.
 - New way to change an email: go through `auth.set_email`, so links are voided.
-- New inline `<script>`: give it `nonce="%s"` with the page's nonce, or it won't run. Inline event handlers (`onclick=`) never run; attach listeners from a nonce'd script.
-- New external resource (CDN, API called from the browser): widen the CSP in `security_header_lines` deliberately and note why here.
+- New inline `<script>`: give it `nonce="{{ nonce }}"` with `req.nonce`, or it won't run. Inline event handlers (`onclick=`) never run; attach listeners from a nonce'd script (or a standalone `src/ui/*.js` asset).
+- New external resource (CDN, API called from the browser): widen the CSP in `security_header_lines` (`src/web/context.lua`) deliberately and note why here.
 - Never put capabilities or anything secret in a cookie.

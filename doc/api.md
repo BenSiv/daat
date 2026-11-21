@@ -6,7 +6,7 @@ A unified JSON HTTP API rooted at `/api/v1` providing 100% parity with every ope
 
 Every feature or operation surfaced in Daat's browser UI **must** ship with an equivalent JSON endpoint under `/api/v1/*`:
 
-1. **One surface, no browser-only shims.** Browser JavaScript (`src/ui/*.js`) calls `/api/v1/*` directly (`session` cookie + `X-CSRF-Token`). Never introduce unversioned `/api/*` endpoints or HTML form-POST-only mutations without a `/api/v1/*` counterpart (the sole exceptions are browser session bootstrap routes: `/login`, `/logout`, `/forgot-password`, and `/reset-password`, plus binary `/attachments/*` uploads/downloads).
+1. **One surface, no browser-only shims.** Browser JavaScript (`src/ui/*.js`) calls `/api/v1/*` directly (`session` cookie + `X-CSRF-Token`). Never introduce unversioned `/api/*` endpoints or HTML form-POST-only mutations without a `/api/v1/*` counterpart (the sole exceptions are browser session bootstrap routes: `/login`, `/logout`, `/forgot-password`, `/reset-password`, and `/verify-email`, plus binary `/attachments/*` uploads/downloads).
 2. **Same capabilities, validation, and provenance.** Session callers and `X-Api-Key` callers share the exact same route handler, single-letter capability check (`i`, `s`, `a`), `entity` / hook validation, and ledger recording (`<login>` vs. `api:<label>`).
 3. **Definition of done for any new UI feature.** Register the route under `/api/v1/*` (`src/web/api_v1_routes.lua` + domain `src/web/*_routes.lua`), wire the UI to call it, document the endpoint in this file, and add integration tests in `tst/integration/api_v1.bats`.
 
@@ -92,11 +92,11 @@ Every endpoint enforces the exact same single-letter capabilities (`cap`) for bo
 
 Raw document and tag table CRUD uses `/api/v1/entities/document` (and `tag`, `document_tag`, `tag_relation`, `tag_evidence`). Higher-level document and pool operations live under:
 
-- `GET /api/v1/documents/tree` -- lightweight active page tree (`id`, `title`, `parent_id`, `created_at`, `external_id`).
+- `GET /api/v1/documents/tree` -- lightweight active page tree (`id`, `title`, `parent_id`, `created_at`, `external_id`) -> `{"documents": [...]}`.
 - `GET /api/v1/documents/search?q=<query>&limit=10` -- hybrid lexical + semantic + heat-reinforced search with snippets and retrieval logging under `author` (`api:<label>` or `<login>`) -> `{"results": [...]}`.
 - `GET /api/v1/documents/link-search?query=<q>&exclude_id=<id>` -- canonical `[[title]]` / `[[folder/title]]` link suggestions.
 - `POST /api/v1/documents/render` (`{"content": "..."}`) -- render Markdown, `plot` gnuplot fences, `[[links]]`, and inline `{{view:...}}` embeds to HTML -> `{"html": "..."}`.
-- `GET /api/v1/documents/connection-draft?connect_a=<id>&connect_b=<id>` -- prefill draft (`{title, parent_id, content}`) explaining the link between two documents.
+- `GET /api/v1/documents/connection-draft?connect_a=<id>&connect_b=<id>` -- prefill draft explaining the link between two documents -> `{"draft": {title, parent_id, content}}`.
 - `GET /api/v1/documents/<id>` -- full page model (`{document, rendered_html, breadcrumbs, children, links, related}`).
 - `GET /api/v1/templates` -- list document templates (`{"templates": [...]}`).
 - `GET /api/v1/templates/<name>` -- load and render a template (`{template, default_path, content}`).
@@ -115,7 +115,7 @@ Raw document and tag table CRUD uses `/api/v1/entities/document` (and `tag`, `do
 - `POST /api/v1/chat/sessions/<session_id>/approve` (`{"pending_id": 12}`) -- approve a pending write/tool call and resume the turn.
 - `POST /api/v1/chat/sessions/<session_id>/deny` (`{"pending_id": 12, "reason": "..."}`) -- deny a pending write/tool call and resume the turn.
 - `POST /api/v1/chat/messages/<message_id>/feedback` (`{"feedback": "up"|"down"}`) -- record reply feedback -> `{"ok": true}`.
-- `POST /api/v1/chat/attachments/extract` -- multipart `file` upload (when `chat.attachments_enabled = true`) -> `{"filename": "...", "text": "..."}`.
+- `POST /api/v1/chat/attachments/extract` -- multipart `file` upload (when `agent.chat_attachments_enabled = true`) -> `{"filename": "...", "text": "..."}`.
 
 ### Extensions (`/api/v1/extensions`)
 
@@ -132,7 +132,7 @@ Raw document and tag table CRUD uses `/api/v1/entities/document` (and `tag`, `do
 - `GET /api/v1/admin/triggers` -- list approved manual triggers.
 - `POST /api/v1/admin/triggers/<ext>/<trigger>` -- invoke a manual trigger (`{"success": true, "message": "..."}`).
 - `GET /api/v1/admin/users` (`?archived=1`), `POST /api/v1/admin/users` (`{login, password?, email?, cap?}`), `PATCH /api/v1/admin/users/<login>` (`{email?, cap?, password?}`), `POST /api/v1/admin/users/<login>/archive`, `POST /api/v1/admin/users/<login>/unarchive`.
-- `GET /api/v1/admin/api-keys` (`?archived=0|1`), `POST /api/v1/admin/api-keys` (`{label, cap?}` -> returns `raw_key` once), `PATCH /api/v1/admin/api-keys/<label>` (`{cap}`), `POST /api/v1/admin/api-keys/<label>/archive`, `POST /api/v1/admin/api-keys/<label>/unarchive`.
+- `GET /api/v1/admin/api-keys` (`?archived=0|1` -> `{"api_keys": [...]}`), `POST /api/v1/admin/api-keys` (`{label, cap?}` -> returns `raw_key` once), `PATCH /api/v1/admin/api-keys/<label>` (`{cap}`), `POST /api/v1/admin/api-keys/<label>/archive`, `POST /api/v1/admin/api-keys/<label>/unarchive`.
 - `GET /api/v1/admin/settings` and `PATCH /api/v1/admin/settings` (`{site_name?, hide_home_heading?, system_prompt_extra?, colors?}`) -- inspect or update theme/deployment settings.
 - `PUT /api/v1/admin/settings/assets/<name>` -- upload raw `image/png` bytes for `logo.png`, `logo-full.png`, or `favicon.png`.
 

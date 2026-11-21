@@ -12,13 +12,13 @@ A self-maintaining knowledge base with a built-in AI agent. Documents, chat conv
 
 ## Building
 
-Requires a built `luam` checkout beside this one (`../luam`, or set `LUAM_DIR`, at or past the commit in `bld/package.lua`), and `cmark-gfm` on `PATH` at runtime.
+Requires a built `luam` checkout beside this one ([../luam](../luam/README.md), or set `LUAM_DIR`, at or past the commit in `bld/package.lua`), C dev headers (`libsqlite3-dev`, `libreadline-dev`, `libssl-dev`, `libcrypt-dev`, `libmariadb-dev`), and `cmark-gfm` on `PATH` at runtime (`python3` for `daat serve`; optional `gnuplot` for `plot` fences/`plot.from_query`, `pdftotext`/`pandoc` when `agent.chat_attachments_enabled = true`, and `curl`/`gcloud` for cloud or local providers).
 
 ```sh
 ./bld/build.sh          # -> bin/daat
 ```
 
-The chat agent's model provider is chosen in `config.lua` (`agent.provider`; see [configuration.md](doc/configuration.md)): Google Vertex AI (`"vertex"`, chat and embeddings, needs `agent.vertex_project`), Claude (`"claude"`, chat only), Ollama or any OpenAI-compatible `/v1` server (`"ollama"`, chat and embeddings, defaults to `http://127.0.0.1:11434/v1` with `qwen3:8b` and `nomic-embed-text`, configurable via `agent.ollama_url`, `agent.model`, `knowledge.embedding_model`, and `OLLAMA_API_KEY`/`OPENAI_API_KEY`), or the scripted `"test"` provider. Vertex authenticates through the VM's service account on Google Cloud, or the logged-in `gcloud` account elsewhere.
+Deployment configuration lives in `config.lua` (`database`, `agent`, `knowledge`, `search`, `mail`, `ui`, `extensions`; see [configuration.md](doc/configuration.md)): the chat agent's model provider (`agent.provider`) supports Google Vertex AI (`"vertex"`, chat and embeddings, needs `agent.vertex_project`), Claude (`"claude"`, chat only), Ollama or any OpenAI-compatible `/v1` server (`"ollama"`, chat and embeddings, defaults to `http://127.0.0.1:11434/v1` with `qwen3:8b` and `nomic-embed-text`, configurable via `agent.ollama_url`, `agent.model`, `knowledge.embedding_model`, and `OLLAMA_API_KEY`/`OPENAI_API_KEY`), or the scripted `"test"` provider; outbound mail (`mail.provider`: `"smtp"`, `"graph"`, `"test"`) and web search (`search.provider`: `"google_cse"`, `"test"`) follow the same pluggable provider pattern. Vertex authenticates through the VM's service account on Google Cloud, or the logged-in `gcloud` account elsewhere.
 
 ## Testing
 
@@ -45,4 +45,4 @@ Run as a CGI program under a web server, `daat` serves the web application direc
 
 ## Contributing
 
-Start with [onboarding.md](doc/onboarding.md): prerequisites, repository layout, an architecture primer and a one-command dev container. Open work is tracked in [GitHub issues](https://github.com/BenSiv/daat/issues). Terms are defined in [glossary.md](doc/glossary.md), and [why-luam.md](doc/why-luam.md), [performance.md](doc/performance.md) and [prior-art.md](doc/prior-art.md) explain the project's choices and performance design.
+Start with [onboarding.md](doc/onboarding.md): prerequisites, repository layout, an architecture primer and a one-command dev container. Open work is tracked in [GitHub issues](https://github.com/BenSiv/daat/issues). Terms are defined in [glossary.md](doc/glossary.md), and [why-luam.md](doc/why-luam.md), [database-concurrency.md](doc/database-concurrency.md), [performance.md](doc/performance.md) and [prior-art.md](doc/prior-art.md) explain the project's language, transaction/verification invariants, performance design, and prior art. For companion repositories in the Luam stack, see [Luam](../luam/README.md), [celleste-lims](../lims/README.md), and [brain-ex](../brain-ex/README.md).
