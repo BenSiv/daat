@@ -534,3 +534,39 @@ EOF
     run raw_api_write POST "/api/v1/entities/tag_evidence" "" "$key" "{\"tag_a\":${tag_id},\"tag_b\":${b},\"kind\":\"lineage\",\"direction\":\"directed\",\"weight\":7,\"support\":7,\"producer\":\"tag-evidence\"}"
     [[ "$output" =~ '"success":true' ]]
 }
+
+@test "GET /api/v1/entities/<type>?since_event=<n> returns only rows changed after watermark (including archives) and reports max_event_id" {
+    key=$("$BIN" api-key create sync-worker i | tail -1)
+    "$BIN" entity create widget label=Alpha >/dev/null
+    "$BIN" entity create widget label=Beta >/dev/null
+
+    run raw_api_get "/api/v1/entities/widget" "" "$key"
+    [[ "$output" =~ '"total":2' ]]
+    wm1=$(printf '%s' "$output" | grep -o '"max_event_id":[0-9]*' | grep -o '[0-9]*')
+    [ -n "$wm1" ] && [ "$wm1" -gt 0 ]
+
+    # Idle delta poll returns 0 rows.
+    run raw_api_get "/api/v1/entities/widget" "since_event=${wm1}" "$key"
+    [[ "$output" =~ '"total":0' ]]
+
+    # Update widget 1 and archive widget 2; delta poll returns both (including archived_at on widget 2).
+    raw_api_write PATCH "/api/v1/entities/widget/1" "" "$key" '{"label":"Alpha-v2"}' >/dev/null
+    raw_api_write POST "/api/v1/entities/widget/2/archive" "" "$key" "" >/dev/null
+
+    run raw_api_get "/api/v1/entities/widget" "since_event=${wm1}" "$key"
+    [[ "$output" =~ '"total":2' ]]
+    [[ "$output" =~ '"Alpha-v2"' ]]
+    [[ "$output" =~ '"archived_at":"' ]]
+}
+
+@test "GET /api/v1/documents/search searches Knowledge Pool and records a retrieval under api:<label>" {
+    key=$("$BIN" api-key create cli-search i | tail -1)
+    "$BIN" entity create document title="Vitrification Medium" content="Glycerol and DMSO cryoprotectant protocol." >/dev/null
+
+    run raw_api_get "/api/v1/documents/search" "q=cryoprotectant&limit=5" "$key"
+    [[ "$output" =~ "200 OK" ]]
+    [[ "$output" =~ '"Vitrification Medium"' ]]
+
+    ret_cnt=$(sqlite3 .store/store.db "SELECT COUNT(*) FROM knowledge_retrieval WHERE query_text='cryoprotectant';")
+    [ "$ret_cnt" -eq 1 ]
+}

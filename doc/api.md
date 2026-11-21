@@ -61,7 +61,7 @@ Every endpoint enforces the exact same single-letter capabilities (`cap`) for bo
 ### Entities, Ledger, Related & Labels (`/api/v1/entities`)
 
 - `GET /api/v1/entities?query=<q>` -- cross-type entity search (`[{entity_type, id, label, subtitle}, ...]`).
-- `GET /api/v1/entities/<type>` -- paginated row list (`?limit=&offset=&filter_field=&filter_value=`) -> `{"rows": [...], "total": 42}`.
+- `GET /api/v1/entities/<type>` -- paginated row list (`?limit=&offset=&filter_field=&filter_value=&since_event=`) -> `{"rows": [...], "total": 42, "max_event_id": 108}`. Passing `since_event=<n>` returns all rows of `<type>` (including archived rows) with `last_event_id > <n>` ordered by `last_event_id ASC, id ASC` for incremental sync polling.
 - `POST /api/v1/entities/<type>` -- create single row (`{...}` -> `{"success": true, "created_id": 6, "issues": []}`) or batch (`[{...}, ...]` -> `{"success": true, "created_ids": [7, 8], "issues": []}`). Optional `?entry=` records notebook provenance.
 - `POST /api/v1/entities/<type>/validate` -- dry-run validation on a single object or batch array -> `{"valid": true, "issues": []}`.
 - `GET /api/v1/entities/<type>/autocomplete?query=<q>` -- active reference-picker candidates (`[{"id": 1, "name": "..."}, ...]`).
@@ -85,7 +85,7 @@ Every endpoint enforces the exact same single-letter capabilities (`cap`) for bo
 Raw document and tag table CRUD uses `/api/v1/entities/document` (and `tag`, `document_tag`, `tag_relation`, `tag_evidence`). Higher-level document and pool operations live under:
 
 - `GET /api/v1/documents/tree` -- lightweight active page tree (`id`, `title`, `parent_id`, `created_at`, `external_id`).
-- `GET /api/v1/documents/search?q=<query>&limit=10` -- hybrid lexical + semantic + heat-reinforced search with snippets and retrieval logging -> `{"results": [...]}`.
+- `GET /api/v1/documents/search?q=<query>&limit=10` -- hybrid lexical + semantic + heat-reinforced search with snippets and retrieval logging under `author` (`api:<label>` or `<login>`) -> `{"results": [...]}`.
 - `GET /api/v1/documents/link-search?query=<q>&exclude_id=<id>` -- canonical `[[title]]` / `[[folder/title]]` link suggestions.
 - `POST /api/v1/documents/render` (`{"content": "..."}`) -- render Markdown, `plot` gnuplot fences, `[[links]]`, and inline `{{view:...}}` embeds to HTML -> `{"html": "..."}`.
 - `GET /api/v1/documents/connection-draft?connect_a=<id>&connect_b=<id>` -- prefill draft (`{title, parent_id, content}`) explaining the link between two documents.

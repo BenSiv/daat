@@ -19,7 +19,7 @@ cp config.lua config.lua.deployed
 trap 'mv config.lua.deployed config.lua' EXIT
 
 export LUA_PATH="/app/src/?.lua;/luam/lib/?.lua;/luam/lib/?/init.lua;;"
-export LUA_CPATH="/luam/bin/?.so;/luam/lib/lfs/?.so;/luam/lib/hmac/?.so;/luam/lib/bcrypt/?.so;/luam/lib/mariadb/?.so;;"
+export LUA_CPATH="/luam/lib/?.so;/luam/lib/?/?.so;/luam/bin/?.so;;"
 /luam/bin/luam -e '
     data = require("data")
     cfg = data.load("config.lua.deployed")

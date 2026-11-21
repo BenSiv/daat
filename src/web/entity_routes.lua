@@ -444,6 +444,28 @@ function handle_api_v1_entities(req, tail)
 
     if v1_rest == "" then
         if method == "GET" then
+            max_ev = entity.max_event_id(db_path)
+            v1_limit = tonumber(params.limit)
+            if v1_limit == nil then
+                v1_limit = web_ctx.BROWSE_PAGE_SIZE
+            end
+            v1_offset = tonumber(params.offset)
+            if v1_offset == nil then
+                v1_offset = 0
+            end
+            if params.since_event != nil and params.since_event != "" then
+                since_num = tonumber(params.since_event)
+                if since_num == nil or since_num < 0 then
+                    return web_ctx.respond_json(req, "400 Bad Request", {error = "Invalid 'since_event' parameter"})
+                end
+                v1_total = entity.count_since_event(db_path, v1_type, since_num)
+                v1_rows = entity.list_since_event(db_path, v1_type, since_num, v1_limit, v1_offset)
+                return web_ctx.respond_json(req, "200 OK", {
+                    rows = web_ctx.as_json_array(v1_rows),
+                    total = v1_total,
+                    max_event_id = max_ev,
+                })
+            end
             layout = schema.layout(db_path, v1_type)
             v1_filter_field = nil
             if params.filter_field != nil and params.filter_field != "" and params.filter_value != nil and layout != nil then
@@ -452,14 +474,6 @@ function handle_api_v1_entities(req, tail)
                         v1_filter_field = params.filter_field
                     end
                 end
-            end
-            v1_limit = tonumber(params.limit)
-            if v1_limit == nil then
-                v1_limit = web_ctx.BROWSE_PAGE_SIZE
-            end
-            v1_offset = tonumber(params.offset)
-            if v1_offset == nil then
-                v1_offset = 0
             end
             v1_total = nil
             v1_rows = nil
@@ -473,6 +487,7 @@ function handle_api_v1_entities(req, tail)
             return web_ctx.respond_json(req, "200 OK", {
                 rows = web_ctx.as_json_array(v1_rows),
                 total = v1_total,
+                max_event_id = max_ev,
             })
         end
 

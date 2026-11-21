@@ -39,7 +39,7 @@ return function(f, s)
                 f.media_decision.medium .. " experiment."),
         },
         checks = {
-            {kind = "approval", expect_write = true},
+            {kind = "approval"},
             {kind = "links_documents", from = protocol_id, ids = notes_ids},
             {kind = "keeps_content", id = protocol_id, texts = {"## Steps", "Dilute 1:10", "## Calculating doubling time", "## Safety"}},
             {kind = "no_dangling_links"},

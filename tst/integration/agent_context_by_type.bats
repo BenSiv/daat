@@ -5,8 +5,9 @@
 # - observation masking runs on research/background loops, leaving DB
 #   rows whole for result.read;
 # - compaction carries both requests and final answers verbatim;
-# - cross-session carried requests (agent_carry_user_requests) stay
-#   strictly within the same login and never carry tool_trace.
+# - a new session never injects raw requests or tool_trace rows from
+#   earlier sessions (cross-session knowledge flows only through the
+#   shared curated document pool).
 
 load test_helper.bash
 
@@ -96,37 +97,26 @@ teardown() {
     [[ "$stored_first" =~ "$long_code" ]]
 }
 
-@test "cross-session carried requests are off by default, and when enabled never leak another user's requests or tool_trace" {
+@test "new sessions never inject raw requests or tool_trace from earlier sessions" {
     read bob_sess bob_csrf < <(login_test_user "bob" "i")
     bob_cookie="session=${bob_sess}; csrf=${bob_csrf}"
 
     "$BIN" entity create sample code=ALICE_OLDER_TRACE_SECRET >/dev/null
 
     bob_chat=$(json_body "$(raw_post_json "/api/v1/chat/sessions" '{"title":"bob"}' "$bob_cookie" "$bob_csrf" "")" | jq -r '.session_id')
-    raw_post_json "/api/v1/chat/sessions/${bob_chat}/messages" "{\"message\":\"BOB_PRIVATE_PREFERENCE_42\"}" "$bob_cookie" "$bob_csrf" "$(done_response "Noted.")" >/dev/null
+    raw_post_json "/api/v1/chat/sessions/${bob_chat}/messages" "{\"message\":\"BOB_UNRELATED_REQUEST_42\"}" "$bob_cookie" "$bob_csrf" "$(done_response "Noted.")" >/dev/null
 
     alice_c1=$(json_body "$(raw_post_json "/api/v1/chat/sessions" '{"title":"alice 1"}' "$ALICE_COOKIE" "$ALICE_CSRF" "")" | jq -r '.session_id')
     t_alice1="$(tool_call_response "entity.query" '{"sql":"SELECT code FROM sample"}')"$'\1'"$(done_response "Checked.")"
-    raw_post_json "/api/v1/chat/sessions/${alice_c1}/messages" "{\"message\":\"ALICE_CORRECTION_USE_MOLASSES_MEDIUM\"}" "$ALICE_COOKIE" "$ALICE_CSRF" "$t_alice1" >/dev/null
+    raw_post_json "/api/v1/chat/sessions/${alice_c1}/messages" "{\"message\":\"ALICE_EARLIER_UNRELATED_TOPIC_99\"}" "$ALICE_COOKIE" "$ALICE_CSRF" "$t_alice1" >/dev/null
 
-    # Default (agent_carry_user_requests = false): new session does not carry prior request.
     alice_c2=$(json_body "$(raw_post_json "/api/v1/chat/sessions" '{"title":"alice 2"}' "$ALICE_COOKIE" "$ALICE_CSRF" "")" | jq -r '.session_id')
     raw_post_json "/api/v1/chat/sessions/${alice_c2}/messages" "{\"message\":\"hello\"}" "$ALICE_COOKIE" "$ALICE_CSRF" "$(done_response "Hi.")" >/dev/null
 
-    # Enable agent_carry_user_requests = true: verify via Lua API that
-    # prior_requests_prompt_block carries Alice's request only, never Bob's
-    # and never Alice's tool_trace!
-    write_config "agent = {carry_user_requests = true}"
-    run_luam -e '
-        config = require("config")
-        agent = require("agent")
-        b = agent.prior_requests_prompt_block(config.db_path(), "alice", "'"$alice_c2"'")
-        print(tostring(b))
-    '
-    [ "$status" -eq 0 ]
-    [[ "$output" =~ "ALICE_CORRECTION_USE_MOLASSES_MEDIUM" ]]
-    [[ ! "$output" =~ "BOB_PRIVATE_PREFERENCE_42" ]]
-    [[ ! "$output" =~ "ALICE_OLDER_TRACE_SECRET" ]]
+    c2_prompt=$(sqlite3 "$DB" "SELECT prompt FROM agent_model_call WHERE session_id = '${alice_c2}' AND kind = 'chat' ORDER BY id DESC LIMIT 1;")
+    [[ ! "$c2_prompt" =~ "ALICE_EARLIER_UNRELATED_TOPIC_99" ]]
+    [[ ! "$c2_prompt" =~ "BOB_UNRELATED_REQUEST_42" ]]
+    [[ ! "$c2_prompt" =~ "ALICE_OLDER_TRACE_SECRET" ]]
 }
 
 @test "compaction carries both user requests and final assistant answers verbatim" {

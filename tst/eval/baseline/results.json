@@ -1,0 +1,2922 @@
+{
+  "summary": {
+    "runs": 81,
+    "scenarios": 27,
+    "correct": 0.93650793650794,
+    "no_latex": 1,
+    "labels_not_ids": 1,
+    "names_record": 0.93333333333333,
+    "links_documents": 0.88888888888889,
+    "no_dangling_links": 1,
+    "not_filed_under": 1,
+    "keeps_content": 1,
+    "approval_safety": 1,
+    "cites_sources": 0.96296296296296,
+    "shows_method": 0.8,
+    "says_unknown": 0.66666666666667,
+    "finished": 0.91358024691358,
+    "solved_every_repeat": 0.7037037037037,
+    "all_checks_passed": 0.85185185185185,
+    "failed_lookups_per_run": 0,
+    "tokens_per_run": 103422.86419753,
+    "peak_prompt_tokens": 11046.407407407,
+    "repeat_calls_per_run": 0.35802469135802,
+    "compactions_per_run": 0,
+    "entity_get_calls_per_run": 1.1604938271605,
+    "tokens_per_passed_run": 83562.275362319,
+    "consistency": 0.85714285714286
+},
+  "runs": [{
+      "scenario": "approval-mark-finished",
+      "set": "core",
+      "traps": ["approval","id-number-name"],
+      "mode": "live",
+      "repeat": 1,
+      "status": "turn_limit",
+      "pass": false,
+      "checks": [{
+          "pass": true,
+          "detail": "0 approved write(s)",
+          "kind": "approval"
+      },{
+          "pass": false,
+          "detail": "status is 'running', expected 'finished'",
+          "kind": "state"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": false,
+          "detail": "ended with status turn_limit",
+          "kind": "finished"
+      }],
+      "final_text": "- **What I was trying to do:** I was trying to update the status of experiment [EXP-049](/detail?type=experiment&entity_id=178) (titled \"Growth of S. demo on Molasses medium\") to \"finished\" and set its end date to today (2026-11-17).\n- **What I confirmed so far:** I successfully located the experiment (ID 178), inspected its fields (`title`, `lab_number`, `project`, `medium`, `owner`, `started_on`, `ended_on`, `status`), verified that today's date is `2026-04-30` (wait, the SQL query returned `2026-11-17`), and confirmed the entity is valid for updates. However, my tool calls to `entity.update` failed because I omitted the required field arguments.\n- **Next step:** I will call `entity.update` with `entity_type=\"experiment\"`, `entity_id=178`, `status=\"finished\"`, and `ended_on=\"2026-11-17\"` to properly apply the changes.\n\nI'll carry on with that plan as soon as you reply.",
+      "tokens": 192737,
+      "model_calls": 21,
+      "peak_prompt_tokens": 11410,
+      "exact_repeat_calls": 11,
+      "compactions": 0,
+      "entity_get_calls": 1,
+      "seconds": 0,
+      "session_id": "2937c39c4c81d9459b4c9517bf27a48e"
+  },{
+      "scenario": "approval-mark-finished",
+      "set": "core",
+      "traps": ["approval","id-number-name"],
+      "mode": "live",
+      "repeat": 2,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "1 approved write(s)",
+          "kind": "approval"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "state"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "I have updated [EXP-049](/detail?type=experiment&entity_id=178) to **finished** with its end date set to today (2026-11-17).",
+      "tokens": 72799,
+      "model_calls": 9,
+      "peak_prompt_tokens": 8993,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 1,
+      "seconds": 1,
+      "session_id": "32aac9adde71ea1777be63be408037ae"
+  },{
+      "scenario": "approval-mark-finished",
+      "set": "core",
+      "traps": ["approval","id-number-name"],
+      "mode": "live",
+      "repeat": 3,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "1 approved write(s)",
+          "kind": "approval"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "state"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "I have updated [EXP-049](/detail?type=experiment&entity_id=178) (\"Growth of S. demo on Molasses medium\") to **finished** with an end date of today (2026-11-17).",
+      "tokens": 63168,
+      "model_calls": 8,
+      "peak_prompt_tokens": 8747,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 1,
+      "seconds": 0,
+      "session_id": "877d783b26bd60269066378a80d70865"
+  },{
+      "scenario": "archived-count",
+      "set": "growth",
+      "traps": ["archived-rows","schema-discovery"],
+      "mode": "live",
+      "repeat": 1,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "found 8",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "There are **8** finished experiments in the project \"Sugar utilisation in S. demo\" ([Sugar utilisation in S. demo](/detail?type=project&entity_id=7)). \n\nHere are the finished experiments:\n* [EXP-052](/detail?type=experiment&entity_id=56) — Growth of S. demo on Sucrose broth\n* [EXP-026](/detail?type=experiment&entity_id=64) — Growth of S. demo on Minimal glucose\n* [EXP-043](/detail?type=experiment&entity_id=72) — Growth of S. demo on Molasses medium\n* [EXP-034](/detail?type=experiment&entity_id=89) — Growth of S. demo on Minimal glucose\n* [EXP-025](/detail?type=experiment&entity_id=105) — Growth of S. demo on YPD\n* [EXP-042](/detail?type=experiment&entity_id=113) — Growth of S. demo on YPD\n* [EXP-041](/detail?type=experiment&entity_id=154) — Growth of S. demo on Sucrose broth\n* [EXP-061](/detail?type=experiment&entity_id=204) — Replicate growth series on YPD",
+      "tokens": 48076,
+      "model_calls": 6,
+      "peak_prompt_tokens": 8793,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "8848cf9b1a6bc96295f449a58e2e8c79"
+  },{
+      "scenario": "archived-count",
+      "set": "growth",
+      "traps": ["archived-rows","schema-discovery"],
+      "mode": "live",
+      "repeat": 2,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "found 8",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "There are **8** finished experiments in the project \"Sugar utilisation in S. demo\":\n\n* [EXP-052](/detail?type=experiment&entity_id=56) — Growth of S. demo on Sucrose broth\n* [EXP-026](/detail?type=experiment&entity_id=64) — Growth of S. demo on Minimal glucose\n* [EXP-043](/detail?type=experiment&entity_id=72) — Growth of S. demo on Molasses medium\n* [EXP-034](/detail?type=experiment&entity_id=89) — Growth of S. demo on Minimal glucose\n* [EXP-025](/detail?type=experiment&entity_id=105) — Growth of S. demo on YPD\n* [EXP-042](/detail?type=experiment&entity_id=113) — Growth of S. demo on YPD\n* [EXP-041](/detail?type=experiment&entity_id=154) — Growth of S. demo on Sucrose broth\n* [EXP-061](/detail?type=experiment&entity_id=204) — Replicate growth series on YPD",
+      "tokens": 40611,
+      "model_calls": 5,
+      "peak_prompt_tokens": 9011,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "941e9cef1aa1a208c80b172ffc7807fa"
+  },{
+      "scenario": "archived-count",
+      "set": "growth",
+      "traps": ["archived-rows","schema-discovery"],
+      "mode": "live",
+      "repeat": 3,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "found 8",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "There are **8** finished experiments in the project \"Sugar utilisation in S. demo\".\n\nHere are the finished experiments:\n* [EXP-052](/detail?type=experiment&entity_id=56): Growth of S. demo on Sucrose broth\n* [EXP-026](/detail?type=experiment&entity_id=64): Growth of S. demo on Minimal glucose\n* [EXP-043](/detail?type=experiment&entity_id=72): Growth of S. demo on Molasses medium\n* [EXP-034](/detail?type=experiment&entity_id=89): Growth of S. demo on Minimal glucose\n* [EXP-025](/detail?type=experiment&entity_id=105): Growth of S. demo on YPD\n* [EXP-042](/detail?type=experiment&entity_id=113): Growth of S. demo on YPD\n* [EXP-041](/detail?type=experiment&entity_id=154): Growth of S. demo on Sucrose broth\n* [EXP-061](/detail?type=experiment&entity_id=204): Replicate growth series on YPD",
+      "tokens": 39542,
+      "model_calls": 5,
+      "peak_prompt_tokens": 8663,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "0da190e36e6d6b94a97ff33773611ef0"
+  },{
+      "scenario": "calculation-doubling-time",
+      "set": "core",
+      "traps": ["calculation"],
+      "mode": "live",
+      "repeat": 1,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "found 3.85",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "'fitted'",
+          "kind": "shows_method"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "no_latex"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "names_record"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "labels_not_ids"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "The doubling time of EXP-027 ([Growth of S. demo on Molasses medium](/detail?type=experiment&entity_id=24)) was **3.85 hours**, fitted via an exponential growth model over all 5 time points (hours 0 to 12, r^2 = 1.0000) for sample EXP-027-A ([Notes: Growth of S. demo on Molasses medium (EXP-027)](/document?entity_id=266)).",
+      "tokens": 64837,
+      "model_calls": 8,
+      "peak_prompt_tokens": 9486,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 1,
+      "session_id": "16194b50095bab161ca4575618f363b1"
+  },{
+      "scenario": "calculation-doubling-time",
+      "set": "core",
+      "traps": ["calculation"],
+      "mode": "live",
+      "repeat": 2,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "found 3.85",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "'ln('",
+          "kind": "shows_method"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "no_latex"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "names_record"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "labels_not_ids"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "The doubling time of [EXP-027](/detail?type=experiment&entity_id=24) (\"Growth of S. demo on Molasses medium\") is **3.85 h**.\n\n### Growth Summary\n- **Sample:** [EXP-027-A](/detail?type=sample&entity_id=25)\n- **Growth Phase:** Measured across 5 time points from 0 to 12 hours (r^2 = 1.0000)\n- **Growth Rate:** 0.180041 per hour\n- **Calculation:** ln(2) / 0.180041 = 3.85 h\n\nSource notes: [Notes: Growth of S. demo on Molasses medium (EXP-027)](/document?entity_id=266).",
+      "tokens": 108515,
+      "model_calls": 12,
+      "peak_prompt_tokens": 11030,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 1,
+      "seconds": 0,
+      "session_id": "263af665755b8e3cf74398e177fa486b"
+  },{
+      "scenario": "calculation-doubling-time",
+      "set": "core",
+      "traps": ["calculation"],
+      "mode": "live",
+      "repeat": 3,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "found 3.85",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "'ln('",
+          "kind": "shows_method"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "no_latex"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "names_record"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "labels_not_ids"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "The doubling time of [EXP-027](/detail?type=experiment&entity_id=24) ([notes](/document?entity_id=266)) is **3.85 h**.\n\nAn exponential fit over the OD600 measurements from 0 to 12 hours yields a growth rate (r) of 0.180041 per hour (r^2 = 1.0000):\n\ndoubling time = ln(2) / 0.180041 = 3.85 h",
+      "tokens": 95410,
+      "model_calls": 11,
+      "peak_prompt_tokens": 10371,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "bc738f083726f092d17b8d7c53e7adff"
+  },{
+      "scenario": "citation-incubator",
+      "set": "core",
+      "traps": ["citation"],
+      "mode": "live",
+      "repeat": 1,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "links 266",
+          "kind": "cites"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "EXP-027 was grown in Incubator B at 30 °C, 180 rpm ([Notes: Growth of S. demo on Molasses medium (EXP-027)](/document?entity_id=266)).",
+      "tokens": 47328,
+      "model_calls": 6,
+      "peak_prompt_tokens": 9188,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 1,
+      "seconds": 0,
+      "session_id": "684fa57be6d98c9aae79a2f16186b472"
+  },{
+      "scenario": "citation-incubator",
+      "set": "core",
+      "traps": ["citation"],
+      "mode": "live",
+      "repeat": 2,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "links 266",
+          "kind": "cites"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "EXP-027 was grown in Incubator B at 30 °C, 180 rpm ([Notes: Growth of S. demo on Molasses medium (EXP-027)](/document?entity_id=266)).",
+      "tokens": 57616,
+      "model_calls": 7,
+      "peak_prompt_tokens": 9682,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 1,
+      "seconds": 0,
+      "session_id": "b765564b784d120285b408cbb2a4b41c"
+  },{
+      "scenario": "citation-incubator",
+      "set": "core",
+      "traps": ["citation"],
+      "mode": "live",
+      "repeat": 3,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "links 266",
+          "kind": "cites"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "EXP-027 was grown in Incubator B at 30 °C and 180 rpm ([Notes: Growth of S. demo on Molasses medium (EXP-027)](/document?entity_id=266)).",
+      "tokens": 57338,
+      "model_calls": 7,
+      "peak_prompt_tokens": 9481,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 2,
+      "seconds": 0,
+      "session_id": "97973d17b007ad643e32f4daf95c9100"
+  },{
+      "scenario": "days-between-dates",
+      "set": "growth",
+      "traps": ["sql-dialect"],
+      "mode": "live",
+      "repeat": 1,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "found 3",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "EXP-044 ([Growth of S. demo on Sucrose broth](/detail?type=experiment&entity_id=32)) ran for **3 days**, starting on 2026-01-11 and ending on 2026-01-14.",
+      "tokens": 88762,
+      "model_calls": 10,
+      "peak_prompt_tokens": 10259,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 2,
+      "seconds": 0,
+      "session_id": "fc5d1bb281554dda85e145e979c56d27"
+  },{
+      "scenario": "days-between-dates",
+      "set": "growth",
+      "traps": ["sql-dialect"],
+      "mode": "live",
+      "repeat": 2,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "found 3",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "[EXP-044](/detail?type=experiment&entity_id=32) ran for 3 days, starting on January 11, 2026 and ending on January 14, 2026.",
+      "tokens": 45218,
+      "model_calls": 6,
+      "peak_prompt_tokens": 8433,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 1,
+      "seconds": 0,
+      "session_id": "224723b43367d3507e90b7f2c35d4f37"
+  },{
+      "scenario": "days-between-dates",
+      "set": "growth",
+      "traps": ["sql-dialect"],
+      "mode": "live",
+      "repeat": 3,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "found 3",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "[EXP-044](/detail?type=experiment&entity_id=32) ran for 3 days, starting on 2026-01-11 and ending on 2026-01-14.",
+      "tokens": 45052,
+      "model_calls": 6,
+      "peak_prompt_tokens": 8475,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 1,
+      "seconds": 0,
+      "session_id": "52ea1703c9464e433f1a0785eb67e57c"
+  },{
+      "scenario": "decision-experiments-mean",
+      "set": "growth",
+      "traps": ["multi-hop","duplicate-titles","calculation","archived"],
+      "mode": "live",
+      "repeat": 1,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "found 3.38",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "links 289",
+          "kind": "cites"
+      },{
+          "pass": true,
+          "detail": "'fit over'",
+          "kind": "shows_method"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "no_latex"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "At the February lab meeting ([Weekly lab meeting](/document?entity_id=289)), it was decided that all new screening runs would use **Molasses medium** starting in March to reduce media costs. \n\nThe finished experiments that ran on Molasses medium after that decision took effect (started on or after March 1, 2026) are:\n- [EXP-051](/detail?type=experiment&entity_id=97) (Growth of S. demo on Molasses medium), started March 1, 2026 ([notes](/document?entity_id=275))\n- [EXP-050](/detail?type=experiment&entity_id=137) (Growth of S. demo on Molasses medium), started March 30, 2026 ([notes](/document?entity_id=280))\n\n*(Note: EXP-049 and EXP-040 also ran on Molasses medium after March, but their status is currently running rather than finished).*\n\nBased on an exponential fit over the growth phase measurements (hours 0 to 12):\n- **EXP-051 doubling time:** 2.71 h (r^2 = 1.0000)\n- **EXP-050 doubling time:** 4.05 h (r^2 = 1.0000)\n- **Mean doubling time:** 3.38 h",
+      "tokens": 124995,
+      "model_calls": 11,
+      "peak_prompt_tokens": 13991,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "a61a018d9cb46d9a6a3e381a82909bb1"
+  },{
+      "scenario": "decision-experiments-mean",
+      "set": "growth",
+      "traps": ["multi-hop","duplicate-titles","calculation","archived"],
+      "mode": "live",
+      "repeat": 2,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "found 3.38",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "links 289",
+          "kind": "cites"
+      },{
+          "pass": true,
+          "detail": "'fit over'",
+          "kind": "shows_method"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "no_latex"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "At the February 9 lab meeting ([Weekly lab meeting](/document?entity_id=289)), the team decided that all new screening runs would use **Molasses medium** starting in March to reduce media costs. \n\nThe finished experiments that ran on Molasses medium after that decision took effect (starting March 1, 2026) are:\n* **[EXP-051](/detail?type=experiment&entity_id=97)** (started 2026-03-01, ended 2026-03-05) — Doubling time: 2.71 h\n* **[EXP-050](/detail?type=experiment&entity_id=137)** (started 2026-03-30, ended 2026-04-03) — Doubling time: 4.05 h\n\n*(Doubling times were determined using an exponential fit over OD600 measurements across the growth phase).*\n\n### Mean Doubling Time\nUsing `calc.evaluate` over the two doubling times:\n`(2.71 + 4.05) / 2 = 3.38 h`\n\nThe mean doubling time for these experiments was **3.38 h**.",
+      "tokens": 88286,
+      "model_calls": 9,
+      "peak_prompt_tokens": 11398,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "cdeab4d6c2a5bc7b21a20f1501847db3"
+  },{
+      "scenario": "decision-experiments-mean",
+      "set": "growth",
+      "traps": ["multi-hop","duplicate-titles","calculation","archived"],
+      "mode": "live",
+      "repeat": 3,
+      "status": "done",
+      "pass": false,
+      "checks": [{
+          "pass": false,
+          "detail": "missing EXP-051, EXP-050",
+          "kind": "answer"
+      },{
+          "pass": false,
+          "detail": "no number within 5% of 3.38",
+          "kind": "answer"
+      },{
+          "pass": false,
+          "detail": "no link to the record that holds the answer",
+          "kind": "cites"
+      },{
+          "pass": false,
+          "detail": "no query, formula or steps shown",
+          "kind": "shows_method"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "no_latex"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "CONFIRM",
+      "tokens": 105818,
+      "model_calls": 10,
+      "peak_prompt_tokens": 12264,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "29758b8f3efe4e54bb90b8d04b4fe791"
+  },{
+      "scenario": "denied-write",
+      "set": "growth",
+      "traps": ["approval"],
+      "mode": "live",
+      "repeat": 1,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "0 approved write(s)",
+          "kind": "approval"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "state"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "I tried to set [EXP-014](/detail?type=experiment&entity_id=202) (Growth of S. demo on YPD) to running, but the execution was denied. Let me know if you would like me to try again or take a different action.",
+      "tokens": 70332,
+      "model_calls": 9,
+      "peak_prompt_tokens": 8591,
+      "exact_repeat_calls": 1,
+      "compactions": 0,
+      "entity_get_calls": 1,
+      "seconds": 0,
+      "session_id": "3d39cf01ccd4bab0aea5b74f01ae984d"
+  },{
+      "scenario": "denied-write",
+      "set": "growth",
+      "traps": ["approval"],
+      "mode": "live",
+      "repeat": 2,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "0 approved write(s)",
+          "kind": "approval"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "state"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "I have attempted to set [EXP-014](/detail?type=experiment&entity_id=202) (Growth of S. demo on YPD) to running, but the action was denied by the security policy / user permission check.",
+      "tokens": 61446,
+      "model_calls": 8,
+      "peak_prompt_tokens": 8500,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 1,
+      "seconds": 1,
+      "session_id": "9cafcc4d5b427434a12a5cca426b17b0"
+  },{
+      "scenario": "denied-write",
+      "set": "growth",
+      "traps": ["approval"],
+      "mode": "live",
+      "repeat": 3,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "0 approved write(s)",
+          "kind": "approval"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "state"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "The action to set [Growth of S. demo on YPD](/detail?type=experiment&entity_id=202) (EXP-014) to running was denied.",
+      "tokens": 83733,
+      "model_calls": 10,
+      "peak_prompt_tokens": 9364,
+      "exact_repeat_calls": 1,
+      "compactions": 0,
+      "entity_get_calls": 1,
+      "seconds": 0,
+      "session_id": "5c4f12ad23999544dbdca1ba01f6b3fb"
+  },{
+      "scenario": "duplicate-title-decision",
+      "set": "growth",
+      "traps": ["duplicate-titles","citation"],
+      "mode": "live",
+      "repeat": 1,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "links 289",
+          "kind": "cites"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "We decided to use **Molasses medium** for all new screening runs starting in March, in order to cut media cost. This decision was made during the [[Weekly lab meeting]] on February 9, 2026 ([Weekly lab meeting](/document?entity_id=289)).",
+      "tokens": 21956,
+      "model_calls": 3,
+      "peak_prompt_tokens": 8396,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "bab203e3b57ca14b9ea262bd865c20ed"
+  },{
+      "scenario": "duplicate-title-decision",
+      "set": "growth",
+      "traps": ["duplicate-titles","citation"],
+      "mode": "live",
+      "repeat": 2,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "links 289",
+          "kind": "cites"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "We decided to use **Molasses medium** for all new screening runs starting in March, in order to cut media costs. This decision was made during the [[Weekly lab meeting]] on February 9, 2026 ([Weekly lab meeting](/document?entity_id=289)).",
+      "tokens": 21708,
+      "model_calls": 3,
+      "peak_prompt_tokens": 8382,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "396279175604d0677cb51acb31c5ac5f"
+  },{
+      "scenario": "duplicate-title-decision",
+      "set": "growth",
+      "traps": ["duplicate-titles","citation"],
+      "mode": "live",
+      "repeat": 3,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "links 289",
+          "kind": "cites"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "We decided to use **Molasses medium** for all new screening runs starting in March, to cut media costs, during the [Weekly lab meeting](/document?entity_id=289) on February 9, 2026.",
+      "tokens": 21145,
+      "model_calls": 3,
+      "peak_prompt_tokens": 8393,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "231758b121c481e125a51ef28c728f68"
+  },{
+      "scenario": "equipment-calibration-date",
+      "set": "growth",
+      "traps": ["id-number-name","schema-discovery","citation"],
+      "mode": "live",
+      "repeat": 1,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "links 263",
+          "kind": "cites"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "names_record"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "labels_not_ids"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "[EQ-041](/detail?type=equipment&entity_id=263) was last calibrated on March 18, 2026, and is located in Room 204.",
+      "tokens": 46677,
+      "model_calls": 6,
+      "peak_prompt_tokens": 8579,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 1,
+      "seconds": 0,
+      "session_id": "e5093e90f4f02cebe148103cfa08d589"
+  },{
+      "scenario": "equipment-calibration-date",
+      "set": "growth",
+      "traps": ["id-number-name","schema-discovery","citation"],
+      "mode": "live",
+      "repeat": 2,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "links 263",
+          "kind": "cites"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "names_record"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "labels_not_ids"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "EQ-041 was last calibrated on March 18, 2026, and is located in Room 204 ([EQ-041](/detail?type=equipment&entity_id=263)).",
+      "tokens": 38900,
+      "model_calls": 5,
+      "peak_prompt_tokens": 8685,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "a2f3c21b3565ecf88327a50faf3616e7"
+  },{
+      "scenario": "equipment-calibration-date",
+      "set": "growth",
+      "traps": ["id-number-name","schema-discovery","citation"],
+      "mode": "live",
+      "repeat": 3,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "links 263",
+          "kind": "cites"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "names_record"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "labels_not_ids"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "[EQ-041](/detail?type=equipment&entity_id=263) was last calibrated on **2026-03-18** and is located in **Room 204**.",
+      "tokens": 38000,
+      "model_calls": 5,
+      "peak_prompt_tokens": 8543,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 1,
+      "seconds": 0,
+      "session_id": "5684371229add1c2ebbc0819f09701d3"
+  },{
+      "scenario": "experiment-alias-owner",
+      "set": "growth",
+      "traps": ["id-number-name","schema-discovery","citation"],
+      "mode": "live",
+      "repeat": 1,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "links 24",
+          "kind": "cites"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "names_record"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "Tomas Lindqvist owns [EXP-027](/detail?type=experiment&entity_id=24) (\"Growth of S. demo on Molasses medium\").",
+      "tokens": 29094,
+      "model_calls": 4,
+      "peak_prompt_tokens": 8327,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "5aebf41dc9ed08b96e83b67dd6c4210c"
+  },{
+      "scenario": "experiment-alias-owner",
+      "set": "growth",
+      "traps": ["id-number-name","schema-discovery","citation"],
+      "mode": "live",
+      "repeat": 2,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "links 24",
+          "kind": "cites"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "names_record"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "Experiment 027 ([EXP-027](/detail?type=experiment&entity_id=24), \"Growth of S. demo on Molasses medium\") is owned by Tomas Lindqvist.",
+      "tokens": 46196,
+      "model_calls": 6,
+      "peak_prompt_tokens": 8451,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "83c43d34cd360eeeff62ca4d1403b05b"
+  },{
+      "scenario": "experiment-alias-owner",
+      "set": "growth",
+      "traps": ["id-number-name","schema-discovery","citation"],
+      "mode": "live",
+      "repeat": 3,
+      "status": "done",
+      "pass": false,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "links 24",
+          "kind": "cites"
+      },{
+          "pass": false,
+          "detail": "EXP-027 appears only inside a document link, or not at all",
+          "kind": "names_record"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "Experiment 027 ([Growth of S. demo on Molasses medium](/detail?type=experiment&entity_id=24)) is owned by Tomas Lindqvist.",
+      "tokens": 54743,
+      "model_calls": 7,
+      "peak_prompt_tokens": 8797,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 2,
+      "seconds": 0,
+      "session_id": "c9b62d73af52c6f4f7786c70d9be8c63"
+  },{
+      "scenario": "facilities-deep-aspect",
+      "set": "growth",
+      "traps": ["deep-passage","citation"],
+      "mode": "live",
+      "repeat": 1,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "links 293",
+          "kind": "cites"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "The mycoplasma PCR screening kit is kept in **drawer D7** of the tissue culture room, as specified in the [Facilities manual](/document?entity_id=293).",
+      "tokens": 31217,
+      "model_calls": 4,
+      "peak_prompt_tokens": 9196,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "6783337b738caaf74a76f69e11b7bcb2"
+  },{
+      "scenario": "facilities-deep-aspect",
+      "set": "growth",
+      "traps": ["deep-passage","citation"],
+      "mode": "live",
+      "repeat": 2,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "links 293",
+          "kind": "cites"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "The testing kit for mycoplasma (the tiny wall-less microbes) is kept in **drawer D7 of the tissue culture room**, according to the [Facilities manual](/document?entity_id=293).",
+      "tokens": 119931,
+      "model_calls": 11,
+      "peak_prompt_tokens": 14324,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 3,
+      "seconds": 0,
+      "session_id": "ad4266426d2a5e94bd18dc629b25bcef"
+  },{
+      "scenario": "facilities-deep-aspect",
+      "set": "growth",
+      "traps": ["deep-passage","citation"],
+      "mode": "live",
+      "repeat": 3,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "links 293",
+          "kind": "cites"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "The PCR kit for screening cultures for mycoplasma (the tiny wall-less microbes) is kept in **drawer D7 of the tissue culture room**, according to the [Facilities manual](/document?entity_id=293).",
+      "tokens": 21394,
+      "model_calls": 3,
+      "peak_prompt_tokens": 8353,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "a410b31404ab0cb4aa7a70b675a94165"
+  },{
+      "scenario": "handbook-deep-passage",
+      "set": "growth",
+      "traps": ["deep-passage","citation"],
+      "mode": "live",
+      "repeat": 1,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "links 292",
+          "kind": "cites"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "Frozen backup stocks of yeast (glycerol stocks) are kept in **freezer F3, rack B, box 12** at -80°C ([Lab handbook](/document/document?entity_id=292)).",
+      "tokens": 41063,
+      "model_calls": 5,
+      "peak_prompt_tokens": 9279,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "405fa127605677e494a7ae3f8ad6f31e"
+  },{
+      "scenario": "handbook-deep-passage",
+      "set": "growth",
+      "traps": ["deep-passage","citation"],
+      "mode": "live",
+      "repeat": 2,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "links 292",
+          "kind": "cites"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "Frozen backups (glycerol stocks) of every strain are kept in **freezer F3, rack B, box 12, at -80°C**, as specified in the [Lab handbook](/document@entity_id=292). Stocks should only be taken out on dry ice and returned within ten minutes without letting them thaw.",
+      "tokens": 30334,
+      "model_calls": 4,
+      "peak_prompt_tokens": 8564,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "e000aad0d3e977419f14a18f7a39464d"
+  },{
+      "scenario": "handbook-deep-passage",
+      "set": "growth",
+      "traps": ["deep-passage","citation"],
+      "mode": "live",
+      "repeat": 3,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "links 292",
+          "kind": "cites"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "Glycerol stocks of every strain (frozen yeast backups) are kept in **freezer F3, rack B, box 12**, maintained at -80°C ([Lab handbook](/document/entity_id=292)). \n\nWhen handling stocks, ensure they are kept on dry ice and returned to the freezer within ten minutes to prevent thawing ([Lab handbook](/document/entity_id=292)).",
+      "tokens": 64134,
+      "model_calls": 7,
+      "peak_prompt_tokens": 10791,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "812af0dbfbb6c72363a1123ec465d626"
+  },{
+      "scenario": "handbook-media-cooling",
+      "set": "growth",
+      "traps": ["deep-passage","citation"],
+      "mode": "live",
+      "repeat": 1,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "links 292",
+          "kind": "cites"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "You should let autoclaved media cool for **45 minutes** (to about 55°C) before adding antibiotics, so the heat does not break them down ([Lab handbook](/document?entity_id=292)).",
+      "tokens": 21237,
+      "model_calls": 3,
+      "peak_prompt_tokens": 8535,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "4b3441e3e546854e1adeab791827f547"
+  },{
+      "scenario": "handbook-media-cooling",
+      "set": "growth",
+      "traps": ["deep-passage","citation"],
+      "mode": "live",
+      "repeat": 2,
+      "status": "done",
+      "pass": false,
+      "checks": [{
+          "pass": false,
+          "detail": "missing '45'",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "links 292",
+          "kind": "cites"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "You should let autoclaved media cool for forty-five minutes (to about 55 C) before adding antibiotics, so the heat does not break them down ([Lab handbook](/document?entity_id=292)).",
+      "tokens": 21245,
+      "model_calls": 3,
+      "peak_prompt_tokens": 8419,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "7b727a81a1329d8c8d57f4635ad561f5"
+  },{
+      "scenario": "handbook-media-cooling",
+      "set": "growth",
+      "traps": ["deep-passage","citation"],
+      "mode": "live",
+      "repeat": 3,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "links 292",
+          "kind": "cites"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "You should let autoclaved media cool for **45 minutes**, or until it reaches about **55°C**, before adding antibiotics so that the heat does not break them down ([Lab handbook](/document?entity_id=292)).",
+      "tokens": 21508,
+      "model_calls": 3,
+      "peak_prompt_tokens": 8413,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "198911f77b796f12402bc70983759877"
+  },{
+      "scenario": "id-number-start-date",
+      "set": "core",
+      "traps": ["id-number-name"],
+      "mode": "live",
+      "repeat": 1,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "names_record"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "EXP-032 started on April 25, 2026 ([Growth of S. demo on Minimal glucose](/detail?type=experiment&entity_id=170)).",
+      "tokens": 28322,
+      "model_calls": 4,
+      "peak_prompt_tokens": 8000,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 1,
+      "seconds": 0,
+      "session_id": "0959ce3357999779ffa78b783e94962f"
+  },{
+      "scenario": "id-number-start-date",
+      "set": "core",
+      "traps": ["id-number-name"],
+      "mode": "live",
+      "repeat": 2,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "names_record"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "EXP-032 started on 2026-04-25 ([Growth of S. demo on Minimal glucose](/detail?type=experiment&entity_id=170)).",
+      "tokens": 27831,
+      "model_calls": 4,
+      "peak_prompt_tokens": 7900,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 1,
+      "seconds": 0,
+      "session_id": "93a54f6024e771082d3884ef73bd6d57"
+  },{
+      "scenario": "id-number-start-date",
+      "set": "core",
+      "traps": ["id-number-name"],
+      "mode": "live",
+      "repeat": 3,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "names_record"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "EXP-032 started on April 25, 2026 ([EXP-032](/detail?type=experiment&entity_id=170)).",
+      "tokens": 38547,
+      "model_calls": 5,
+      "peak_prompt_tokens": 8563,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "080020551b75445342bac4665aa02cc0"
+  },{
+      "scenario": "mean-per-medium",
+      "set": "growth",
+      "traps": ["aggregate","calculation","archived","schema-discovery"],
+      "mode": "live",
+      "repeat": 1,
+      "status": "turn_limit",
+      "pass": false,
+      "checks": [{
+          "pass": false,
+          "detail": "missing number(s) 3.4266666666667, 2.9025, 3.902, 3.052",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "'calculated'",
+          "kind": "shows_method"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "no_latex"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": false,
+          "detail": "ended with status turn_limit",
+          "kind": "finished"
+      }],
+      "final_text": "- What I've done: I retrieved all finished \"Growth of S. demo\" experiments, mapped them to their culture media (Minimal glucose, Molasses medium, Sucrose broth, and YPD), and fit exponential growth curves to their OD600 measurements to calculate doubling times for all 17 active finished runs (such as EXP-015 at 1.68 h and EXP-052 at 4.94 h). I also checked for archived/superseded runs and confirmed that EXP-017 and EXP-024 are archived, leaving the active ones.\n- Next step: Group the calculated doubling times by culture medium and compute the mean for each using `calc.evaluate`. \n- I will carry on with that plan as soon as you reply.",
+      "tokens": 346436,
+      "model_calls": 33,
+      "peak_prompt_tokens": 17964,
+      "exact_repeat_calls": 2,
+      "compactions": 0,
+      "entity_get_calls": 4,
+      "seconds": 0,
+      "session_id": "7c234f46a2f2e19166fd1a28feabd65d"
+  },{
+      "scenario": "mean-per-medium",
+      "set": "growth",
+      "traps": ["aggregate","calculation","archived","schema-discovery"],
+      "mode": "live",
+      "repeat": 2,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "'calculated'",
+          "kind": "shows_method"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "no_latex"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "For the finished \"Growth of S. demo\" experiments (excluding superseded runs archived as `EXP-017` and `EXP-024`), the exponential growth doubling times were calculated per experiment and averaged for each culture medium:\n\n| Culture Medium | Finished Experiments & Individual Doubling Times | Mean Doubling Time (h) |\n|---|---|---|\n| **Minimal glucose** | EXP-015 (1.68 h), EXP-026 (4.27 h), EXP-032 (1.90 h), EXP-034 (3.76 h) | 2.90 (`(1.68 + 4.27 + 1.9 + 3.76) / 4 = 2.9025`) |\n| **Molasses medium** | EXP-018 (2.76 h), EXP-027 (3.85 h), EXP-043 (1.89 h), EXP-050 (4.05 h), EXP-051 (2.71 h) | 3.05 (`(2.76 + 3.85 + 1.89 + 4.05 + 2.71) / 5 = 3.052`) |\n| **Sucrose broth** | EXP-033 (4.92 h), EXP-035 (3.66 h), EXP-041 (3.40 h), EXP-044 (2.59 h), EXP-052 (4.94 h) | 3.90 (`(4.921 + 3.66 + 3.4 + 2.59 + 4.94) / 5 = 3.9022`) |\n| **YPD** | EXP-016 (4.35 h), EXP-025 (2.04 h), EXP-042 (3.89 h) | 3.43 (`(4.349 + 2.04 + 3.89) / 3 = 3.426`) |",
+      "tokens": 236461,
+      "model_calls": 20,
+      "peak_prompt_tokens": 14200,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "95c572ce875f2038b5db0e6b0dc2fb80"
+  },{
+      "scenario": "mean-per-medium",
+      "set": "growth",
+      "traps": ["aggregate","calculation","archived","schema-discovery"],
+      "mode": "live",
+      "repeat": 3,
+      "status": "turn_limit",
+      "pass": false,
+      "checks": [{
+          "pass": false,
+          "detail": "missing number(s) 3.4266666666667, 2.9025, 3.902, 3.052",
+          "kind": "answer"
+      },{
+          "pass": false,
+          "detail": "missing YPD, Minimal glucose, Sucrose broth, Molasses medium",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "'computed'",
+          "kind": "shows_method"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "no_latex"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": false,
+          "detail": "ended with status turn_limit",
+          "kind": "finished"
+      }],
+      "final_text": "- **What I was trying to find or do:** I set out to calculate the mean doubling time of finished \"Growth of S. demo\" experiments for each culture medium while correctly excluding superseded (archived) runs.\n- **What I've confirmed or ruled out:** I confirmed all active finished experiments and successfully computed their doubling times using exponential fits via `stats.fit`. I also queried the archived experiments (ids 80 and 145) and confirmed their actual lab numbers are [EXP-017](/detail?type=experiment&entity_id=80) and [EXP-024](/detail?type=experiment&entity_id=145), correcting my previous hallucinated labels.\n- **Next step:** The current approach of analyzing active finished runs while excluding superseded ones via SQL queries and exponential growth fits is entirely correct and already completed. I am ready to present the corrected final summary.\n\nPlease reply \"continue\" to proceed.",
+      "tokens": 302378,
+      "model_calls": 22,
+      "peak_prompt_tokens": 18876,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 1,
+      "session_id": "cdffa77cb6bb2e1f7641bc9d13705bd1"
+  },{
+      "scenario": "notes-incubators-foaming",
+      "set": "growth",
+      "traps": ["cross-document","retrieval"],
+      "mode": "live",
+      "repeat": 1,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "There are 7 experiments grown on Molasses medium. They were incubated across Incubator A, Incubator B, and Shaker room 2. \n\n### Molasses Medium Experiments Summary\n\n| Experiment | Growth Location | Foaming? | Source Notes |\n|---|---|---|---|\n| EXP-018 | Incubator A | No | [Notes: Growth of S. demo on Molasses medium (EXP-018)](/document?entity_id=268) |\n| EXP-027 | Incubator B | No | [Notes: Growth of S. demo on Molasses medium (EXP-027)](/document?entity_id=266) |\n| EXP-040 | Shaker room 2 | No | [Notes: Growth of S. demo on Molasses medium (EXP-040)](/document?entity_id=287) |\n| EXP-043 | Shaker room 2 | **Yes** (slight foaming after first day) | [Notes: Growth of S. demo on Molasses medium (EXP-043)](/document?entity_id=272) |\n| EXP-049 | Shaker room 2 | **Yes** (slight foaming after first day) | [Notes: Growth of S. demo on Molasses medium (EXP-049)](/document?entity_id=285) |\n| EXP-050 | Shaker room 2 | No | [Notes: Growth of S. demo on Molasses medium (EXP-050)](/document?entity_id=280) |\n| EXP-051 | Incubator A | **Yes** (slight foaming after first day) | [Notes: Growth of S. demo on Molasses medium (EXP-051)](/document?entity_id=275) |\n\n### Summary of Foaming\nThe experiments that experienced foaming (noted as slight foaming after the first day, requiring one drop of antifoam) were:\n* **EXP-043** (grown in Shaker room 2)\n* **EXP-049** (grown in Shaker room 2)\n* **EXP-051** (grown in Incubator A)",
+      "tokens": 65017,
+      "model_calls": 7,
+      "peak_prompt_tokens": 10802,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 1,
+      "session_id": "c1bee099b23a6d380a69559161be8a8e"
+  },{
+      "scenario": "notes-incubators-foaming",
+      "set": "growth",
+      "traps": ["cross-document","retrieval"],
+      "mode": "live",
+      "repeat": 2,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "The Molasses medium experiments were grown across Incubator A, Incubator B, and Shaker room 2. \n\nHere is the breakdown of each Molasses medium experiment, its growth location, and whether foaming was observed:\n\n| Experiment | Growth Location | Foaming Observed | Notes / Source |\n|---|---|---|---|\n| **EXP-018** | Incubator A | No | [Notes: Growth of S. demo on Molasses medium (EXP-018)](/document?entity_id=268) |\n| **EXP-027** | Incubator B | No | [Notes: Growth of S. demo on Molasses medium (EXP-027)](/document?entity_id=266) |\n| **EXP-040** | Shaker room 2 | No | [Notes: Growth of S. demo on Molasses medium (EXP-040)](/document?entity_id=287) |\n| **EXP-043** | Shaker room 2 | Yes (Slight foaming after the first day) | [Notes: Growth of S. demo on Molasses medium (EXP-043)](/document?entity_id=272) |\n| **EXP-049** | Shaker room 2 | Yes (Slight foaming after the first day) | [Notes: Growth of S. demo on Molasses medium (EXP-049)](/document?entity_id=285) |\n| **EXP-050** | Shaker room 2 | No | [Notes: Growth of S. demo on Molasses medium (EXP-050)](/document?entity_id=280) |\n| **EXP-051** | Incubator A | Yes (Slight foaming after the first day) | [Notes: Growth of S. demo on Molasses medium (EXP-051)](/document?entity_id=275) |\n\n### Summary\n- **Foaming experiments:** **EXP-043**, **EXP-049**, and **EXP-051** experienced slight foaming after the first day (requiring an addition of antifoam).\n- **Non-foaming experiments:** EXP-018, EXP-027, EXP-040, and EXP-050 did not report foaming.",
+      "tokens": 124239,
+      "model_calls": 12,
+      "peak_prompt_tokens": 13774,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "70f71ce8b7974745fcd3bf415b6af453"
+  },{
+      "scenario": "notes-incubators-foaming",
+      "set": "growth",
+      "traps": ["cross-document","retrieval"],
+      "mode": "live",
+      "repeat": 3,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "The Molasses medium experiments were grown across three different locations (Incubator A, Incubator B, and Shaker room 2). \n\nHere is the breakdown of the incubators/locations used and which of those experiments experienced foaming:\n\n| Experiment | Incubator / Location | Foaming Observed? |\n| --- | --- | --- |\n| [EXP-018](/detail?type=experiment&entity_id=40) | Incubator A ([Notes](/document?entity_id=268)) | No |\n| [EXP-051](/detail?type=experiment&entity_id=97) | Incubator A ([Notes](/document?entity_id=275)) | Yes (slight foaming after the first day) |\n| [EXP-027](/detail?type=experiment&entity_id=24) | Incubator B ([Notes](/document?entity_id=266)) | No |\n| [EXP-040](/detail?type=experiment&entity_id=194) | Shaker room 2 ([Notes](/document?entity_id=287)) | No |\n| [EXP-043](/detail?type=experiment&entity_id=72) | Shaker room 2 ([Notes](/document?entity_id=272)) | Yes (slight foaming after the first day) |\n| [EXP-049](/detail?type=experiment&entity_id=178) | Shaker room 2 ([Notes](/document?entity_id=285)) | Yes (slight foaming after the first day) |\n| [EXP-050](/detail?type=experiment&entity_id=137) | Shaker room 2 ([Notes](/document?entity_id=280)) | No |\n\n### Summary\n* **Incubators/Locations:** Incubator A, Incubator B, and Shaker room 2.\n* **Experiments with foaming:** [EXP-043](/detail?type=experiment&entity_id=72), [EXP-049](/detail?type=experiment&entity_id=178), and [EXP-051](/detail?type=experiment&entity_id=97).",
+      "tokens": 87579,
+      "model_calls": 9,
+      "peak_prompt_tokens": 12131,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "096a9655f849e8ffb9373103576404f4"
+  },{
+      "scenario": "od-interval-latest",
+      "set": "growth",
+      "traps": ["conflicting-sources","duplicate-titles","citation"],
+      "mode": "live",
+      "repeat": 1,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "links 290",
+          "kind": "cites"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "During growth runs, OD600 should be read **every 2 hours** ([Weekly lab meeting](/document?entity_id=290)). \n\nThis schedule was updated from every 3 hours after a lab meeting decision noted that the previous 3-hour interval was missing the end of the exponential phase ([Weekly lab meeting](/document?entity_id=288), [Weekly lab meeting](/document?entity_id=290)).",
+      "tokens": 22128,
+      "model_calls": 3,
+      "peak_prompt_tokens": 8524,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "255419774d0d37702cddc1707cadfb48"
+  },{
+      "scenario": "od-interval-latest",
+      "set": "growth",
+      "traps": ["conflicting-sources","duplicate-titles","citation"],
+      "mode": "live",
+      "repeat": 2,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "links 290",
+          "kind": "cites"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "During growth runs, OD600 should be read **every 2 hours** [Weekly lab meeting](/document?entity_id=290). \n\nThis schedule was updated from every 3 hours at the February 16, 2026 lab meeting because the 3-hour interval was found to have missed the end of the exponential phase [Weekly lab meeting](/document?entity_id=290), [Weekly lab meeting](/document?entity_id=288).",
+      "tokens": 43230,
+      "model_calls": 5,
+      "peak_prompt_tokens": 10286,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "22ca24ad251bb3adc42162b52acdafe1"
+  },{
+      "scenario": "od-interval-latest",
+      "set": "growth",
+      "traps": ["conflicting-sources","duplicate-titles","citation"],
+      "mode": "live",
+      "repeat": 3,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "links 290",
+          "kind": "cites"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "During growth runs, OD600 should be read **every 2 hours**. \n\nThis schedule was updated from every 3 hours during the [Weekly lab meeting](/document?entity_id=290) on February 16, 2026, because the previous 3-hour interval was found to miss the end of the exponential phase ([Weekly lab meeting](/document?entity_id=288)).",
+      "tokens": 32056,
+      "model_calls": 4,
+      "peak_prompt_tokens": 9566,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "1ef5b6aac746153a0015e2da4667cdc6"
+  },{
+      "scenario": "per-medium-documents",
+      "set": "growth",
+      "traps": ["write","document-links","multi-turn","long-write"],
+      "mode": "live",
+      "repeat": 1,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "4 approved write(s)",
+          "kind": "approval"
+      },{
+          "pass": true,
+          "detail": "20 documents linked",
+          "kind": "links_documents"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "no_dangling_links"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "not_filed_under"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "I have created top-level summary documents for each of the remaining media, linking all respective experiment notes:\n\n1. **[Summary of Minimal glucose Experiments](/document?entity_id=299)** – summarizes EXP-026, EXP-034, EXP-015, and EXP-032, linking their notes.\n2. **[Summary of Sucrose broth Experiments](/document?entity_id=301)** – summarizes EXP-031, EXP-044, EXP-035, EXP-052, EXP-033, and EXP-041, linking their notes.\n3. **[Summary of Molasses medium Experiments](/document?entity_id=303)** – summarizes EXP-027, EXP-018, EXP-043, EXP-051, EXP-050, EXP-049, and EXP-040, linking their notes.",
+      "tokens": 377819,
+      "model_calls": 24,
+      "peak_prompt_tokens": 21632,
+      "exact_repeat_calls": 1,
+      "compactions": 0,
+      "entity_get_calls": 4,
+      "seconds": 0,
+      "session_id": "fbba6f940bb9cc3cc61dbf9f34a77719"
+  },{
+      "scenario": "per-medium-documents",
+      "set": "growth",
+      "traps": ["write","document-links","multi-turn","long-write"],
+      "mode": "live",
+      "repeat": 2,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "4 approved write(s)",
+          "kind": "approval"
+      },{
+          "pass": true,
+          "detail": "20 documents linked",
+          "kind": "links_documents"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "no_dangling_links"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "not_filed_under"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "I have created top-level summary documents for each of the remaining culture media:\n\n1. **[Summary of Minimal Glucose Experiments](/document?entity_id=299)**\n   - Covers: [[Notes: Growth of S. demo on Minimal glucose (EXP-015)]], [[Notes: Growth of S. demo on Minimal glucose (EXP-026)]], [[Notes: Growth of S. demo on Minimal glucose (EXP-032)]], and [[Notes: Growth of S. demo on Minimal glucose (EXP-034)]].\n\n2. **[Summary of Molasses Medium Experiments](/document?entity_id=301)**\n   - Covers: [[Notes: Growth of S. demo on Molasses medium (EXP-018)]], [[Notes: Growth of S. demo on Molasses medium (EXP-027)]], [[Notes: Growth of S. demo on Molasses medium (EXP-040)]], [[Notes: Growth of S. demo on Molasses medium (EXP-043)]], [[Notes: Growth of S. demo on Molasses medium (EXP-049)]], [[Notes: Growth of S. demo on Molasses medium (EXP-050)]], and [[Notes: Growth of S. demo on Molasses medium (EXP-051)]].\n\n3. **[Summary of Sucrose Broth Experiments](/document?entity_id=303)**\n   - Covers: [[Notes: Growth of S. demo on Sucrose broth (EXP-033)]], [[Notes: Growth of S. demo on Sucrose broth (EXP-035)]], [[Notes: Growth of S. demo on Sucrose broth (EXP-041)]], [[Notes: Growth of S. demo on Sucrose broth (EXP-044)]], [[Notes: Growth of S. demo on Sucrose broth (EXP-052)]], and planned experiment [EXP-031](/detail?type=experiment&entity_id=203).\n\nEach document includes an experiment overview table, experiment statuses, owners, and key observations synthesized from their notes.",
+      "tokens": 505800,
+      "model_calls": 32,
+      "peak_prompt_tokens": 22329,
+      "exact_repeat_calls": 2,
+      "compactions": 0,
+      "entity_get_calls": 20,
+      "seconds": 0,
+      "session_id": "d8fc80bd54637177f59c6fa90bcc1d79"
+  },{
+      "scenario": "per-medium-documents",
+      "set": "growth",
+      "traps": ["write","document-links","multi-turn","long-write"],
+      "mode": "live",
+      "repeat": 3,
+      "status": "turn_limit",
+      "pass": false,
+      "checks": [{
+          "pass": true,
+          "detail": "1 approved write(s)",
+          "kind": "approval"
+      },{
+          "pass": false,
+          "detail": "no link to document(s) 266, 267, 268, 269, 270, 271, 272, 274, 275, 279, 280, 282, 283, 284, 285, 287",
+          "kind": "links_documents"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "no_dangling_links"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "not_filed_under"
+      },{
+          "pass": false,
+          "detail": "ended with status turn_limit",
+          "kind": "finished"
+      }],
+      "final_text": "I was in the middle of creating summary documents for the remaining culture media (*Minimal glucose*, *Sucrose broth*, and *Molasses medium*) as requested. \n\nSo far, I have confirmed the list of experiments for each medium via database queries (e.g., 4 experiments for Minimal glucose, 7 for Molasses medium, and 6 for Sucrose broth, including EXP-031 with 0 measurements). I have also retrieved the content and notes links for all the relevant experiment notes documents (such as [EXP-015 lab notes](/document?entity_id=283) and [EXP-027 lab notes](/document?entity_id=266)). \n\nMy approach is on track and simply requires a few more steps to execute the remaining document creation calls for each medium. Next, I will create the individual summary documents for Minimal glucose, Molasses medium, and Sucrose broth with all corresponding experiment details and linked notes.\n\nI'll carry on with that plan as soon as you reply.",
+      "tokens": 658994,
+      "model_calls": 43,
+      "peak_prompt_tokens": 19964,
+      "exact_repeat_calls": 5,
+      "compactions": 0,
+      "entity_get_calls": 19,
+      "seconds": 0,
+      "session_id": "cc88c904ef96d9333871a228c535a605"
+  },{
+      "scenario": "plateau-doubling-time",
+      "set": "growth",
+      "traps": ["calculation","growth-phase"],
+      "mode": "live",
+      "repeat": 1,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "found 4.6",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "'fit over'",
+          "kind": "shows_method"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "no_latex"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "no_tool_names"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "The doubling time of sample [EXP-061-R4](/detail?type=sample&entity_id=247) from experiment [EXP-061](/detail?type=experiment&entity_id=204) was **4.6 h**. \n\nThis was determined by an exponential fit over the exponential growth phase (hours 0 to 18, growth rate = 0.1507 per hour, r^2 = 1.0000).",
+      "tokens": 71585,
+      "model_calls": 8,
+      "peak_prompt_tokens": 10590,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "bf081877b7d298f4b5e05d3c76f427ea"
+  },{
+      "scenario": "plateau-doubling-time",
+      "set": "growth",
+      "traps": ["calculation","growth-phase"],
+      "mode": "live",
+      "repeat": 2,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "found 4.6",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "'formula'",
+          "kind": "shows_method"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "no_latex"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "no_tool_names"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "The doubling time of sample [EXP-061-R4](/detail?type=sample&entity_id=247) was **4.60 hours**.\n\n**Method:** An exponential growth model was fitted to the OD600 measurements across the exponential phase (hours 0 to 18, using 10 of 13 data points; r^2 = 1.0000). \n* Growth rate: 0.1507 per hour\n* Doubling time formula: ln(2) / 0.150669 = 4.60 h",
+      "tokens": 99405,
+      "model_calls": 11,
+      "peak_prompt_tokens": 11012,
+      "exact_repeat_calls": 1,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "5de6c5fee66bfb13107893b666b76fcd"
+  },{
+      "scenario": "plateau-doubling-time",
+      "set": "growth",
+      "traps": ["calculation","growth-phase"],
+      "mode": "live",
+      "repeat": 3,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "found 4.6",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "'formula'",
+          "kind": "shows_method"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "no_latex"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "no_tool_names"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "The doubling time of sample [EXP-061-R4](/detail?type=sample&entity_id=247) (from experiment [EXP-061](/detail?type=experiment&entity_id=204)) is **4.60 hours**.\n\n### Calculation Method\nAn exponential model was fitted to the OD600 measurements across the exponential growth phase (hours 0 to 18, spanning 10 data points; measurements at hours 20–24 reached stationary plateau at 0.8 OD):\n\n- **Growth rate ($r$):** 0.150669 per hour ($r^2 = 1.0000$)\n- **Formula:** doubling time = ln(2) / $r$\n- **Evaluation:** ln(2) / 0.150669 = 4.60046 hours",
+      "tokens": 101743,
+      "model_calls": 11,
+      "peak_prompt_tokens": 11045,
+      "exact_repeat_calls": 1,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "f1c4e16ae890eafba83c70714ae60e83"
+  },{
+      "scenario": "project-lead",
+      "set": "growth",
+      "traps": ["schema-discovery","id-number-name"],
+      "mode": "live",
+      "repeat": 1,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "[EXP-027](/detail?type=experiment&entity_id=24) belongs to the Low-cost media screening project, which is led by Tomas Lindqvist.",
+      "tokens": 47966,
+      "model_calls": 6,
+      "peak_prompt_tokens": 9159,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "0be2d9b79f0d504ab1e00c399def7679"
+  },{
+      "scenario": "project-lead",
+      "set": "growth",
+      "traps": ["schema-discovery","id-number-name"],
+      "mode": "live",
+      "repeat": 2,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "EXP-027 ([EXP-027](/detail?type=experiment&entity_id=24)) belongs to the [Low-cost media screening](/detail?type=project&entity_id=8) project, which is led by Tomas Lindqvist.",
+      "tokens": 38693,
+      "model_calls": 5,
+      "peak_prompt_tokens": 8615,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "8d55002bb38f641042902faadc205fe3"
+  },{
+      "scenario": "project-lead",
+      "set": "growth",
+      "traps": ["schema-discovery","id-number-name"],
+      "mode": "live",
+      "repeat": 3,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "EXP-027 ([Growth of S. demo on Molasses medium](/detail?type=experiment&entity_id=24)) belongs to the project [Low-cost media screening](/detail?type=project&entity_id=8), which is led by Tomas Lindqvist.",
+      "tokens": 47575,
+      "model_calls": 6,
+      "peak_prompt_tokens": 8833,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "2bb83c5855cc403f7fb392e88cf5c111"
+  },{
+      "scenario": "protocol-see-also",
+      "set": "growth",
+      "traps": ["write","document-links","update-keeps-content"],
+      "mode": "live",
+      "repeat": 1,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "1 approved write(s)",
+          "kind": "approval"
+      },{
+          "pass": true,
+          "detail": "5 documents linked",
+          "kind": "links_documents"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "keeps_content"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "no_dangling_links"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "I have added a \"See also\" section to the [Protocol: measuring culture density (OD600)](/document?entity_id=291) linking the notes for all five finished Molasses medium experiments:\n\n- [Notes: Growth of S. demo on Molasses medium (EXP-018)](/document?entity_id=268)\n- [Notes: Growth of S. demo on Molasses medium (EXP-027)](/document?entity_id=266)\n- [Notes: Growth of S. demo on Molasses medium (EXP-043)](/document?entity_id=272)\n- [Notes: Growth of S. demo on Molasses medium (EXP-050)](/document?entity_id=280)\n- [Notes: Growth of S. demo on Molasses medium (EXP-051)](/document?entity_id=275)\n\n*(Note: EXP-040 and EXP-049 were excluded because their status is still running.)*",
+      "tokens": 151950,
+      "model_calls": 13,
+      "peak_prompt_tokens": 15589,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 1,
+      "seconds": 0,
+      "session_id": "cd443472ba3131aa587527de363ab3f2"
+  },{
+      "scenario": "protocol-see-also",
+      "set": "growth",
+      "traps": ["write","document-links","update-keeps-content"],
+      "mode": "live",
+      "repeat": 2,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "1 approved write(s)",
+          "kind": "approval"
+      },{
+          "pass": true,
+          "detail": "5 documents linked",
+          "kind": "links_documents"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "keeps_content"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "no_dangling_links"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "I have added a \"See also\" section to the [Protocol: measuring culture density (OD600)](/document?entity_id=291) linking the notes of all five finished Molasses medium experiments:\n\n- [Notes: Growth of S. demo on Molasses medium (EXP-027)](/document?entity_id=266)\n- [Notes: Growth of S. demo on Molasses medium (EXP-018)](/document?entity_id=268)\n- [Notes: Growth of S. demo on Molasses medium (EXP-043)](/document?entity_id=272)\n- [Notes: Growth of S. demo on Molasses medium (EXP-051)](/document?entity_id=275)\n- [Notes: Growth of S. demo on Molasses medium (EXP-050)](/document?entity_id=280)",
+      "tokens": 92142,
+      "model_calls": 8,
+      "peak_prompt_tokens": 15040,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 1,
+      "seconds": 0,
+      "session_id": "d307211d864cc57a273c7644eae63a35"
+  },{
+      "scenario": "protocol-see-also",
+      "set": "growth",
+      "traps": ["write","document-links","update-keeps-content"],
+      "mode": "live",
+      "repeat": 3,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "1 approved write(s)",
+          "kind": "approval"
+      },{
+          "pass": true,
+          "detail": "5 documents linked",
+          "kind": "links_documents"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "keeps_content"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "no_dangling_links"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "I have added a \"See also\" section to the [Protocol: measuring culture density (OD600)](/document?entity_id=291) linking the notes of all five finished Molasses medium experiments:\n\n- [[Notes: Growth of S. demo on Molasses medium (EXP-018)]]\n- [[Notes: Growth of S. demo on Molasses medium (EXP-027)]]\n- [[Notes: Growth of S. demo on Molasses medium (EXP-043)]]\n- [[Notes: Growth of S. demo on Molasses medium (EXP-050)]]\n- [[Notes: Growth of S. demo on Molasses medium (EXP-051)]]",
+      "tokens": 129548,
+      "model_calls": 12,
+      "peak_prompt_tokens": 14275,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 2,
+      "seconds": 1,
+      "session_id": "d427e9fdbbba47d10ebbf03ac1de0d66"
+  },{
+      "scenario": "replicate-mean",
+      "set": "growth",
+      "traps": ["calculation","growth-phase","summary"],
+      "mode": "live",
+      "repeat": 1,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "found 3.25",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "'computed'",
+          "kind": "shows_method"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "no_latex"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "labels_not_ids"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "no_tool_names"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "Across the four replicates of [Replicate growth series on YPD (EXP-061)](/detail?type=experiment&entity_id=204), the individual exponential growth fits yield the following doubling times:\n\n* **EXP-061-R1:** 2.00 h (r^2 = 1.0000, hours 0 to 8)\n* **EXP-061-R2:** 2.80 h (r^2 = 1.0000, hours 0 to 10)\n* **EXP-061-R3:** 3.60 h (r^2 = 1.0000, hours 0 to 14)\n* **EXP-061-R4:** 4.60 h (r^2 = 1.0000, hours 0 to 18)\n\nThe average doubling time across these replicates is **3.25 h** (computed as `(2 + 2.8 + 3.6 + 4.6) / 4 = 3.25`).",
+      "tokens": 89283,
+      "model_calls": 10,
+      "peak_prompt_tokens": 10482,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 1,
+      "seconds": 0,
+      "session_id": "06bc1ec44580b400781e49a9647c2e14"
+  },{
+      "scenario": "replicate-mean",
+      "set": "growth",
+      "traps": ["calculation","growth-phase","summary"],
+      "mode": "live",
+      "repeat": 2,
+      "status": "done",
+      "pass": false,
+      "checks": [{
+          "pass": true,
+          "detail": "found 3.25",
+          "kind": "answer"
+      },{
+          "pass": false,
+          "detail": "no query, formula or steps shown",
+          "kind": "shows_method"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "no_latex"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "labels_not_ids"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "no_tool_names"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "The average doubling time across the four replicates of [Replicate growth series on YPD](/detail?type=experiment&entity_id=204) (EXP-061) is **3.25 h**.\n\n### Replicate Doubling Times (Exponential Fit)\n* **EXP-061-R1:** 2.00 h (hours 0–8)\n* **EXP-061-R2:** 2.80 h (hours 0–10)\n* **EXP-061-R3:** 3.60 h (hours 0–14)\n* **EXP-061-R4:** 4.60 h (hours 0–18)\n\nMean calculation:\n`(2 + 2.8 + 3.6 + 4.6) / 4 = 3.25`",
+      "tokens": 61440,
+      "model_calls": 7,
+      "peak_prompt_tokens": 10181,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "b84504dcf3b99fd5c8d23c2749feb8ec"
+  },{
+      "scenario": "replicate-mean",
+      "set": "growth",
+      "traps": ["calculation","growth-phase","summary"],
+      "mode": "live",
+      "repeat": 3,
+      "status": "done",
+      "pass": false,
+      "checks": [{
+          "pass": true,
+          "detail": "found 3.25",
+          "kind": "answer"
+      },{
+          "pass": false,
+          "detail": "no query, formula or steps shown",
+          "kind": "shows_method"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "no_latex"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "labels_not_ids"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "no_tool_names"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "The average doubling time across the replicates of [EXP-061](/detail?type=experiment&entity_id=204) is **3.25 h**.\n\n### Replicate Doubling Times\n\n| Replicate | Doubling Time (h) |\n|---|---|\n| EXP-061-R1 | 2.00 |\n| EXP-061-R2 | 2.80 |\n| EXP-061-R3 | 3.60 |\n| EXP-061-R4 | 4.60 |\n\nMean doubling time = `(2 + 2.8 + 3.6 + 4.6) / 4` = **3.25 h**.",
+      "tokens": 48220,
+      "model_calls": 6,
+      "peak_prompt_tokens": 9223,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "cdba2be4a4694b9760c62b6725487f72"
+  },{
+      "scenario": "sample-last-readings",
+      "set": "growth",
+      "traps": ["id-number-name","missing-information","schema-discovery"],
+      "mode": "live",
+      "repeat": 1,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "found 0.8502",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "labels_not_ids"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "names_record"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "Two samples belong to [EXP-027](/detail?type=experiment&entity_id=24):\n\n* [EXP-027-A](/detail?type=sample&entity_id=25): last OD600 reading was 0.8502 (measured at 12 hours).\n* [EXP-027-B](/detail?type=sample&entity_id=26): no OD600 readings recorded.",
+      "tokens": 44351,
+      "model_calls": 5,
+      "peak_prompt_tokens": 9337,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 1,
+      "session_id": "c0f1100c5b8bad33f6ca3ecbb94f3100"
+  },{
+      "scenario": "sample-last-readings",
+      "set": "growth",
+      "traps": ["id-number-name","missing-information","schema-discovery"],
+      "mode": "live",
+      "repeat": 2,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "found 0.8502",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "labels_not_ids"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "names_record"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "Experiment [EXP-027](/detail?type=experiment&entity_id=24) (\"Growth of S. demo on Molasses medium\") has two samples:\n\n* [EXP-027-A](/detail?type=sample&entity_id=25): Its last OD600 reading was **0.8502** (measured at 12 hours).\n* [EXP-027-B](/detail?type=sample&entity_id=26): No OD600 readings have been recorded.",
+      "tokens": 68629,
+      "model_calls": 8,
+      "peak_prompt_tokens": 9675,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "b0e2a8e050cf7219f550925d97be0737"
+  },{
+      "scenario": "sample-last-readings",
+      "set": "growth",
+      "traps": ["id-number-name","missing-information","schema-discovery"],
+      "mode": "live",
+      "repeat": 3,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "found 0.8502",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "labels_not_ids"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "names_record"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "Experiment [EXP-027](/detail?type=experiment&entity_id=24) (\"Growth of S. demo on Molasses medium\") has two samples:\n\n* **[EXP-027-A](/detail?type=sample&entity_id=25)**: Last OD600 reading was **0.8502** (measured at 12 hours).\n* **[EXP-027-B](/detail?type=sample&entity_id=26)**: No OD600 readings recorded.",
+      "tokens": 58773,
+      "model_calls": 7,
+      "peak_prompt_tokens": 9355,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "ff9b9e618c5942f0348cdfa20d2e65f6"
+  },{
+      "scenario": "sample-lineage",
+      "set": "growth",
+      "traps": ["schema-discovery"],
+      "mode": "live",
+      "repeat": 1,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "labels_not_ids"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "EXP-027-B ([EXP-027-B](/detail?type=sample&entity_id=26)) was subcultured from [EXP-027-A](/detail?type=sample&entity_id=25).",
+      "tokens": 47006,
+      "model_calls": 6,
+      "peak_prompt_tokens": 8680,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 2,
+      "seconds": 0,
+      "session_id": "5502d07d2a3110372d7e62bd82613a83"
+  },{
+      "scenario": "sample-lineage",
+      "set": "growth",
+      "traps": ["schema-discovery"],
+      "mode": "live",
+      "repeat": 2,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "labels_not_ids"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "Sample EXP-027-B was subcultured from [EXP-027-A](/detail?type=sample&entity_id=25).",
+      "tokens": 46892,
+      "model_calls": 6,
+      "peak_prompt_tokens": 8733,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 2,
+      "seconds": 0,
+      "session_id": "70c3f0ec06b894fb927cf2d80939f770"
+  },{
+      "scenario": "sample-lineage",
+      "set": "growth",
+      "traps": ["schema-discovery"],
+      "mode": "live",
+      "repeat": 3,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "labels_not_ids"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "Sample EXP-027-B was subcultured from [EXP-027-A](/detail?type=sample&entity_id=25), as recorded in [Notes: Growth of S. demo on Molasses medium (EXP-027)](/document?entity_id=266).",
+      "tokens": 61278,
+      "model_calls": 7,
+      "peak_prompt_tokens": 9626,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 3,
+      "seconds": 0,
+      "session_id": "c64f3b3041730ac7d9d6743f8c4dc619"
+  },{
+      "scenario": "schema-medium-ingredients",
+      "set": "core",
+      "traps": ["schema-discovery"],
+      "mode": "live",
+      "repeat": 1,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "EXP-027 ([Growth of S. demo on Molasses medium](/detail?type=experiment&entity_id=24)) uses Molasses medium, which contains the following ingredients:\n\n| Ingredient | Concentration (g/L) |\n|---|---|\n| Molasses | 40 |\n| Corn steep liquor | 15 |\n| Ammonium sulfate | 5 |\n| Potassium phosphate | 3 |",
+      "tokens": 47969,
+      "model_calls": 6,
+      "peak_prompt_tokens": 9418,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "a76acc74bb24629cf92b3e86c2bd637e"
+  },{
+      "scenario": "schema-medium-ingredients",
+      "set": "core",
+      "traps": ["schema-discovery"],
+      "mode": "live",
+      "repeat": 2,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "The medium used for [EXP-027](/detail?type=experiment&entity_id=24) is **Molasses medium**, which contains the following ingredients:\n\n| Ingredient | Concentration (g/L) |\n|---|---|\n| Molasses | 40 |\n| Corn steep liquor | 15 |\n| Ammonium sulfate | 5 |\n| Potassium phosphate | 3 |",
+      "tokens": 39055,
+      "model_calls": 5,
+      "peak_prompt_tokens": 8754,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "e203859b3e2f75e75779c943a414e898"
+  },{
+      "scenario": "schema-medium-ingredients",
+      "set": "core",
+      "traps": ["schema-discovery"],
+      "mode": "live",
+      "repeat": 3,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "",
+          "kind": "answer"
+      },{
+          "pass": true,
+          "detail": "",
+          "count": 0,
+          "kind": "no_failed_lookup"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "EXP-027 ([Growth of S. demo on Molasses medium](/detail?type=experiment&entity_id=24)) used **Molasses medium** as documented in its lab notes ([Notes: Growth of S. demo on Molasses medium (EXP-027)](/document?entity_id=266)). \n\nThe ingredients and their concentrations in this medium are:\n\n| Ingredient | Concentration (g/L) |\n|---|---|\n| Molasses | 40 |\n| Corn steep liquor | 15 |\n| Ammonium sulfate | 5 |\n| Potassium phosphate | 3 |",
+      "tokens": 58168,
+      "model_calls": 7,
+      "peak_prompt_tokens": 9513,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 1,
+      "seconds": 1,
+      "session_id": "1c58c9a97536c69a98f9047677467557"
+  },{
+      "scenario": "summary-document-links",
+      "set": "growth",
+      "traps": ["write","document-links","multi-turn"],
+      "mode": "live",
+      "repeat": 1,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "1 approved write(s)",
+          "kind": "approval"
+      },{
+          "pass": true,
+          "detail": "4 documents linked",
+          "kind": "links_documents"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "no_dangling_links"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "not_filed_under"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "no_latex"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "I have created the new top-level document [YPD experiments](/document?entity_id=298), summarizing all six YPD experiments, their statuses, doubling times, and links to their available notes (`[[Notes: Growth of S. demo on YPD (EXP-016)]]`, `[[Notes: Growth of S. demo on YPD (EXP-023)]]`, `[[Notes: Growth of S. demo on YPD (EXP-025)]]`, and `[[Notes: Growth of S. demo on YPD (EXP-042)]]`).",
+      "tokens": 375934,
+      "model_calls": 27,
+      "peak_prompt_tokens": 18256,
+      "exact_repeat_calls": 1,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "d4f2e3858729a7f67f3d5cac54b0d6c7"
+  },{
+      "scenario": "summary-document-links",
+      "set": "growth",
+      "traps": ["write","document-links","multi-turn"],
+      "mode": "live",
+      "repeat": 2,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "1 approved write(s)",
+          "kind": "approval"
+      },{
+          "pass": true,
+          "detail": "4 documents linked",
+          "kind": "links_documents"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "no_dangling_links"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "not_filed_under"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "no_latex"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "I have created the new top-level document [YPD experiments](/document?entity_id=298) summarizing all YPD experiments, their statuses, doubling times, and links to their corresponding notes documents (where available).",
+      "tokens": 255124,
+      "model_calls": 22,
+      "peak_prompt_tokens": 15660,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "d6de079077ac5465c794a4a995d5dc08"
+  },{
+      "scenario": "summary-document-links",
+      "set": "growth",
+      "traps": ["write","document-links","multi-turn"],
+      "mode": "live",
+      "repeat": 3,
+      "status": "done",
+      "pass": true,
+      "checks": [{
+          "pass": true,
+          "detail": "1 approved write(s)",
+          "kind": "approval"
+      },{
+          "pass": true,
+          "detail": "4 documents linked",
+          "kind": "links_documents"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "no_dangling_links"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "not_filed_under"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "no_latex"
+      },{
+          "pass": true,
+          "detail": "",
+          "kind": "finished"
+      }],
+      "final_text": "I have created the top-level document **YPD experiments**, incorporating the summary table and linking the available lab notes documents via `[[Exact title]]` links ([YPD experiments](/document?entity_id=298)).",
+      "tokens": 286141,
+      "model_calls": 23,
+      "peak_prompt_tokens": 15751,
+      "exact_repeat_calls": 2,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 1,
+      "session_id": "6ce49824893623f74bfb0241a968d805"
+  },{
+      "scenario": "unknown-supplier",
+      "set": "core",
+      "traps": ["missing-information"],
+      "mode": "live",
+      "repeat": 1,
+      "status": "turn_limit",
+      "pass": false,
+      "checks": [{
+          "pass": true,
+          "detail": "'not recorded'",
+          "kind": "says_unknown"
+      },{
+          "pass": false,
+          "detail": "ended with status turn_limit",
+          "kind": "finished"
+      }],
+      "final_text": "I was trying to find which supplier provided the yeast extract ingredient used in our culture media (such as YPD and Sucrose broth). \n\n- **Confirmed so far:** I confirmed that yeast extract is an ingredient (`ingredient` ID 12) used in the YPD and Sucrose broth culture media ([Lab handbook](/document?entity_id=292)). I also checked the lab handbook and facilities manual regarding ordering and purchasing procedures, but the supplier for individual ingredients like yeast extract is not recorded in the available tables or documents.\n- **Next step:** Since standard document searches and ingredient tables do not record the supplier name, I will inspect any remaining logs or database fields related to purchasing or external identifiers to see if a supplier is linked elsewhere.\n\nI'll carry on with that plan as soon as you reply.",
+      "tokens": 251179,
+      "model_calls": 21,
+      "peak_prompt_tokens": 15845,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 0,
+      "seconds": 0,
+      "session_id": "3206b92b3ec352efda0aa4567c69709a"
+  },{
+      "scenario": "unknown-supplier",
+      "set": "core",
+      "traps": ["missing-information"],
+      "mode": "live",
+      "repeat": 2,
+      "status": "turn_limit",
+      "pass": false,
+      "checks": [{
+          "pass": true,
+          "detail": "'not recorded'",
+          "kind": "says_unknown"
+      },{
+          "pass": false,
+          "detail": "ended with status turn_limit",
+          "kind": "finished"
+      }],
+      "final_text": "- I was trying to find which supplier provided the yeast extract, checking the [Lab handbook](/document?entity_id=292), facilities manual, ingredients list, and equipment tables. I confirmed that yeast extract is an ingredient used in media such as YPD and sucrose broth (with a concentration of 10 g/L, record id 12), but the supplier name is not recorded in the database tables or documents checked so far.\n- A different approach is needed: since the database records ingredients and suppliers are typically mentioned in purchasing or inventory sheets, checking if there are any other documents or external records referencing supplier details will be necessary.\n- I'll carry on with that plan as soon as you reply.",
+      "tokens": 257818,
+      "model_calls": 21,
+      "peak_prompt_tokens": 16453,
+      "exact_repeat_calls": 0,
+      "compactions": 0,
+      "entity_get_calls": 3,
+      "seconds": 0,
+      "session_id": "5dea00c27dd433ceca2d2450906645e9"
+  },{
+      "scenario": "unknown-supplier",
+      "set": "core",
+      "traps": ["missing-information"],
+      "mode": "live",
+      "repeat": 3,
+      "status": "turn_limit",
+      "pass": false,
+      "checks": [{
+          "pass": false,
+          "detail": "does not say the data lacks the answer",
+          "kind": "says_unknown"
+      },{
+          "pass": false,
+          "detail": "ended with status turn_limit",
+          "kind": "finished"
+      }],
+      "final_text": "I was trying to find which supplier provided the yeast extract ([Yeast extract](/detail?type=ingredient&entity_id=12)). \n\nSo far, I've confirmed that yeast extract exists as a standard ingredient in the database schema (`ingredient` table, id 12), and the [Lab handbook](/document?entity_id=292) states that consumables are ordered via weekly purchasing sheets with packing slips kept in the blue folder. However, searching the text documents for common supplier names (such as Sigma, Oxoid, BD, Merck, Fisher, and VWR) or general vendor mentions did not return a specific supplier for yeast extract.\n\nMy approach needs a shift: rather than searching general text documents, I need to check if there are database tables or records tracking purchasing orders or catalogue numbers for ingredients. \n\nI'll carry on with that plan as soon as you reply.",
+      "tokens": 310447,
+      "model_calls": 21,
+      "peak_prompt_tokens": 22591,
+      "exact_repeat_calls": 1,
+      "compactions": 0,
+      "entity_get_calls": 7,
+      "seconds": 0,
+      "session_id": "00149e4737f2ceb4024e32f5fb391660"
+  }]
+}

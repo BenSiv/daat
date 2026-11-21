@@ -14,16 +14,44 @@ Needs a built luam (`LUAM_DIR`, as for `./bld/test.sh`) and `jq`.
 export DAAT_EVAL_PROVIDER=ollama             # or vertex (default; requires DAAT_EVAL_VERTEX_PROJECT)
 export DAAT_EVAL_MODEL=...                   # optional; default: the provider's own default model
 ./bld/eval.sh --mode live                    # every scenario, 3 repeats each
-./bld/eval.sh --mode live --compare /path/to/baseline/results.json
+./bld/eval.sh --mode live --compare baseline           # against the committed baseline (below)
+./bld/eval.sh --mode live --compare /path/to/results.json
+./bld/eval.sh --mode live --save-baseline      # run, then save it as the committed baseline
 
 ./bld/eval.sh --rescore eval-out/runs/<run>  # re-check a finished run after a check changed; no model calls
+./bld/eval.sh --save-baseline-from eval-out/runs/<run>   # save a finished run as the baseline; no model calls
 ```
 
 Other options: `--repeat N`, `--set core|growth|all`, `--seed N`, and `--extra 'k = v, ...'`, which appends `config.lua` fields to every run's copy of the lab, to compare a setting without rebuilding it.
 
-Each run writes `eval-out/runs/<timestamp>-<mode>/`: `report.md` (the scores, and the failing scenarios with links to their transcripts), `results.json` (summary and rows: what `--compare` reads), `results.jsonl`, and `work/<scenario>-<repeat>/` with each run's database and `transcript.md`. The scores are also printed. The command exits non-zero when any run fails a check, so test mode fails the build.
+Each run writes `eval-out/runs/<timestamp>-<mode>/`: `report.md` (the scores, and the failing scenarios with links to their transcripts), `results.json` (summary and rows: what `--compare` reads), `results.jsonl`, `run.txt` (the branch, commit, provider, model and settings it ran on), and `work/<scenario>-<repeat>/` with each run's database and `transcript.md`. The scores are also printed. The command exits non-zero when any run fails a check, so test mode fails the build.
 
-`eval-out/` is not in git, and a container rebuild loses it. Keep a run that serves as a baseline somewhere durable, and name it in the PR or issue that compares against it.
+### The baseline
+
+`eval-out/` is not in git, and a container rebuild loses it. The reference run is kept in git instead, in `tst/eval/baseline/`: its `report.md` (the scores, readable after a pull), its `results.json` (what `--compare baseline` reads) and `RUN.md` (which run, commit and model). The transcripts (`work/`, about 150 MB a run) stay in that run's own `eval-out/` folder.
+
+- **Save one** with `--save-baseline` on a full live run (every scenario, no `--only`, `--set` or `--extra`), or `--save-baseline-from eval-out/runs/<run>` for a run that already finished. Commit the three files in their own commit or PR, naming the run.
+- **Take a new one** after a live run on `main` meant as the reference: a checkpoint (C2, C4, C6 in #46), or a change that moves the scores on purpose. Not after a run on a branch: the baseline is what `main` scores.
+- **Compare against it** with `--compare baseline`, so every PR compares against the same run.
+
+### Run-to-run spread
+
+A score from one run is not a measurement of a change. Most conversation checks apply to a few scenarios only, so one run moves them by a lot: `no_latex` runs on 6 scenarios x 3 repeats, 18 checks a run, so one reply with LaTeX is 5.6 points. The 3 repeats of a scenario share its question, so they tend to fail together: `calculation-doubling-time` alone took `no_latex` from 94% to 72% on one run (#45). Read a drop of one scenario's repeats as noise until a second run shows it again.
+
+`no_latex` across live runs, 2026-11-08 to 2026-11-17 (`gemini-3.5-flash-lite`, 18 checks each):
+
+| Run | Code | `no_latex` |
+|---|---|---|
+| `20261108-090223` | `main` before #44 | 94% |
+| `20261108-123024` | #44, first look | 72% |
+| `20261108-232823` | `main` with #44 (C2 baseline, #46) | 89% |
+| `20261110-100540` | #38 branch | 94% |
+| `20261110-105351` | `main` @ 8e8d90e | 100% |
+| `20261110-111632` | #38 branch | 94% |
+| `20261117-092904` | `main` @ deb3be2 | 100% |
+| `20261117-102156` | `main` @ deb3be2 (the first committed baseline) | 100% |
+
+So the 72% didn't hold: every later run with #44's code scored 89% or more, and current `main` scored 100% twice.
 
 ## Problem
 

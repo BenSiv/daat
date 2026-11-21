@@ -98,3 +98,44 @@ EOF
         grep -q "[[:space:]]${pkg}\\b" "$PROJECT_ROOT/dev/Containerfile"
     done
 }
+
+@test "dev/demo/Dockerfile COPY sources exist, luam_pin extraction works, and seed-demo-lab.sh sets LUA_CPATH" {
+    # Every host-context COPY source (no --from=) in dev/demo/Dockerfile must exist in the repo.
+    while read -r src; do
+        [ -n "$src" ] || continue
+        [ -e "$PROJECT_ROOT/$src" ]
+    done < <(awk '/^COPY / && $2 !~ /^--from=/ { print $2 }' "$PROJECT_ROOT/dev/demo/Dockerfile")
+
+    # Extract the sed expression used by dev/demo/Dockerfile to read optional luam_pin.
+    sed_expr=$(sed -n "s/^RUN pin=\$(sed -n '\([^']*\)'.*/\1/p" "$PROJECT_ROOT/dev/demo/Dockerfile")
+    [ -n "$sed_expr" ]
+
+    unpinned_file="$TEST_DIR/unpinned_package.lua"
+    cat > "$unpinned_file" <<'EOF'
+return {
+    bin = "daat",
+    entry = "main.lua",
+    -- luam_pin = "commented_out_should_be_ignored",
+}
+EOF
+    [ -z "$(sed -n "$sed_expr" "$unpinned_file" | head -n 1)" ]
+
+    pinned_file="$TEST_DIR/pinned_package.lua"
+    cat > "$pinned_file" <<'EOF'
+return {
+    bin = "daat",
+    entry = "main.lua",
+    luam_pin = "8c9bb857dd0b8c22b9f0dfad674130e0958ec240",
+}
+EOF
+    [ "$(sed -n "$sed_expr" "$pinned_file" | head -n 1)" = "8c9bb857dd0b8c22b9f0dfad674130e0958ec240" ]
+
+    # seed-demo-lab.sh's LUA_CPATH pattern (with /luam mapped to real LUAM_DIR) must load consolidated C libs.
+    luam_dir=$(real_luam_dir)
+    seed_cpath=$(sed -n 's/^export LUA_CPATH="\([^"]*\)"/\1/p' "$PROJECT_ROOT/dev/demo/seed-demo-lab.sh")
+    [ -n "$seed_cpath" ]
+    mapped_cpath="${seed_cpath//\/luam/$luam_dir}"
+    LUA_PATH="$PROJECT_ROOT/src/?.lua;$luam_dir/lib/?.lua;$luam_dir/lib/?/init.lua;;" \
+        LUA_CPATH="$mapped_cpath" \
+        "$luam_dir/bin/luam" -e 'require("sqlite3"); require("crypto"); require("vec"); require("lfs"); require("bcrypt"); require("hmac")'
+}
