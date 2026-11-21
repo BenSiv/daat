@@ -65,6 +65,14 @@ every change, the rule changes here first.
 
 ## Code
 
+- **Every UI operation has a `/api/v1` counterpart** (`doc/api.md`, "UI/API
+  parity invariant"; `doc/architecture.md`, "Auth"). Every read or write
+  surfaced in the browser UI is backed by a JSON endpoint under `/api/v1/*`
+  that browser JavaScript (`session` + `X-CSRF-Token`) and external callers
+  (`X-Api-Key`) share with identical capabilities and validation. Never add a
+  browser-only `/api/*` endpoint or a form-POST-only mutation without its
+  `/api/v1/*` equivalent (except session bootstrap routes: `/login`,
+  `/logout`, `/forgot-password`, `/reset-password`).
 - **One mechanism, not a copy.** A list that mirrors another table (tool
   names, reserved names, column lists) is read from the source, not kept by
   hand. A second near-identical function is a sign the first one wants a
@@ -103,4 +111,7 @@ every change, the rule changes here first.
   (`AGENT_TEST_RESPONSES`).
 - **Behaviour the agent loop relies on has a characterization test**
   before it is refactored (#3 lists them).
+- **Every new UI or `/api/v1` operation is documented in `doc/api.md` and
+  covered in `tst/integration/api_v1.bats`** under both session + CSRF and
+  `X-Api-Key` auth where applicable.
 - `./bld/test.sh` is green before a PR asks for review.

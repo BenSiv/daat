@@ -2,6 +2,14 @@
 
 A unified JSON HTTP API rooted at `/api/v1` providing 100% parity with every operation surfaced in Daat's browser UI. Both external integrations (`X-Api-Key`) and the browser UI (`session` cookie + `X-CSRF-Token`) call the same `/api/v1` endpoints and enforce identical capabilities and validation rules.
 
+## UI/API parity invariant
+
+Every feature or operation surfaced in Daat's browser UI **must** ship with an equivalent JSON endpoint under `/api/v1/*`:
+
+1. **One surface, no browser-only shims.** Browser JavaScript (`src/ui/*.js`) calls `/api/v1/*` directly (`session` cookie + `X-CSRF-Token`). Never introduce unversioned `/api/*` endpoints or HTML form-POST-only mutations without a `/api/v1/*` counterpart (the sole exceptions are browser session bootstrap routes: `/login`, `/logout`, `/forgot-password`, and `/reset-password`, plus binary `/attachments/*` uploads/downloads).
+2. **Same capabilities, validation, and provenance.** Session callers and `X-Api-Key` callers share the exact same route handler, single-letter capability check (`i`, `s`, `a`), `entity` / hook validation, and ledger recording (`<login>` vs. `api:<label>`).
+3. **Definition of done for any new UI feature.** Register the route under `/api/v1/*` (`src/web/api_v1_routes.lua` + domain `src/web/*_routes.lua`), wire the UI to call it, document the endpoint in this file, and add integration tests in `tst/integration/api_v1.bats`.
+
 ## Authentication & CSRF
 
 ### External callers (`X-Api-Key`)
