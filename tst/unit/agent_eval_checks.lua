@@ -32,6 +32,161 @@ end
 
 CTX = {status = "done", is_destructive = only_updates_are_destructive}
 
+-- The tools each loop is offered, for the validity checks (#41): the chat
+-- loop a read, a search and a write; a research sub-agent the read only.
+-- Schemas as src/agent_tools.lua declares them.
+ENTITY_GET = {parameters = {type = "object", required = {"entity_type", "entity_id"}, properties = {
+    entity_type = {type = "string"}, entity_id = {type = "integer"}, field = {type = "string"}}}}
+DOCUMENT_SEARCH = {parameters = {type = "object", required = {"query"}, properties = {
+    query = {type = "string"}, scope = {type = "string", enum = {"all", "titles"}}}}}
+ENTITY_UPDATE = {parameters = {type = "object", required = {"entity_type", "entity_id"}, additionalProperties = true,
+    properties = {entity_type = {type = "string"}, entity_id = {type = "integer"}, reason = {type = "string"}}}}
+CHAT_TOOLS = {["entity.get"] = ENTITY_GET, ["document.search"] = DOCUMENT_SEARCH, ["entity.update"] = ENTITY_UPDATE}
+RESEARCH_TOOLS = {["entity.get"] = ENTITY_GET, ["document.search"] = DOCUMENT_SEARCH}
+VALIDITY_CTX = {declared = function(loop)
+    if loop == "research" or loop == "background" then
+        return RESEARCH_TOOLS
+    end
+    return CHAT_TOOLS
+end}
+
+-- A step of a sub-agent: stored under its parent with its loop.
+function in_loop(row, loop)
+    row.parent_message_id = 1
+    row.loop_kind = loop
+    return row
+end
+
+function tests.known_tools_fails_on_a_tool_nobody_declared()
+    print("Testing known_tools catches invented tools, as on 20261110-111632-live")
+    -- Recorded: per-medium-documents-1 and sample-last-readings-1 of that run.
+    conv = checks.conversation({user("Which documents cover the media?"),
+        calls("c1", "document.query", {sql = "SELECT d.id, d.title FROM document d WHERE d.title LIKE '%EXP-014%'"}),
+        result("c1", "document.query", "ERROR: unknown tool document.query", true),
+        calls("c1", "entity.search", {query = "EXP-027"}),
+        result("c1", "entity.search", "ERROR: unknown tool entity.search", true),
+        calls("c1", "document.search", {query = "EXP-014"}),
+        result("c1", "document.search", "hits", false), said("Done.")}, {})
+    outcome = checks.known_tools(conv, {}, VALIDITY_CTX)
+    check(outcome.pass == false and outcome.count == 2 and outcome.calls == 3,
+        "two of three calls invented, got " .. tostring(outcome.count) .. " of " .. tostring(outcome.calls))
+    check(string.find(outcome.detail, "document.query", 1, true) != nil and string.find(outcome.detail, "entity.search", 1, true) != nil,
+        "names both, got: " .. outcome.detail)
+    check(outcome.by_tool["document.query"] == 1 and outcome.by_tool["entity.search"] == 1, "counted by tool")
+end
+
+function tests.known_tools_holds_a_sub_agent_to_its_own_tools()
+    print("Testing known_tools: a write is unknown to the research loop, known to chat")
+    conv = checks.conversation({user("q"),
+        in_loop(calls("c1", "entity.update", {}), "research"),
+        in_loop(result("c1", "entity.update", "ERROR: research is read-only", true), "research"),
+        in_loop(calls("c1", "entity.get", {}), "research"),
+        calls("c1", "entity.update", {}), said("ok")}, {})
+    outcome = checks.known_tools(conv, {}, VALIDITY_CTX)
+    check(outcome.pass == false and outcome.count == 1 and outcome.calls == 3, "only the research write, got " .. tostring(outcome.count))
+    check(string.find(outcome.detail, "entity.update (research)", 1, true) != nil, "says which loop, got: " .. outcome.detail)
+end
+
+function tests.known_tools_passes_declared_calls_and_no_calls()
+    print("Testing known_tools passes a conversation of declared calls, or none")
+    conv = checks.conversation({user("q"), calls("c1", "entity.get", {}), result("c1", "entity.get", "row", false), said("ok")}, {})
+    outcome = checks.known_tools(conv, {}, VALIDITY_CTX)
+    check(outcome.pass == true and outcome.count == 0 and outcome.calls == 1, "a declared call passes")
+    outcome = checks.known_tools(checks.conversation({user("q"), said("ok")}, {}), {}, VALIDITY_CTX)
+    check(outcome.pass == true and outcome.calls == 0, "no calls passes")
+end
+
+function valid_arguments_of(arguments, name)
+    conv = checks.conversation({user("q"), calls("c1", name, arguments), result("c1", name, "x", false), said("ok")}, {})
+    return checks.valid_arguments(conv, {}, VALIDITY_CTX)
+end
+
+function tests.valid_arguments_fails_on_each_kind_of_bad_argument()
+    print("Testing valid_arguments catches missing, mistyped, unknown and out-of-list arguments")
+    missing = valid_arguments_of({entity_id = 24}, "entity.get")
+    check(missing.pass == false and missing.count == 1 and string.find(missing.detail, "missing entity_type", 1, true) != nil,
+        "a required field missing, got: " .. missing.detail)
+    -- The id as text: what a model copying "experiment 24" from a result writes.
+    mistyped = valid_arguments_of({entity_type = "experiment", entity_id = "24"}, "entity.get")
+    check(mistyped.pass == false and string.find(mistyped.detail, "entity_id should be integer, got string", 1, true) != nil,
+        "a string where an integer belongs, got: " .. mistyped.detail)
+    fractional = valid_arguments_of({entity_type = "experiment", entity_id = 24.5}, "entity.get")
+    check(fractional.pass == false, "24.5 isn't an integer")
+    unknown = valid_arguments_of({entity_type = "experiment", entity_id = 24, lab_number = "EXP-027"}, "entity.get")
+    check(unknown.pass == false and string.find(unknown.detail, "unknown lab_number", 1, true) != nil,
+        "a key the tool doesn't take, got: " .. unknown.detail)
+    off_list = valid_arguments_of({query = "EXP-027", scope = "everything"}, "document.search")
+    check(off_list.pass == false and string.find(off_list.detail, "'everything' isn't one of all, titles", 1, true) != nil,
+        "a value outside the enum, got: " .. off_list.detail)
+end
+
+function tests.valid_arguments_passes_good_calls_and_open_ended_writes()
+    print("Testing valid_arguments passes matching calls, and field keys on entity.update")
+    check(valid_arguments_of({entity_type = "experiment", entity_id = 24}, "entity.get").pass == true, "required only")
+    check(valid_arguments_of({entity_type = "experiment", entity_id = 24, field = "notes"}, "entity.get").pass == true, "with an optional one")
+    open = valid_arguments_of({entity_type = "experiment", entity_id = 24, status = "finished"}, "entity.update")
+    check(open.pass == true, "additionalProperties = true takes one key per field, got: " .. open.detail)
+    still_typed = valid_arguments_of({entity_type = "experiment", entity_id = "24", status = "finished"}, "entity.update")
+    check(still_typed.pass == false, "a declared key is still typed on an open-ended write")
+    undeclared = valid_arguments_of({sql = "SELECT 1"}, "document.query")
+    check(undeclared.pass == true and undeclared.calls == 0, "an undeclared tool is known_tools' to count, not this one")
+end
+
+function tests.grounded_ids_fails_on_an_id_nothing_showed()
+    print("Testing grounded_ids catches a lab number read as a row id (#38's failure)")
+    -- EXP-017 is row 24; the 17 in the lab number isn't a row id anywhere.
+    conv = checks.conversation({user("When did EXP-017 start?"),
+        calls("c1", "entity.get", {entity_type = "experiment", entity_id = 17}),
+        result("c1", "entity.get", "id=17; lab_number=EXP-009", false), said("It started on 2026-01-02.")}, {})
+    outcome = checks.grounded_ids(conv, {}, VALIDITY_CTX)
+    check(outcome.pass == false and outcome.count == 1 and string.find(outcome.detail, "entity.get (entity_id 17)", 1, true) != nil,
+        "17 came from EXP-017, got: " .. outcome.detail)
+    check(outcome.by_tool["entity.get"] == 1, "counted by tool")
+end
+
+function tests.grounded_ids_passes_an_id_a_result_or_the_user_gave()
+    print("Testing grounded_ids passes ids from an earlier result or the user's message")
+    from_result = checks.conversation({user("When did EXP-017 start?"),
+        calls("c1", "entity.find", {text = "EXP-017"}),
+        result("c1", "entity.find", "experiment 24 \"Growth trial\" (lab_number EXP-017)", false),
+        calls("c2", "entity.get", {entity_type = "experiment", entity_id = 24}),
+        result("c2", "entity.get", "started_on=2026-01-07", false), said("2026-01-07.")}, {})
+    outcome = checks.grounded_ids(from_result, {}, VALIDITY_CTX)
+    check(outcome.pass == true and outcome.calls == 2, "24 came from entity.find, got: " .. outcome.detail)
+    from_user = checks.conversation({user("Show me document 261"),
+        calls("c1", "document.read", {document_id = 261}), result("c1", "document.read", "text", false), said("ok")}, {})
+    check(checks.grounded_ids(from_user, {}, VALIDITY_CTX).pass == true, "the user named 261")
+end
+
+function tests.grounded_ids_never_lets_the_model_ground_itself()
+    print("Testing grounded_ids: the model's own text and arguments don't ground an id")
+    conv = checks.conversation({user("q"), said("I'll look at experiment 17."),
+        calls("c1", "entity.get", {entity_type = "experiment", entity_id = 17}),
+        result("c1", "entity.get", "ERROR: no such row", true),
+        calls("c2", "entity.get", {entity_type = "experiment", entity_id = 17}),
+        result("c2", "entity.get", "ERROR: no such row", true), said("Not found.")}, {})
+    outcome = checks.grounded_ids(conv, {}, VALIDITY_CTX)
+    check(outcome.pass == false and outcome.count == 2, "both uses of the invented 17, got " .. tostring(outcome.count))
+    check(checks.has_number == nil, "helpers stay out of the check list")
+end
+
+function tests.grounded_ids_reads_whole_numbers_only()
+    print("Testing grounded_ids: 24 isn't in 124, 240 or EXP-0245")
+    texts = {"row 124", "EXP-0245", "id 240"}
+    for _, text in ipairs(texts) do
+        conv = checks.conversation({user(text), calls("c1", "entity.get", {entity_type = "x", entity_id = 24}),
+            result("c1", "entity.get", "r", false), said("ok")}, {})
+        check(checks.grounded_ids(conv, {}, VALIDITY_CTX).pass == false, "24 isn't in '" .. text .. "'")
+    end
+    conv = checks.conversation({user("entity_id=24,"), calls("c1", "entity.get", {entity_type = "x", entity_id = 24}),
+        result("c1", "entity.get", "r", false), said("ok")}, {})
+    check(checks.grounded_ids(conv, {}, VALIDITY_CTX).pass == true, "24 stands alone in 'entity_id=24,'")
+    ids = checks.conversation({user("rows 5 and 6"), calls("c1", "plot.points", {row_ids = {5, 6, 7}}),
+        result("c1", "plot.points", "r", false), said("ok")}, {})
+    outcome = checks.grounded_ids(ids, {}, VALIDITY_CTX)
+    check(outcome.pass == false and string.find(outcome.detail, "row_ids 7", 1, true) != nil, "a list's ids each, got: " .. outcome.detail)
+end
+
 function tests.final_text_is_the_last_plain_reply_after_the_last_user_message()
     print("Testing the final answer is the last plain reply of the latest exchange")
     conv = checks.conversation({user("q1"), said("old answer"), user("q2"), calls("c1", "document.search", {}),

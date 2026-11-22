@@ -568,9 +568,263 @@ function checks.state(conv, spec, ctx)
     return {pass = true, detail = ""}
 end
 
+-- Tool-call validity (#41): run on every scenario, not opted into by a
+-- spec, and reported as rates over the run's calls rather than counted in
+-- "All checks passed" -- a check added later would otherwise read as a drop
+-- against every baseline taken before it. A bad call usually gets an error
+-- the model recovers from, so the scenario still passes and nothing else in
+-- the scorecard sees it: on 20261110-111632-live the agent called
+-- document.query three times and entity.search once, neither of which
+-- exists, and every one of those scenarios passed.
+checks.VALIDITY = {"known_tools", "valid_arguments", "grounded_ids"}
+
+-- The loop a call was made in: a sub-agent's steps carry their loop_kind
+-- (research, background); the main conversation's rows are the chat loop.
+function call_loop(msg)
+    if msg.has_parent == true and msg.loop_kind != nil and msg.loop_kind != "" then
+        return msg.loop_kind
+    end
+    return "chat"
+end
+
+-- Every call names a tool declared to its own loop. A sub-agent is offered
+-- read-only tools only, so a write it calls is as unknown to it as a tool
+-- that exists nowhere. ctx.declared(loop) is {[name] = declaration}.
+function checks.known_tools(conv, spec, ctx)
+    bad = {}
+    by_tool = {}
+    calls = 0
+    for _, msg in ipairs(conv.messages) do
+        if msg.role == "assistant" then
+            loop = call_loop(msg)
+            declared = ctx.declared(loop)
+            for _, call in ipairs(msg.tool_calls) do
+                calls = calls + 1
+                if declared[tostring(call.name)] == nil then
+                    label = tostring(call.name)
+                    if loop != "chat" then
+                        label = label .. " (" .. loop .. ")"
+                    end
+                    table.insert(bad, label)
+                    if by_tool[tostring(call.name)] == nil then
+                        by_tool[tostring(call.name)] = 0
+                    end
+                    by_tool[tostring(call.name)] = by_tool[tostring(call.name)] + 1
+                end
+            end
+        end
+    end
+    detail = ""
+    if #bad > 0 then
+        detail = "not declared: " .. table.concat(bad, ", ")
+    end
+    return {pass = #bad == 0, detail = detail, count = #bad, calls = calls, by_tool = by_tool}
+end
+
+-- Whether `value` has JSON Schema type `t` (as decoded from the model's JSON).
+function schema_type_ok(value, t)
+    if t == "string" then
+        return type(value) == "string"
+    elseif t == "integer" then
+        return type(value) == "number" and math.floor(value) == value
+    elseif t == "number" then
+        return type(value) == "number"
+    elseif t == "boolean" then
+        return type(value) == "boolean"
+    elseif t == "array" or t == "object" then
+        return type(value) == "table"
+    end
+    return true
+end
+
+-- What's wrong with `value` against `schema`, appended to `out` as
+-- "<path> <problem>". The subset the tool records use: type, required,
+-- properties, enum, items. A key the schema doesn't name is a problem
+-- unless it sets additionalProperties = true, as the "one property per
+-- field" writes (entity.create/update/validate) do.
+function schema_problems(value, schema, path, out)
+    if type(schema) != "table" then
+        return
+    end
+    label = path
+    if label == "" then
+        label = "arguments"
+    end
+    if schema.type != nil and schema_type_ok(value, schema.type) == false then
+        table.insert(out, label .. " should be " .. tostring(schema.type) .. ", got " .. type(value))
+        return
+    end
+    if schema.enum != nil then
+        allowed = false
+        for _, option in ipairs(schema.enum) do
+            if option == value then
+                allowed = true
+            end
+        end
+        if allowed == false then
+            table.insert(out, label .. " '" .. tostring(value) .. "' isn't one of " .. table.concat(schema.enum, ", "))
+        end
+    end
+    if type(value) != "table" then
+        return
+    end
+    prefix = ""
+    if path != "" then
+        prefix = path .. "."
+    end
+    if schema.type == "object" or schema.properties != nil then
+        if schema.required != nil then
+            for _, name in ipairs(schema.required) do
+                if value[name] == nil then
+                    table.insert(out, "missing " .. prefix .. name)
+                end
+            end
+        end
+        properties = schema.properties
+        if properties == nil then
+            properties = {}
+        end
+        names = {}
+        for key, _ in pairs(value) do
+            table.insert(names, tostring(key))
+        end
+        table.sort(names)
+        for _, key in ipairs(names) do
+            if properties[key] != nil then
+                schema_problems(value[key], properties[key], prefix .. key, out)
+            elseif schema.additionalProperties != true then
+                table.insert(out, "unknown " .. prefix .. key)
+            end
+        end
+    elseif schema.type == "array" and schema.items != nil then
+        for i, item in ipairs(value) do
+            schema_problems(item, schema.items, path .. "[" .. tostring(i) .. "]", out)
+        end
+    end
+end
+
+-- Every call to a declared tool matches that tool's declared parameters.
+-- A call to an undeclared tool is known_tools' problem, not counted here.
+function checks.valid_arguments(conv, spec, ctx)
+    bad = {}
+    by_tool = {}
+    calls = 0
+    for _, msg in ipairs(conv.messages) do
+        if msg.role == "assistant" then
+            declared = ctx.declared(call_loop(msg))
+            for _, call in ipairs(msg.tool_calls) do
+                declaration = declared[tostring(call.name)]
+                if declaration != nil then
+                    calls = calls + 1
+                    arguments = call.arguments
+                    if arguments == nil then
+                        arguments = {}
+                    end
+                    problems = {}
+                    schema_problems(arguments, declaration.parameters, "", problems)
+                    if #problems > 0 then
+                        table.insert(bad, tostring(call.name) .. " (" .. table.concat(problems, "; ") .. ")")
+                        if by_tool[tostring(call.name)] == nil then
+                            by_tool[tostring(call.name)] = 0
+                        end
+                        by_tool[tostring(call.name)] = by_tool[tostring(call.name)] + 1
+                    end
+                end
+            end
+        end
+    end
+    detail = ""
+    if #bad > 0 then
+        detail = table.concat(bad, ", ")
+    end
+    return {pass = #bad == 0, detail = detail, count = #bad, calls = calls, by_tool = by_tool}
+end
+
+-- The row ids a call's arguments pass: keys named id or ending in _id
+-- (entity_id, document_id, result_id), or _ids for a list, whose values are
+-- whole numbers. {{key =, value =}, ...}.
+function id_arguments(arguments, out)
+    if type(arguments) != "table" then
+        return out
+    end
+    names = {}
+    for key, _ in pairs(arguments) do
+        table.insert(names, tostring(key))
+    end
+    table.sort(names)
+    for _, key in ipairs(names) do
+        value = arguments[key]
+        is_id = key == "id" or string.match(key, "_id$") != nil
+        is_ids = string.match(key, "_ids$") != nil
+        if is_id then
+            n = tonumber(value)
+            if n != nil and math.floor(n) == n then
+                table.insert(out, {key = key, value = string.format("%d", n)})
+            end
+        elseif is_ids and type(value) == "table" then
+            for _, item in ipairs(value) do
+                n = tonumber(item)
+                if n != nil and math.floor(n) == n then
+                    table.insert(out, {key = key, value = string.format("%d", n)})
+                end
+            end
+        end
+    end
+    return out
+end
+
+-- Whether `number` stands as a whole number in `text`: 24 in "experiment
+-- 24" or "entity_id=24", not in 124, 24.5 or EXP-0245.
+function has_number(text, number)
+    return string.find(text, "%f[%d]" .. number .. "%f[^%d]") != nil
+end
+
+-- Every id an argument passes appeared before the call: in the user's
+-- message, a tool result, a compaction summary or a decision. What the
+-- model wrote itself (its text, earlier arguments) doesn't count, or an
+-- invented id would ground itself on its next use. This is #38's failure:
+-- entity.get with entity_id 17 for "EXP-017", a lab number read as a row
+-- id. A small id (1, 2) also turns up in other numbers, so a made-up one
+-- can pass; a pass is "nothing contradicts it", a failure is certain.
+function checks.grounded_ids(conv, spec, ctx)
+    bad = {}
+    by_tool = {}
+    calls = 0
+    seen = {}
+    for _, msg in ipairs(conv.messages) do
+        if msg.role == "assistant" then
+            known = table.concat(seen, "\n")
+            for _, call in ipairs(msg.tool_calls) do
+                calls = calls + 1
+                invented = {}
+                for _, id in ipairs(id_arguments(call.arguments, {})) do
+                    if has_number(known, id.value) == false then
+                        table.insert(invented, id.key .. " " .. id.value)
+                    end
+                end
+                if #invented > 0 then
+                    table.insert(bad, tostring(call.name) .. " (" .. table.concat(invented, ", ") .. ")")
+                    if by_tool[tostring(call.name)] == nil then
+                        by_tool[tostring(call.name)] = 0
+                    end
+                    by_tool[tostring(call.name)] = by_tool[tostring(call.name)] + 1
+                end
+            end
+        elseif msg.role != "self_check" and msg.text != nil and msg.text != "" then
+            -- A self-check is the model's own critique, like its text.
+            table.insert(seen, msg.text)
+        end
+    end
+    detail = ""
+    if #bad > 0 then
+        detail = "not seen before: " .. table.concat(bad, ", ")
+    end
+    return {pass = #bad == 0, detail = detail, count = #bad, calls = calls, by_tool = by_tool}
+end
+
 function checks.run(name, conv, spec, ctx)
     fn = checks[name]
-    if fn == nil or name == "run" or name == "conversation" then
+    if type(fn) != "function" or name == "run" or name == "conversation" then
         return {pass = false, detail = "unknown check " .. tostring(name)}
     end
     return fn(conv, spec, ctx)

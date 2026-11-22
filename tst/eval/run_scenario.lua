@@ -141,9 +141,33 @@ function score(db_path, scenario, session_id, status, message_rows)
         "SELECT id, tool, method, status, tool_call_id FROM agent_pending_action WHERE session_id = %s ORDER BY id;", db.quote(session_id)))
     conv = checks.conversation(message_rows, pending_rows)
 
+    -- What each loop was offered, as the turn loop builds it: the chat loop
+    -- every tool, a research or background sub-agent only the read-only
+    -- ones (agent_tools.research_tool_declarations).
+    declared_by_loop = {}
     ctx = {
         status = status,
         query = function(sql) return db.query(db_path, sql) end,
+        declared = function(loop)
+            key = "chat"
+            if loop == "research" or loop == "background" then
+                key = "research"
+            end
+            if declared_by_loop[key] == nil then
+                list = nil
+                if key == "chat" then
+                    list = agent.tool_declarations(db_path)
+                else
+                    list = agent_tools.research_tool_declarations(db_path)
+                end
+                by_name = {}
+                for _, declaration in ipairs(list) do
+                    by_name[declaration.name] = declaration
+                end
+                declared_by_loop[key] = by_name
+            end
+            return declared_by_loop[key]
+        end,
         is_destructive = function(full_name)
             dot = string.find(full_name, ".", 1, true)
             if dot == nil then
@@ -163,7 +187,14 @@ function score(db_path, scenario, session_id, status, message_rows)
             all_pass = false
         end
     end
-    return conv, results, all_pass
+    -- Run on every scenario, kept apart from pass/fail (checks.VALIDITY).
+    validity = {}
+    for _, name in ipairs(checks.VALIDITY) do
+        outcome = checks.run(name, conv, {}, ctx)
+        outcome.kind = name
+        table.insert(validity, outcome)
+    end
+    return conv, results, all_pass, validity
 end
 
 -- A readable transcript beside the run's database, for the report to
@@ -260,7 +291,7 @@ function run_and_score(command, argv, scenario, login)
 
     message_rows = db.query(db_path, string.format(
         "SELECT id, role, content, loop_kind, parent_message_id FROM agent_message WHERE session_id = %s ORDER BY id;", db.quote(session_id)))
-    conv, results, all_pass = score(db_path, scenario, session_id, status, message_rows)
+    conv, results, all_pass, validity = score(db_path, scenario, session_id, status, message_rows)
     write_transcript("transcript.md", scenario, mode, repeat_index, conv)
     cost = session_cost(db_path, session_id, message_rows)
 
@@ -274,6 +305,7 @@ function run_and_score(command, argv, scenario, login)
         error = run_error,
         pass = all_pass,
         checks = results,
+        validity = validity,
         final_text = conv.final_text,
         tokens = cost.tokens,
         model_calls = cost.model_calls,

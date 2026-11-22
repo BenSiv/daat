@@ -203,6 +203,49 @@ if repeated > 0 then
     summary.consistency = consistent / repeated
 end
 
+-- Tool-call validity (#41, checks.VALIDITY): bad calls per 100 calls of
+-- the run, for each check, and which tools they were. Rates over calls,
+-- not runs, so a run that makes more calls doesn't hide its bad ones, and
+-- kept out of all_checks_passed so a baseline taken before these checks
+-- stays comparable. A run from before #41 has no validity and is skipped.
+VALIDITY_SCORES = {
+    {"known_tools", "invented_tools_per_100_calls", "Invented tools"},
+    {"valid_arguments", "invalid_arguments_per_100_calls", "Invalid arguments"},
+    {"grounded_ids", "invented_ids_per_100_calls", "Invented ids"},
+}
+validity_totals = {}
+for _, v in ipairs(VALIDITY_SCORES) do
+    validity_totals[v[1]] = {bad = 0, calls = 0, by_tool = {}, runs = 0}
+end
+for _, run in ipairs(runs) do
+    if type(run.validity) == "table" then
+        for _, outcome in ipairs(run.validity) do
+            total = validity_totals[outcome.kind]
+            if total != nil then
+                total.runs = total.runs + 1
+                total.bad = total.bad + tonumber(outcome.count)
+                total.calls = total.calls + tonumber(outcome.calls)
+                if type(outcome.by_tool) == "table" then
+                    for tool, n in pairs(outcome.by_tool) do
+                        if total.by_tool[tool] == nil then
+                            total.by_tool[tool] = 0
+                        end
+                        total.by_tool[tool] = total.by_tool[tool] + tonumber(n)
+                    end
+                end
+            end
+        end
+    end
+end
+for _, v in ipairs(VALIDITY_SCORES) do
+    total = validity_totals[v[1]]
+    if total.runs > 0 and total.calls > 0 then
+        summary[v[2]] = 100 * total.bad / total.calls
+    elseif total.runs > 0 then
+        summary[v[2]] = 0
+    end
+end
+
 previous = nil
 if compare_path != nil then
     cfile = io.open(compare_path, "r")
@@ -236,6 +279,9 @@ SCORES = {
     {"repeat_calls_per_run", "Exact repeat calls per run", "num"},
     {"compactions_per_run", "Compactions per run", "num"},
     {"entity_get_calls_per_run", "entity.get calls per run", "num"},
+    {"invented_tools_per_100_calls", "Invented tools per 100 calls", "num"},
+    {"invalid_arguments_per_100_calls", "Invalid arguments per 100 calls", "num"},
+    {"invented_ids_per_100_calls", "Invented ids per 100 calls", "num"},
 }
 
 function fmt(value, kind)
@@ -282,6 +328,27 @@ else
     table.insert(lines, "|-------|-------|")
     for _, s in ipairs(SCORES) do
         table.insert(lines, string.format("| %s | %s |", s[2], fmt(summary[s[1]], s[3])))
+    end
+end
+-- The counts behind the validity rates, and which tools the bad calls named.
+if validity_totals.known_tools.runs > 0 then
+    table.insert(lines, "")
+    table.insert(lines, "Tool-call validity (not part of All checks passed):")
+    table.insert(lines, "")
+    table.insert(lines, "| Check | Bad calls | Calls | By tool |")
+    table.insert(lines, "|-------|-----------|-------|---------|")
+    for _, v in ipairs(VALIDITY_SCORES) do
+        total = validity_totals[v[1]]
+        tools = {}
+        for tool, n in pairs(total.by_tool) do
+            table.insert(tools, tool .. " " .. tostring(n))
+        end
+        table.sort(tools)
+        tools_text = table.concat(tools, ", ")
+        if tools_text == "" then
+            tools_text = "-"
+        end
+        table.insert(lines, string.format("| %s (`%s`) | %d | %d | %s |", v[3], v[1], total.bad, total.calls, tools_text))
     end
 end
 table.insert(lines, "")

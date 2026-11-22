@@ -184,6 +184,16 @@ end
 
 `answer` also takes `any` (one of several wordings) and `numbers` (every one within tolerance). The checks from `no_latex` down come from failures seen on a live deployment (daat-test, 2026-10-29); the database ones run in scenarios only.
 
+**Tool-call validity** checks (#41) run on every scenario without being listed in it, and count bad calls rather than pass or fail a run:
+
+| Check | Counts a call that |
+|-------|--------------------|
+| `known_tools` | names a tool not declared to its loop: one that exists nowhere (`document.query`), or a write called from a read-only research or background sub-agent |
+| `valid_arguments` | doesn't match the tool's declared parameters: a required field missing, a wrong type (`"24"` for an integer), a value outside its `enum`, or a key the tool doesn't take (allowed only where it declares `additionalProperties = true`, as `entity.create` does) |
+| `grounded_ids` | passes an id (`id`, `*_id`, `*_ids`) that appeared nowhere before it: not in the user's message, a tool result, a compaction summary or a decision. The model's own text doesn't count. This catches a lab number read as a row id (`entity_id 17` for EXP-017). A small id can turn up inside other numbers, so an invented one can pass; a failure is certain |
+
+They aren't part of "All checks passed", so a baseline scored before them stays comparable.
+
 The checks live in `tst/eval/checks.lua`. All but `approval` and `state` read only a conversation decoded from stored `agent_message` rows, so they apply to any stored chat (see section 5). `tst/unit/agent_eval_checks.lua` makes sure each check fails on the conversation it exists to catch.
 
 ### 3. Runner and report
@@ -208,6 +218,7 @@ The report shows one line per score (`SCORES` in `tst/eval/report.lua`):
 | Failed lookups per run | Guessed-schema and dialect errors per run (`no_failed_lookup`) |
 | Tokens per run, per passed run; peak prompt tokens | Cost, read from `agent_model_call` |
 | Exact repeat calls, compactions, `entity.get` calls per run | How the agent spends its context |
+| Invented tools, invalid arguments, invented ids per 100 calls | Tool-call validity: bad calls per 100 of the run's calls, by check. A table under the scores gives the counts and which tools |
 
 With `--compare` it adds a change column. It also lists failing scenarios with links to their transcripts.
 
@@ -248,8 +259,6 @@ Progress is tracked in the issues, not here:
 - #9: aggregate questions that run out of steps and hide their method.
 - #39: a repeatable stress test for the knowledge-pool tiers: search latency p50/p95, model calls and review cost per search, at 5,000-10,000 documents.
 - #40: cross-session scenarios, whether knowledge from one chat reaches a later one.
-- #41: checks for invented tool names and invalid or fabricated arguments.
-- #45: whether the drop in plain-text formulas on #44's live run is noise or real.
 
 The aims the scorecard is held to: a fresh clone plus an eval credential runs it with no other setup; every expected answer comes from the generator; test mode stays fast enough to run in every `./bld/test.sh`; a live run of the core set with 3 repeats stays within the agreed monthly budget.
 
