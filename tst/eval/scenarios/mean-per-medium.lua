@@ -29,10 +29,13 @@ return function(f, s)
             "experiments? Leave out superseded runs."},
         approval = "leave",
         script = {
-            s.tool("entity.query", {sql = "SELECT m.label, e.lab_number, ms.hours, ms.od600 FROM measurement ms " ..
+            -- The short path (#9): one fit per experiment, averaged per
+            -- medium by mean_by in the same call.
+            s.tool("stats.fit", {sql = "SELECT m.label AS medium, e.lab_number, ms.hours, ms.od600 FROM measurement ms " ..
                 "JOIN sample sa ON sa.id = ms.sample JOIN experiment e ON e.id = sa.experiment " ..
                 "JOIN culture_medium m ON m.id = e.medium WHERE e.status = 'finished' AND e.archived_at IS NULL " ..
-                "AND e.title LIKE 'Growth of S. demo%'"}),
+                "AND e.title LIKE 'Growth of S. demo%'", x_column = "hours", y_column = "od600", model = "exponential",
+                group_column = "lab_number", mean_by = "medium"}),
             s.final("Mean doubling time per medium, each run fitted as ln(2) / slope of ln(OD600) against hours: " ..
                 table.concat(parts, "; ") .. "."),
         },
