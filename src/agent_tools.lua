@@ -1222,7 +1222,7 @@ function entity_list_types(ctx, args)
     return table.concat(names, ", ")
 end
 
-ENTITY_SYSTEM_COLUMNS = "id, name, external_id, created_by, created_at, updated_by, updated_at, archived_at (non-NULL = archived; filter archived_at IS NULL for live rows)."
+ENTITY_SYSTEM_COLUMNS = "id, name, external_id, created_by, created_at, updated_by, updated_at, archived_at (non-NULL = archived: a deleted, superseded or replaced record; filter archived_at IS NULL for live rows)."
 
 function entity_fields(ctx, args)
     db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
@@ -1318,6 +1318,65 @@ function schema_columns_lines(db_path)
     return lines
 end
 
+-- Which tables hold archived rows right now, and the reasons given when
+-- they were archived (#9). "Leave out superseded runs" sent every eval
+-- mean-per-medium run searching documents, tags and meeting notes for
+-- 14-30 steps: it found the two archived experiments early, but nothing
+-- said that archived was how a superseded run is recorded, so it went
+-- looking for proof. The reason ("superseded by a repeat run") was in
+-- entity_event all along. One line per table, at most three reasons
+-- each, so the result that's pinned through compaction stays small;
+-- best-effort, since a store without entity_event rows (or a query
+-- that fails) should cost the first look nothing.
+ARCHIVED_REASONS_SHOWN = 3
+ARCHIVED_REASON_CHARS = 80
+
+function archived_rows_lines(db_path)
+    found = {}
+    for _, t in ipairs(schema.list(db_path)) do
+        name = t.name
+        ok, rows = pcall(db.query, db_path, string.format(
+            "SELECT ev.reason AS reason, COUNT(*) AS n FROM %s r LEFT JOIN entity_event ev ON ev.event_id = " ..
+            "(SELECT MAX(x.event_id) FROM entity_event x WHERE x.entity_id = r.id AND x.entity_type = '%s' " ..
+            "AND x.event_type = 'archive') WHERE r.archived_at IS NOT NULL GROUP BY ev.reason ORDER BY n DESC", name, name))
+        if ok == true and type(rows) == "table" and #rows > 0 then
+            total = 0
+            reasons = {}
+            for _, row in ipairs(rows) do
+                n = tonumber(row.n)
+                if n == nil then
+                    n = 0
+                end
+                total = total + n
+                reason = row.reason
+                if reason != nil and reason != "" and #reasons < ARCHIVED_REASONS_SHOWN then
+                    reason = tostring(reason)
+                    if #reason > ARCHIVED_REASON_CHARS then
+                        reason = string.sub(reason, 1, ARCHIVED_REASON_CHARS) .. "..."
+                    end
+                    table.insert(reasons, string.format("\"%s\" (%d)", reason, n))
+                end
+            end
+            if total > 0 then
+                line = string.format("%s: %d", name, total)
+                if #reasons > 0 then
+                    line = line .. ", reasons given: " .. table.concat(reasons, ", ")
+                end
+                table.insert(found, line)
+            end
+        end
+    end
+    if #found == 0 then
+        return {}
+    end
+    table.sort(found)
+    lines = {"Archived rows now (how a deleted, superseded or replaced record is kept; filter archived_at IS NULL to leave them out):"}
+    for _, line in ipairs(found) do
+        table.insert(lines, line)
+    end
+    return lines
+end
+
 function entity_relationships(ctx, args)
     db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
     edges = schema.relationships(db_path)
@@ -1330,6 +1389,9 @@ function entity_relationships(ctx, args)
         lines = {"No reference relationships registered between any entity types."}
     end
     for _, line in ipairs(schema_columns_lines(db_path)) do
+        table.insert(lines, line)
+    end
+    for _, line in ipairs(archived_rows_lines(db_path)) do
         table.insert(lines, line)
     end
     return table.concat(lines, "\n")

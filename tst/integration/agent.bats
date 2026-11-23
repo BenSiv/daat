@@ -498,6 +498,38 @@ EOF
     [[ "$output" =~ "task_note.task -> task (reference)" ]]
 }
 
+@test "entity.relationships says which tables have archived rows and the reasons given" {
+    # "Leave out superseded runs": the eval's mean-per-medium runs found
+    # the archived experiments, then spent 14-30 steps searching
+    # documents for proof that archived meant superseded (#9).
+    write_task_schema
+    write_task_note_schema
+    for t in A B C D; do
+        "$BIN" entity create task title="Task $t" status=open >/dev/null
+    done
+    id_of() { sqlite3 "$TEST_DIR/.store/store.db" "SELECT id FROM task WHERE title = 'Task $1';"; }
+    a=$(id_of A); b=$(id_of B); c=$(id_of C)
+    "$BIN" entity archive task "$a" >/dev/null
+    "$BIN" entity archive task "$b" >/dev/null
+    # Archived and restored: no longer archived, so not counted.
+    "$BIN" entity archive task "$c" >/dev/null
+    "$BIN" entity unarchive task "$c" >/dev/null
+    # The CLI takes no reason; the API and the agent's entity.archive do.
+    sqlite3 "$TEST_DIR/.store/store.db" "UPDATE entity_event SET reason = 'superseded by a repeat run' WHERE event_type = 'archive' AND entity_type = 'task' AND entity_id = $a;"
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(tool_call_response "entity.relationships" '{}')"$'\1'"$(done_response "Listed.")"
+    raw_post_json "/api/v1/chat/sessions/${session_id}/messages" "{\"message\":\"which tasks are superseded?\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "Archived rows now (how a deleted, superseded or replaced record is kept" ]]
+    # A stored result is JSON, so the reason's quotes are escaped there.
+    [[ "$output" =~ 'task: 2, reasons given: \"superseded by a repeat run\" (1)' ]]
+    # A table with nothing archived gets no line.
+    [[ ! "$output" =~ task_note:\ [0-9] ]]
+}
+
 @test "entity.find resolves a name on an identifier field to the entity's real id" {
     mkdir -p schemas
     cat > schemas/batch.lua <<'EOF'
