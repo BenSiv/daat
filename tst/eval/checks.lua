@@ -41,6 +41,16 @@ UNKNOWN_PATTERNS = {
     "no data", "unknown",
 }
 
+-- "No <thing> recorded" with the thing named in between, which the fixed
+-- phrases above miss: "there is no supplier information recorded" failed
+-- a correct unknown-supplier reply (20261123-130007-live #3, #9). One or
+-- two words between, no more, so "no doubt the values were recorded"
+-- isn't read as one.
+UNKNOWN_SHAPES = {
+    "%f[%a]no %a+ recorded", "%f[%a]no %a+ %a+ recorded",
+    "%f[%a]no %a+ information", "%f[%a]no %a+ %a+ information",
+}
+
 MONTHS = {"january", "february", "march", "april", "may", "june", "july",
     "august", "september", "october", "november", "december"}
 
@@ -63,7 +73,10 @@ function date_forms(iso)
 end
 
 METHOD_PATTERNS = {"select ", "```", "calculated", "computed", "formula", "ln(", "log(", "slope", "regression",
-    "log-linear", "least squares", "least-squares", "fitted", "fit over"}
+    "log-linear", "least squares", "least-squares", "fitted", "fit over",
+    -- "determined using an exponential fit on OD600" failed a correct
+    -- mean-per-medium reply (20261123-130007-live #2, #9).
+    "exponential fit", "linear fit", "curve fit"}
 
 function contains_any(text, patterns)
     lowered = string.lower(text)
@@ -325,7 +338,16 @@ function checks.finished(conv, spec, ctx)
 end
 
 function checks.says_unknown(conv, spec, ctx)
-    hit = contains_any(final_or_empty(conv), UNKNOWN_PATTERNS)
+    text = final_or_empty(conv)
+    hit = contains_any(text, UNKNOWN_PATTERNS)
+    if hit == nil then
+        lowered = string.lower(text)
+        for _, shape in ipairs(UNKNOWN_SHAPES) do
+            if hit == nil then
+                hit = string.match(lowered, shape)
+            end
+        end
+    end
     if hit == nil then
         return {pass = false, detail = "does not say the data lacks the answer"}
     end

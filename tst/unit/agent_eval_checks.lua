@@ -140,6 +140,24 @@ function tests.says_unknown_and_shows_method()
     check(checks.shows_method(shown, {}, CTX).pass == true, "a stated method should pass")
 end
 
+function tests.says_unknown_and_shows_method_take_the_live_phrasings()
+    print("Testing says_unknown and shows_method pass the correct live replies they failed (#9)")
+    -- 20261123-130007-live, unknown-supplier #3 and mean-per-medium #2.
+    named = checks.conversation({user("q"), said("Having checked the tables and the handbook, there is no supplier " ..
+        "information recorded for yeast extract or any other ingredient in the platform's data.")}, {})
+    result = checks.says_unknown(named, {}, CTX)
+    check(result.pass == true, "'no supplier information recorded' should pass says_unknown")
+    check(result.detail == "'no supplier information recorded'","detail should quote the match, got " .. tostring(result.detail))
+    check(checks.says_unknown(checks.conversation({user("q"), said("No supplier recorded for it.")}, {}), {}, CTX).pass == true,
+        "'no supplier recorded' should pass")
+    -- Not every "no ... recorded" says the data lacks the answer.
+    doubt = checks.conversation({user("q"), said("No doubt the readings were carefully recorded: 3.9 hours.")}, {})
+    check(checks.says_unknown(doubt, {}, CTX).pass == false, "three words between 'no' and 'recorded' should not count")
+    fit = checks.conversation({user("q"), said("Each doubling time was determined using an exponential fit on OD600 " ..
+        "measurements over time; the mean for YPD is 3.43 h.")}, {})
+    check(checks.shows_method(fit, {}, CTX).pass == true, "'an exponential fit on OD600' should pass shows_method")
+end
+
 function tests.no_tool_names_catches_plumbing_but_not_links()
     print("Testing no_tool_names catches tool names but not record links or sentence ends")
     leaky = checks.conversation({user("q"), said("| S1 | calc.evaluate -> 4.31 days |")}, {})
