@@ -375,12 +375,13 @@ agent_tools.AGENT_TOOLS = {
         fit = {
             destructive = false,
             in_research = true,
-            description = "Fit a line or an exponential to two numeric columns of a read-only SQL query (same rules as entity.query) and get the fitted rate with how well it fits. Use it for any growth rate, doubling time, decay or trend over a time series instead of picking two points yourself. model \"exponential\" fits ln(y) against x and reports the growth rate and doubling time; without x_min/x_max it finds the exponential phase from the data and leaves out a lag or plateau, and says which points it used. model \"linear\" fits y against x. Each series is fitted separately: for one value per experiment, sample or replicate, return all of them in one query with a group_column and get one fit per group plus their mean in a single call.",
+            description = "Fit a line or an exponential to two numeric columns of a read-only SQL query (same rules as entity.query) and get the fitted rate with how well it fits. Use it for any growth rate, doubling time, decay or trend over a time series instead of picking two points yourself. model \"exponential\" fits ln(y) against x and reports the growth rate and doubling time; without x_min/x_max it finds the exponential phase from the data and leaves out a lag or plateau, and says which points it used. model \"linear\" fits y against x. Each series is fitted separately: for one value per experiment, sample or replicate, return all of them in one query with a group_column and get one fit per group plus their mean in a single call. For a mean per a second level above the series (the mean doubling time per medium, fitting each experiment), also return that column and name it in mean_by: the same call gives one mean per value.",
             parameters = {
                 type = "object",
                 properties = {
                     sql = {type = "string", description = "a single SELECT returning the x_column and y_column -- for one series, or for many with a group_column"},
                     group_column = {type = "string", description = "optional: result column naming each series (e.g. lab_number); fits each group separately"},
+                    mean_by = {type = "string", description = "optional, with group_column: result column the series are averaged by (e.g. medium, the same on every row of a series); gives one mean per value"},
                     x_column = {type = "string", description = "result column for x (e.g. time) -- numeric"},
                     y_column = {type = "string", description = "result column for y -- numeric, above 0 for an exponential fit"},
                     model = {type = "string", description = "\"exponential\" or \"linear\""},
@@ -980,27 +981,85 @@ function fit_series(args, xs, ys)
     return {rate = slope, intercept = intercept, r2 = r2, n = #fx, x_from = fx[1], x_to = fx[#fx], phase = "all"}
 end
 
+-- One line per mean_by value, in the order the query first returns it:
+-- the mean over that value's fitted series, how many of its series went
+-- in, and which -- the arithmetic a reply shows as its method, so the
+-- model can cite it without redoing it in calc.evaluate. A value whose
+-- series all failed to fit says so rather than vanishing.
+function append_level_means(lines, order, groups, measure, group_column, mean_by)
+    level_order = {}
+    levels = {}
+    for _, key in ipairs(order) do
+        g = groups[key]
+        if levels[g.level] == nil then
+            levels[g.level] = {total = 0, fitted = {}, count = 0}
+            table.insert(level_order, g.level)
+        end
+        lv = levels[g.level]
+        lv.count = lv.count + 1
+        if g.value != nil then
+            lv.total = lv.total + g.value
+            table.insert(lv.fitted, string.format("%s %.4g", key, g.value))
+        end
+    end
+    table.insert(lines, string.format("mean %s by %s:", measure, mean_by))
+    for _, level in ipairs(level_order) do
+        lv = levels[level]
+        if #lv.fitted == 0 then
+            table.insert(lines, string.format("%s: no series could be fitted (0 of %d %s groups)", level, lv.count,
+                group_column))
+        else
+            table.insert(lines, string.format("%s: %.4g, mean of %d of %d %s groups (%s)", level,
+                lv.total / #lv.fitted, #lv.fitted, lv.count, group_column, table.concat(lv.fitted, ", ")))
+        end
+    end
+end
+
+-- A result column is named without its table alias ("e.id" comes back as
+-- "id"); take the name after the dot when that's what exists. Returns the
+-- column's name in the result, or nil and an error naming the columns
+-- that are there.
+function result_column(first, name, arg_name)
+    column = name
+    if first[column] == nil and string.find(column, ".", 1, true) != nil then
+        column = string.match(column, "%.([^%.]+)$")
+    end
+    if first[column] == nil then
+        names = {}
+        for n, _ in pairs(first) do
+            table.insert(names, tostring(n))
+        end
+        table.sort(names)
+        return nil, "query result has no column named \"" .. tostring(name) ..
+            "\" for " .. arg_name .. " -- " .. agent_tools.hint_result_columns(names)
+    end
+    return column
+end
+
 -- stats.fit with group_column: one fit per value of that column (e.g.
 -- per experiment or sample), in the order the query returns them, one
 -- line each, then the mean over the groups that fit. A value per group
 -- in one call -- fitting each separately took one call per series and
 -- ran a per-medium question out of turns (eval mean-per-medium).
 function fit_groups(args, series)
-    -- A result column is named without its table alias ("e.id" comes
-    -- back as "id"); take the name after the dot when that's what exists.
-    group_column = args.group_column
     first = series.rows[1]
-    if first[group_column] == nil and string.find(group_column, ".", 1, true) != nil then
-        group_column = string.match(group_column, "%.([^%.]+)$")
+    group_column, group_err = result_column(first, args.group_column, "group_column")
+    if group_column == nil then
+        return nil, group_err
     end
-    if first[group_column] == nil then
-        names = {}
-        for name, _ in pairs(first) do
-            table.insert(names, tostring(name))
+    -- mean_by: a second level above the series (the medium each
+    -- experiment ran on), so "the mean doubling time per medium" is one
+    -- call. Without it the model fitted per experiment, queried which
+    -- medium each ran on and averaged each medium with its own
+    -- calc.evaluate -- about five steps, and two of three eval
+    -- mean-per-medium runs ran out of steps (#9).
+    mean_by = nil
+    if args.mean_by != nil and args.mean_by != "" then
+        mean_by_err = nil
+        mean_by, mean_by_err = result_column(first, args.mean_by, "mean_by")
+        if mean_by == nil then
+            return nil, mean_by_err
         end
-        table.sort(names)
-        return nil, "query result has no column named \"" .. tostring(args.group_column) ..
-            "\" for group_column -- " .. agent_tools.hint_result_columns(names)
     end
     order = {}
     groups = {}
@@ -1009,6 +1068,20 @@ function fit_groups(args, series)
         if groups[key] == nil then
             groups[key] = {x = {}, y = {}}
             table.insert(order, key)
+        end
+        -- Each series belongs to exactly one mean_by value. A series
+        -- that spans two (grouped by sample when one sample's rows
+        -- carry two media) has no single place to go, and averaging it
+        -- into either would be a guess, so it's an error.
+        if mean_by != nil then
+            level = tostring(row[mean_by])
+            if groups[key].level == nil then
+                groups[key].level = level
+            elseif groups[key].level != level then
+                return nil, string.format("%s %s has more than one %s (%s and %s) -- mean_by must be the same " ..
+                    "on every row of a series; group by a column that separates them", group_column, key, mean_by,
+                    groups[key].level, level)
+            end
         end
         table.insert(groups[key].x, series.x[i])
         table.insert(groups[key].y, series.y[i])
@@ -1037,6 +1110,7 @@ function fit_groups(args, series)
                     key, fit.rate, fit.n, #g.x, fit.r2))
             else
                 table.insert(values, value)
+                g.value = value
                 table.insert(lines, string.format("%s: %s %.4g (in %s); fitted %d of %d points, %s %.6g to %.6g, r^2 = %.4f",
                     key, measure, value, args.x_column, fit.n, #g.x, args.x_column, fit.x_from, fit.x_to, fit.r2))
             end
@@ -1049,6 +1123,9 @@ function fit_groups(args, series)
         end
         table.insert(lines, string.format("mean %s over %d of %d %s groups: %.4g", measure, #values, #order,
             group_column, total / #values))
+    end
+    if mean_by != nil then
+        append_level_means(lines, order, groups, measure, group_column, mean_by)
     end
     return table.concat(lines, "\n")
 end
@@ -1980,6 +2057,9 @@ function stats_fit(ctx, args)
         return nil, "the query hit the row cap -- narrow it (fewer series, or only the columns needed) before fitting"
     end
     if args.group_column == nil or args.group_column == "" then
+        if args.mean_by != nil and args.mean_by != "" then
+            return nil, "mean_by needs a group_column naming each series to fit (e.g. lab_number)"
+        end
         fit, fit_err = fit_series(args, series.x, series.y)
         if fit == nil then
             return nil, "cannot fit: " .. tostring(fit_err)
@@ -2396,7 +2476,10 @@ used. For a value per experiment, sample or group (e.g. "the mean doubling
 time per medium"), fit every series in ONE stats.fit call: a query that
 returns all of them, with group_column naming each series -- not one call
 per series, which runs out of steps long before twenty series are done.
-Group the per-series results yourself only from what that call returned.
+When the question asks for a mean per something above the series (per
+medium, fitting each experiment), return that column too and name it in
+mean_by: the same call gives the mean per value, so don't look the groups
+up again or average them by hand.
 
 Say where a method comes from. If a document or SOP states how something
 is calculated, follow it and link it. If not, the method is your own
