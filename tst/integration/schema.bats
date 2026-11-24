@@ -51,7 +51,7 @@ return {
 }
 EOF
     run "$BIN" schema add schemas/bad.lua
-    [ "$status" -eq 0 ]
+    [ "$status" -eq 1 ]
     [[ "$output" =~ "Error" ]]
 
     run "$BIN" schema list
