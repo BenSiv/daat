@@ -795,16 +795,17 @@ function document.prune_derived(db_path, dry_run)
     }
     results = {}
     for _, check in ipairs(checks) do
-        rows = db.query(db_path, string.format("SELECT COUNT(*) AS n FROM %s WHERE %s;", check.tbl, check.where))
+        quoted_tbl = db.quote_ident(check.tbl)
+        rows = db.query(db_path, string.format("SELECT COUNT(*) AS n FROM %s WHERE %s;", quoted_tbl, check.where))
         count = 0
         if rows != nil and rows[1] != nil then
             count = tonumber(rows[1].n)
         end
         if count > 0 and dry_run != true then
             if check.action == "archived" then
-                db.exec(db_path, string.format("UPDATE %s SET archived_at = %s WHERE %s;", check.tbl, db.now_expr(db_path), check.where))
+                db.exec(db_path, string.format("UPDATE %s SET archived_at = %s WHERE %s;", quoted_tbl, db.now_expr(db_path), check.where))
             else
-                db.exec(db_path, string.format("DELETE FROM %s WHERE %s;", check.tbl, check.where))
+                db.exec(db_path, string.format("DELETE FROM %s WHERE %s;", quoted_tbl, check.where))
             end
         end
         table.insert(results, {label = check.label, action = check.action, count = count})

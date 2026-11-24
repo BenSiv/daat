@@ -1423,10 +1423,12 @@ function archived_rows_lines(db_path)
                 -- A multi-line reason would break the one-line-per-table layout.
                 reason = string.gsub(tostring(r.reason), "%s+", " ")
                 reason = string.match(reason, "^%s*(.-)%s*$")
-                if #reason > ARCHIVED_REASON_CHARS then
-                    reason = string.sub(reason, 1, ARCHIVED_REASON_CHARS) .. "..."
+                if reason != "" then
+                    if #reason > ARCHIVED_REASON_CHARS then
+                        reason = string.sub(reason, 1, ARCHIVED_REASON_CHARS) .. "..."
+                    end
+                    table.insert(reasons, string.format("\"%s\" (%d)", reason, tonumber(r.n)))
                 end
-                table.insert(reasons, string.format("\"%s\" (%d)", reason, tonumber(r.n)))
             end
             line = string.format("%s: %d", tostring(name), total)
             if #reasons > 0 then

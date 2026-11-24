@@ -509,7 +509,7 @@ end
 -- is never needed). See guess_tables below for the full table list a
 -- query reads from, joins included.
 function view.guess_from_table(sql_text)
-    table_name = string.match(sql_text, "[Ff][Rr][Oo][Mm]%s+([A-Za-z_][A-Za-z0-9_]*)")
+    table_name = string.match(sql_text, "[Ff][Rr][Oo][Mm]%s+[`\"]?([A-Za-z_][A-Za-z0-9_]*)[`\"]?")
     return table_name
 end
 
@@ -531,7 +531,7 @@ function view.guess_tables(sql_text)
         table.insert(tables, from_table)
         seen[from_table] = true
     end
-    for joined in string.gmatch(sql_text, "[Jj][Oo][Ii][Nn]%s+([A-Za-z_][A-Za-z0-9_]*)") do
+    for joined in string.gmatch(sql_text, "[Jj][Oo][Ii][Nn]%s+[`\"]?([A-Za-z_][A-Za-z0-9_]*)[`\"]?") do
         if seen[joined] == nil then
             table.insert(tables, joined)
             seen[joined] = true
@@ -963,7 +963,7 @@ function archived_rows_note(db_path, sql_text, referenced)
     for _, name in ipairs(referenced) do
         if registered[name] == true and seen[name] == nil then
             seen[name] = true
-            ok, count_rows = pcall(db.query, db_path, "SELECT COUNT(*) AS n FROM " .. name .. " WHERE archived_at IS NOT NULL;")
+            ok, count_rows = pcall(db.query, db_path, "SELECT COUNT(*) AS n FROM " .. db.quote_ident(name) .. " WHERE archived_at IS NOT NULL;")
             if ok == true and count_rows != nil and count_rows[1] != nil then
                 n = tonumber(count_rows[1].n)
                 if n != nil and n > 0 then
