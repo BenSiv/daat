@@ -593,6 +593,47 @@ table.insert(MIGRATIONS, {version = 13, name = "entity_event entity_id index", r
         "CREATE INDEX entity_event_entity_id_idx ON entity_event(entity_id, event_id);")
 end})
 
+-- 14. entity.update, entity.archive, and entity.unarchive previously stamped
+-- updated_by and last_event_id without advancing updated_at, leaving
+-- updated_at frozen at created_at across every projected entity table.
+-- Backfills stale updated_at values from each row's last_event_id row in
+-- entity_event while preserving any row whose updated_at is already newer
+-- (e.g. a document touched by curation after its last ledger edit).
+table.insert(MIGRATIONS, {version = 14, name = "backfill entity updated_at from ledger", run = function(db_path)
+    if not exists(db_path, "entity_event") or not exists(db_path, "entity_type") then
+        return
+    end
+    type_rows = db.query(db_path, "SELECT name FROM entity_type;")
+    if type_rows == nil then
+        return
+    end
+    is_maria = db.is_mariadb(db_path)
+    for _, tr in ipairs(type_rows) do
+        tname = tr.name
+        if tname != nil and tname != "" and exists(db_path, tname) then
+            have = columns_of(db_path, tname)
+            if have["id"] == true and have["updated_at"] == true and have["last_event_id"] == true then
+                qt = db.quote_ident(tname)
+                if is_maria then
+                    db.exec(db_path, string.format(
+                        "UPDATE %s t INNER JOIN entity_event e ON e.event_id = t.last_event_id " ..
+                        "SET t.updated_at = e.created_at " ..
+                        "WHERE t.last_event_id IS NOT NULL AND t.last_event_id > t.id " ..
+                        "AND e.created_at IS NOT NULL AND (t.updated_at IS NULL OR t.updated_at = '' OR t.updated_at < e.created_at);",
+                        qt))
+                else
+                    db.exec(db_path, string.format(
+                        "UPDATE %s SET updated_at = (SELECT e.created_at FROM entity_event e WHERE e.event_id = %s.last_event_id) " ..
+                        "WHERE last_event_id IS NOT NULL AND last_event_id > id AND EXISTS (" ..
+                        "SELECT 1 FROM entity_event e WHERE e.event_id = %s.last_event_id AND e.created_at IS NOT NULL " ..
+                        "AND (%s.updated_at IS NULL OR %s.updated_at = '' OR %s.updated_at < e.created_at));",
+                        qt, qt, qt, qt, qt, qt))
+                end
+            end
+        end
+    end
+end})
+
 function latest_version()
     latest = 0
     for _, m in ipairs(MIGRATIONS) do

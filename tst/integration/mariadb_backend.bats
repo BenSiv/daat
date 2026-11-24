@@ -803,3 +803,37 @@ EOF2
     [[ "$output" =~ "200 OK" ]]
     [[ "$output" =~ "REL-2026" ]]
 }
+
+@test "MariaDB entity update/archive/unarchive advance updated_at and migration 14 backfills frozen timestamps" {
+    "$BIN" init >/dev/null
+    mkdir -p schemas
+    cat > schemas/reagent.lua <<'EOF2'
+return {
+  name = "reagent",
+  fields = {
+    {name = "lot_number", type = "text", required = true},
+  },
+}
+EOF2
+    "$BIN" schema add schemas/reagent.lua >/dev/null
+    rid=$("$BIN" entity create reagent lot_number="LOT-M1" | grep -o '[0-9]\+')
+
+    q_sql() {
+        mariadb --batch --skip-column-names -h "$DAAT_MARIADB_HOST" -P "$DAAT_MARIADB_PORT" \
+            -u "$DAAT_MARIADB_USER" -p"$DAAT_MARIADB_PASSWORD" "$DAAT_MARIADB_DATABASE" -e "$1"
+    }
+
+    q_sql "UPDATE reagent SET created_at = '2026-01-01 00:00:00', updated_at = '2026-01-01 00:00:00' WHERE id = $rid;"
+    "$BIN" entity update reagent "$rid" lot_number="LOT-M2" >/dev/null
+    [[ "$(q_sql "SELECT updated_at FROM reagent WHERE id = $rid;")" > "2026-01-01 00:00:00" ]]
+
+    # Simulate a pre-migration-14 frozen updated_at on MariaDB and verify backfill.
+    ev_id=$(q_sql "SELECT last_event_id FROM reagent WHERE id = $rid;")
+    q_sql "UPDATE entity_event SET created_at = '2026-11-24 10:50:49' WHERE event_id = $ev_id;"
+    q_sql "UPDATE reagent SET updated_at = '2026-11-19 21:10:49' WHERE id = $rid;"
+    q_sql "UPDATE system_state SET number_value = 13 WHERE name = 'store.schema_version';"
+
+    run "$BIN" entity list reagent
+    [ "$status" -eq 0 ]
+    [ "$(q_sql "SELECT updated_at FROM reagent WHERE id = $rid;")" = "2026-11-24 10:50:49" ]
+}
