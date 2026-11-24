@@ -232,6 +232,20 @@ function tests.document_create_asks_for_placement_when_unspecified()
         "default_system_prompt should instruct the agent to inspect folders and ask where to file a new document")
 end
 
+-- #9: every live unknown-supplier run found the handbook saying orders go
+-- through "the purchasing sheet", then spent the rest of its steps
+-- searching vendor names it had guessed. The stop rule names both early
+-- signs of an absence and forbids searching guessed values.
+function tests.stop_rule_settles_an_absence_kept_elsewhere()
+    print("Testing default_system_prompt stops when a document says the information is kept outside daat")
+    prompt = agent_tools.default_system_prompt()
+    for _, phrase in ipairs({"has no field for what was asked", "kept somewhere outside daat",
+            "where the document says it is kept", "Don't then guess"}) do
+        check(string.find(prompt, phrase, 1, true) != nil,
+            "default_system_prompt's stop rule should say: " .. phrase)
+    end
+end
+
 dir = os.tmpname()
 os.remove(dir)
 lfs.mkdir(dir)
