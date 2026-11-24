@@ -621,6 +621,35 @@ function checks.known_tools(conv, spec, ctx)
     return {pass = #bad == 0, detail = detail, count = #bad, calls = calls, by_tool = by_tool}
 end
 
+-- Whether a table was a JSON array or object. A Lua table is both, and
+-- ipairs over {foo = "bar"} runs zero times, so without this an object
+-- passed where an array is declared had no problems (Ben, #60). dkjson
+-- marks what it decodes with __jsontype; a table built in Lua is an
+-- array when its keys are exactly 1..n. An empty one counts as either,
+-- whatever its mark: dkjson writes an empty Lua table as [], so a
+-- test-mode script's document.children {} came back as an array, and
+-- [] and {} carry the same nothing.
+function json_kind(value)
+    if next(value) == nil then
+        return "empty"
+    end
+    meta = getmetatable(value)
+    if meta != nil and meta.__jsontype != nil then
+        return meta.__jsontype
+    end
+    n = 0
+    for key, _ in pairs(value) do
+        if type(key) != "number" or key < 1 or math.floor(key) != key then
+            return "object"
+        end
+        n = n + 1
+    end
+    if n != #value then
+        return "object"
+    end
+    return "array"
+end
+
 -- Whether `value` has JSON Schema type `t` (as decoded from the model's JSON).
 function schema_type_ok(value, t)
     if t == "string" then
@@ -631,8 +660,10 @@ function schema_type_ok(value, t)
         return type(value) == "number"
     elseif t == "boolean" then
         return type(value) == "boolean"
-    elseif t == "array" or t == "object" then
-        return type(value) == "table"
+    elseif t == "array" then
+        return type(value) == "table" and json_kind(value) != "object"
+    elseif t == "object" then
+        return type(value) == "table" and json_kind(value) != "array"
     end
     return true
 end
@@ -779,10 +810,25 @@ function has_number(text, number)
     return string.find(text, "%f[%d]" .. number .. "%f[^%d]") != nil
 end
 
+-- Which rows can ground an id: only what came from outside the model.
+-- An allowlist, not a list of the model's own roles (Ben, #60): a
+-- `progress` note between two step budgets is the model's text too, and
+-- an error result echoes the id it was given ("no such experiment #17"),
+-- so either would let an invented id ground its own next use.
+GROUNDING_ROLES = {user = true, decision = true, compaction_summary = true, tool_result = true}
+
+function grounds_ids(msg)
+    if GROUNDING_ROLES[msg.role] != true or msg.text == nil or msg.text == "" then
+        return false
+    end
+    return msg.role != "tool_result" or msg.is_error != true
+end
+
 -- Every id an argument passes appeared before the call: in the user's
--- message, a tool result, a compaction summary or a decision. What the
--- model wrote itself (its text, earlier arguments) doesn't count, or an
--- invented id would ground itself on its next use. This is #38's failure:
+-- message, a tool result that isn't an error, a compaction summary or a
+-- decision (grounds_ids). What the model wrote itself (its text, progress
+-- notes, earlier arguments) doesn't count, or an invented id would ground
+-- itself on its next use. This is #38's failure:
 -- entity.get with entity_id 17 for "EXP-017", a lab number read as a row
 -- id. A small id (1, 2) also turns up in other numbers, so a made-up one
 -- can pass; a pass is "nothing contradicts it", a failure is certain.
@@ -810,8 +856,7 @@ function checks.grounded_ids(conv, spec, ctx)
                     by_tool[tostring(call.name)] = by_tool[tostring(call.name)] + 1
                 end
             end
-        elseif msg.role != "self_check" and msg.text != nil and msg.text != "" then
-            -- A self-check is the model's own critique, like its text.
+        elseif grounds_ids(msg) == true then
             table.insert(seen, msg.text)
         end
     end

@@ -41,7 +41,12 @@ DOCUMENT_SEARCH = {parameters = {type = "object", required = {"query"}, properti
     query = {type = "string"}, scope = {type = "string", enum = {"all", "titles"}}}}}
 ENTITY_UPDATE = {parameters = {type = "object", required = {"entity_type", "entity_id"}, additionalProperties = true,
     properties = {entity_type = {type = "string"}, entity_id = {type = "integer"}, reason = {type = "string"}}}}
-CHAT_TOOLS = {["entity.get"] = ENTITY_GET, ["document.search"] = DOCUMENT_SEARCH, ["entity.update"] = ENTITY_UPDATE}
+-- No built-in tool declares an array today; an extension's tool can, so
+-- this stands in for one.
+DOCUMENT_COMPARE = {parameters = {type = "object", required = {"document_ids"}, properties = {
+    document_ids = {type = "array", items = {type = "integer"}}}}}
+CHAT_TOOLS = {["entity.get"] = ENTITY_GET, ["document.search"] = DOCUMENT_SEARCH, ["entity.update"] = ENTITY_UPDATE,
+    ["document.compare"] = DOCUMENT_COMPARE}
 RESEARCH_TOOLS = {["entity.get"] = ENTITY_GET, ["document.search"] = DOCUMENT_SEARCH}
 VALIDITY_CTX = {declared = function(loop)
     if loop == "research" or loop == "background" then
@@ -132,6 +137,25 @@ function tests.valid_arguments_passes_good_calls_and_open_ended_writes()
     check(undeclared.pass == true and undeclared.calls == 0, "an undeclared tool is known_tools' to count, not this one")
 end
 
+function tests.valid_arguments_tells_an_array_from_an_object()
+    print("Testing valid_arguments: a JSON object where an array is declared is a wrong type (Ben, #60)")
+    -- Arguments go through json.encode and decode, as stored ones do, so
+    -- these carry dkjson's __jsontype.
+    object = valid_arguments_of({document_ids = {first = 291}}, "document.compare")
+    check(object.pass == false and string.find(object.detail, "document_ids should be array", 1, true) != nil,
+        "an object for an array, got: " .. object.detail)
+    check(valid_arguments_of({document_ids = {291, 292}}, "document.compare").pass == true, "a real array passes")
+    items = valid_arguments_of({document_ids = {291, "292"}}, "document.compare")
+    check(items.pass == false and string.find(items.detail, "should be integer", 1, true) != nil,
+        "an array's items are still typed, got: " .. items.detail)
+    -- dkjson writes an empty Lua table as [], as a test-mode script's
+    -- document.children {} is stored; empty is empty either way.
+    check(valid_arguments_of({}, "document.search").count == 1, "an empty object still misses its required query")
+    empty = valid_arguments_of({document_ids = {}}, "document.compare")
+    check(empty.pass == true, "an empty list is an array, got: " .. empty.detail)
+    check(checks.json_kind == nil, "helpers stay out of the check list")
+end
+
 function tests.grounded_ids_fails_on_an_id_nothing_showed()
     print("Testing grounded_ids catches a lab number read as a row id (#38's failure)")
     -- EXP-017 is row 24; the 17 in the lab number isn't a row id anywhere.
@@ -168,6 +192,33 @@ function tests.grounded_ids_never_lets_the_model_ground_itself()
     outcome = checks.grounded_ids(conv, {}, VALIDITY_CTX)
     check(outcome.pass == false and outcome.count == 2, "both uses of the invented 17, got " .. tostring(outcome.count))
     check(checks.has_number == nil, "helpers stay out of the check list")
+end
+
+function tests.grounded_ids_takes_only_what_came_from_outside_the_model()
+    print("Testing grounded_ids: a progress note or an error echoing the id doesn't ground it (Ben, #60)")
+    -- An error result names the id it was given, as entity.get's does.
+    echoed = checks.conversation({user("q"),
+        calls("c1", "entity.get", {entity_type = "experiment", entity_id = 17}),
+        result("c1", "entity.get", "ERROR: no such experiment #17", true),
+        calls("c2", "entity.get", {entity_type = "experiment", entity_id = 17}),
+        result("c2", "entity.get", "ERROR: no such experiment #17", true), said("Not found.")}, {})
+    outcome = checks.grounded_ids(echoed, {}, VALIDITY_CTX)
+    check(outcome.count == 2, "an error's echo of 17 grounds neither call, got " .. tostring(outcome.count))
+    -- The note between two step budgets of an auto-continued turn.
+    noted = checks.conversation({user("q"), {role = "progress", content = "Next I'll read experiment 17."},
+        calls("c1", "entity.get", {entity_type = "experiment", entity_id = 17}),
+        result("c1", "entity.get", "r", false), said("ok")}, {})
+    check(checks.grounded_ids(noted, {}, VALIDITY_CTX).pass == false, "the model's progress note doesn't ground 17")
+    -- What did come from outside still does: a decision, a summary, a result.
+    for _, role in ipairs({"decision", "compaction_summary", "tool_result"}) do
+        row = {role = role, content = "experiment 17"}
+        if role == "tool_result" then
+            row = result("c0", "entity.find", "experiment 17", false)
+        end
+        conv = checks.conversation({user("q"), row, calls("c1", "entity.get", {entity_type = "experiment", entity_id = 17}),
+            result("c1", "entity.get", "r", false), said("ok")}, {})
+        check(checks.grounded_ids(conv, {}, VALIDITY_CTX).pass == true, "a " .. role .. " row grounds 17")
+    end
 end
 
 function tests.grounded_ids_reads_whole_numbers_only()

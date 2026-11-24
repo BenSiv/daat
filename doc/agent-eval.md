@@ -190,11 +190,11 @@ end
 |-------|--------------------|
 | `known_tools` | names a tool not declared to its loop: one that exists nowhere (`document.query`), or a write called from a read-only research or background sub-agent |
 | `valid_arguments` | doesn't match the tool's declared parameters: a required field missing, a wrong type (`"24"` for an integer), a value outside its `enum`, or a key the tool doesn't take (allowed only where it declares `additionalProperties = true`, as `entity.create` does) |
-| `grounded_ids` | passes an id (`id`, `*_id`, `*_ids`) that appeared nowhere before it: not in the user's message, a tool result, a compaction summary or a decision. The model's own text doesn't count. This catches a lab number read as a row id (`entity_id 17` for EXP-017). A small id can turn up inside other numbers, so an invented one can pass; a failure is certain |
+| `grounded_ids` | passes an id (`id`, `*_id`, `*_ids`) that appeared nowhere before it: not in the user's message, a tool result that isn't an error, a compaction summary or a decision. The model's own text doesn't count, nor its progress notes, nor an error that echoes the id it was given. This catches a lab number read as a row id (`entity_id 17` for EXP-017). A small id can turn up inside other numbers, so an invented one can pass; a failure is certain |
 
 They aren't part of "All checks passed", so a baseline scored before them stays comparable.
 
-The checks live in `tst/eval/checks.lua`. All but `approval` and `state` read only a conversation decoded from stored `agent_message` rows, so they apply to any stored chat (see section 5). `tst/unit/agent_eval_checks.lua` makes sure each check fails on the conversation it exists to catch.
+The checks live in `tst/eval/checks.lua`. All but `approval`, `state`, `known_tools` and `valid_arguments` read only a conversation decoded from stored `agent_message` rows, so they apply to any stored chat (see section 5). `approval` and `state` also read the database; `known_tools` and `valid_arguments` also need the tools each loop was offered (`ctx.declared`). `tst/unit/agent_eval_checks.lua` makes sure each check fails on the conversation it exists to catch.
 
 ### 3. Runner and report
 
