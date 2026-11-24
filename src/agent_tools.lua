@@ -1299,7 +1299,7 @@ function entity_list_types(ctx, args)
     return table.concat(names, ", ")
 end
 
-ENTITY_SYSTEM_COLUMNS = "id, name, external_id, created_by, created_at, updated_by, updated_at, archived_at (non-NULL = archived; filter archived_at IS NULL for live rows)."
+ENTITY_SYSTEM_COLUMNS = "id, name, external_id, created_by, created_at, updated_by, updated_at, archived_at (non-NULL = archived: a deleted, superseded or replaced record; filter archived_at IS NULL for live rows)."
 
 function entity_fields(ctx, args)
     db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
@@ -1395,6 +1395,57 @@ function schema_columns_lines(db_path)
     return lines
 end
 
+-- Which tables hold archived rows right now, and the reasons given when
+-- they were archived (#9). "Leave out superseded runs" sent every eval
+-- mean-per-medium run searching documents, tags and meeting notes for
+-- 14-30 steps: it found the two archived experiments early, but nothing
+-- said that archived was how a superseded run is recorded, so it went
+-- looking for proof. The reason ("superseded by a repeat run") was in
+-- entity_event all along. The counting is entity.archived_summary's,
+-- cached on the ledger's MAX(event_id) so this first look scans no table
+-- on a store that hasn't changed. One line per table, at most three
+-- reasons each, every reason on one line and cut at 80 characters, so
+-- the result that's pinned through compaction stays small; best-effort,
+-- since a failure there should cost the first look nothing.
+ARCHIVED_REASON_CHARS = 80
+
+function archived_rows_lines(db_path)
+    found = {}
+    ok, summary = pcall(entity.archived_summary, db_path, schema.list(db_path))
+    if ok != true or type(summary) != "table" then
+        return {}
+    end
+    for name, entry in pairs(summary) do
+        total = tonumber(entry.total)
+        if total != nil and total > 0 and type(entry.reasons) == "table" then
+            reasons = {}
+            for _, r in ipairs(entry.reasons) do
+                -- A multi-line reason would break the one-line-per-table layout.
+                reason = string.gsub(tostring(r.reason), "%s+", " ")
+                reason = string.match(reason, "^%s*(.-)%s*$")
+                if #reason > ARCHIVED_REASON_CHARS then
+                    reason = string.sub(reason, 1, ARCHIVED_REASON_CHARS) .. "..."
+                end
+                table.insert(reasons, string.format("\"%s\" (%d)", reason, tonumber(r.n)))
+            end
+            line = string.format("%s: %d", tostring(name), total)
+            if #reasons > 0 then
+                line = line .. ", reasons given: " .. table.concat(reasons, ", ")
+            end
+            table.insert(found, line)
+        end
+    end
+    if #found == 0 then
+        return {}
+    end
+    table.sort(found)
+    lines = {"Archived rows now (how a deleted, superseded or replaced record is kept; filter archived_at IS NULL to leave them out):"}
+    for _, line in ipairs(found) do
+        table.insert(lines, line)
+    end
+    return lines
+end
+
 function entity_relationships(ctx, args)
     db_path, author, session_id, source = ctx.db_path, ctx.author, ctx.session_id, ctx.source
     edges = schema.relationships(db_path)
@@ -1407,6 +1458,9 @@ function entity_relationships(ctx, args)
         lines = {"No reference relationships registered between any entity types."}
     end
     for _, line in ipairs(schema_columns_lines(db_path)) do
+        table.insert(lines, line)
+    end
+    for _, line in ipairs(archived_rows_lines(db_path)) do
         table.insert(lines, line)
     end
     return table.concat(lines, "\n")

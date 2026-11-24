@@ -1292,6 +1292,175 @@ function entity.counts_by_type(db_path, entity_types)
     return counts
 end
 
+-- Archived rows per registered type, with the most common reasons given
+-- when they were archived, for entity.relationships (#9). "Leave out
+-- superseded runs" sent the agent searching documents for 14-30 steps
+-- for what superseded meant; the archive reason in entity_event said it.
+-- entity.relationships is step 1 of nearly every chat turn and research
+-- pass, so this follows counts_by_type above to stay cheap on a
+-- production store (34 types, 200k+ events, ~1-2 ms per query):
+--   1. Cache hit in system_state on (types_sig, MAX(event_id)): one PK
+--      read each, no table scanned.
+--   2. New events since: re-read only the types that had an archive, or
+--      an update touching archived_at (an unarchive), after the cached max.
+--   3. Cold start: archived counts batched in UNION ALL chunks, then the
+--      reasons only for types that have archived rows. Each row's reason
+--      is its latest archive event, an index seek on entity_event's
+--      (entity_id, event_id) (store.lua migration 13).
+-- Returns {type = {total = n, reasons = {{reason = text, n = count}, ...}}}
+-- for types with archived rows only, reasons most common first, at most
+-- ARCHIVED_REASONS_KEPT, empty or missing ones left out.
+const ARCHIVED_SUMMARY_STATE_KEY = "entity.archived_summary_cache"
+const ARCHIVED_REASONS_KEPT = 3
+
+function run_batched_archived_counts(db_path, target_names, existing_set)
+    computed = {}
+    present = {}
+    for _, name in ipairs(target_names) do
+        computed[name] = 0
+        if existing_set[name] == true then
+            table.insert(present, name)
+        end
+    end
+    idx = 1
+    while idx <= #present do
+        parts = {}
+        chunk_end = math.min(#present, idx + COUNT_UNION_CHUNK_SIZE - 1)
+        for i = idx, chunk_end do
+            tname = present[i]
+            table.insert(parts, string.format(
+                "SELECT %s AS entity_name, COUNT(*) AS n FROM %s WHERE archived_at IS NOT NULL AND archived_at != ''",
+                db.quote(tname), db.quote_ident(tname)
+            ))
+        end
+        rows = db.query(db_path, table.concat(parts, " UNION ALL ") .. ";")
+        if rows != nil then
+            for _, r in ipairs(rows) do
+                if r.entity_name != nil then
+                    computed[r.entity_name] = to_int_or_zero(r.n)
+                end
+            end
+        end
+        idx = chunk_end + 1
+    end
+    return computed
+end
+
+function archived_reasons(db_path, name)
+    rows = db.query(db_path, string.format(
+        "SELECT ev.reason AS reason, COUNT(*) AS n FROM %s r JOIN entity_event ev ON ev.event_id = " ..
+        "(SELECT MAX(x.event_id) FROM entity_event x WHERE x.entity_id = r.id AND x.entity_type = %s " ..
+        "AND x.event_type = 'archive') WHERE r.archived_at IS NOT NULL AND r.archived_at != '' " ..
+        "AND ev.reason IS NOT NULL AND ev.reason != '' GROUP BY ev.reason ORDER BY n DESC LIMIT %d;",
+        db.quote_ident(name), db.quote(name), ARCHIVED_REASONS_KEPT
+    ))
+    reasons = {}
+    if rows != nil then
+        for _, r in ipairs(rows) do
+            table.insert(reasons, {reason = tostring(r.reason), n = to_int_or_zero(r.n)})
+        end
+    end
+    return reasons
+end
+
+-- The summary entries for `names`, from scratch: counts batched, reasons
+-- only where something is archived.
+function archived_summary_for(db_path, names)
+    summary = {}
+    counts = run_batched_archived_counts(db_path, names, existing_tables_set(db_path))
+    for _, name in ipairs(names) do
+        if counts[name] != nil and counts[name] > 0 then
+            summary[name] = {total = counts[name], reasons = archived_reasons(db_path, name)}
+        end
+    end
+    return summary
+end
+
+function entity.archived_summary(db_path, entity_types)
+    type_names = {}
+    for _, item in ipairs(entity_types) do
+        name = item
+        if type(item) == "table" then
+            name = item.name
+        end
+        if type(name) == "string" and name != "" and schema.valid_name_syntax(name) then
+            table.insert(type_names, name)
+        end
+    end
+    if #type_names == 0 then
+        return {}
+    end
+    sorted_names = {}
+    for i, name in ipairs(type_names) do
+        sorted_names[i] = name
+    end
+    table.sort(sorted_names)
+    types_sig = table.concat(sorted_names, ",")
+
+    max_ok, max_rows = pcall(db.query, db_path, "SELECT COALESCE(MAX(event_id), 0) AS max_id FROM entity_event;")
+    if max_ok != true or max_rows == nil or max_rows[1] == nil then
+        return archived_summary_for(db_path, type_names)
+    end
+    current_max_id = to_int_or_zero(max_rows[1].max_id)
+
+    cached = nil
+    raw_ok, raw_json = pcall(store_lib.get_text, db_path, ARCHIVED_SUMMARY_STATE_KEY)
+    if raw_ok == true and type(raw_json) == "string" and raw_json != "" then
+        decoded = json.decode(raw_json)
+        if type(decoded) == "table" and type(decoded.summary) == "table" and decoded.types_sig == types_sig
+                and tonumber(decoded.max_event_id) != nil then
+            cached = decoded
+        end
+    end
+
+    summary = nil
+    if cached != nil and tonumber(cached.max_event_id) == current_max_id then
+        return cached.summary
+    end
+    if cached != nil and current_max_id > tonumber(cached.max_event_id) then
+        dirty_ok, dirty_rows = pcall(db.query, db_path, string.format(
+            "SELECT DISTINCT entity_type FROM entity_event WHERE event_id > %d AND (event_type = 'archive' OR " ..
+            "(event_type = 'update' AND field_changes LIKE '%%\"archived_at\"%%'));",
+            tonumber(cached.max_event_id)
+        ))
+        if dirty_ok == true then
+            requested = {}
+            for _, name in ipairs(type_names) do
+                requested[name] = true
+            end
+            summary = cached.summary
+            dirty_names = {}
+            if dirty_rows != nil then
+                for _, dr in ipairs(dirty_rows) do
+                    if dr.entity_type != nil and requested[dr.entity_type] == true then
+                        table.insert(dirty_names, dr.entity_type)
+                    end
+                end
+            end
+            if #dirty_names > 0 then
+                fresh = archived_summary_for(db_path, dirty_names)
+                for _, name in ipairs(dirty_names) do
+                    summary[name] = fresh[name]
+                end
+            end
+        end
+    end
+    if summary == nil then
+        summary = archived_summary_for(db_path, type_names)
+    end
+    -- Cached only when no event landed while it was being computed, as
+    -- counts_by_type does, so a concurrent archive is never skipped.
+    post_ok, post_rows = pcall(db.query, db_path, "SELECT COALESCE(MAX(event_id), 0) AS max_id FROM entity_event;")
+    if post_ok == true and post_rows != nil and post_rows[1] != nil and to_int_or_zero(post_rows[1].max_id) == current_max_id then
+        pcall(store_lib.set_text, db_path, ARCHIVED_SUMMARY_STATE_KEY, json.encode({
+            max_event_id = current_max_id,
+            types_sig = types_sig,
+            summary = summary,
+        }))
+    end
+    return summary
+end
+
 -- Filtered siblings of entity.list/entity.count, for "every X that
 -- references this Y" (e.g. a mixture's ingredients) -- field_name/value
 -- are trusted the same way entity_type already is throughout this file
