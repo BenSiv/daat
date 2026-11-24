@@ -1591,6 +1591,12 @@ EOF
 
     run raw_get "/api/v1/chat/sessions/${session_id}" "" "$COOKIE"
     [[ "$output" =~ "switch to a single aggregate query instead" ]]
+
+    # The wrap-up asks for an answer already in hand first, then status
+    # (#9: a run with all four means replied only with its plan).
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT prompt FROM agent_model_call WHERE session_id = '${session_id}' AND kind = 'wrapup';"
+    [[ "$output" =~ "already answer the question" ]]
+    [[ "$output" =~ "give that answer first" ]]
 }
 
 @test "chat-widget-stop requires the matching CSRF token" {
