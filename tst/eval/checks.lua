@@ -45,10 +45,11 @@ UNKNOWN_PATTERNS = {
 -- phrases above miss: "there is no supplier information recorded" failed
 -- a correct unknown-supplier reply (20261123-130007-live #3, #9). One or
 -- two words between, no more, so "no doubt the values were recorded"
--- isn't read as one.
+-- isn't read as one. A word may hold digits and hyphens ("no OD600
+-- information", "no catalog-number recorded").
 UNKNOWN_SHAPES = {
-    "%f[%a]no %a+ recorded", "%f[%a]no %a+ %a+ recorded",
-    "%f[%a]no %a+ information", "%f[%a]no %a+ %a+ information",
+    "%f[%w]no [%w%-]+ recorded", "%f[%w]no [%w%-]+ [%w%-]+ recorded",
+    "%f[%w]no [%w%-]+ information", "%f[%w]no [%w%-]+ [%w%-]+ information",
 }
 
 MONTHS = {"january", "february", "march", "april", "may", "june", "july",

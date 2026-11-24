@@ -145,9 +145,15 @@ function tests.says_unknown_and_shows_method_take_the_live_phrasings()
     -- 20261123-130007-live, unknown-supplier #3 and mean-per-medium #2.
     named = checks.conversation({user("q"), said("Having checked the tables and the handbook, there is no supplier " ..
         "information recorded for yeast extract or any other ingredient in the platform's data.")}, {})
-    result = checks.says_unknown(named, {}, CTX)
-    check(result.pass == true, "'no supplier information recorded' should pass says_unknown")
-    check(result.detail == "'no supplier information recorded'","detail should quote the match, got " .. tostring(result.detail))
+    -- Not `result`: a bare assignment in Luam reuses the file's result()
+    -- helper and overwrites it for every later test (#64 review).
+    outcome = checks.says_unknown(named, {}, CTX)
+    check(outcome.pass == true, "'no supplier information recorded' should pass says_unknown")
+    check(outcome.detail == "'no supplier information recorded'", "detail should quote the match, got " .. tostring(outcome.detail))
+    for _, text in ipairs({"There is no OD600 information for that run.", "No catalog-number recorded for the yeast extract."}) do
+        check(checks.says_unknown(checks.conversation({user("q"), said(text)}, {}), {}, CTX).pass == true,
+            "a word with digits or a hyphen should count: " .. text)
+    end
     check(checks.says_unknown(checks.conversation({user("q"), said("No supplier recorded for it.")}, {}), {}, CTX).pass == true,
         "'no supplier recorded' should pass")
     -- Not every "no ... recorded" says the data lacks the answer.
