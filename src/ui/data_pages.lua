@@ -151,8 +151,9 @@ end
 _display_label_cache = nil
 
 function compute_entity_display_label(db_path, entity_type, entity_id)
+    quoted_type = db.quote_ident(entity_type)
     rows = db.query(db_path, string.format(
-        "SELECT name FROM %s WHERE id = %s;", entity_type, db.quote(entity_id)
+        "SELECT name FROM %s WHERE id = %s;", quoted_type, db.quote(entity_id)
     ))
     if rows != nil and rows[1] != nil and rows[1].name != nil and tostring(rows[1].name) != "" then
         return tostring(rows[1].name)
@@ -174,7 +175,7 @@ function compute_entity_display_label(db_path, entity_type, entity_id)
     end
     rows = db.query(db_path, string.format(
         "SELECT %s AS label FROM %s WHERE id = %s;",
-        display_field.name, entity_type, db.quote(entity_id)
+        db.quote_ident(display_field.name), quoted_type, db.quote(entity_id)
     ))
     if rows == nil or rows[1] == nil or rows[1].label == nil or tostring(rows[1].label) == "" then
         return nil
@@ -354,7 +355,7 @@ function prefetch_browse_display_labels(db_path, layout, rows)
                 end
                 q_rows = db.query(db_path, string.format(
                     "SELECT %s FROM %s WHERE id IN (%s);",
-                    select_cols, ref_type, table.concat(quoted_ids, ", ")
+                    select_cols, db.quote_ident(ref_type), table.concat(quoted_ids, ", ")
                 ))
                 if q_rows != nil then
                     for _, qr in ipairs(q_rows) do

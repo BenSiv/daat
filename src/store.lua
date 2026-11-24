@@ -146,7 +146,7 @@ function store.ensure_column(db_path, table_name, column_name, column_sql)
     if store.has_column(db_path, table_name, column_name) then
         return false
     end
-    ok_col, col_err = pcall(db.exec, db_path, "ALTER TABLE " .. table_name .. " ADD COLUMN " .. column_name .. " " .. column_sql .. ";")
+    ok_col, col_err = pcall(db.exec, db_path, "ALTER TABLE " .. db.quote_ident(table_name) .. " ADD COLUMN " .. db.quote_ident(column_name) .. " " .. column_sql .. ";")
     if ok_col == false and not store.has_column(db_path, table_name, column_name) then
         error(col_err)
     end
@@ -158,11 +158,12 @@ function store.ensure_columns(db_path, table_name, specs)
         return
     end
     have = columns_of(db_path, table_name)
+    quoted_table = db.quote_ident(table_name)
     for _, spec in ipairs(specs) do
         col_name = spec[1]
         col_sql = spec[2]
         if have[col_name] != true then
-            ok_col, col_err = pcall(db.exec, db_path, "ALTER TABLE " .. table_name .. " ADD COLUMN " .. col_name .. " " .. col_sql .. ";")
+            ok_col, col_err = pcall(db.exec, db_path, "ALTER TABLE " .. quoted_table .. " ADD COLUMN " .. db.quote_ident(col_name) .. " " .. col_sql .. ";")
             if ok_col == false and not store.has_column(db_path, table_name, col_name) then
                 error(col_err)
             end
@@ -182,7 +183,7 @@ function store.ensure_index(db_path, table_name, index_name, index_sql)
 end
 
 function row_count(db_path, table_name)
-    rows = db.query(db_path, "SELECT COUNT(*) AS n FROM " .. table_name .. ";")
+    rows = db.query(db_path, "SELECT COUNT(*) AS n FROM " .. db.quote_ident(table_name) .. ";")
     if rows == nil or rows[1] == nil then
         return 0
     end
@@ -201,9 +202,9 @@ function store.rename_table(db_path, old, new)
         if row_count(db_path, new) > 0 then
             error("cannot rename " .. old .. " to " .. new .. ": both exist and " .. new .. " has rows")
         end
-        db.exec(db_path, "DROP TABLE " .. new .. ";")
+        db.exec(db_path, "DROP TABLE " .. db.quote_ident(new) .. ";")
     end
-    db.exec(db_path, "ALTER TABLE " .. old .. " RENAME TO " .. new .. ";")
+    db.exec(db_path, "ALTER TABLE " .. db.quote_ident(old) .. " RENAME TO " .. db.quote_ident(new) .. ";")
 end
 
 -- Moves a replaced table out of the way, keeping its rows.
@@ -213,9 +214,9 @@ function store.retire_table(db_path, old)
     end
     legacy = old .. "_legacy"
     if exists(db_path, legacy) then
-        db.exec(db_path, "DROP TABLE " .. legacy .. ";")
+        db.exec(db_path, "DROP TABLE " .. db.quote_ident(legacy) .. ";")
     end
-    db.exec(db_path, "ALTER TABLE " .. old .. " RENAME TO " .. legacy .. ";")
+    db.exec(db_path, "ALTER TABLE " .. db.quote_ident(old) .. " RENAME TO " .. db.quote_ident(legacy) .. ";")
 end
 
 --------------------------------------------------------------------------

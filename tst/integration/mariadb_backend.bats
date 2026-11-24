@@ -747,6 +747,63 @@ EOF2
     [[ "$result" =~ "(2)" ]]
 }
 
+@test "MariaDB rejects reserved-word entity types cleanly and quotes reserved-word fields end to end (#65)" {
+    cat > config.lua <<EOF2
+return {database = {backend = "mariadb", host = "${DAAT_MARIADB_HOST}", port = ${DAAT_MARIADB_PORT}, user = "${DAAT_MARIADB_USER}", database = "${DAAT_MARIADB_DATABASE}"}}
+EOF2
+    "$BIN" init >/dev/null
+    mkdir -p schemas
+
+    for bad_type in order release condition; do
+        cat > "schemas/${bad_type}.lua" <<EOF2
+return {name = "${bad_type}", fields = {{name = "label", type = "text", required = true, display = true}}}
+EOF2
+        run "$BIN" schema add "schemas/${bad_type}.lua"
+        [ "$status" -eq 1 ]
+        [[ "$output" =~ "is a reserved SQL word" ]]
+        [[ ! "$output" =~ "stack traceback" ]]
+        rm -f "schemas/${bad_type}.lua"
+    done
+
+    cat > schemas/step_spec.lua <<'EOF2'
+return {
+    name = "step_spec",
+    fields = {
+        {name = "release", type = "text", required = true, display = true},
+        {name = "order", type = "number", required = true},
+        {name = "usage", type = "multi_select", required = false, values = {"seed", "prod"}},
+    },
+}
+EOF2
+    cat > schemas/step_run.lua <<'EOF2'
+return {
+    name = "step_run",
+    fields = {
+        {name = "code", type = "text", required = true, display = true},
+        {name = "spec", type = "reference", required = true, entity_type = "step_spec"},
+    },
+}
+EOF2
+    run "$BIN" schema add schemas/step_spec.lua
+    [ "$status" -eq 0 ]
+    run "$BIN" schema add schemas/step_run.lua
+    [ "$status" -eq 0 ]
+
+    run "$BIN" entity create step_spec release="REL-2026" order=1 usage="seed,prod"
+    [ "$status" -eq 0 ]
+    spec_id=$("$BIN" entity list step_spec | head -1 | tr -d '#')
+    [ -n "$spec_id" ]
+    run "$BIN" entity create step_run code="SR-1" spec="$spec_id"
+    [ "$status" -eq 0 ]
+
+    read session csrf < <(login_test_user "alice" "i")
+    # Exercises compute_entity_display_label + prefetch_browse_display_labels on a reserved-word display field (`release`).
+    GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/browse" QUERY_STRING="type=step_run" \
+        HTTP_COOKIE="session=${session}; csrf=${csrf}" run "$BIN"
+    [[ "$output" =~ "200 OK" ]]
+    [[ "$output" =~ "REL-2026" ]]
+}
+
 @test "MariaDB entity update/archive/unarchive advance updated_at and migration 14 backfills frozen timestamps" {
     "$BIN" init >/dev/null
     mkdir -p schemas

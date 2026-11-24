@@ -49,7 +49,7 @@ function count_where(db_path, table_name, where_sql)
     if ok_tbl != true or exists_tbl != true then
         return 0
     end
-    sql = "SELECT COUNT(*) AS n FROM " .. table_name
+    sql = "SELECT COUNT(*) AS n FROM " .. db.quote_ident(table_name)
     if where_sql != nil and where_sql != "" then
         sql = sql .. " WHERE " .. where_sql
     end

@@ -100,7 +100,7 @@ function entity.build_ctx(db_path, manifest, read_only)
                 end
             end
         end
-        q = "SELECT * FROM " .. target_type
+        q = "SELECT * FROM " .. db.quote_ident(target_type)
         if #where > 0 then
             q = q .. " WHERE " .. table.concat(where, " AND ")
         end
@@ -426,7 +426,7 @@ function lock_entity_row_for_update(db_path, entity_type, entity_id)
     if db.is_mariadb(db_path) then
         db.query(db_path, string.format(
             "SELECT id, last_event_id FROM %s WHERE id = %d FOR UPDATE;",
-            entity_type, tonumber(entity_id)
+            db.quote_ident(entity_type), tonumber(entity_id)
         ))
     end
 end
@@ -484,7 +484,7 @@ function entity.create(db_path, entity_type, values, author, source)
 
         db.exec(db_path, string.format(
             "INSERT INTO %s (%s) VALUES (%s);",
-            entity_type, table.concat(columns, ", "), table.concat(literals, ", ")
+            db.quote_ident(entity_type), table.concat(columns, ", "), table.concat(literals, ", ")
         ))
 
         for name, field in pairs(multi_fields) do
@@ -946,7 +946,7 @@ function entity.apply_computed_field_overrides(db_path, entity_type, rows)
             end
             m_rows = db.query(db_path, string.format(
                 "SELECT %s AS pid, %s AS v FROM %s WHERE %s IN (%s);",
-                parent_col, value_col, table_name, parent_col, id_sql
+                db.quote_ident(parent_col), db.quote_ident(value_col), db.quote_ident(table_name), db.quote_ident(parent_col), id_sql
             ))
             if m_rows != nil then
                 for _, mr in ipairs(m_rows) do
@@ -999,7 +999,7 @@ function entity.get(db_path, entity_type, entity_id)
         return nil
     end
     rows = db.query(db_path, string.format(
-        "SELECT * FROM %s WHERE id = %d;", entity_type, entity_id
+        "SELECT * FROM %s WHERE id = %d;", db.quote_ident(entity_type), entity_id
     ))
     if rows == nil then
         return nil
@@ -1022,7 +1022,7 @@ function entity.list(db_path, entity_type, limit, offset, include_archived)
     if db.table_exists(db_path, entity_type) == false then
         return {}
     end
-    query = "SELECT * FROM " .. entity_type
+    query = "SELECT * FROM " .. db.quote_ident(entity_type)
     if include_archived != true then
         query = query .. " WHERE archived_at IS NULL"
     end
@@ -1379,7 +1379,11 @@ end
 
 function entity.archived_summary(db_path, entity_types)
     type_names = {}
-    for _, item in ipairs(entity_types) do
+    items = entity_types
+    if items == nil then
+        items = {}
+    end
+    for _, item in ipairs(items) do
         name = item
         if type(item) == "table" then
             name = item.name
@@ -1471,7 +1475,7 @@ function entity.list_by_field(db_path, entity_type, field_name, value, limit, of
     if db.table_exists(db_path, entity_type) == false then
         return {}
     end
-    query = "SELECT * FROM " .. entity_type .. " WHERE " .. db.quote_ident(field_name) .. " = " .. db.literal(value)
+    query = "SELECT * FROM " .. db.quote_ident(entity_type) .. " WHERE " .. db.quote_ident(field_name) .. " = " .. db.literal(value)
     if include_archived != true then
         query = query .. " AND archived_at IS NULL"
     end
@@ -1492,7 +1496,7 @@ function entity.count_by_field(db_path, entity_type, field_name, value, include_
     if db.table_exists(db_path, entity_type) == false then
         return 0
     end
-    query = "SELECT COUNT(*) AS n FROM " .. entity_type .. " WHERE " .. db.quote_ident(field_name) .. " = " .. db.literal(value)
+    query = "SELECT COUNT(*) AS n FROM " .. db.quote_ident(entity_type) .. " WHERE " .. db.quote_ident(field_name) .. " = " .. db.literal(value)
     if include_archived != true then
         query = query .. " AND archived_at IS NULL"
     end
@@ -1612,7 +1616,7 @@ function entity.search_across_types(db_path, query_text, per_type_limit, total_l
             end
             rows = db.query(db_path, string.format(
                 "SELECT %s FROM %s WHERE (%s) AND (archived_at IS NULL OR archived_at = '') LIMIT %d;",
-                table.concat(select_cols, ", "), entity_type, table.concat(where_parts, " OR "), tonumber(per_type_limit)
+                table.concat(select_cols, ", "), db.quote_ident(entity_type), table.concat(where_parts, " OR "), tonumber(per_type_limit)
             ))
             if rows != nil then
                 for _, row in ipairs(rows) do
@@ -1906,7 +1910,7 @@ function entity.do_entity(cmd_args, db_path)
         result = {}
         if db.table_exists(db_path, entity_type) then
             rows = db.query(db_path, string.format(
-                "SELECT external_id, id, archived_at FROM %s WHERE external_id IS NOT NULL AND external_id != '';", entity_type
+                "SELECT external_id, id, archived_at FROM %s WHERE external_id IS NOT NULL AND external_id != '';", db.quote_ident(entity_type)
             ))
             if rows != nil then
                 result = entity_id_map_prefer_active(rows, "external_id")
@@ -1933,7 +1937,7 @@ function entity.do_entity(cmd_args, db_path)
             quoted_field = db.quote_ident(field_name)
             rows = db.query(db_path, string.format(
                 "SELECT %s AS field_value, id, archived_at FROM %s WHERE %s IS NOT NULL AND %s != '';",
-                quoted_field, entity_type, quoted_field, quoted_field
+                quoted_field, db.quote_ident(entity_type), quoted_field, quoted_field
             ))
             if rows != nil then
                 result = entity_id_map_prefer_active(rows, "field_value")

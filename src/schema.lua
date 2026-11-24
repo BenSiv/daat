@@ -250,6 +250,108 @@ function is_reserved_field_name(name)
     return false
 end
 
+-- Strictly reserved SQL keywords across SQLite 3.45 and MariaDB 10.11 (#65):
+-- words that fail unquoted table DDL/DML on either backend (59 in SQLite,
+-- 241 in MariaDB, 249 in the union -- 190 of which pass on a local SQLite
+-- store and only syntax-error on MariaDB in production, such as `release`,
+-- `condition`, `procedure`, `signal`, `match`, `range`, `interval`, `key`).
+-- Checked on entity-type names (`def.name`), NEVER on `field.name`: column
+-- identifiers are quoted via `db.quote_ident`, and real schemas already use
+-- fields named `sql` and `usage`, whereas entity-type names appear unquoted
+-- in raw `SELECT ... FROM <type>` queries across views, `/sql`, and
+-- `entity.query`. Non-reserved SQL keywords (`status`, `source`, `subject`,
+-- `type`, `user`, `reference`, `view`, `query`, ...) are intentionally NOT
+-- listed here so ordinary domain nouns stay usable.
+const RESERVED_SQL_WORDS = {
+    "accessible", "add", "all", "alter", "analyze", "and", "as", "asc",
+    "asensitive", "autoincrement", "before", "between", "bigint", "binary",
+    "blob", "both", "by", "call", "cascade", "case", "change", "char",
+    "character", "check", "collate", "column", "commit", "condition",
+    "constraint", "continue", "convert", "create", "cross", "current_date",
+    "current_role", "current_time", "current_timestamp", "current_user",
+    "cursor", "databases", "day_hour", "day_microsecond", "day_minute",
+    "day_second", "dec", "decimal", "declare", "default", "deferrable",
+    "delayed", "delete", "delete_domain_id", "desc", "describe",
+    "deterministic", "distinct", "distinctrow", "div", "do_domain_ids",
+    "double", "drop", "each", "else", "elseif", "enclosed", "escape",
+    "escaped", "except", "exists", "exit", "explain", "false", "fetch",
+    "float", "float4", "float8", "for", "force", "foreign", "from",
+    "fulltext", "grant", "group", "having", "high_priority",
+    "hour_microsecond", "hour_minute", "hour_second", "if", "ignore",
+    "ignore_domain_ids", "in", "index", "infile", "inner", "inout",
+    "insensitive", "insert", "int", "int1", "int2", "int3", "int4", "int8",
+    "integer", "intersect", "interval", "into", "is", "isnull", "iterate",
+    "join", "key", "keys", "kill", "leading", "leave", "left", "like",
+    "limit", "linear", "lines", "load", "localtime", "localtimestamp",
+    "lock", "long", "longblob", "longtext", "loop", "low_priority",
+    "master_ssl_verify_server_cert", "match", "maxvalue", "mediumblob",
+    "mediumint", "mediumtext", "middleint", "minute_microsecond",
+    "minute_second", "mod", "modifies", "natural", "no_write_to_binlog",
+    "not", "nothing", "notnull", "null", "numeric", "offset", "on",
+    "optimize", "optionally", "or", "order", "out", "outer", "outfile",
+    "over", "page_checksum", "partition", "portion", "precision", "primary",
+    "procedure", "purge", "range", "read", "read_write", "reads", "real",
+    "recursive", "references", "regexp", "release", "rename", "repeat",
+    "replace", "require", "resignal", "restrict", "return", "returning",
+    "revoke", "right", "rlike", "row_number", "rows", "schemas",
+    "second_microsecond", "select", "sensitive", "separator", "set", "show",
+    "signal", "smallint", "spatial", "specific", "sql", "sql_big_result",
+    "sql_calc_found_rows", "sql_small_result", "sqlexception", "sqlstate",
+    "sqlwarning", "ssl", "starting", "stats_auto_recalc", "stats_persistent",
+    "stats_sample_pages", "straight_join", "table", "terminated", "then",
+    "tinyblob", "tinyint", "tinytext", "to", "trailing", "transaction",
+    "trigger", "true", "undo", "union", "unique", "unlock", "unsigned",
+    "update", "usage", "use", "using", "utc_date", "utc_time",
+    "utc_timestamp", "value", "values", "varbinary", "varchar",
+    "varcharacter", "varying", "when", "where", "while", "with", "write",
+    "xor", "year_month", "zerofill",
+}
+
+const RESERVED_SQL_WORDS_SET = {}
+for _, w in ipairs(RESERVED_SQL_WORDS) do
+    RESERVED_SQL_WORDS_SET[w] = true
+end
+
+function is_reserved_sql_word(name)
+    return type(name) == "string" and RESERVED_SQL_WORDS_SET[string.lower(name)] == true
+end
+
+-- Hand-rolled internal platform and engine system tables that are never
+-- registered entity schemas: allowing a user schema file to claim one of
+-- these names would `ALTER TABLE` live auth/ledger/agent storage.
+const RESERVED_PLATFORM_TABLES = {
+    "agent_background_task", "agent_message", "agent_model_call",
+    "agent_pending_action", "agent_session", "auth_api_key",
+    "auth_email_link", "auth_user", "document_aspect", "document_embedding",
+    "document_embedding_due", "document_link", "document_link_sync",
+    "document_mention", "document_passage_cache", "document_tier_judgment",
+    "entity_dropdown_value", "entity_event", "entity_field",
+    "entity_name_index", "entity_name_prefix", "entity_ref", "entity_type",
+    "knowledge_aspect_curation", "knowledge_conversation_curation",
+    "knowledge_curation", "knowledge_distillation", "knowledge_link_review",
+    "knowledge_pool_state", "knowledge_reference", "knowledge_retrieval",
+    "knowledge_retrieval_hit", "knowledge_tag_definition", "sqlite_master",
+    "sqlite_schema", "sqlite_sequence", "system_approval", "system_job",
+    "system_state", "tag_centre", "tag_judgment", "tag_upkeep",
+}
+
+const RESERVED_PLATFORM_TABLES_SET = {}
+for _, t in ipairs(RESERVED_PLATFORM_TABLES) do
+    RESERVED_PLATFORM_TABLES_SET[t] = true
+end
+
+function is_reserved_table_name(name)
+    return type(name) == "string" and RESERVED_PLATFORM_TABLES_SET[string.lower(name)] == true
+end
+
+-- Whether `name` has the shape a real registered entity-type or field name
+-- could ever have -- lowercase ASCII letters/digits/underscore, not starting
+-- with a digit. Shared by `schema.validate` (structural schema-file check)
+-- and HTTP route parameter guards (`web/entity_routes.lua`, `ui/data_pages.lua`).
+function schema.valid_name_syntax(name)
+    return type(name) == "string" and string.match(name, "^[a-z_][a-z0-9_]*$") != nil
+end
+
 -- "text" is LONGTEXT, not TEXT -- MariaDB's plain TEXT caps at 65,535
 -- *bytes*, not characters, so multi-KB content routinely exceeds it
 -- ("Data too long for column"); SQLite has no such cap regardless of
@@ -315,6 +417,15 @@ function schema.validate(def)
     if type(def.name) != "string" or def.name == "" then
         return "schema must have a non-empty string 'name'"
     end
+    if schema.valid_name_syntax(def.name) == false then
+        return string.format("schema '%s': name must match ^[a-z_][a-z0-9_]*$ (lowercase letters, digits, and underscores, not starting with a digit)", def.name)
+    end
+    if is_reserved_sql_word(def.name) then
+        return string.format("schema '%s': '%s' is a reserved SQL word -- choose a different entity type name", def.name, def.name)
+    end
+    if is_reserved_table_name(def.name) then
+        return string.format("schema '%s': collides with an internal platform table of the same name -- choose a different entity type name", def.name)
+    end
     if type(def.fields) != "table" then
         return "schema '" .. tostring(def.name) .. "' must have a 'fields' list"
     end
@@ -339,13 +450,21 @@ function schema.validate(def)
     if def.admin_write_only != nil and def.admin_write_only != true and def.admin_write_only != false then
         return string.format("schema '%s': 'admin_write_only' must be true or false", def.name)
     end
+    seen_fields = {}
     for i, field in ipairs(def.fields) do
         if type(field.name) != "string" or field.name == "" then
             return string.format("schema '%s' field #%d: missing 'name'", def.name, i)
         end
+        if schema.valid_name_syntax(field.name) == false then
+            return string.format("schema '%s' field '%s': name must match ^[a-z_][a-z0-9_]*$ (lowercase letters, digits, and underscores, not starting with a digit)", def.name, field.name)
+        end
         if is_reserved_field_name(field.name) then
             return string.format("schema '%s' field '%s': collides with a builtin column of the same name -- choose a different field name", def.name, field.name)
         end
+        if seen_fields[field.name] == true then
+            return string.format("schema '%s' field '%s': duplicate field name", def.name, field.name)
+        end
+        seen_fields[field.name] = true
         if is_valid_field_type(field.type) == false then
             return string.format("schema '%s' field '%s': invalid type '%s'", def.name, field.name, tostring(field.type))
         end
@@ -618,16 +737,20 @@ function schema.ensure_multi_field_table(db_path, entity_type, field)
             bucket[table_name] = value_col
             return
         end
-        existing_rows = db.query(db_path, string.format("SELECT 1 AS x FROM %s LIMIT 1;", table_name))
+        existing_rows = db.query(db_path, string.format("SELECT 1 AS x FROM %s LIMIT 1;", db.quote_ident(table_name)))
         if existing_rows != nil and #existing_rows > 0 then
             error(string.format(
                 "cannot change multivalue field '%s.%s' column to '%s' while companion table '%s' contains data",
                 entity_type, field.name, value_col, table_name
             ))
         end
-        db.exec(db_path, string.format("DROP TABLE %s;", table_name))
+        db.exec(db_path, string.format("DROP TABLE %s;", db.quote_ident(table_name)))
     end
     ddl_sql = nil
+    quoted_table = db.quote_ident(table_name)
+    quoted_parent = db.quote_ident(parent_col)
+    quoted_value = db.quote_ident(value_col)
+    quoted_entity = db.quote_ident(entity_type)
     if field.type == "multi_reference" then
         -- `field` arrives in two different shapes depending on caller:
         -- a raw schemas/*.lua field definition (schema.sync_table,
@@ -647,11 +770,11 @@ function schema.ensure_multi_field_table(db_path, entity_type, field)
                 %s INTEGER NOT NULL,
                 %s INTEGER NOT NULL,
                 PRIMARY KEY (%s, %s),
-                FOREIGN KEY (%s) REFERENCES %s(id),
-                FOREIGN KEY (%s) REFERENCES %s(id)
+                FOREIGN KEY (%s) REFERENCES %s (`id`),
+                FOREIGN KEY (%s) REFERENCES %s (`id`)
             );
-        """, table_name, parent_col, value_col, parent_col, value_col,
-             parent_col, entity_type, value_col, ref_type)
+        """, quoted_table, quoted_parent, quoted_value, quoted_parent, quoted_value,
+             quoted_parent, quoted_entity, quoted_value, db.quote_ident(ref_type))
     else
         -- VARCHAR(255), not TEXT -- same MariaDB/InnoDB key-length
         -- reasoning as ledger.lua/document_link (a bare TEXT/BLOB
@@ -661,9 +784,9 @@ function schema.ensure_multi_field_table(db_path, entity_type, field)
                 %s INTEGER NOT NULL,
                 %s VARCHAR(255) NOT NULL,
                 PRIMARY KEY (%s, %s),
-                FOREIGN KEY (%s) REFERENCES %s(id)
+                FOREIGN KEY (%s) REFERENCES %s (`id`)
             );
-        """, table_name, parent_col, value_col, parent_col, value_col, parent_col, entity_type)
+        """, quoted_table, quoted_parent, quoted_value, quoted_parent, quoted_value, quoted_parent, quoted_entity)
     end
     ok_ddl, ddl_err = pcall(db.exec, db_path, ddl_sql)
     if ok_ddl == false and db.table_exists(db_path, table_name) == false then
@@ -705,21 +828,22 @@ end
 function schema.write_multi_field(db_path, entity_type, entity_id, field, value)
     schema.ensure_multi_field_table(db_path, entity_type, field)
     table_name = schema.multi_field_table_name(entity_type, field.name)
-    parent_col = entity_type .. "_id"
-    value_col = multi_field_value_column(field)
+    quoted_table = db.quote_ident(table_name)
+    quoted_parent = db.quote_ident(entity_type .. "_id")
+    quoted_value = db.quote_ident(multi_field_value_column(field))
     db.exec(db_path, string.format(
-        "DELETE FROM %s WHERE %s = %d;", table_name, parent_col, tonumber(entity_id)
+        "DELETE FROM %s WHERE %s = %d;", quoted_table, quoted_parent, tonumber(entity_id)
     ))
     for _, item in ipairs(schema.normalize_multi_value(value)) do
         if field.type == "multi_reference" then
             db.exec(db_path, string.format(
                 "%s %s (%s, %s) VALUES (%d, %d);",
-                db.insert_ignore(db_path), table_name, parent_col, value_col, tonumber(entity_id), tonumber(item)
+                db.insert_ignore(db_path), quoted_table, quoted_parent, quoted_value, tonumber(entity_id), tonumber(item)
             ))
         else
             db.exec(db_path, string.format(
                 "%s %s (%s, %s) VALUES (%d, %s);",
-                db.insert_ignore(db_path), table_name, parent_col, value_col, tonumber(entity_id), db.quote(tostring(item))
+                db.insert_ignore(db_path), quoted_table, quoted_parent, quoted_value, tonumber(entity_id), db.quote(tostring(item))
             ))
         end
     end
@@ -735,7 +859,8 @@ function schema.read_multi_field(db_path, entity_type, entity_id, field)
     parent_col = entity_type .. "_id"
     value_col = multi_field_value_column(field)
     rows = db.query(db_path, string.format(
-        "SELECT %s AS v FROM %s WHERE %s = %d;", value_col, table_name, parent_col, tonumber(entity_id)
+        "SELECT %s AS v FROM %s WHERE %s = %d;",
+        db.quote_ident(value_col), db.quote_ident(table_name), db.quote_ident(parent_col), tonumber(entity_id)
     ))
     if rows == nil then
         return {}
@@ -937,14 +1062,14 @@ function ensure_external_id_index(db_path, table_name)
     index_name = "idx_" .. table_name .. "_external_id"
     if db.index_exists(db_path, table_name, index_name) == false then
         add_unless_present(db_path, string.format(
-            "CREATE INDEX %s ON %s (%s);", index_name, table_name, db.text_index_column(db_path, "external_id")
+            "CREATE INDEX %s ON %s (%s);", db.quote_ident(index_name), db.quote_ident(table_name), db.text_index_column(db_path, "external_id")
         ), function() return db.index_exists(db_path, table_name, index_name) end)
     end
 end
 
 function add_column_unless_present(db_path, table_name, column_name, sql_type)
     add_unless_present(db_path, string.format(
-        "ALTER TABLE %s ADD COLUMN %s %s;", table_name, db.quote_ident(column_name), sql_type
+        "ALTER TABLE %s ADD COLUMN %s %s;", db.quote_ident(table_name), db.quote_ident(column_name), sql_type
     ), function()
         for _, name in ipairs(db.get_columns(db_path, table_name)) do
             if name == column_name then
@@ -967,7 +1092,7 @@ function schema.sync_table(db_path, def)
             table.insert(columns, db.quote_ident(builtin.name) .. " " .. builtin.sql_type)
         end
         db.exec(db_path, string.format(
-            "CREATE TABLE IF NOT EXISTS %s (%s);", def.name, table.concat(columns, ", ")
+            "CREATE TABLE IF NOT EXISTS %s (%s);", db.quote_ident(def.name), table.concat(columns, ", ")
         ))
         ensure_external_id_index(db_path, def.name)
         for _, field in ipairs(def.fields) do
@@ -1307,26 +1432,6 @@ function schema.show_json(db_path, name)
     return json_lib.encode(layout)
 end
 
--- Whether `name` has the shape a real registered entity-type name could
--- ever have -- lowercase ASCII letters/digits/underscore, not starting
--- with a digit, matching how every real schema file names itself
--- (`schema.register`'s `def.name`, always written this way by hand).
---
--- Security finding, fixed 2026-07-17 (see platform's own TODO.md, M3):
--- `entity_type` flows unescaped into raw SQL as a table name
--- (`entity.lua`/`database.lua`, `"SELECT * FROM " .. entity_type`) and into a
--- file path for schema lookup (`schemas_dir .. "/" .. name .. ".lua"`)
--- wherever it comes from a request parameter (`params.type`). Every
--- call site happened to be safe only because it incidentally checked
--- the name resolves via schema.layout/schema.fields first -- not a
--- deliberate guard. This is that guard: a single charset check, applied
--- once, centrally, at every point in web.lua where `params.type`/
--- `params.ref_type`-shaped external input becomes an `entity_type`,
--- before it can reach any raw SQL or path-building call.
-function schema.valid_name_syntax(name)
-    return type(name) == "string" and string.match(name, "^[a-z_][a-z0-9_]*$") != nil
-end
-
 -- Resource filename guard for views, templates, and extensions, which
 -- may carry hyphens (e.g. "widgets-in-stock", "widget-intake") unlike SQL
 -- entity-type names, while still rejecting path separators, "..", leading
@@ -1589,16 +1694,16 @@ function schema.do_schema(cmd_args, db_path)
         path = cmd_args[2]
         if path == nil then
             print("Usage: daat schema add <file>")
-            return
+            return 1
         end
         def, err = schema.load_file(path)
         if def == nil then
             print("Error: " .. err)
-            return
+            return 1
         end
         schema.register(db_path, def)
         print("Registered entity type '" .. def.name .. "'")
-        return
+        return 0
     end
 
     if action == "list" then
@@ -1606,30 +1711,30 @@ function schema.do_schema(cmd_args, db_path)
         for _, row in ipairs(schema.list(db_path)) do
             print(row.name)
         end
-        return
+        return 0
     end
 
     if action == "show-json" or (action == "show" and cmd_args[3] == "--json") then
         name = cmd_args[2]
         if name == nil then
             print("Usage: daat schema show-json <name>")
-            return
+            return 1
         end
         schema.sync_all(db_path)
         json_str, err = schema.show_json(db_path, name)
         if json_str == nil then
             print("Error: " .. tostring(err))
-            return
+            return 1
         end
         print(json_str)
-        return
+        return 0
     end
 
     if action == "show" then
         name = cmd_args[2]
         if name == nil then
             print("Usage: daat schema show <name>")
-            return
+            return 1
         end
         schema.sync_all(db_path)
         for _, field in ipairs(schema.fields(db_path, name)) do
@@ -1639,20 +1744,21 @@ function schema.do_schema(cmd_args, db_path)
             end
             print(string.format("%-20s %-10s %s", field.name, field.type, required))
         end
-        return
+        return 0
     end
 
     if action == "sync" then
         ok, err = schema.sync_all(db_path)
         if not ok then
             print("Error: " .. tostring(err))
-        else
-            print("Schema sync complete")
+            return 1
         end
-        return
+        print("Schema sync complete")
+        return 0
     end
 
     print("Usage: daat schema <add|list|show|show-json|sync> [args]")
+    return 1
 end
 
 -- Exposed purely so tst/unit/schema.lua can reach it across the
@@ -1663,5 +1769,7 @@ schema.is_multi_field_type = is_multi_field_type
 -- rule ensure_table uses for its filter keys.
 schema.is_polymorphic_field_type = is_polymorphic_field_type
 schema.is_reserved_field_name = is_reserved_field_name
+schema.is_reserved_sql_word = is_reserved_sql_word
+schema.is_reserved_table_name = is_reserved_table_name
 
 return schema

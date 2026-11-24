@@ -635,7 +635,7 @@ function agent.ensure_typed_columns(db_path)
             end
             for _, column in ipairs(wanted[table_name]) do
                 if have[column[1]] == nil then
-                    db.exec(db_path, "ALTER TABLE " .. table_name .. " ADD COLUMN " .. column[1] .. " " .. column[2] .. ";")
+                    db.exec(db_path, "ALTER TABLE " .. db.quote_ident(table_name) .. " ADD COLUMN " .. db.quote_ident(column[1]) .. " " .. column[2] .. ";")
                 end
             end
         end
