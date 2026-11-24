@@ -270,6 +270,26 @@ function tests.knowledge_graph_view_model_escapes_script_closing_tags_in_boot_js
         "rendered knowledge graph should include the extracted JS asset")
 end
 
+function tests.knowledge_graph_tier_colors_fall_back_per_tier_without_theme_overrides()
+    print("Testing default KNOWLEDGE_TIER_COLORS are 4 distinct stops and knowledge_graph.js falls back per tier")
+    kp = require("ui.knowledge_pages")
+    seen = {}
+    for tier = 0, 3 do
+        c = kp.KNOWLEDGE_TIER_COLORS[tier]
+        check(type(c) == "string" and string.match(c, "^#%x%x%x%x%x%x$") != nil,
+            "tier " .. tostring(tier) .. " should have a #rrggbb default color, got " .. tostring(c))
+        check(seen[c] == nil, "each tier needs its own default color, duplicate: " .. tostring(c))
+        seen[c] = true
+    end
+    rendered = ui.render_knowledge_graph("n1")
+    for tier = 0, 3 do
+        check(string.contains(rendered, kp.KNOWLEDGE_TIER_COLORS[tier]),
+            "boot_json should carry default color for tier " .. tostring(tier))
+    end
+    check(string.contains(rendered, "TIER_DEFAULTS[tier]"),
+        "tierColor() must fall back to TIER_DEFAULTS[tier] rather than a single constant hex")
+end
+
 function tests.chat_widget_view_model_toggles_attachment_controls_and_escapes_nonce()
     print("Testing ui.chat_widget.view_model toggles attachment controls and escapes CSP nonce")
     cw = require("ui.chat_widget")
