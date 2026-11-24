@@ -342,3 +342,39 @@ view|stock|SELECT 1|admin" ]
     [ "$(store "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'entity_event_entity_id_idx';")" = "1" ]
     [ "$(store "SELECT number_value >= 13 FROM system_state WHERE name = 'store.schema_version';")" = "1" ]
 }
+
+@test "migration 14 backfills frozen entity updated_at from entity_event while preserving newer curation timestamps" {
+    mkdir -p schemas
+    cat > schemas/task.lua <<'EOF'
+return {
+  name = "task",
+  fields = {
+    {name = "due_to", type = "date", required = false},
+    {name = "status", type = "text", required = true},
+  },
+}
+EOF
+    "$BIN" schema add schemas/task.lua >/dev/null
+    tid=$("$BIN" entity create task due_to="2026-11-18" status="open" | grep -o '[0-9]\+')
+    "$BIN" entity update task "$tid" due_to="2026-12-01" >/dev/null
+
+    did=$("$BIN" entity create document title="Curated note" content="v1" | grep -o '[0-9]\+')
+    "$BIN" entity update document "$did" content="v2" >/dev/null
+
+    # Simulate pre-fix rows whose updated_at stayed frozen at created_at on update,
+    # and a document whose updated_at was bumped later by curation.
+    task_ev=$(store "SELECT last_event_id FROM task WHERE id = $tid;")
+    doc_ev=$(store "SELECT last_event_id FROM document WHERE id = $did;")
+    store "UPDATE entity_event SET created_at = '2026-11-24 10:50:49' WHERE event_id = $task_ev;"
+    store "UPDATE task SET created_at = '2026-11-19 21:10:49', updated_at = '2026-11-19 21:10:49' WHERE id = $tid;"
+    store "UPDATE entity_event SET created_at = '2026-11-20 12:00:00' WHERE event_id = $doc_ev;"
+    store "UPDATE document SET created_at = '2026-11-19 21:10:49', updated_at = '2026-11-22 18:00:00' WHERE id = $did;"
+    rewind_to 13
+
+    run "$BIN" entity list task
+    [ "$status" -eq 0 ]
+
+    [ "$(store "SELECT updated_at FROM task WHERE id = $tid;")" = "2026-11-24 10:50:49" ]
+    [ "$(store "SELECT updated_at FROM document WHERE id = $did;")" = "2026-11-22 18:00:00" ]
+    [ "$(store "SELECT number_value >= 14 FROM system_state WHERE name = 'store.schema_version';")" = "1" ]
+}

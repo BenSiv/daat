@@ -659,10 +659,11 @@ function entity.update(db_path, entity_type, entity_id, values, author, source, 
         event_id = ledger.append_update(db_path, entity_type, entity_id, field_changes, author, source, reason)
 
         table.insert(assignments, "updated_by = " .. db.literal(author))
+        table.insert(assignments, "updated_at = " .. db.now_expr(db_path))
         table.insert(assignments, "last_event_id = " .. tostring(event_id))
         _, _, changed = db.exec(db_path, string.format(
             "UPDATE %s SET %s WHERE %s;",
-            entity_type, table.concat(assignments, ", "), cas_where_clause(entity_id, current.last_event_id)
+            db.quote_ident(entity_type), table.concat(assignments, ", "), cas_where_clause(entity_id, current.last_event_id)
         ))
         if changed == nil or changed == 0 then
             error("concurrent update conflict on " .. entity_type .. " #" .. tostring(entity_id))
@@ -736,8 +737,8 @@ function entity.archive(db_path, entity_type, entity_id, author, source, reason)
         event_id = ledger.append_archive(db_path, entity_type, entity_id, author, source, reason)
 
         _, _, changed = db.exec(db_path, string.format(
-            "UPDATE %s SET archived_at = %s, updated_by = %s, last_event_id = %d WHERE %s;",
-            entity_type, db.now_expr(db_path), db.literal(author), event_id,
+            "UPDATE %s SET archived_at = %s, updated_by = %s, updated_at = %s, last_event_id = %d WHERE %s;",
+            db.quote_ident(entity_type), db.now_expr(db_path), db.literal(author), db.now_expr(db_path), event_id,
             cas_where_clause(entity_id, current.last_event_id)
         ))
         if changed == nil or changed == 0 then
@@ -791,8 +792,8 @@ function entity.unarchive(db_path, entity_type, entity_id, author, source, reaso
         event_id = ledger.append_update(db_path, entity_type, entity_id, field_changes, author, source, reason)
 
         _, _, changed = db.exec(db_path, string.format(
-            "UPDATE %s SET archived_at = NULL, updated_by = %s, last_event_id = %d WHERE %s;",
-            entity_type, db.literal(author), event_id, cas_where_clause(entity_id, current.last_event_id)
+            "UPDATE %s SET archived_at = NULL, updated_by = %s, updated_at = %s, last_event_id = %d WHERE %s;",
+            db.quote_ident(entity_type), db.literal(author), db.now_expr(db_path), event_id, cas_where_clause(entity_id, current.last_event_id)
         ))
         if changed == nil or changed == 0 then
             error("concurrent unarchive conflict on " .. entity_type .. " #" .. tostring(entity_id))
