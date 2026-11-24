@@ -2302,7 +2302,15 @@ attempt that came up empty or ambiguous.
 But don't search without end. If three differently-worded searches, plus a
 look at the records the question is about, still find nothing, the data
 most likely doesn't record it: say so plainly -- what you checked, and that
-it isn't recorded -- and stop. Don't hand an absence to research.investigate
+it isn't recorded -- and stop. Two things settle it sooner. If the entity
+type the question is about has no field for what was asked (an ingredient
+table with no supplier column), the records don't hold it. If a document
+says that kind of information is kept somewhere outside daat (a sheet, a
+binder, a folder, another system), that is the answer: say it isn't
+recorded here and where the document says it is kept. Don't then guess
+likely values (vendor names, people, places) and search for each one; a
+search for a name nobody gave you can only test your guess, not find the
+record. Don't hand an absence to research.investigate
 or background.start; those are for questions that need many steps over
 data that exists, not for confirming that something isn't there.
 
