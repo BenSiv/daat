@@ -709,3 +709,40 @@ EOF2
     [ "$status" -eq 0 ]
     [[ "$output" =~ "Store verification passed (0 violations)." ]]
 }
+
+@test "entity.relationships lists archived rows and their reasons on MariaDB, with the entity_event index (#9, #62)" {
+    cat > config.lua <<EOF2
+return {database = {backend = "mariadb", host = "${DAAT_MARIADB_HOST}", port = ${DAAT_MARIADB_PORT}, user = "${DAAT_MARIADB_USER}", database = "${DAAT_MARIADB_DATABASE}"}, agent = {provider = "test", turn_mode = "inline"}}
+EOF2
+    "$BIN" init >/dev/null
+    q() { mariadb -N -h "$DAAT_MARIADB_HOST" -P "$DAAT_MARIADB_PORT" -u "$DAAT_MARIADB_USER" -p"$DAAT_MARIADB_PASSWORD" "$DAAT_MARIADB_DATABASE" -e "$1" 2>/dev/null; }
+    mkdir -p schemas
+    cat > schemas/reagent.lua <<'EOF2'
+return {name = "reagent", fields = {{name = "lot_number", type = "text", required = true, display = true}}}
+EOF2
+    "$BIN" schema add schemas/reagent.lua >/dev/null
+    for lot in LOT-1 LOT-2 LOT-3; do
+        "$BIN" entity create reagent lot_number="$lot" >/dev/null
+    done
+    id1=$(q "SELECT id FROM reagent WHERE lot_number = 'LOT-1';")
+    id2=$(q "SELECT id FROM reagent WHERE lot_number = 'LOT-2';")
+    "$BIN" entity archive reagent "$id1" >/dev/null
+    "$BIN" entity archive reagent "$id2" >/dev/null
+    q "UPDATE entity_event SET reason = 'expired lot' WHERE event_type = 'archive' AND entity_type = 'reagent';"
+    [ "$(q "SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'entity_event' AND index_name = 'entity_event_entity_id_idx';")" -ge 1 ]
+
+    read -r session csrf <<< "$(login_test_user alice i)"
+    cookie="session=${session}; csrf=${csrf}"
+    resp=$(raw_post_json "/api/v1/chat/sessions" '{"title":"MariaDB archived"}' "$cookie" "$csrf" "")
+    sid=$(json_body "$resp" | jq -r '.session_id')
+    scripted="$(tool_call_response "entity.relationships" "{}")"$'\1'"$(done_response "Listed.")"
+    raw_post_json "/api/v1/chat/sessions/${sid}/messages" "{\"message\":\"which reagents are archived?\"}" "$cookie" "$csrf" "$scripted" >/dev/null
+
+    result=$(q "SELECT content FROM agent_message WHERE session_id = '${sid}' AND role = 'tool_result';")
+    [[ "$result" =~ "Archived rows now" ]]
+    # The mariadb CLI prints the stored JSON's \" as \\", so the quotes
+    # around the reason are left out of the match.
+    [[ "$result" =~ "reagent: 2, reasons given: " ]]
+    [[ "$result" =~ "expired lot" ]]
+    [[ "$result" =~ "(2)" ]]
+}

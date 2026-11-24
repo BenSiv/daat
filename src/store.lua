@@ -577,6 +577,21 @@ table.insert(MIGRATIONS, {version = 12, name = "consolidate core module columns"
     store.ensure_columns(db_path, "entity_name_index", {{"distinctive", "INTEGER NOT NULL DEFAULT 1"}})
 end})
 
+-- 13. Index entity_event by entity (#9, #62 review). entity.relationships
+-- reads each archived row's latest archive reason with MAX(event_id)
+-- WHERE entity_id = ..., which without this scanned the whole ledger
+-- once per archived row (200k+ events on a production store). entity_id
+-- comes from one integer sequence shared by every type, so
+-- (entity_id, event_id) is two integers: no TEXT key length on MariaDB.
+-- ledger.history's per-entity reads use it too. Frozen self-contained SQL.
+table.insert(MIGRATIONS, {version = 13, name = "entity_event entity_id index", run = function(db_path)
+    if not exists(db_path, "entity_event") then
+        return
+    end
+    store.ensure_index(db_path, "entity_event", "entity_event_entity_id_idx",
+        "CREATE INDEX entity_event_entity_id_idx ON entity_event(entity_id, event_id);")
+end})
+
 function latest_version()
     latest = 0
     for _, m in ipairs(MIGRATIONS) do

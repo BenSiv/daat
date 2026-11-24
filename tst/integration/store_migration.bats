@@ -327,3 +327,18 @@ view|stock|SELECT 1|admin" ]
     [ "$(store "SELECT COUNT(*) FROM pragma_table_info('knowledge_retrieval_hit') WHERE name = 'aspect';")" = "1" ]
     [ "$(store "SELECT number_value >= 12 FROM system_state WHERE name = 'store.schema_version';")" = "1" ]
 }
+
+@test "migration 13 indexes entity_event by entity on an existing store" {
+    # entity.relationships reads each archived row's latest archive event
+    # by entity_id; without this index that scanned the whole ledger per
+    # row (#62 review).
+    [ "$(store "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'entity_event_entity_id_idx';")" = "1" ]
+    store "DROP INDEX entity_event_entity_id_idx;"
+    rewind_to 12
+
+    run "$BIN" user list
+    [ "$status" -eq 0 ]
+
+    [ "$(store "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'entity_event_entity_id_idx';")" = "1" ]
+    [ "$(store "SELECT number_value >= 13 FROM system_state WHERE name = 'store.schema_version';")" = "1" ]
+}

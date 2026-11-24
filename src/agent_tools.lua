@@ -1401,46 +1401,38 @@ end
 -- 14-30 steps: it found the two archived experiments early, but nothing
 -- said that archived was how a superseded run is recorded, so it went
 -- looking for proof. The reason ("superseded by a repeat run") was in
--- entity_event all along. One line per table, at most three reasons
--- each, so the result that's pinned through compaction stays small;
--- best-effort, since a store without entity_event rows (or a query
--- that fails) should cost the first look nothing.
-ARCHIVED_REASONS_SHOWN = 3
+-- entity_event all along. The counting is entity.archived_summary's,
+-- cached on the ledger's MAX(event_id) so this first look scans no table
+-- on a store that hasn't changed. One line per table, at most three
+-- reasons each, every reason on one line and cut at 80 characters, so
+-- the result that's pinned through compaction stays small; best-effort,
+-- since a failure there should cost the first look nothing.
 ARCHIVED_REASON_CHARS = 80
 
 function archived_rows_lines(db_path)
     found = {}
-    for _, t in ipairs(schema.list(db_path)) do
-        name = t.name
-        ok, rows = pcall(db.query, db_path, string.format(
-            "SELECT ev.reason AS reason, COUNT(*) AS n FROM %s r LEFT JOIN entity_event ev ON ev.event_id = " ..
-            "(SELECT MAX(x.event_id) FROM entity_event x WHERE x.entity_id = r.id AND x.entity_type = '%s' " ..
-            "AND x.event_type = 'archive') WHERE r.archived_at IS NOT NULL GROUP BY ev.reason ORDER BY n DESC", name, name))
-        if ok == true and type(rows) == "table" and #rows > 0 then
-            total = 0
+    ok, summary = pcall(entity.archived_summary, db_path, schema.list(db_path))
+    if ok != true or type(summary) != "table" then
+        return {}
+    end
+    for name, entry in pairs(summary) do
+        total = tonumber(entry.total)
+        if total != nil and total > 0 and type(entry.reasons) == "table" then
             reasons = {}
-            for _, row in ipairs(rows) do
-                n = tonumber(row.n)
-                if n == nil then
-                    n = 0
+            for _, r in ipairs(entry.reasons) do
+                -- A multi-line reason would break the one-line-per-table layout.
+                reason = string.gsub(tostring(r.reason), "%s+", " ")
+                reason = string.match(reason, "^%s*(.-)%s*$")
+                if #reason > ARCHIVED_REASON_CHARS then
+                    reason = string.sub(reason, 1, ARCHIVED_REASON_CHARS) .. "..."
                 end
-                total = total + n
-                reason = row.reason
-                if reason != nil and reason != "" and #reasons < ARCHIVED_REASONS_SHOWN then
-                    reason = tostring(reason)
-                    if #reason > ARCHIVED_REASON_CHARS then
-                        reason = string.sub(reason, 1, ARCHIVED_REASON_CHARS) .. "..."
-                    end
-                    table.insert(reasons, string.format("\"%s\" (%d)", reason, n))
-                end
+                table.insert(reasons, string.format("\"%s\" (%d)", reason, tonumber(r.n)))
             end
-            if total > 0 then
-                line = string.format("%s: %d", name, total)
-                if #reasons > 0 then
-                    line = line .. ", reasons given: " .. table.concat(reasons, ", ")
-                end
-                table.insert(found, line)
+            line = string.format("%s: %d", tostring(name), total)
+            if #reasons > 0 then
+                line = line .. ", reasons given: " .. table.concat(reasons, ", ")
             end
+            table.insert(found, line)
         end
     end
     if #found == 0 then

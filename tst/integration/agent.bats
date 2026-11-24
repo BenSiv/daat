@@ -515,7 +515,11 @@ EOF
     "$BIN" entity archive task "$c" >/dev/null
     "$BIN" entity unarchive task "$c" >/dev/null
     # The CLI takes no reason; the API and the agent's entity.archive do.
-    sqlite3 "$TEST_DIR/.store/store.db" "UPDATE entity_event SET reason = 'superseded by a repeat run' WHERE event_type = 'archive' AND entity_type = 'task' AND entity_id = $a;"
+    # A reason written over several lines still makes one line here.
+    sqlite3 "$TEST_DIR/.store/store.db" "UPDATE entity_event SET reason = 'superseded by'||char(10)||'   a repeat run  ' WHERE event_type = 'archive' AND entity_type = 'task' AND entity_id = $a;"
+    # An empty archived_at is live, as everywhere else in daat.
+    d=$(id_of D)
+    sqlite3 "$TEST_DIR/.store/store.db" "UPDATE task SET archived_at = '' WHERE id = $d;"
     resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
     session_id=$(extract_query_param "$resp" "session_id")
 
