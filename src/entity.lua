@@ -100,7 +100,7 @@ function entity.build_ctx(db_path, manifest, read_only)
                 end
             end
         end
-        q = "SELECT * FROM " .. target_type
+        q = "SELECT * FROM " .. db.quote_ident(target_type)
         if #where > 0 then
             q = q .. " WHERE " .. table.concat(where, " AND ")
         end
@@ -426,7 +426,7 @@ function lock_entity_row_for_update(db_path, entity_type, entity_id)
     if db.is_mariadb(db_path) then
         db.query(db_path, string.format(
             "SELECT id, last_event_id FROM %s WHERE id = %d FOR UPDATE;",
-            entity_type, tonumber(entity_id)
+            db.quote_ident(entity_type), tonumber(entity_id)
         ))
     end
 end
@@ -484,7 +484,7 @@ function entity.create(db_path, entity_type, values, author, source)
 
         db.exec(db_path, string.format(
             "INSERT INTO %s (%s) VALUES (%s);",
-            entity_type, table.concat(columns, ", "), table.concat(literals, ", ")
+            db.quote_ident(entity_type), table.concat(columns, ", "), table.concat(literals, ", ")
         ))
 
         for name, field in pairs(multi_fields) do
@@ -659,10 +659,11 @@ function entity.update(db_path, entity_type, entity_id, values, author, source, 
         event_id = ledger.append_update(db_path, entity_type, entity_id, field_changes, author, source, reason)
 
         table.insert(assignments, "updated_by = " .. db.literal(author))
+        table.insert(assignments, "updated_at = " .. db.now_expr(db_path))
         table.insert(assignments, "last_event_id = " .. tostring(event_id))
         _, _, changed = db.exec(db_path, string.format(
             "UPDATE %s SET %s WHERE %s;",
-            entity_type, table.concat(assignments, ", "), cas_where_clause(entity_id, current.last_event_id)
+            db.quote_ident(entity_type), table.concat(assignments, ", "), cas_where_clause(entity_id, current.last_event_id)
         ))
         if changed == nil or changed == 0 then
             error("concurrent update conflict on " .. entity_type .. " #" .. tostring(entity_id))
@@ -736,8 +737,8 @@ function entity.archive(db_path, entity_type, entity_id, author, source, reason)
         event_id = ledger.append_archive(db_path, entity_type, entity_id, author, source, reason)
 
         _, _, changed = db.exec(db_path, string.format(
-            "UPDATE %s SET archived_at = %s, updated_by = %s, last_event_id = %d WHERE %s;",
-            entity_type, db.now_expr(db_path), db.literal(author), event_id,
+            "UPDATE %s SET archived_at = %s, updated_by = %s, updated_at = %s, last_event_id = %d WHERE %s;",
+            db.quote_ident(entity_type), db.now_expr(db_path), db.literal(author), db.now_expr(db_path), event_id,
             cas_where_clause(entity_id, current.last_event_id)
         ))
         if changed == nil or changed == 0 then
@@ -791,8 +792,8 @@ function entity.unarchive(db_path, entity_type, entity_id, author, source, reaso
         event_id = ledger.append_update(db_path, entity_type, entity_id, field_changes, author, source, reason)
 
         _, _, changed = db.exec(db_path, string.format(
-            "UPDATE %s SET archived_at = NULL, updated_by = %s, last_event_id = %d WHERE %s;",
-            entity_type, db.literal(author), event_id, cas_where_clause(entity_id, current.last_event_id)
+            "UPDATE %s SET archived_at = NULL, updated_by = %s, updated_at = %s, last_event_id = %d WHERE %s;",
+            db.quote_ident(entity_type), db.literal(author), db.now_expr(db_path), event_id, cas_where_clause(entity_id, current.last_event_id)
         ))
         if changed == nil or changed == 0 then
             error("concurrent unarchive conflict on " .. entity_type .. " #" .. tostring(entity_id))
@@ -945,7 +946,7 @@ function entity.apply_computed_field_overrides(db_path, entity_type, rows)
             end
             m_rows = db.query(db_path, string.format(
                 "SELECT %s AS pid, %s AS v FROM %s WHERE %s IN (%s);",
-                parent_col, value_col, table_name, parent_col, id_sql
+                db.quote_ident(parent_col), db.quote_ident(value_col), db.quote_ident(table_name), db.quote_ident(parent_col), id_sql
             ))
             if m_rows != nil then
                 for _, mr in ipairs(m_rows) do
@@ -998,7 +999,7 @@ function entity.get(db_path, entity_type, entity_id)
         return nil
     end
     rows = db.query(db_path, string.format(
-        "SELECT * FROM %s WHERE id = %d;", entity_type, entity_id
+        "SELECT * FROM %s WHERE id = %d;", db.quote_ident(entity_type), entity_id
     ))
     if rows == nil then
         return nil
@@ -1021,7 +1022,7 @@ function entity.list(db_path, entity_type, limit, offset, include_archived)
     if db.table_exists(db_path, entity_type) == false then
         return {}
     end
-    query = "SELECT * FROM " .. entity_type
+    query = "SELECT * FROM " .. db.quote_ident(entity_type)
     if include_archived != true then
         query = query .. " WHERE archived_at IS NULL"
     end
@@ -1292,6 +1293,179 @@ function entity.counts_by_type(db_path, entity_types)
     return counts
 end
 
+-- Archived rows per registered type, with the most common reasons given
+-- when they were archived, for entity.relationships (#9). "Leave out
+-- superseded runs" sent the agent searching documents for 14-30 steps
+-- for what superseded meant; the archive reason in entity_event said it.
+-- entity.relationships is step 1 of nearly every chat turn and research
+-- pass, so this follows counts_by_type above to stay cheap on a
+-- production store (34 types, 200k+ events, ~1-2 ms per query):
+--   1. Cache hit in system_state on (types_sig, MAX(event_id)): one PK
+--      read each, no table scanned.
+--   2. New events since: re-read only the types that had an archive, or
+--      an update touching archived_at (an unarchive), after the cached max.
+--   3. Cold start: archived counts batched in UNION ALL chunks, then the
+--      reasons only for types that have archived rows. Each row's reason
+--      is its latest archive event, an index seek on entity_event's
+--      (entity_id, event_id) (store.lua migration 13).
+-- Returns {type = {total = n, reasons = {{reason = text, n = count}, ...}}}
+-- for types with archived rows only, reasons most common first, at most
+-- ARCHIVED_REASONS_KEPT, empty or missing ones left out.
+const ARCHIVED_SUMMARY_STATE_KEY = "entity.archived_summary_cache"
+const ARCHIVED_REASONS_KEPT = 3
+
+function run_batched_archived_counts(db_path, target_names, existing_set)
+    computed = {}
+    present = {}
+    for _, name in ipairs(target_names) do
+        computed[name] = 0
+        if existing_set[name] == true then
+            table.insert(present, name)
+        end
+    end
+    idx = 1
+    while idx <= #present do
+        parts = {}
+        chunk_end = math.min(#present, idx + COUNT_UNION_CHUNK_SIZE - 1)
+        for i = idx, chunk_end do
+            tname = present[i]
+            table.insert(parts, string.format(
+                "SELECT %s AS entity_name, COUNT(*) AS n FROM %s WHERE archived_at IS NOT NULL AND archived_at != ''",
+                db.quote(tname), db.quote_ident(tname)
+            ))
+        end
+        rows = db.query(db_path, table.concat(parts, " UNION ALL ") .. ";")
+        if rows != nil then
+            for _, r in ipairs(rows) do
+                if r.entity_name != nil then
+                    computed[r.entity_name] = to_int_or_zero(r.n)
+                end
+            end
+        end
+        idx = chunk_end + 1
+    end
+    return computed
+end
+
+function archived_reasons(db_path, name)
+    rows = db.query(db_path, string.format(
+        "SELECT ev.reason AS reason, COUNT(*) AS n FROM %s r JOIN entity_event ev ON ev.event_id = " ..
+        "(SELECT MAX(x.event_id) FROM entity_event x WHERE x.entity_id = r.id AND x.entity_type = %s " ..
+        "AND x.event_type = 'archive') WHERE r.archived_at IS NOT NULL AND r.archived_at != '' " ..
+        "AND ev.reason IS NOT NULL AND ev.reason != '' GROUP BY ev.reason ORDER BY n DESC LIMIT %d;",
+        db.quote_ident(name), db.quote(name), ARCHIVED_REASONS_KEPT
+    ))
+    reasons = {}
+    if rows != nil then
+        for _, r in ipairs(rows) do
+            table.insert(reasons, {reason = tostring(r.reason), n = to_int_or_zero(r.n)})
+        end
+    end
+    return reasons
+end
+
+-- The summary entries for `names`, from scratch: counts batched, reasons
+-- only where something is archived.
+function archived_summary_for(db_path, names)
+    summary = {}
+    counts = run_batched_archived_counts(db_path, names, existing_tables_set(db_path))
+    for _, name in ipairs(names) do
+        if counts[name] != nil and counts[name] > 0 then
+            summary[name] = {total = counts[name], reasons = archived_reasons(db_path, name)}
+        end
+    end
+    return summary
+end
+
+function entity.archived_summary(db_path, entity_types)
+    type_names = {}
+    items = entity_types
+    if items == nil then
+        items = {}
+    end
+    for _, item in ipairs(items) do
+        name = item
+        if type(item) == "table" then
+            name = item.name
+        end
+        if type(name) == "string" and name != "" and schema.valid_name_syntax(name) then
+            table.insert(type_names, name)
+        end
+    end
+    if #type_names == 0 then
+        return {}
+    end
+    sorted_names = {}
+    for i, name in ipairs(type_names) do
+        sorted_names[i] = name
+    end
+    table.sort(sorted_names)
+    types_sig = table.concat(sorted_names, ",")
+
+    max_ok, max_rows = pcall(db.query, db_path, "SELECT COALESCE(MAX(event_id), 0) AS max_id FROM entity_event;")
+    if max_ok != true or max_rows == nil or max_rows[1] == nil then
+        return archived_summary_for(db_path, type_names)
+    end
+    current_max_id = to_int_or_zero(max_rows[1].max_id)
+
+    cached = nil
+    raw_ok, raw_json = pcall(store_lib.get_text, db_path, ARCHIVED_SUMMARY_STATE_KEY)
+    if raw_ok == true and type(raw_json) == "string" and raw_json != "" then
+        decoded = json.decode(raw_json)
+        if type(decoded) == "table" and type(decoded.summary) == "table" and decoded.types_sig == types_sig
+                and tonumber(decoded.max_event_id) != nil then
+            cached = decoded
+        end
+    end
+
+    summary = nil
+    if cached != nil and tonumber(cached.max_event_id) == current_max_id then
+        return cached.summary
+    end
+    if cached != nil and current_max_id > tonumber(cached.max_event_id) then
+        dirty_ok, dirty_rows = pcall(db.query, db_path, string.format(
+            "SELECT DISTINCT entity_type FROM entity_event WHERE event_id > %d AND (event_type = 'archive' OR " ..
+            "(event_type = 'update' AND field_changes LIKE '%%\"archived_at\"%%'));",
+            tonumber(cached.max_event_id)
+        ))
+        if dirty_ok == true then
+            requested = {}
+            for _, name in ipairs(type_names) do
+                requested[name] = true
+            end
+            summary = cached.summary
+            dirty_names = {}
+            if dirty_rows != nil then
+                for _, dr in ipairs(dirty_rows) do
+                    if dr.entity_type != nil and requested[dr.entity_type] == true then
+                        table.insert(dirty_names, dr.entity_type)
+                    end
+                end
+            end
+            if #dirty_names > 0 then
+                fresh = archived_summary_for(db_path, dirty_names)
+                for _, name in ipairs(dirty_names) do
+                    summary[name] = fresh[name]
+                end
+            end
+        end
+    end
+    if summary == nil then
+        summary = archived_summary_for(db_path, type_names)
+    end
+    -- Cached only when no event landed while it was being computed, as
+    -- counts_by_type does, so a concurrent archive is never skipped.
+    post_ok, post_rows = pcall(db.query, db_path, "SELECT COALESCE(MAX(event_id), 0) AS max_id FROM entity_event;")
+    if post_ok == true and post_rows != nil and post_rows[1] != nil and to_int_or_zero(post_rows[1].max_id) == current_max_id then
+        pcall(store_lib.set_text, db_path, ARCHIVED_SUMMARY_STATE_KEY, json.encode({
+            max_event_id = current_max_id,
+            types_sig = types_sig,
+            summary = summary,
+        }))
+    end
+    return summary
+end
+
 -- Filtered siblings of entity.list/entity.count, for "every X that
 -- references this Y" (e.g. a mixture's ingredients) -- field_name/value
 -- are trusted the same way entity_type already is throughout this file
@@ -1301,7 +1475,7 @@ function entity.list_by_field(db_path, entity_type, field_name, value, limit, of
     if db.table_exists(db_path, entity_type) == false then
         return {}
     end
-    query = "SELECT * FROM " .. entity_type .. " WHERE " .. db.quote_ident(field_name) .. " = " .. db.literal(value)
+    query = "SELECT * FROM " .. db.quote_ident(entity_type) .. " WHERE " .. db.quote_ident(field_name) .. " = " .. db.literal(value)
     if include_archived != true then
         query = query .. " AND archived_at IS NULL"
     end
@@ -1322,7 +1496,7 @@ function entity.count_by_field(db_path, entity_type, field_name, value, include_
     if db.table_exists(db_path, entity_type) == false then
         return 0
     end
-    query = "SELECT COUNT(*) AS n FROM " .. entity_type .. " WHERE " .. db.quote_ident(field_name) .. " = " .. db.literal(value)
+    query = "SELECT COUNT(*) AS n FROM " .. db.quote_ident(entity_type) .. " WHERE " .. db.quote_ident(field_name) .. " = " .. db.literal(value)
     if include_archived != true then
         query = query .. " AND archived_at IS NULL"
     end
@@ -1442,7 +1616,7 @@ function entity.search_across_types(db_path, query_text, per_type_limit, total_l
             end
             rows = db.query(db_path, string.format(
                 "SELECT %s FROM %s WHERE (%s) AND (archived_at IS NULL OR archived_at = '') LIMIT %d;",
-                table.concat(select_cols, ", "), entity_type, table.concat(where_parts, " OR "), tonumber(per_type_limit)
+                table.concat(select_cols, ", "), db.quote_ident(entity_type), table.concat(where_parts, " OR "), tonumber(per_type_limit)
             ))
             if rows != nil then
                 for _, row in ipairs(rows) do
@@ -1736,7 +1910,7 @@ function entity.do_entity(cmd_args, db_path)
         result = {}
         if db.table_exists(db_path, entity_type) then
             rows = db.query(db_path, string.format(
-                "SELECT external_id, id, archived_at FROM %s WHERE external_id IS NOT NULL AND external_id != '';", entity_type
+                "SELECT external_id, id, archived_at FROM %s WHERE external_id IS NOT NULL AND external_id != '';", db.quote_ident(entity_type)
             ))
             if rows != nil then
                 result = entity_id_map_prefer_active(rows, "external_id")
@@ -1763,7 +1937,7 @@ function entity.do_entity(cmd_args, db_path)
             quoted_field = db.quote_ident(field_name)
             rows = db.query(db_path, string.format(
                 "SELECT %s AS field_value, id, archived_at FROM %s WHERE %s IS NOT NULL AND %s != '';",
-                quoted_field, entity_type, quoted_field, quoted_field
+                quoted_field, db.quote_ident(entity_type), quoted_field, quoted_field
             ))
             if rows != nil then
                 result = entity_id_map_prefer_active(rows, "field_value")

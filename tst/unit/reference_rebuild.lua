@@ -123,7 +123,7 @@ function tests.rebuild_migrates_legacy_index_and_tolerates_add_column_race()
     db.exec(legacy_db, "CREATE TABLE entity_name_index (name_key VARCHAR(255) NOT NULL, entity_type VARCHAR(64) NOT NULL, entity_id INTEGER NOT NULL);")
     original_exec = db.exec
     db.exec = function(path, statement, ...)
-        if string.find(statement, "ADD COLUMN distinctive", 1, true) != nil then
+        if string.find(statement, "ADD COLUMN", 1, true) != nil and string.find(statement, "distinctive", 1, true) != nil then
             original_exec(path, statement, ...)
             error("duplicate column name: distinctive")
         end
@@ -136,7 +136,7 @@ function tests.rebuild_migrates_legacy_index_and_tolerates_add_column_race()
     db.exec(legacy_db, "DROP TABLE entity_name_index;")
     db.exec(legacy_db, "CREATE TABLE entity_name_index (name_key VARCHAR(255) NOT NULL, entity_type VARCHAR(64) NOT NULL, entity_id INTEGER NOT NULL);")
     db.exec = function(path, statement, ...)
-        if string.find(statement, "ADD COLUMN distinctive", 1, true) != nil then
+        if string.find(statement, "ADD COLUMN", 1, true) != nil and string.find(statement, "distinctive", 1, true) != nil then
             error("disk full")
         end
         return original_exec(path, statement, ...)

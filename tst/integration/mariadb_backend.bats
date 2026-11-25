@@ -709,3 +709,131 @@ EOF2
     [ "$status" -eq 0 ]
     [[ "$output" =~ "Store verification passed (0 violations)." ]]
 }
+
+@test "entity.relationships lists archived rows and their reasons on MariaDB, with the entity_event index (#9, #62)" {
+    cat > config.lua <<EOF2
+return {database = {backend = "mariadb", host = "${DAAT_MARIADB_HOST}", port = ${DAAT_MARIADB_PORT}, user = "${DAAT_MARIADB_USER}", database = "${DAAT_MARIADB_DATABASE}"}, agent = {provider = "test", turn_mode = "inline"}}
+EOF2
+    "$BIN" init >/dev/null
+    q() { mariadb -N -h "$DAAT_MARIADB_HOST" -P "$DAAT_MARIADB_PORT" -u "$DAAT_MARIADB_USER" -p"$DAAT_MARIADB_PASSWORD" "$DAAT_MARIADB_DATABASE" -e "$1" 2>/dev/null; }
+    mkdir -p schemas
+    cat > schemas/reagent.lua <<'EOF2'
+return {name = "reagent", fields = {{name = "lot_number", type = "text", required = true, display = true}}}
+EOF2
+    "$BIN" schema add schemas/reagent.lua >/dev/null
+    for lot in LOT-1 LOT-2 LOT-3; do
+        "$BIN" entity create reagent lot_number="$lot" >/dev/null
+    done
+    id1=$(q "SELECT id FROM reagent WHERE lot_number = 'LOT-1';")
+    id2=$(q "SELECT id FROM reagent WHERE lot_number = 'LOT-2';")
+    "$BIN" entity archive reagent "$id1" >/dev/null
+    "$BIN" entity archive reagent "$id2" >/dev/null
+    q "UPDATE entity_event SET reason = 'expired lot' WHERE event_type = 'archive' AND entity_type = 'reagent';"
+    [ "$(q "SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'entity_event' AND index_name = 'entity_event_entity_id_idx';")" -ge 1 ]
+
+    read -r session csrf <<< "$(login_test_user alice i)"
+    cookie="session=${session}; csrf=${csrf}"
+    resp=$(raw_post_json "/api/v1/chat/sessions" '{"title":"MariaDB archived"}' "$cookie" "$csrf" "")
+    sid=$(json_body "$resp" | jq -r '.session_id')
+    scripted="$(tool_call_response "entity.relationships" "{}")"$'\1'"$(done_response "Listed.")"
+    raw_post_json "/api/v1/chat/sessions/${sid}/messages" "{\"message\":\"which reagents are archived?\"}" "$cookie" "$csrf" "$scripted" >/dev/null
+
+    result=$(q "SELECT content FROM agent_message WHERE session_id = '${sid}' AND role = 'tool_result';")
+    [[ "$result" =~ "Archived rows now" ]]
+    # The mariadb CLI prints the stored JSON's \" as \\", so the quotes
+    # around the reason are left out of the match.
+    [[ "$result" =~ "reagent: 2, reasons given: " ]]
+    [[ "$result" =~ "expired lot" ]]
+    [[ "$result" =~ "(2)" ]]
+}
+
+@test "MariaDB rejects reserved-word entity types cleanly and quotes reserved-word fields end to end (#65)" {
+    cat > config.lua <<EOF2
+return {database = {backend = "mariadb", host = "${DAAT_MARIADB_HOST}", port = ${DAAT_MARIADB_PORT}, user = "${DAAT_MARIADB_USER}", database = "${DAAT_MARIADB_DATABASE}"}}
+EOF2
+    "$BIN" init >/dev/null
+    mkdir -p schemas
+
+    for bad_type in order release condition; do
+        cat > "schemas/${bad_type}.lua" <<EOF2
+return {name = "${bad_type}", fields = {{name = "label", type = "text", required = true, display = true}}}
+EOF2
+        run "$BIN" schema add "schemas/${bad_type}.lua"
+        [ "$status" -eq 1 ]
+        [[ "$output" =~ "is a reserved SQL word" ]]
+        [[ ! "$output" =~ "stack traceback" ]]
+        rm -f "schemas/${bad_type}.lua"
+    done
+
+    cat > schemas/step_spec.lua <<'EOF2'
+return {
+    name = "step_spec",
+    fields = {
+        {name = "release", type = "text", required = true, display = true},
+        {name = "order", type = "number", required = true},
+        {name = "usage", type = "multi_select", required = false, values = {"seed", "prod"}},
+    },
+}
+EOF2
+    cat > schemas/step_run.lua <<'EOF2'
+return {
+    name = "step_run",
+    fields = {
+        {name = "code", type = "text", required = true, display = true},
+        {name = "spec", type = "reference", required = true, entity_type = "step_spec"},
+    },
+}
+EOF2
+    run "$BIN" schema add schemas/step_spec.lua
+    [ "$status" -eq 0 ]
+    run "$BIN" schema add schemas/step_run.lua
+    [ "$status" -eq 0 ]
+
+    run "$BIN" entity create step_spec release="REL-2026" order=1 usage="seed,prod"
+    [ "$status" -eq 0 ]
+    spec_id=$("$BIN" entity list step_spec | head -1 | tr -d '#')
+    [ -n "$spec_id" ]
+    run "$BIN" entity create step_run code="SR-1" spec="$spec_id"
+    [ "$status" -eq 0 ]
+
+    read session csrf < <(login_test_user "alice" "i")
+    # Exercises compute_entity_display_label + prefetch_browse_display_labels on a reserved-word display field (`release`).
+    GATEWAY_INTERFACE="CGI/1.1" REQUEST_METHOD="GET" PATH_INFO="/browse" QUERY_STRING="type=step_run" \
+        HTTP_COOKIE="session=${session}; csrf=${csrf}" run "$BIN"
+    [[ "$output" =~ "200 OK" ]]
+    [[ "$output" =~ "REL-2026" ]]
+}
+
+@test "MariaDB entity update/archive/unarchive advance updated_at and migration 14 backfills frozen timestamps" {
+    "$BIN" init >/dev/null
+    mkdir -p schemas
+    cat > schemas/reagent.lua <<'EOF2'
+return {
+  name = "reagent",
+  fields = {
+    {name = "lot_number", type = "text", required = true},
+  },
+}
+EOF2
+    "$BIN" schema add schemas/reagent.lua >/dev/null
+    rid=$("$BIN" entity create reagent lot_number="LOT-M1" | grep -o '[0-9]\+')
+
+    q_sql() {
+        mariadb --batch --skip-column-names -h "$DAAT_MARIADB_HOST" -P "$DAAT_MARIADB_PORT" \
+            -u "$DAAT_MARIADB_USER" -p"$DAAT_MARIADB_PASSWORD" "$DAAT_MARIADB_DATABASE" -e "$1"
+    }
+
+    q_sql "UPDATE reagent SET created_at = '2026-01-01 00:00:00', updated_at = '2026-01-01 00:00:00' WHERE id = $rid;"
+    "$BIN" entity update reagent "$rid" lot_number="LOT-M2" >/dev/null
+    [[ "$(q_sql "SELECT updated_at FROM reagent WHERE id = $rid;")" > "2026-01-01 00:00:00" ]]
+
+    # Simulate a pre-migration-14 frozen updated_at on MariaDB and verify backfill.
+    ev_id=$(q_sql "SELECT last_event_id FROM reagent WHERE id = $rid;")
+    q_sql "UPDATE entity_event SET created_at = '2026-11-24 10:50:49' WHERE event_id = $ev_id;"
+    q_sql "UPDATE reagent SET updated_at = '2026-11-19 21:10:49' WHERE id = $rid;"
+    q_sql "UPDATE system_state SET number_value = 13 WHERE name = 'store.schema_version';"
+
+    run "$BIN" entity list reagent
+    [ "$status" -eq 0 ]
+    [ "$(q_sql "SELECT updated_at FROM reagent WHERE id = $rid;")" = "2026-11-24 10:50:49" ]
+}

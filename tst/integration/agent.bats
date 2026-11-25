@@ -498,6 +498,42 @@ EOF
     [[ "$output" =~ "task_note.task -> task (reference)" ]]
 }
 
+@test "entity.relationships says which tables have archived rows and the reasons given" {
+    # "Leave out superseded runs": the eval's mean-per-medium runs found
+    # the archived experiments, then spent 14-30 steps searching
+    # documents for proof that archived meant superseded (#9).
+    write_task_schema
+    write_task_note_schema
+    for t in A B C D; do
+        "$BIN" entity create task title="Task $t" status=open >/dev/null
+    done
+    id_of() { sqlite3 "$TEST_DIR/.store/store.db" "SELECT id FROM task WHERE title = 'Task $1';"; }
+    a=$(id_of A); b=$(id_of B); c=$(id_of C)
+    "$BIN" entity archive task "$a" >/dev/null
+    "$BIN" entity archive task "$b" >/dev/null
+    # Archived and restored: no longer archived, so not counted.
+    "$BIN" entity archive task "$c" >/dev/null
+    "$BIN" entity unarchive task "$c" >/dev/null
+    # The CLI takes no reason; the API and the agent's entity.archive do.
+    # A reason written over several lines still makes one line here.
+    sqlite3 "$TEST_DIR/.store/store.db" "UPDATE entity_event SET reason = 'superseded by'||char(10)||'   a repeat run  ' WHERE event_type = 'archive' AND entity_type = 'task' AND entity_id = $a;"
+    # An empty archived_at is live, as everywhere else in daat.
+    d=$(id_of D)
+    sqlite3 "$TEST_DIR/.store/store.db" "UPDATE task SET archived_at = '' WHERE id = $d;"
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(tool_call_response "entity.relationships" '{}')"$'\1'"$(done_response "Listed.")"
+    raw_post_json "/api/v1/chat/sessions/${session_id}/messages" "{\"message\":\"which tasks are superseded?\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "Archived rows now (how a deleted, superseded or replaced record is kept" ]]
+    # A stored result is JSON, so the reason's quotes are escaped there.
+    [[ "$output" =~ 'task: 2, reasons given: \"superseded by a repeat run\" (1)' ]]
+    # A table with nothing archived gets no line.
+    [[ ! "$output" =~ task_note:\ [0-9] ]]
+}
+
 @test "entity.find resolves a name on an identifier field to the entity's real id" {
     mkdir -p schemas
     cat > schemas/batch.lua <<'EOF'
@@ -922,6 +958,64 @@ SCHEMA
     raw_post_json "/api/v1/chat/sessions/${session_id}/messages" "{\"message\":\"once more\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
     run latest_tool_result "$session_id"
     [[ "$output" =~ "actual columns: hours, od, run" ]]
+}
+
+@test "stats.fit with mean_by gives a mean per second level in the same call" {
+    # "The mean doubling time per medium" took a fit per experiment, a
+    # query for each experiment's medium and a calc.evaluate per medium;
+    # two of three eval mean-per-medium runs ran out of steps (#9).
+    mkdir -p schemas
+    cat > schemas/reading.lua <<'SCHEMA'
+return {name = "reading", fields = {
+    {name = "run", type = "text", required = true},
+    {name = "medium", type = "text", required = true},
+    {name = "hours", type = "number", required = true},
+    {name = "od", type = "number", required = true},
+}}
+SCHEMA
+    "$BIN" schema add schemas/reading.lua >/dev/null
+    # YPD: R1 doubles every 2 h, R2 every 4 h (mean 3). LB: R3 every 6 h,
+    # R4 has one point and can't be fitted (mean 6, 1 of 2). Malt: only
+    # R5, one point.
+    for t in 0:0.1 2:0.2 4:0.4 6:0.8; do
+        "$BIN" entity create reading run=R1 medium=YPD hours="${t%%:*}" od="${t##*:}" >/dev/null
+    done
+    for t in 0:0.1 4:0.2 8:0.4 12:0.8; do
+        "$BIN" entity create reading run=R2 medium=YPD hours="${t%%:*}" od="${t##*:}" >/dev/null
+    done
+    for t in 0:0.1 6:0.2 12:0.4 18:0.8; do
+        "$BIN" entity create reading run=R3 medium=LB hours="${t%%:*}" od="${t##*:}" >/dev/null
+    done
+    "$BIN" entity create reading run=R4 medium=LB hours=0 od=0.1 >/dev/null
+    "$BIN" entity create reading run=R5 medium=Malt hours=0 od=0.1 >/dev/null
+    resp=$(start_chat "$COOKIE" "$CSRF" "Chat")
+    session_id=$(extract_query_param "$resp" "session_id")
+
+    scripted="$(tool_call_response "stats.fit" '{"sql":"SELECT r.run, r.medium, r.hours, r.od FROM reading r ORDER BY r.run, r.hours","x_column":"hours","y_column":"od","model":"exponential","group_column":"run","mean_by":"r.medium"}')"
+    raw_post_json "/api/v1/chat/sessions/${session_id}/messages" "{\"message\":\"mean doubling time per medium?\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "R1: doubling time 2 (in hours)" ]]
+    [[ "$output" =~ "mean doubling time over 3 of 5 run groups: 4" ]]
+    [[ "$output" =~ "mean doubling time by medium:" ]]
+    [[ "$output" =~ "YPD: 3, mean of 2 of 2 run groups (R1 2, R2 4)" ]]
+    [[ "$output" =~ "LB: 6, mean of 1 of 2 run groups (R3 6)" ]]
+    [[ "$output" =~ "Malt: no series could be fitted (0 of 1 run groups)" ]]
+
+    # A series spanning two values has no single mean to join; a missing
+    # column lists the real ones; mean_by alone has no series to average.
+    scripted="$(tool_call_response "stats.fit" '{"sql":"SELECT medium AS run, run AS medium, hours, od FROM reading","x_column":"hours","y_column":"od","model":"exponential","group_column":"run","mean_by":"medium"}')"
+    raw_post_json "/api/v1/chat/sessions/${session_id}/messages" "{\"message\":\"again\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "has more than one medium" ]]
+    scripted="$(tool_call_response "stats.fit" '{"sql":"SELECT run, hours, od FROM reading","x_column":"hours","y_column":"od","model":"exponential","group_column":"run","mean_by":"medium"}')"
+    raw_post_json "/api/v1/chat/sessions/${session_id}/messages" "{\"message\":\"once more\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "for mean_by -- " ]]
+    [[ "$output" =~ "actual columns: hours, od, run" ]]
+    scripted="$(tool_call_response "stats.fit" '{"sql":"SELECT run, medium, hours, od FROM reading","x_column":"hours","y_column":"od","model":"exponential","mean_by":"medium"}')"
+    raw_post_json "/api/v1/chat/sessions/${session_id}/messages" "{\"message\":\"and again\"}" "$COOKIE" "$CSRF" "$scripted" >/dev/null
+    run latest_tool_result "$session_id"
+    [[ "$output" =~ "mean_by needs a group_column" ]]
 }
 
 @test "document.search gives each result a ready-made link to cite" {
@@ -1591,6 +1685,12 @@ EOF
 
     run raw_get "/api/v1/chat/sessions/${session_id}" "" "$COOKIE"
     [[ "$output" =~ "switch to a single aggregate query instead" ]]
+
+    # The wrap-up asks for an answer already in hand first, then status
+    # (#9: a run with all four means replied only with its plan).
+    run sqlite3 "$TEST_DIR/.store/store.db" "SELECT prompt FROM agent_model_call WHERE session_id = '${session_id}' AND kind = 'wrapup';"
+    [[ "$output" =~ "already answer the question" ]]
+    [[ "$output" =~ "give that answer first" ]]
 }
 
 @test "chat-widget-stop requires the matching CSRF token" {

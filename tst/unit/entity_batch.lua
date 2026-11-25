@@ -225,6 +225,69 @@ function tests.counts_by_type_and_preload_all_fields_cache_and_delta_refresh(db_
     check(#edges >= 1, "expected at least 1 relationship edge")
 end
 
+function archived_widgets(db_path)
+    rows = db.query(db_path, "SELECT COUNT(*) AS n FROM widget WHERE archived_at IS NOT NULL AND archived_at != '';")
+    return tonumber(rows[1].n)
+end
+
+-- How many queries read a table's archived rows while `fn` runs, and
+-- whether any read tagged_item's.
+function watch_archived_scans(fn)
+    original_query = db.query
+    watched = {scans = 0, tagged = false}
+    db.query = function(path, statement, ...)
+        if string.find(statement, "archived_at IS NOT NULL", 1, true) != nil then
+            watched.scans = watched.scans + 1
+            if string.find(statement, "tagged_item", 1, true) != nil then
+                watched.tagged = true
+            end
+        end
+        return original_query(path, statement, ...)
+    end
+    result = fn()
+    db.query = original_query
+    return result, watched
+end
+
+function tests.archived_summary_is_indexed_cached_and_refreshed_by_type(db_path)
+    print("Testing entity.archived_summary: entity_event index, warm 0-scan cache hit, dirty-type-only refresh (#62 review)")
+    check(db.index_exists(db_path, "entity_event", "entity_event_entity_id_idx") == true,
+        "expected entity_event_entity_id_idx on a new store")
+    types = schema.list(db_path)
+    a, _ = entity.create(db_path, "widget", {label = "W-Arch-A"}, "tester")
+    b, _ = entity.create(db_path, "widget", {label = "W-Arch-B"}, "tester")
+    c, _ = entity.create(db_path, "widget", {label = "W-Arch-C"}, "tester")
+    entity.archive(db_path, "widget", a, "tester", nil, "superseded by a repeat run")
+    entity.archive(db_path, "widget", b, "tester", nil, "superseded by a repeat run")
+
+    cold = entity.archived_summary(db_path, types)
+    check(cold["widget"] != nil, "cold summary should have widget")
+    check(cold["widget"].total == archived_widgets(db_path), "cold widget total should match the table, got " ..
+        tostring(cold["widget"].total))
+    top = cold["widget"].reasons[1]
+    check(top != nil, "widget should have a reason")
+    check(top.reason == "superseded by a repeat run" and top.n >= 2, "the most common widget reason, got " .. tostring(top.reason))
+
+    -- Nothing new in the ledger: no table read at all.
+    warm, watched = watch_archived_scans(function() return entity.archived_summary(db_path, types) end)
+    check(watched.scans == 0, "expected 0 archived-row scans on a warm hit, got " .. tostring(watched.scans))
+    check(warm["widget"].total == cold["widget"].total, "warm widget total mismatch")
+
+    -- An update that doesn't touch archived_at changes nothing to re-read.
+    entity.update(db_path, "widget", c, {label = "W-Arch-C2"}, "tester")
+    _, watched = watch_archived_scans(function() return entity.archived_summary(db_path, types) end)
+    check(watched.scans == 0, "an ordinary update should re-read nothing, got " .. tostring(watched.scans))
+
+    -- Archiving a widget re-reads widget only; unarchiving brings it back.
+    entity.archive(db_path, "widget", c, "tester", nil, "folded into W-Arch-A")
+    after_archive, watched = watch_archived_scans(function() return entity.archived_summary(db_path, types) end)
+    check(watched.tagged == false, "a widget archive must not rescan tagged_item")
+    check(after_archive["widget"].total == cold["widget"].total + 1, "expected one more archived widget")
+    entity.unarchive(db_path, "widget", c, "tester")
+    after_unarchive = entity.archived_summary(db_path, types)
+    check(after_unarchive["widget"].total == cold["widget"].total, "an unarchive takes it back off")
+end
+
 function tests.single_row_crud_is_transactional_and_ddl_free(db_path)
     print("Testing single-row create/update/archive/unarchive roll back ledger + projection atomically and run zero DDL in-tx")
     verify = require("verify")

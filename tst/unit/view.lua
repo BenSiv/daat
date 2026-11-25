@@ -198,6 +198,10 @@ function tests.run_agent_query_blocks_all_allowlist_bypass_shapes()
     check(loaded == nil and load_err != nil and string.find(load_err, "invalid view name", 1, true) != nil,
         "view.load must reject ../secret traversal, got: " .. tostring(load_err))
 
+    check(view.guess_from_table("SELECT id FROM `sample` WHERE id = 1") == "sample", "guess_from_table should strip backticks")
+    guessed = view.guess_tables("SELECT s.id FROM `sample` s LEFT JOIN `plant` p ON p.id = s.source")
+    check(#guessed == 2 and guessed[1] == "sample" and guessed[2] == "plant", "guess_tables should strip backticks on FROM and JOIN")
+
     os.execute("rm -rf '" .. dir .. "'")
 end
 

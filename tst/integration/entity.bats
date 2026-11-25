@@ -250,3 +250,27 @@ teardown() {
     run "$BIN" store verify
     [ "$status" -eq 0 ]
 }
+
+@test "entity update, archive, and unarchive advance updated_at while no-op updates leave it untouched" {
+    rid=$("$BIN" entity create reagent lot_number="LOT-TS" concentration=5 | grep -o '[0-9]\+')
+    sqlite3 .store/store.db "UPDATE reagent SET created_at = '2026-01-01 00:00:00', updated_at = '2026-01-01 00:00:00' WHERE id = $rid;"
+
+    # No-op update (same concentration=5) must not bump updated_at or last_event_id.
+    "$BIN" entity update reagent "$rid" concentration=5
+    [ "$(sqlite3 .store/store.db "SELECT updated_at FROM reagent WHERE id = $rid;")" = "2026-01-01 00:00:00" ]
+
+    # Real field update advances updated_at past the frozen creation timestamp.
+    "$BIN" entity update reagent "$rid" concentration=10
+    after_update=$(sqlite3 .store/store.db "SELECT updated_at FROM reagent WHERE id = $rid;")
+    [[ "$after_update" > "2026-01-01 00:00:00" ]]
+
+    sqlite3 .store/store.db "UPDATE reagent SET updated_at = '2026-01-02 00:00:00' WHERE id = $rid;"
+    "$BIN" entity archive reagent "$rid"
+    after_archive=$(sqlite3 .store/store.db "SELECT updated_at FROM reagent WHERE id = $rid;")
+    [[ "$after_archive" > "2026-01-02 00:00:00" ]]
+
+    sqlite3 .store/store.db "UPDATE reagent SET updated_at = '2026-01-03 00:00:00' WHERE id = $rid;"
+    "$BIN" entity unarchive reagent "$rid"
+    after_unarchive=$(sqlite3 .store/store.db "SELECT updated_at FROM reagent WHERE id = $rid;")
+    [[ "$after_unarchive" > "2026-01-03 00:00:00" ]]
+}

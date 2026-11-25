@@ -227,4 +227,60 @@ function tests.valid_name_syntax_rejects_injection_and_traversal_shapes()
     check(schema.valid_name_syntax(42) == false, "expected a non-string to be rejected")
 end
 
+function tests.validate_rejects_reserved_sql_and_platform_table_names()
+    print("Testing schema.validate rejects SQLite + MariaDB reserved SQL words and platform table names (#65)")
+    -- Shared SQLite + MariaDB reserved words, SQLite-only (`transaction`, `autoincrement`),
+    -- and MariaDB-only (`release`, `condition`, `procedure`, `signal`, `match`, `range`, `key`, `usage`, `sql`, `value`).
+    for _, bad_type in ipairs({
+        "order", "group", "check", "select", "references", "values", "table", "index",
+        "transaction", "autoincrement", "nothing",
+        "release", "condition", "procedure", "signal", "match", "range", "key", "usage", "sql", "value",
+    }) do
+        err = schema.validate({name = bad_type, fields = {{name = "label", type = "text"}}})
+        check(err != nil and string.find(err, "reserved SQL word", 1, true) != nil,
+            "expected '" .. bad_type .. "' to be rejected as a reserved SQL word, got: " .. tostring(err))
+    end
+
+    -- Internal platform tables must never be claimed by a user schema file.
+    for _, internal_tbl in ipairs({"auth_user", "entity_event", "entity_type", "system_state", "agent_session", "document_link"}) do
+        err = schema.validate({name = internal_tbl, fields = {{name = "label", type = "text"}}})
+        check(err != nil and string.find(err, "internal platform table", 1, true) != nil,
+            "expected '" .. internal_tbl .. "' to be rejected as an internal table, got: " .. tostring(err))
+    end
+
+    -- Non-reserved SQL keywords that are ordinary domain nouns stay valid as entity types.
+    for _, ok_type in ipairs({"reference", "status", "source", "subject", "user", "task", "event", "view", "query", "action", "plant"}) do
+        err = schema.validate({name = ok_type, fields = {{name = "label", type = "text"}}})
+        check(err == nil, "expected non-reserved domain name '" .. ok_type .. "' to pass, got: " .. tostring(err))
+    end
+
+    -- Reserved SQL words ARE allowed as field names (quoted via db.quote_ident; used in lims for `sql` and `usage`).
+    err = schema.validate({
+        name = "reagent_spec",
+        fields = {
+            {name = "order", type = "number"},
+            {name = "release", type = "text"},
+            {name = "usage", type = "multi_select", values = {"growth", "assay"}},
+            {name = "sql", type = "sql_select"},
+        },
+    })
+    check(err == nil, "expected reserved SQL words to remain valid as field names, got: " .. tostring(err))
+end
+
+function tests.validate_enforces_identifier_syntax_and_unique_fields()
+    print("Testing schema.validate enforces identifier syntax on type/field names and rejects duplicate fields")
+    for _, bad_name in ipairs({"my-order", "Order", "1sample", "a b"}) do
+        err = schema.validate({name = bad_name, fields = {{name = "label", type = "text"}}})
+        check(err != nil and string.find(err, "name must match", 1, true) != nil,
+            "expected invalid schema name '" .. bad_name .. "' to be rejected, got: " .. tostring(err))
+        err_f = schema.validate({name = "sample", fields = {{name = bad_name, type = "text"}}})
+        check(err_f != nil and string.find(err_f, "name must match", 1, true) != nil,
+            "expected invalid field name '" .. bad_name .. "' to be rejected, got: " .. tostring(err_f))
+    end
+
+    dup = schema.validate({name = "sample", fields = {{name = "code", type = "text"}, {name = "code", type = "number"}}})
+    check(dup != nil and string.find(dup, "duplicate field name", 1, true) != nil,
+        "expected duplicate field name to be rejected, got: " .. tostring(dup))
+end
+
 unit.run(tests)

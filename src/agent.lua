@@ -635,7 +635,7 @@ function agent.ensure_typed_columns(db_path)
             end
             for _, column in ipairs(wanted[table_name]) do
                 if have[column[1]] == nil then
-                    db.exec(db_path, "ALTER TABLE " .. table_name .. " ADD COLUMN " .. column[1] .. " " .. column[2] .. ";")
+                    db.exec(db_path, "ALTER TABLE " .. db.quote_ident(table_name) .. " ADD COLUMN " .. db.quote_ident(column[1]) .. " " .. column[2] .. ";")
                 end
             end
         end
@@ -2703,10 +2703,17 @@ If the reply holds up, respond with EXACTLY: CONFIRM
 Otherwise, do not repeat the reply -- just say what to check next, as if continuing your own investigation.
 """
 
+-- Answer first, status second (#9). Asked only for "a status update",
+-- an eval mean-per-medium run that had all four means one step before
+-- the end replied "I am ready to compile the final summary table", and
+-- unknown-supplier runs that had found the supplier isn't recorded
+-- replied with a plan to keep searching. The user needs what the work
+-- already established; the next step matters only if something's left.
 TURN_LIMIT_WRAPUP_PROMPT = """
-[Automated: you've used your entire step budget for this task without reaching a final answer.] Write a short status update for the user, in your own words:
-- What you were trying to find or do, and what you've actually confirmed or ruled out so far -- cite real values from your own tool results above, not vague generalities.
-- Decide the next step yourself: either your approach was on track and just needs more steps, or -- on reflection -- a different approach would get there faster (e.g. one aggregate query instead of paging through rows one batch at a time). Say which, and exactly what you will do next.
+[Automated: you've used your entire step budget for this task without reaching a final answer.] Write the reply the user needs now, in your own words:
+- If your tool results above already answer the question -- all of it, or a part you can state for certain -- give that answer first, the way you would in a final reply: the values, and the method (the query or formula) in plain text. If what you were looking for isn't recorded in the places you checked, say plainly that it isn't recorded and where you looked.
+- Otherwise, what you were trying to find or do, and what you've actually confirmed or ruled out so far -- cite real values from your own tool results above, not vague generalities.
+- Only if something is genuinely left to do: decide the next step yourself. Either your approach was on track and just needs more steps, or -- on reflection -- a different approach would get there faster (e.g. one aggregate query instead of paging through rows one batch at a time). Say which, and exactly what you will do next.
 - Do not ask the user to choose between approaches -- that is your call, not theirs. Just end with one short line saying you'll carry on with that plan as soon as they reply (any reply, e.g. "continue").
 Do not call any tools -- this is a plain text reply only, and no tool call would run even if you proposed one.
 """

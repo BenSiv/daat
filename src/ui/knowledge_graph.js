@@ -25,6 +25,8 @@
     // the simulation, so toggling doesn't reshuffle the layout.
     var boot = JSON.parse(document.getElementById('platform-kg-boot').textContent);
     var TIER_LEGEND = boot.tier_legend;
+    var TIER_DEFAULTS = {};
+    TIER_LEGEND.forEach(function(t) { TIER_DEFAULTS[t.tier] = t.color; });
     // Distinct categorical colours for the most common tags; the
     // rest share "Other tags", untagged nodes are grey.
     var TAG_PALETTE = ['#4e79a7', '#f28e2b', '#e15759', '#76b7b2', '#59a14f', '#edc948',
@@ -82,7 +84,7 @@
     function buildLegend() {
         var entries = [];
         if (view.colorBy === 'tier') {
-            TIER_LEGEND.forEach(function(t) { entries.push({ key: 'tier:' + t.tier, label: t.label, color: tierColor(t.tier) || t.color }); });
+            TIER_LEGEND.forEach(function(t) { entries.push({ key: 'tier:' + t.tier, label: t.label, color: tierColor(t.tier) }); });
         } else {
             // Largest first by documents (each counted under its main
             // tag), ties by name so the order is stable; then "Other
@@ -195,11 +197,11 @@
     }
 
     function tierColor(tier) {
-        return cssVar('--platform-tier-' + tier, '#8880ec');
+        return cssVar('--platform-tier-' + tier, TIER_DEFAULTS[tier] || '#4f46e5');
     }
 
     function accentColor() {
-        return cssVar('--platform-accent', '#5c52e0');
+        return cssVar('--platform-accent', '#4f46e5');
     }
 
     function nodeRadius(heat) {

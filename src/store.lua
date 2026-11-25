@@ -146,7 +146,7 @@ function store.ensure_column(db_path, table_name, column_name, column_sql)
     if store.has_column(db_path, table_name, column_name) then
         return false
     end
-    ok_col, col_err = pcall(db.exec, db_path, "ALTER TABLE " .. table_name .. " ADD COLUMN " .. column_name .. " " .. column_sql .. ";")
+    ok_col, col_err = pcall(db.exec, db_path, "ALTER TABLE " .. db.quote_ident(table_name) .. " ADD COLUMN " .. db.quote_ident(column_name) .. " " .. column_sql .. ";")
     if ok_col == false and not store.has_column(db_path, table_name, column_name) then
         error(col_err)
     end
@@ -158,11 +158,12 @@ function store.ensure_columns(db_path, table_name, specs)
         return
     end
     have = columns_of(db_path, table_name)
+    quoted_table = db.quote_ident(table_name)
     for _, spec in ipairs(specs) do
         col_name = spec[1]
         col_sql = spec[2]
         if have[col_name] != true then
-            ok_col, col_err = pcall(db.exec, db_path, "ALTER TABLE " .. table_name .. " ADD COLUMN " .. col_name .. " " .. col_sql .. ";")
+            ok_col, col_err = pcall(db.exec, db_path, "ALTER TABLE " .. quoted_table .. " ADD COLUMN " .. db.quote_ident(col_name) .. " " .. col_sql .. ";")
             if ok_col == false and not store.has_column(db_path, table_name, col_name) then
                 error(col_err)
             end
@@ -182,7 +183,7 @@ function store.ensure_index(db_path, table_name, index_name, index_sql)
 end
 
 function row_count(db_path, table_name)
-    rows = db.query(db_path, "SELECT COUNT(*) AS n FROM " .. table_name .. ";")
+    rows = db.query(db_path, "SELECT COUNT(*) AS n FROM " .. db.quote_ident(table_name) .. ";")
     if rows == nil or rows[1] == nil then
         return 0
     end
@@ -201,9 +202,9 @@ function store.rename_table(db_path, old, new)
         if row_count(db_path, new) > 0 then
             error("cannot rename " .. old .. " to " .. new .. ": both exist and " .. new .. " has rows")
         end
-        db.exec(db_path, "DROP TABLE " .. new .. ";")
+        db.exec(db_path, "DROP TABLE " .. db.quote_ident(new) .. ";")
     end
-    db.exec(db_path, "ALTER TABLE " .. old .. " RENAME TO " .. new .. ";")
+    db.exec(db_path, "ALTER TABLE " .. db.quote_ident(old) .. " RENAME TO " .. db.quote_ident(new) .. ";")
 end
 
 -- Moves a replaced table out of the way, keeping its rows.
@@ -213,9 +214,9 @@ function store.retire_table(db_path, old)
     end
     legacy = old .. "_legacy"
     if exists(db_path, legacy) then
-        db.exec(db_path, "DROP TABLE " .. legacy .. ";")
+        db.exec(db_path, "DROP TABLE " .. db.quote_ident(legacy) .. ";")
     end
-    db.exec(db_path, "ALTER TABLE " .. old .. " RENAME TO " .. legacy .. ";")
+    db.exec(db_path, "ALTER TABLE " .. db.quote_ident(old) .. " RENAME TO " .. db.quote_ident(legacy) .. ";")
 end
 
 --------------------------------------------------------------------------
@@ -575,6 +576,62 @@ table.insert(MIGRATIONS, {version = 12, name = "consolidate core module columns"
     store.ensure_columns(db_path, "knowledge_retrieval_hit", {{"aspect", "INTEGER DEFAULT NULL"}})
     store.ensure_columns(db_path, "knowledge_link_review", {{"reason", "TEXT DEFAULT NULL"}})
     store.ensure_columns(db_path, "entity_name_index", {{"distinctive", "INTEGER NOT NULL DEFAULT 1"}})
+end})
+
+-- 13. Index entity_event by entity (#9, #62 review). entity.relationships
+-- reads each archived row's latest archive reason with MAX(event_id)
+-- WHERE entity_id = ..., which without this scanned the whole ledger
+-- once per archived row (200k+ events on a production store). entity_id
+-- comes from one integer sequence shared by every type, so
+-- (entity_id, event_id) is two integers: no TEXT key length on MariaDB.
+-- ledger.history's per-entity reads use it too. Frozen self-contained SQL.
+table.insert(MIGRATIONS, {version = 13, name = "entity_event entity_id index", run = function(db_path)
+    if not exists(db_path, "entity_event") then
+        return
+    end
+    store.ensure_index(db_path, "entity_event", "entity_event_entity_id_idx",
+        "CREATE INDEX entity_event_entity_id_idx ON entity_event(entity_id, event_id);")
+end})
+
+-- 14. entity.update, entity.archive, and entity.unarchive previously stamped
+-- updated_by and last_event_id without advancing updated_at, leaving
+-- updated_at frozen at created_at across every projected entity table.
+-- Backfills stale updated_at values from each row's last_event_id row in
+-- entity_event while preserving any row whose updated_at is already newer
+-- (e.g. a document touched by curation after its last ledger edit).
+table.insert(MIGRATIONS, {version = 14, name = "backfill entity updated_at from ledger", run = function(db_path)
+    if not exists(db_path, "entity_event") or not exists(db_path, "entity_type") then
+        return
+    end
+    type_rows = db.query(db_path, "SELECT name FROM entity_type;")
+    if type_rows == nil then
+        return
+    end
+    is_maria = db.is_mariadb(db_path)
+    for _, tr in ipairs(type_rows) do
+        tname = tr.name
+        if tname != nil and tname != "" and exists(db_path, tname) then
+            have = columns_of(db_path, tname)
+            if have["id"] == true and have["updated_at"] == true and have["last_event_id"] == true then
+                qt = db.quote_ident(tname)
+                if is_maria then
+                    db.exec(db_path, string.format(
+                        "UPDATE %s t INNER JOIN entity_event e ON e.event_id = t.last_event_id " ..
+                        "SET t.updated_at = e.created_at " ..
+                        "WHERE t.last_event_id IS NOT NULL AND t.last_event_id > t.id " ..
+                        "AND e.created_at IS NOT NULL AND (t.updated_at IS NULL OR t.updated_at = '' OR t.updated_at < e.created_at);",
+                        qt))
+                else
+                    db.exec(db_path, string.format(
+                        "UPDATE %s SET updated_at = (SELECT e.created_at FROM entity_event e WHERE e.event_id = %s.last_event_id) " ..
+                        "WHERE last_event_id IS NOT NULL AND last_event_id > id AND EXISTS (" ..
+                        "SELECT 1 FROM entity_event e WHERE e.event_id = %s.last_event_id AND e.created_at IS NOT NULL " ..
+                        "AND (%s.updated_at IS NULL OR %s.updated_at = '' OR %s.updated_at < e.created_at));",
+                        qt, qt, qt, qt, qt, qt))
+                end
+            end
+        end
+    end
 end})
 
 function latest_version()

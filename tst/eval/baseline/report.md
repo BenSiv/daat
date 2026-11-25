@@ -27,6 +27,17 @@ Mode: live. 27 scenarios, 81 runs.
 | Exact repeat calls per run | 0.36 |
 | Compactions per run | 0.00 |
 | entity.get calls per run | 1.16 |
+| Invented tools per 100 calls | 0.00 |
+| Invalid arguments per 100 calls | 0.00 |
+| Invented ids per 100 calls | 0.00 |
+
+Tool-call validity (not part of All checks passed):
+
+| Check | Bad calls | Calls | By tool |
+|-------|-----------|-------|---------|
+| Invented tools (`known_tools`) | 0 | 657 | - |
+| Invalid arguments (`valid_arguments`) | 0 | 657 | - |
+| Invented ids (`grounded_ids`) | 0 | 657 | - |
 
 | Scenario | Set | Passed | Failing checks |
 |----------|-----|--------|----------------|

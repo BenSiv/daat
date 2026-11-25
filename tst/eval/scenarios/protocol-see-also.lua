@@ -20,6 +20,9 @@ return function(f, s)
             f.media_decision.medium .. " experiment."},
         approval = "approve",
         script = {
+            -- Found before it's read: the id comes from the search result,
+            -- as a model's would (grounded_ids, #41).
+            s.tool("document.search", {query = "OD600 protocol"}),
             s.tool("entity.get", {entity_type = "document", entity_id = protocol_id, field = "content", offset = 0}),
             s.tool("entity.query", {sql = "SELECT lab_number FROM experiment WHERE status = 'finished' AND archived_at IS NULL"}),
             -- The test provider can't read the protocol back, so the

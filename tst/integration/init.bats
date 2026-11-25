@@ -101,8 +101,60 @@ teardown() {
 return { name = "bad", fields = { {name = "name", type = "text"} } }
 EOF
     run "$BIN" schema add schemas/bad.lua
+    [ "$status" -eq 1 ]
     [[ "$output" =~ "collides with a builtin column" ]]
     [[ ! "$output" =~ "Registered" ]]
+}
+
+@test "daat schema add rejects SQL reserved-word and internal table names cleanly, while allowing reserved-word fields (#65)" {
+    "$BIN" init
+    mkdir -p schemas
+
+    for bad_type in order release auth_user; do
+        cat > "schemas/${bad_type}.lua" <<EOF
+return { name = "${bad_type}", fields = { {name = "label", type = "text", required = true, display = true} } }
+EOF
+        run "$BIN" schema add "schemas/${bad_type}.lua"
+        [ "$status" -eq 1 ]
+        [[ ! "$output" =~ "stack traceback" ]]
+        [[ ! "$output" =~ "Registered" ]]
+        rm -f "schemas/${bad_type}.lua"
+    done
+
+    cat > schemas/order.lua <<'EOF'
+return { name = "order", fields = { {name = "label", type = "text"} } }
+EOF
+    run "$BIN" schema add schemas/order.lua
+    [ "$status" -eq 1 ]
+    [[ "$output" =~ "is a reserved SQL word" ]]
+    rm -f schemas/order.lua
+
+    # Reserved SQL words as field names (`usage`, `order`, `release`) work end-to-end via db.quote_ident.
+    cat > schemas/step_spec.lua <<'EOF'
+return {
+    name = "step_spec",
+    fields = {
+        {name = "release", type = "text", required = true, display = true},
+        {name = "order", type = "number", required = true},
+        {name = "usage", type = "multi_select", required = false, values = {"seed", "prod"}},
+    },
+}
+EOF
+    run "$BIN" schema add schemas/step_spec.lua
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "Registered entity type 'step_spec'" ]]
+
+    run "$BIN" entity create step_spec release="R-1" order=1 usage="seed,prod"
+    [ "$status" -eq 0 ]
+    spec_id=$("$BIN" entity list step_spec | head -1 | tr -d '#')
+    [ -n "$spec_id" ]
+    run "$BIN" entity update step_spec "$spec_id" order=2
+    [ "$status" -eq 0 ]
+    run "$BIN" entity show step_spec "$spec_id"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "R-1" ]]
+    [[ "$output" =~ "prod" ]]
+    [[ "$output" =~ "seed" ]]
 }
 
 @test "CLI exits non-zero on unknown commands, missing init, and --help exits zero" {

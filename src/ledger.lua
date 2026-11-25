@@ -79,6 +79,10 @@ function ledger.init_schema(db_path)
         db.now_expr(db_path), db.autoincrement_keyword(db_path), db.now_expr(db_path)
     ))
     ensure_entity_event_reason_column(db_path)
+    -- A new store gets the per-entity index here; an existing one from
+    -- store.lua's migration 13, which explains it.
+    store_lib.ensure_index(db_path, "entity_event", "entity_event_entity_id_idx",
+        "CREATE INDEX entity_event_entity_id_idx ON entity_event(entity_id, event_id);")
 end
 
 -- Appends a 'create' event and returns the new entity_id.
