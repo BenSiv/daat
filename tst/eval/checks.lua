@@ -79,6 +79,12 @@ METHOD_PATTERNS = {"select ", "```", "calculated", "computed", "formula", "ln(",
     -- mean-per-medium reply (20261123-130007-live #2, #9).
     "exponential fit", "linear fit", "curve fit"}
 
+-- One word between, as in "an exponential growth fit" (20261124-114859-live,
+-- calculation-doubling-time #1 and mean-per-medium #1, #9), which the
+-- fixed "exponential fit" misses. One word only, same cap as
+-- UNKNOWN_SHAPES.
+METHOD_SHAPES = {"%f[%w]exponential [%w%-]+ fit", "%f[%w]linear [%w%-]+ fit"}
+
 function contains_any(text, patterns)
     lowered = string.lower(text)
     for _, pattern in ipairs(patterns) do
@@ -356,7 +362,16 @@ function checks.says_unknown(conv, spec, ctx)
 end
 
 function checks.shows_method(conv, spec, ctx)
-    hit = contains_any(final_or_empty(conv), METHOD_PATTERNS)
+    text = final_or_empty(conv)
+    hit = contains_any(text, METHOD_PATTERNS)
+    if hit == nil then
+        lowered = string.lower(text)
+        for _, shape in ipairs(METHOD_SHAPES) do
+            if hit == nil then
+                hit = string.match(lowered, shape)
+            end
+        end
+    end
     if hit == nil then
         return {pass = false, detail = "no query, formula or steps shown"}
     end

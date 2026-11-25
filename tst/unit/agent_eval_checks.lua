@@ -368,6 +368,14 @@ function tests.says_unknown_and_shows_method_take_the_live_phrasings()
     fit = checks.conversation({user("q"), said("Each doubling time was determined using an exponential fit on OD600 " ..
         "measurements over time; the mean for YPD is 3.43 h.")}, {})
     check(checks.shows_method(fit, {}, CTX).pass == true, "'an exponential fit on OD600' should pass shows_method")
+    -- 20261124-114859-live, mean-per-medium #1: one word between.
+    grown = checks.conversation({user("q"), said("An exponential growth fit was performed on the OD600 " ..
+        "measurements; the mean for YPD is 3.43 h.")}, {})
+    method = checks.shows_method(grown, {}, CTX)
+    check(method.pass == true and method.detail == "'exponential growth fit'",
+        "'exponential growth fit' should pass shows_method, got " .. tostring(method.detail))
+    far = checks.conversation({user("q"), said("Exponential phase data were too sparse to fit: 3.43 h is a guess.")}, {})
+    check(checks.shows_method(far, {}, CTX).pass == false, "more than one word between should not count")
 end
 
 function tests.no_tool_names_catches_plumbing_but_not_links()
