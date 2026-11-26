@@ -41,6 +41,17 @@ UNKNOWN_PATTERNS = {
     "no data", "unknown",
 }
 
+-- "No <thing> recorded" with the thing named in between, which the fixed
+-- phrases above miss: "there is no supplier information recorded" failed
+-- a correct unknown-supplier reply (20261123-130007-live #3, #9). One or
+-- two words between, no more, so "no doubt the values were recorded"
+-- isn't read as one. A word may hold digits and hyphens ("no OD600
+-- information", "no catalog-number recorded").
+UNKNOWN_SHAPES = {
+    "%f[%w]no [%w%-]+ recorded", "%f[%w]no [%w%-]+ [%w%-]+ recorded",
+    "%f[%w]no [%w%-]+ information", "%f[%w]no [%w%-]+ [%w%-]+ information",
+}
+
 MONTHS = {"january", "february", "march", "april", "may", "june", "july",
     "august", "september", "october", "november", "december"}
 
@@ -63,7 +74,16 @@ function date_forms(iso)
 end
 
 METHOD_PATTERNS = {"select ", "```", "calculated", "computed", "formula", "ln(", "log(", "slope", "regression",
-    "log-linear", "least squares", "least-squares", "fitted", "fit over"}
+    "log-linear", "least squares", "least-squares", "fitted", "fit over",
+    -- "determined using an exponential fit on OD600" failed a correct
+    -- mean-per-medium reply (20261123-130007-live #2, #9).
+    "exponential fit", "linear fit", "curve fit"}
+
+-- One word between, as in "an exponential growth fit" (20261124-114859-live,
+-- calculation-doubling-time #1 and mean-per-medium #1, #9), which the
+-- fixed "exponential fit" misses. One word only, same cap as
+-- UNKNOWN_SHAPES.
+METHOD_SHAPES = {"%f[%w]exponential [%w%-]+ fit", "%f[%w]linear [%w%-]+ fit"}
 
 function contains_any(text, patterns)
     lowered = string.lower(text)
@@ -325,7 +345,16 @@ function checks.finished(conv, spec, ctx)
 end
 
 function checks.says_unknown(conv, spec, ctx)
-    hit = contains_any(final_or_empty(conv), UNKNOWN_PATTERNS)
+    text = final_or_empty(conv)
+    hit = contains_any(text, UNKNOWN_PATTERNS)
+    if hit == nil then
+        lowered = string.lower(text)
+        for _, shape in ipairs(UNKNOWN_SHAPES) do
+            if hit == nil then
+                hit = string.match(lowered, shape)
+            end
+        end
+    end
     if hit == nil then
         return {pass = false, detail = "does not say the data lacks the answer"}
     end
@@ -333,7 +362,16 @@ function checks.says_unknown(conv, spec, ctx)
 end
 
 function checks.shows_method(conv, spec, ctx)
-    hit = contains_any(final_or_empty(conv), METHOD_PATTERNS)
+    text = final_or_empty(conv)
+    hit = contains_any(text, METHOD_PATTERNS)
+    if hit == nil then
+        lowered = string.lower(text)
+        for _, shape in ipairs(METHOD_SHAPES) do
+            if hit == nil then
+                hit = string.match(lowered, shape)
+            end
+        end
+    end
     if hit == nil then
         return {pass = false, detail = "no query, formula or steps shown"}
     end

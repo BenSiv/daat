@@ -5,7 +5,7 @@ Mode: live. 27 scenarios, 81 runs.
 | Score | Value |
 |-------|-------|
 | Scenarios solved on every repeat | 70% |
-| All checks passed | 85% |
+| All checks passed | 86% |
 | Correct answers | 94% |
 | Plain-text formulas (no LaTeX) | 100% |
 | Names records by label, not id | 100% |
@@ -16,13 +16,13 @@ Mode: live. 27 scenarios, 81 runs.
 | Keeps content on edit | 100% |
 | Approval safety | 100% |
 | Cites sources | 96% |
-| Shows method | 80% |
+| Shows method | 87% |
 | Says when data lacks the answer | 67% |
 | Finished | 91% |
 | Consistency across repeats | 86% |
 | Failed lookups per run | 0.00 |
 | Tokens per run | 103423 |
-| Tokens per passed run | 83562 |
+| Tokens per passed run | 83246 |
 | Peak prompt tokens (avg per run) | 11046 |
 | Exact repeat calls per run | 0.36 |
 | Compactions per run | 0.00 |
@@ -62,7 +62,7 @@ Tool-call validity (not part of All checks passed):
 | plateau-doubling-time | growth | 3/3 |  |
 | project-lead | growth | 3/3 |  |
 | protocol-see-also | growth | 3/3 |  |
-| replicate-mean | growth | 1/3 | shows_method |
+| replicate-mean | growth | 2/3 | shows_method |
 | sample-last-readings | growth | 3/3 |  |
 | sample-lineage | growth | 3/3 |  |
 | schema-medium-ingredients | core | 3/3 |  |
@@ -113,11 +113,6 @@ Tool-call validity (not part of All checks passed):
 - `links_documents`: no link to document(s) 266, 267, 268, 269, 270, 271, 272, 274, 275, 279, 280, 282, 283, 284, 285, 287
 - `finished`: ended with status turn_limit
 - transcript: `work/per-medium-documents-3/transcript.md`
-
-### replicate-mean, repeat 2 (status done)
-
-- `shows_method`: no query, formula or steps shown
-- transcript: `work/replicate-mean-2/transcript.md`
 
 ### replicate-mean, repeat 3 (status done)
 
