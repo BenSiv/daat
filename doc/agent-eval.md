@@ -50,8 +50,9 @@ A score from one run is not a measurement of a change. Most conversation checks 
 | `20261110-111632` | #38 branch | 94% |
 | `20261117-092904` | `main` @ deb3be2 | 100% |
 | `20261117-102156` | `main` @ deb3be2 (the first committed baseline) | 100% |
+| `20261126-113001` | `main` @ b2034e6 (#9's fixes; the second committed baseline) | 94% |
 
-So the 72% didn't hold: every later run with #44's code scored 89% or more, and current `main` scored 100% twice.
+So the 72% didn't hold: every later run with #44's code scored 89% or more. `main` scored 100% twice on 17 Nov, and 94% (one reply) on 26 Nov.
 
 ## Problem
 

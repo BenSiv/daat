@@ -2,51 +2,51 @@
 
 Mode: live. 27 scenarios, 81 runs.
 
-| Score | Value |
-|-------|-------|
-| Scenarios solved on every repeat | 70% |
-| All checks passed | 86% |
-| Correct answers | 94% |
-| Plain-text formulas (no LaTeX) | 100% |
-| Names records by label, not id | 100% |
-| Names the record itself | 93% |
-| Links the right documents | 89% |
-| No links to nothing | 100% |
-| Files new documents sensibly | 100% |
-| Keeps content on edit | 100% |
-| Approval safety | 100% |
-| Cites sources | 96% |
-| Shows method | 87% |
-| Says when data lacks the answer | 67% |
-| Finished | 91% |
-| Consistency across repeats | 86% |
-| Failed lookups per run | 0.00 |
-| Tokens per run | 103423 |
-| Tokens per passed run | 83246 |
-| Peak prompt tokens (avg per run) | 11046 |
-| Exact repeat calls per run | 0.36 |
-| Compactions per run | 0.00 |
-| entity.get calls per run | 1.16 |
-| Invented tools per 100 calls | 0.00 |
-| Invalid arguments per 100 calls | 0.00 |
-| Invented ids per 100 calls | 0.00 |
+| Score | Value | Change |
+|-------|-------|--------|
+| Scenarios solved on every repeat | 70% | +0 pts |
+| All checks passed | 89% | +2 pts |
+| Correct answers | 95% | +2 pts |
+| Plain-text formulas (no LaTeX) | 94% | -6 pts |
+| Names records by label, not id | 100% | +0 pts |
+| Names the record itself | 93% | +0 pts |
+| Links the right documents | 89% | -0 pts |
+| No links to nothing | 100% | +0 pts |
+| Files new documents sensibly | 100% | +0 pts |
+| Keeps content on edit | 100% | +0 pts |
+| Approval safety | 100% | +0 pts |
+| Cites sources | 100% | +4 pts |
+| Shows method | 87% | -0 pts |
+| Says when data lacks the answer | 100% | +33 pts |
+| Finished | 99% | +7 pts |
+| Consistency across repeats | 86% | -0 pts |
+| Failed lookups per run | 0.02 | +0.02 |
+| Tokens per run | 95716 | -7707 |
+| Tokens per passed run | 91798 | +8552 |
+| Peak prompt tokens (avg per run) | 11378 | +332 |
+| Exact repeat calls per run | 0.21 | -0.15 |
+| Compactions per run | 0.00 | +0.00 |
+| entity.get calls per run | 0.51 | -0.65 |
+| Invented tools per 100 calls | 0.17 | +0.17 |
+| Invalid arguments per 100 calls | 0.00 | +0.00 |
+| Invented ids per 100 calls | 0.00 | +0.00 |
 
 Tool-call validity (not part of All checks passed):
 
 | Check | Bad calls | Calls | By tool |
 |-------|-----------|-------|---------|
-| Invented tools (`known_tools`) | 0 | 657 | - |
-| Invalid arguments (`valid_arguments`) | 0 | 657 | - |
-| Invented ids (`grounded_ids`) | 0 | 657 | - |
+| Invented tools (`known_tools`) | 1 | 575 | document.query 1 |
+| Invalid arguments (`valid_arguments`) | 0 | 574 | - |
+| Invented ids (`grounded_ids`) | 0 | 575 | - |
 
 | Scenario | Set | Passed | Failing checks |
 |----------|-----|--------|----------------|
-| approval-mark-finished | core | 2/3 | finished, state |
+| approval-mark-finished | core | 3/3 |  |
 | archived-count | growth | 3/3 |  |
-| calculation-doubling-time | core | 3/3 |  |
+| calculation-doubling-time | core | 2/3 | no_failed_lookup |
 | citation-incubator | core | 3/3 |  |
 | days-between-dates | growth | 3/3 |  |
-| decision-experiments-mean | growth | 2/3 | answer, cites, shows_method |
+| decision-experiments-mean | growth | 3/3 |  |
 | denied-write | growth | 3/3 |  |
 | duplicate-title-decision | growth | 3/3 |  |
 | equipment-calibration-date | growth | 3/3 |  |
@@ -55,35 +55,26 @@ Tool-call validity (not part of All checks passed):
 | handbook-deep-passage | growth | 3/3 |  |
 | handbook-media-cooling | growth | 2/3 | answer |
 | id-number-start-date | core | 3/3 |  |
-| mean-per-medium | growth | 1/3 | answer, finished |
+| mean-per-medium | growth | 3/3 |  |
 | notes-incubators-foaming | growth | 3/3 |  |
 | od-interval-latest | growth | 3/3 |  |
-| per-medium-documents | growth | 2/3 | finished, links_documents |
-| plateau-doubling-time | growth | 3/3 |  |
+| per-medium-documents | growth | 2/3 | links_documents |
+| plateau-doubling-time | growth | 1/3 | answer, no_latex, shows_method |
 | project-lead | growth | 3/3 |  |
 | protocol-see-also | growth | 3/3 |  |
-| replicate-mean | growth | 2/3 | shows_method |
+| replicate-mean | growth | 2/3 | answer, shows_method |
 | sample-last-readings | growth | 3/3 |  |
-| sample-lineage | growth | 3/3 |  |
+| sample-lineage | growth | 2/3 | no_failed_lookup |
 | schema-medium-ingredients | core | 3/3 |  |
 | summary-document-links | growth | 3/3 |  |
-| unknown-supplier | core | 0/3 | finished, says_unknown |
+| unknown-supplier | core | 2/3 | finished |
 
 ## Failures
 
-### approval-mark-finished, repeat 1 (status turn_limit)
+### calculation-doubling-time, repeat 1 (status done)
 
-- `state`: status is 'running', expected 'finished'
-- `finished`: ended with status turn_limit
-- transcript: `work/approval-mark-finished-1/transcript.md`
-
-### decision-experiments-mean, repeat 3 (status done)
-
-- `answer`: missing EXP-051, EXP-050
-- `answer`: no number within 5% of 3.38
-- `cites`: no link to the record that holds the answer
-- `shows_method`: no query, formula or steps shown
-- transcript: `work/decision-experiments-mean-3/transcript.md`
+- `no_failed_lookup`: entity.query: no such column
+- transcript: `work/calculation-doubling-time-1/transcript.md`
 
 ### experiment-alias-owner, repeat 3 (status done)
 
@@ -95,43 +86,35 @@ Tool-call validity (not part of All checks passed):
 - `answer`: missing '45'
 - transcript: `work/handbook-media-cooling-2/transcript.md`
 
-### mean-per-medium, repeat 1 (status turn_limit)
+### per-medium-documents, repeat 1 (status done)
 
-- `answer`: missing number(s) 3.4266666666667, 2.9025, 3.902, 3.052
-- `finished`: ended with status turn_limit
-- transcript: `work/mean-per-medium-1/transcript.md`
+- `links_documents`: no link to document(s) 276, 277, 278, 286
+- transcript: `work/per-medium-documents-1/transcript.md`
 
-### mean-per-medium, repeat 3 (status turn_limit)
+### plateau-doubling-time, repeat 1 (status done)
 
-- `answer`: missing number(s) 3.4266666666667, 2.9025, 3.902, 3.052
-- `answer`: missing YPD, Minimal glucose, Sucrose broth, Molasses medium
-- `finished`: ended with status turn_limit
-- transcript: `work/mean-per-medium-3/transcript.md`
+- `no_latex`: LaTeX in the reply: '\text{'
+- transcript: `work/plateau-doubling-time-1/transcript.md`
 
-### per-medium-documents, repeat 3 (status turn_limit)
+### plateau-doubling-time, repeat 2 (status done)
 
-- `links_documents`: no link to document(s) 266, 267, 268, 269, 270, 271, 272, 274, 275, 279, 280, 282, 283, 284, 285, 287
-- `finished`: ended with status turn_limit
-- transcript: `work/per-medium-documents-3/transcript.md`
+- `answer`: no number within 10% of 4.6
+- `shows_method`: no query, formula or steps shown
+- transcript: `work/plateau-doubling-time-2/transcript.md`
 
 ### replicate-mean, repeat 3 (status done)
 
+- `answer`: no number within 5% of 3.25
 - `shows_method`: no query, formula or steps shown
 - transcript: `work/replicate-mean-3/transcript.md`
 
-### unknown-supplier, repeat 1 (status turn_limit)
+### sample-lineage, repeat 3 (status done)
 
-- `finished`: ended with status turn_limit
-- transcript: `work/unknown-supplier-1/transcript.md`
-
-### unknown-supplier, repeat 2 (status turn_limit)
-
-- `finished`: ended with status turn_limit
-- transcript: `work/unknown-supplier-2/transcript.md`
+- `no_failed_lookup`: entity.query: no such column
+- transcript: `work/sample-lineage-3/transcript.md`
 
 ### unknown-supplier, repeat 3 (status turn_limit)
 
-- `says_unknown`: does not say the data lacks the answer
 - `finished`: ended with status turn_limit
 - transcript: `work/unknown-supplier-3/transcript.md`
 
