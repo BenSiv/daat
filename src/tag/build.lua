@@ -1,39 +1,6 @@
--- Cold start (doc/tag-ontology.md, phase 3c): tags built in daat, from
--- its own embeddings, for a deployment that has none -- after which
--- tag.lua places documents and tag_upkeep.lua restructures them.
---
---   1. Vectors: each document's tagging vector (tag_dims) with the pool's
---      average taken out, renormalised -- in one field every document
---      shares a large common direction (tag_upkeep.lua's comment).
---   2. Micro-clusters: spherical k-means, k ~ sqrt(n) (up to
---      BUILD_MICRO_MAX, as cluster_tags.py), seeded k-means++
---      from a fixed seed, so the same pool always builds the same way.
---   3. Consensus (evidence accumulation, as cluster_tags.py's --tree, but
---      over micro-clusters rather than documents, which an n x n matrix
---      can't hold in Luam): BUILD_RUNS more k-means runs, each on a
---      BUILD_FRACTION resample with k drawn from m/2 to 2m; for
---      each pair of micro-clusters, the share of their documents' pairs
---      that landed together.
---   4. Average linkage over 1 - that share, cut where a level lives
---      longest (the gap between successive merge heights) within
---      BUILD_TAG_RANGE.
---      Documents with under tag_min_text characters of their own text
---      (a folder page, a template, a file with no text) are left out.
---   5. Every document joins its nearest tag centre (and a second within
---      tag_second_within); tags under BUILD_MIN_SIZE are dissolved into
---      their neighbours first.
---   6. The agent names each tag from its most central titles; a label two
---      tags share, or a manual tag already has, is asked again.
---
--- `daat tag build --dry-run` reports the cut, the sizes, central titles
--- and -- when the deployment has tags -- how the build agrees with them
--- (the check before cluster_tags.py is retired); `--name` adds the
--- agent's labels; without --dry-run it writes, refused while computed
--- tags exist unless `--replace`: then the computed tags and their
--- memberships are archived (ledgered, never deleted) once the new tags
--- are planned and named, just before they're written. Refused while a
--- computed tag holds a membership a person set (pinned, excluded, or a
--- #tag in the text) -- a person's choice wins.
+-- Cold-start and `--replace` tag clustering: mean-centred vectors, seeded
+-- spherical k-means micro-clusters, consensus average-linkage cut, and LLM naming.
+-- See doc/tag-ontology.md.
 
 const db = require("database")
 const entity = require("entity")
@@ -49,18 +16,13 @@ const tag_terms_lib = require("tag.terms")
 const tag_build = {}
 
 const BUILD_SEED = 42
--- Documents build_vectors left out for too little text (for the report).
 BUILD_SHORT = 0
 const BUILD_RUNS = 10
 const BUILD_FRACTION = 0.8
 const BUILD_MAX_ITERATIONS = 15
 const BUILD_TAG_RANGE = {15, 60}
 const BUILD_MIN_SIZE = 10
--- Micro-clusters: sqrt(n), capped -- above the tag range's top on a
--- real pool, or the cut has no resolution near it (prod 2026-10-12:
--- sqrt(n/2) = 63 micro-clusters cut at 60 tags, the range's edge). No
--- floor beyond 2: on a small pool a fixed floor leaves micro-clusters of
--- a few documents that consensus runs never put together.
+-- Capped above BUILD_TAG_RANGE[2] so linkage cuts have resolution near the ceiling.
 const BUILD_MICRO_MAX = 150
 const BUILD_DOCS_PER_TAG = 60
 
@@ -96,8 +58,6 @@ function build_list(rows)
     return rows
 end
 
--- Luam's and/or take booleans only, so no defaulting a missing count
--- with `or`: these stand in.
 function build_get(t, key)
     if t[key] == nil then
         return 0
@@ -109,7 +69,6 @@ function build_add(t, key, by)
     t[key] = build_get(t, key) + by
 end
 
--- Active documents with an embedding: ids, centred unit vectors.
 function build_vectors(db_path)
     dims = config.load().tag_dims
     rows = db.query(db_path, """
@@ -121,8 +80,7 @@ function build_vectors(db_path)
     min_text = config.load().tag_min_text
     BUILD_SHORT = 0
     for _, row in ipairs(build_list(rows)) do
-        -- Too little text of its own to have a subject (tag_min_text);
-        -- body_chars unknown (NULL) counts as enough.
+        -- NULL body_chars (legacy embeddings) are treated as long enough to cluster.
         body_chars = tonumber(row.body_chars)
         if body_chars != nil and body_chars < min_text then
             BUILD_SHORT = BUILD_SHORT + 1
@@ -172,9 +130,6 @@ function build_vectors(db_path)
     return kept, vectors
 end
 
--- Spherical k-means over vectors[index[1..]]: k-means++ seeding from
--- `rng`, then Lloyd rounds until assignments settle. -> labels (one per
--- index entry, 1..k), centres.
 function build_kmeans(vectors, index, k, rng)
     n = #index
     if k > n then
@@ -258,9 +213,6 @@ function build_kmeans(vectors, index, k, rng)
     return labels, centres
 end
 
--- Average linkage (size-weighted) over a distance matrix of m items with
--- `sizes`. -> merges {{a, b, height}, ...} in order, items numbered 1..m
--- and each merge creating item m + step.
 function build_average_linkage(distance, sizes)
     m = #sizes
     active, size, dist = {}, {}, {}
@@ -303,8 +255,6 @@ function build_average_linkage(distance, sizes)
     return merges
 end
 
--- The micro-clusters grouped into `groups` tags by replaying the merges
--- until that many remain. -> group number per micro-cluster.
 function build_cut(merges, m, groups)
     parent = {}
     function find(x)
@@ -322,7 +272,6 @@ function build_cut(merges, m, groups)
         parent[merge[2]] = m + step
         remaining = remaining - 1
     end
-    -- Groups numbered 1..count in order of first appearance.
     roots, out, count = {}, {}, 0
     for i = 1, m do
         r = find(i)
@@ -335,12 +284,6 @@ function build_cut(merges, m, groups)
     return out
 end
 
--- The tag count whose level lives longest within the range: cutting after
--- merge i leaves m - i groups, living for h[i+1] - h[i]. The range's floor
--- scales with the pool -- a tag per BUILD_DOCS_PER_TAG documents at least,
--- up to BUILD_TAG_RANGE's -- so a small pool can have a few tags.
--- The range's top: `--max-tags N`, else config.lua's tag_build_max,
--- else BUILD_TAG_RANGE's (Ben, 2026-10-29: 50 tags were too many).
 BUILD_MAX_TAGS = nil
 
 function build_max_tags()
@@ -354,11 +297,6 @@ function build_max_tags()
     return BUILD_TAG_RANGE[2]
 end
 
--- How strongly the build leans to fewer tags: a level is scored by its
--- life / tags^c, so a level with more tags must live clearly longer to
--- win. 0 is the longest-lived level as is. `--coarseness C`, else
--- config.lua's tag_build_coarseness (Ben, 2026-10-29: fewer tags, but
--- left to the data rather than a fixed number).
 BUILD_COARSENESS = nil
 
 function build_coarseness()
@@ -372,8 +310,8 @@ function build_coarseness()
     return 0
 end
 
--- -> the chosen tag count, its life, the range, and the levels in the
--- range by score ({groups, life, score}), best first, for the report.
+-- Picks the cut in [low, high] maximizing merge-height gap / groups^coarseness
+-- (>= breaks ties toward fewer tags).
 function build_choose(merges, m, n)
     low = math.min(BUILD_TAG_RANGE[1], math.max(2, math.floor(n / BUILD_DOCS_PER_TAG)))
     high = math.min(build_max_tags(), m - 1)
@@ -385,8 +323,6 @@ function build_choose(merges, m, n)
         groups = m - i
         life = merges[i + 1][3] - merges[i][3]
         score = life / (groups ^ c)
-        -- >=: merges run from many groups to few, so a tie goes to the
-        -- coarser cut -- the simpler answer.
         if groups >= low and groups <= high then
             table.insert(levels, {groups = groups, life = life, score = score})
             if score >= best_score then
@@ -426,8 +362,6 @@ function build_centres(vectors, label_of, k)
     return centres
 end
 
--- Documents to their nearest tag centre, tags under BUILD_MIN_SIZE
--- dissolved first. -> {{centre, members = {{position, score, second}}}}.
 function build_assign(vectors, micro, group_of, groups)
     label_of = {}
     for i = 1, #vectors do
@@ -491,8 +425,6 @@ function build_assign(vectors, micro, group_of, groups)
     return tags
 end
 
--- The whole build, nothing written. -> plan {ids, vectors, tags = {{
--- centre, members = {positions}}, ...}, micro, groups, life, low, high}.
 function tag_build.plan(db_path, report)
     started = os.time()
     ids, vectors = build_vectors(db_path)
@@ -518,7 +450,6 @@ function tag_build.plan(db_path, report)
     end
     report(string.format("%d micro-clusters (%ds)", m, os.time() - started))
 
-    -- Consensus: share of each micro pair's document pairs put together.
     together = {}
     for a = 1, m do
         together[a] = {}
@@ -540,8 +471,6 @@ function tag_build.plan(db_path, report)
                 table.insert(sample, i)
             end
         end
-        -- k from m/2 to 2m, as cluster_tags.py: a run much coarser than
-        -- the real groups forces some of them together and blurs them.
         k_low = math.max(2, math.floor(m / 2))
         k = k_low + rng(math.max(1, 2 * m - k_low + 1)) - 1
         labels, _ = build_kmeans(vectors, sample, k, rng)
@@ -608,9 +537,7 @@ function tag_build.plan(db_path, report)
     return {ids = ids, vectors = vectors, tags = tags, micro = m, groups = groups, life = life, low = low, high = high}
 end
 
--- How the plan agrees with the deployment's current tags (each
--- document's first active tag): adjusted Rand over documents in both,
--- and each built tag's largest current tag. nil when there are none.
+-- Adjusted Rand index against each document's primary active tag, when tags exist.
 function build_agreement(db_path, plan)
     rows = db.query(db_path, """
         SELECT dt.document, dt.tag, t.label FROM document_tag dt JOIN tag t ON t.id = dt.tag
@@ -691,12 +618,8 @@ function build_members_for_titles(plan, t)
     return members
 end
 
--- The agent's label and description for each tag; labels two tags got,
--- or that a manual tag has, asked again together.
 function build_name(db_path, plan, report)
     context = tag_upkeep.context()
-    -- Distinctive words per planned tag, against all the others
-    -- (tag_terms.lua; decision log 2026-10-30 in doc/tag-ontology.md).
     groups = {}
     for t, _ in ipairs(plan.tags) do
         docs = {}
@@ -758,7 +681,6 @@ function build_name(db_path, plan, report)
     return plan
 end
 
--- Creates the tags and memberships and records the upkeep baselines.
 function build_write(db_path, plan, report)
     author = "system"
     now = os.date("!%Y-%m-%d %H:%M:%S")
@@ -784,7 +706,7 @@ function build_write(db_path, plan, report)
     return true
 end
 
--- Memberships a person set on computed tags: what --replace won't drop.
+-- Counts pinned, excluded, or text-asserted memberships that block --replace.
 function build_person_memberships(db_path)
     rows = db.query(db_path, """
         SELECT COUNT(*) AS n FROM document_tag dt JOIN tag t ON t.id = dt.tag
@@ -797,7 +719,6 @@ function build_person_memberships(db_path)
     return tonumber(rows[1].n)
 end
 
--- Archives every computed tag and its memberships, for --replace.
 function build_archive_computed(db_path, report)
     author = "system"
     reason = "replaced by tag build"
@@ -819,7 +740,6 @@ function build_archive_computed(db_path, report)
     end
 end
 
--- `daat tag build [--dry-run [--name]] [--replace] [--max-tags N] [--coarseness C]`.
 function tag_build.run(db_path, opts)
     BUILD_MAX_TAGS = opts.max_tags
     BUILD_COARSENESS = opts.coarseness

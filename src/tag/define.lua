@@ -1,16 +1,5 @@
--- Tag definitions as records (doc/tag-ontology.md, "Broader tags", and
--- the tier ladder's tier 3): every tag gets one short definition, written
--- by the agent the way the ontology plan asks -- the broader tag as its
--- genus, then what sets it apart from the tags beside it -- checked by a
--- second call, and kept as a tier-3 record (source_ref "tag:<id>") that
--- search and the graph see like any other record.
---
--- A specific tag is defined from its label, description, broader tag,
--- sibling tags and most central documents; a broad tag from the tags it
--- holds. knowledge_tag_definition keeps the hash of the tag's place in
--- the hierarchy (label, description, broader tag, siblings, sub-tags),
--- so a definition is rewritten in place only when that changes -- not
--- when documents come and go -- and archived when its tag is.
+-- Writes and verifies per-tag ontology definitions as tier-3 records (`source_ref = 'tag:<id>'`),
+-- keyed by hierarchy hash so document churn does not trigger rewrites. See doc/tag-ontology.md.
 
 const db = require("database")
 const entity = require("entity")
@@ -50,8 +39,6 @@ function define_text(value)
     return tostring(value)
 end
 
--- Every active tag with what its definition is written from.
--- -> {{id, label, input}, ...}, by id.
 function tag_define.inputs(db_path)
     rows = db.query(db_path, "SELECT id, label, description, source, parent FROM tag WHERE archived_at IS NULL OR archived_at = '' ORDER BY id;")
     if rows == nil then
@@ -117,14 +104,9 @@ function tag_define.inputs(db_path)
             end
             table.insert(parts, "Sub-tags:\n" .. table.concat(subs, "\n"))
         end
-        -- What the definition is rewritten for: the tag's place in the
-        -- hierarchy, not its documents (they come and go every day; the
-        -- central ones still go into the prompt).
         structure = table.concat(parts, "\n\n")
         if centres[key] != nil then
-            -- Without the definitions themselves: a definition placed in
-            -- a tag would otherwise change every tag's inputs, and every
-            -- run would write them all again.
+            -- Exclude tag-definition records themselves so defining a tag does not mutate inputs.
             members = {}
             for _, m in ipairs(tag_upkeep.members(db_path, row.id)) do
                 if definitions[tostring(tonumber(m.document))] != true then
@@ -134,7 +116,6 @@ function tag_define.inputs(db_path)
             table.insert(parts, "Its most central documents:\n" ..
                 tag_upkeep.titles(db_path, members, centres[key], false))
         end
-        -- A tag with neither documents nor sub-tags has nothing to define.
         if centres[key] != nil or children[key] != nil then
             table.insert(out, {id = tonumber(row.id), label = tostring(row.label), input = table.concat(parts, "\n\n"),
                 structure = structure})
@@ -143,8 +124,6 @@ function tag_define.inputs(db_path)
     return out
 end
 
--- Defines one tag now. -> "defined", "rejected" or "failed", and the
--- record's id.
 function tag_define.run(db_path, t, author)
     hash = document.content_hash(t.structure)
     previous = define_row(db_path, t.id)
@@ -192,11 +171,6 @@ function tag_define.run(db_path, t, author)
     return "defined", record_id
 end
 
--- `daat tag define [--dry-run] [--limit N] [--recheck]`: every tag
--- whose inputs changed since its definition (or that has none) -- with
--- --recheck also those whose last try was rejected or failed -- and the
--- definitions of archived tags archived. Found on prod 2026-10-30: 10 of
--- 65 definitions rejected, and nothing would ever try them again.
 function tag_define.repair(db_path, limit, dry_run, author, recheck)
     lines = {}
     due = {}

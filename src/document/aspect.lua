@@ -1,17 +1,6 @@
--- Aspects: a few extra vectors for a long document, so search can find
--- it by a subject it covers anywhere in its text (doc/aspect-retrieval-plan.md).
---
--- A document's own embedding covers only its start: the embedding model
--- reads at most 2,048 tokens and drops the rest (measured on prod
--- 2026-11-04: the stored vector is the embedding of the first 7-10k
--- characters). A document longer than aspect_min_chars is split into
--- the same passages stage 2 of search uses (src/passage.lua), they are
--- grouped by meaning, and each group becomes one aspect vector.
---
--- Aspects only decide whether a document is found. They are never
--- shown, linked, heated or tiered: the document stays the unit.
--- Derived like document_embedding: rebuilt when the text changes, safe
--- to drop, refilled by `daat repair aspects`.
+-- Derived multi-passage aspect vectors (`document_aspect`) for long documents
+-- whose text exceeds the single-vector embedding window.
+-- See doc/aspect-retrieval-plan.md.
 
 const config = require("config")
 const db = require("database")
@@ -24,16 +13,8 @@ const agent_provider_lib = require("agent_provider")
 
 const aspect = {}
 
--- One row per aspect of a document. vector_packed is int8: the vector
--- (cut to aspect_dims when set) scaled by its largest component, so a
--- 768-dimension aspect is 768 bytes; search renormalises on read.
--- passage_offset is where the group's most central passage starts, as
--- stage 2 shows it ("[at character N]", counting from 0);
--- member_offsets lists where each of the group's passages starts, the
--- same way, comma-separated in document order -- what curating the
--- aspect reads (src/curate.lua). text_hash covers the content, the
--- model and every setting that shapes the aspects, so a change of any
--- of them rebuilds them.
+-- int8-quantised vectors renormalised on read; passage_offset and member_offsets
+-- are 0-based byte offsets into content; text_hash covers content, model, and config.
 const ASPECT_SCHEMA = """
 CREATE TABLE IF NOT EXISTS document_aspect (
     document_id INTEGER NOT NULL,
@@ -53,15 +34,9 @@ function aspect.init_schema(db_path)
     db.exec(db_path, string.format(ASPECT_SCHEMA, db.now_expr(db_path)))
 end
 
---------------------------------------------------------------------------
--- Pure parts: grouping and packing
---------------------------------------------------------------------------
-
 const dot = vector_lib.dot
 const normalized = vector_lib.unit
 
--- How many aspects a document of `n` passages gets: about the square
--- root of its passages, at most `max`, at least 1.
 function aspect.group_count(n, max)
     if n <= 0 then
         return 0
@@ -69,17 +44,10 @@ function aspect.group_count(n, max)
     return math.max(1, math.min(max, math.ceil(math.sqrt(n))))
 end
 
--- Iterations of k-means at most; it usually settles in a few.
 const GROUP_ITERATIONS = 12
 
--- aspect.group(vectors, k, seed) -> {{members, centroid, medoid}, ...}
--- Spherical k-means over unit vectors, deterministic: the first centre
--- is the vector least like `seed` (the document's own vector, which
--- already covers its opening; nil: the first vector), each next centre
--- the vector least like any centre so far, ties to the earlier one.
--- `members` are indexes into `vectors` in order, `centroid` is the
--- group's normalised mean, `medoid` the member closest to it. Empty
--- groups are dropped; groups come in the order of their first member.
+-- Deterministic spherical k-means seeded by farthest-point from `seed`
+-- (the document's whole-text vector), ordered by first member passage.
 function aspect.group(vectors, k, seed)
     n = #vectors
     if n == 0 or k <= 0 then
@@ -192,9 +160,6 @@ function aspect.group(vectors, k, seed)
     return groups
 end
 
--- A vector cut to its first `dims` dimensions (0 or more than it has:
--- all of them) and renormalised -- how an aspect is stored and how the
--- query is compared with it.
 function aspect.cut(vector, dims)
     if vector == nil then
         return nil
@@ -209,8 +174,7 @@ function aspect.cut(vector, dims)
     return normalized(head)
 end
 
--- int8, scaled so the largest component is +-127. The scale isn't
--- stored: unpacking renormalises, and only direction matters.
+-- Symmetric int8 quantisation (+-127 max component); unpacking L2-renormalises.
 function aspect.pack(vector, dims)
     unit = aspect.cut(vector, dims)
     if unit == nil then
@@ -237,16 +201,10 @@ function aspect.unpack(packed)
         return nil
     end
     values = {string.unpack("<" .. string.rep("b", string.len(packed)), packed)}
-    table.remove(values) -- string.unpack's trailing "next position"
+    table.remove(values)
     return normalized(values)
 end
 
---------------------------------------------------------------------------
--- Building
---------------------------------------------------------------------------
-
--- Everything that shapes a document's aspects, hashed with its content:
--- a change to any of them makes the stored aspects stale.
 function aspect_hash(content, model, conf)
     return hmac.sha256("document_aspect", table.concat({
         tostring(model), tostring(conf.aspect_max), tostring(conf.aspect_dims), tostring(conf.aspect_vector),
@@ -267,12 +225,6 @@ function own_vector(db_path, document_id, model)
     return vector_lib.unpack(rows[1].vector_packed)
 end
 
--- aspect.refresh(db_path, document_id) -> outcome, count | nil, err
--- Builds a document's aspects if they're missing or stale. Outcomes:
--- "built" (with the number of aspects), "unchanged", "short" (no
--- aspects: the document fits its own vector, any old ones dropped).
--- Passage vectors come from document_passage_cache; missing ones are
--- embedded in batches and cached, which warms stage 2 of search too.
 function aspect.refresh(db_path, document_id)
     document_id = tonumber(document_id)
     conf = config.load()
@@ -346,10 +298,6 @@ function aspect.refresh(db_path, document_id)
     return "built", #values
 end
 
--- `daat repair aspects`: every active document's aspects brought up to
--- date (or one document's). Documents are visited in id order; `limit`
--- caps how many are built in one run, so a backfill can go in steps.
--- -> {built, unchanged, short, failed, aspects}
 function aspect.refresh_all(db_path, limit)
     counts = {built = 0, unchanged = 0, short = 0, failed = 0, aspects = 0}
     rows = db.query(db_path, "SELECT id FROM document WHERE (archived_at IS NULL OR archived_at = '') AND merged_into IS NULL ORDER BY id;")
@@ -363,9 +311,6 @@ function aspect.refresh_all(db_path, limit)
         ok, outcome, count = pcall(aspect.refresh, db_path, row.id)
         if ok != true or outcome == nil then
             counts.failed = counts.failed + 1
-            -- pcall's error, or refresh's own (nil, err). Spelled out:
-            -- luam's `and`/`or` take booleans only, and the one-line
-            -- version crashed prod's first backfill on its first failure.
             why = outcome
             if ok == true then
                 why = count
@@ -381,11 +326,7 @@ function aspect.refresh_all(db_path, limit)
     return counts
 end
 
--- aspect.passages(db_path, document_id, n) -> {passage_offset, passages} | nil
--- Aspect `n` of a document as it stands: its passages, in document
--- order, re-split from the content (passage.split is deterministic, so
--- the offsets the build stored find them again). nil when the document
--- has no such aspect, or its content changed since the build.
+-- Re-splits content deterministically and resolves stored 0-based member_offsets; nil if stale.
 function aspect.passages(db_path, document_id, n)
     rows = db.query(db_path, string.format(
         "SELECT passage_offset, member_offsets FROM document_aspect WHERE document_id = %d AND aspect = %d ORDER BY model LIMIT 1;",
@@ -416,14 +357,6 @@ function aspect.passages(db_path, document_id, n)
     return {passage_offset = tonumber(rows[1].passage_offset), passages = chosen}
 end
 
---------------------------------------------------------------------------
--- Search
---------------------------------------------------------------------------
-
--- aspect.best_matches(db_path, query_vector, model, where) ->
---   {[document_id] = {similarity, aspect, passage_offset}}
--- The best aspect of every searchable document against the query.
--- `where` is the searchable-document condition on `d`.
 function aspect.best_matches(db_path, query_vector, model, where)
     best = {}
     query_unit = aspect.cut(query_vector, config.load().aspect_dims)
@@ -438,8 +371,6 @@ function aspect.best_matches(db_path, query_vector, model, where)
         return best
     end
     for _, row in ipairs(rows) do
-        -- A vector of another length (aspect_dims changed, not yet
-        -- rebuilt) compares as 0, never as an error.
         s = dot(query_unit, aspect.unpack(row.vector_packed))
         id = tonumber(row.document_id)
         if best[id] == nil or s > best[id].similarity then

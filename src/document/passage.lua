@@ -1,14 +1,6 @@
--- Passages: the most relevant parts of a document for one question,
--- chosen at search time (doc/passage-retrieval.md). Documents are
--- embedded and searched whole; once search has narrowed them down, each
--- shortlisted document is split here along its own structure, its
--- passages are scored against the question, and only the best are
--- shown -- to the agent and on the /documents page alike.
---
--- Nothing is stored as chunks: passages are derived from the document's
--- current text every time, so as documents are distilled and edited
--- their passages change with them. Only passage embeddings are cached
--- (document_passage_cache), keyed by the passage text, and they expire.
+-- On-demand structural passage splitting, text-keyed embedding cache
+-- (`document_passage_cache`), query-time excerpt selection, and pairwise passage gating.
+-- See doc/passage-retrieval.md and doc/link-passage-gate.md.
 
 const config = require("config")
 const db = require("database")
@@ -20,14 +12,6 @@ const agent_provider_lib = require("agent_provider")
 
 const passage = {}
 
---------------------------------------------------------------------------
--- The embedding cache
---------------------------------------------------------------------------
-
--- One row per (passage text, embedding model). Derived and safe to empty
--- at any time; keyed by text, not document, so identical passages share
--- an entry and an edited document's old passages simply stop being used
--- and expire (passage_cache_days after last_used_at).
 const PASSAGE_CACHE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS document_passage_cache (
     text_hash VARCHAR(64) NOT NULL,
@@ -55,9 +39,6 @@ function quoted_list(values)
     return table.concat(parts, ", ")
 end
 
--- passage.cache_get(db_path, model, hashes) -> {[hash] = unit vector}
--- One query for all of them; found entries get last_used_at refreshed
--- in one UPDATE.
 function passage.cache_get(db_path, model, hashes)
     found = {}
     if #hashes == 0 then
@@ -85,9 +66,6 @@ function passage.cache_get(db_path, model, hashes)
     return found
 end
 
--- passage.cache_put(db_path, model, entries): entries {{hash, vector}};
--- stores each L2-normalised and packed, as document_embedding does.
--- Returns {[hash] = unit vector} for what it stored.
 function passage.cache_put(db_path, model, entries)
     stored = {}
     values = {}
@@ -107,10 +85,7 @@ function passage.cache_put(db_path, model, entries)
     return stored
 end
 
--- passage.prune_cache(db_path, days) -> rows deleted
--- Entries unused for longer than `days` (passage_cache_days); <= 0
--- keeps everything. Evaluated against store.ago_expr so the cutoff uses
--- the exact same timezone and clock basis as db.now_expr.
+-- Uses store.ago_expr so cutoff timestamps match db.now_expr's UTC clock basis.
 function passage.prune_cache(db_path, days)
     if days == nil or days <= 0 then
         return 0
@@ -128,9 +103,6 @@ function passage.prune_cache(db_path, days)
     return count
 end
 
--- The last index in [from, to] where `pattern` (a Lua pattern whose
--- match should end the piece) matches, as the index of the match's last
--- character; nil if none.
 function last_break(content, from, to, pattern)
     found = nil
     position = from
@@ -145,15 +117,10 @@ function last_break(content, from, to, pattern)
     return found
 end
 
--- Cuts content[a..b] into pieces of at most `max_chars`, preferring
--- paragraph breaks, then sentence ends, then any whitespace; a run with
--- none of those (one enormous token) is cut at the limit. Returns a list
--- of {first, last} index pairs covering a..b exactly.
 function split_range(content, a, b, max_chars)
     pieces = {}
     while b - a + 1 > max_chars do
         limit = a + max_chars - 1
-        -- Not so early that the piece is a sliver.
         floor = a + math.floor(max_chars / 4)
         cut = last_break(content, floor, limit, "\n[ \t]*\n")
         if cut == nil then
@@ -174,8 +141,6 @@ function split_range(content, a, b, max_chars)
     return pieces
 end
 
--- The start index of every heading line ("#", "##", ... then a space)
--- at or after `from`.
 function heading_starts(content, from)
     starts = {}
     if string.find(string.sub(content, from, from + 6), "^#+%s") != nil then
@@ -203,14 +168,8 @@ function line_at(content, index)
     return string.sub(content, index, line_end - 1)
 end
 
--- passage.split(content, max_chars, min_chars) -> {{text, offset, heading}, ...}
--- The document's own text (past any metadata preamble) cut at its
--- headings, sections longer than max_chars cut further (split_range),
--- and pieces shorter than min_chars merged into a neighbour. Every
--- passage is an exact contiguous slice: string.sub(content, offset,
--- offset + #text - 1) == text. `heading` is the nearest heading line at
--- or before the passage (nil if none), for showing what it's about.
--- Deterministic: the same content always gives the same passages.
+-- Splits content past any sync preamble on headings and paragraph/sentence/word breaks,
+-- merging pieces under min_chars; returns contiguous 1-based slices {text, offset, heading}.
 function passage.split(content, max_chars, min_chars)
     if content == nil or content == "" then
         return {}
@@ -221,8 +180,6 @@ function passage.split(content, max_chars, min_chars)
         return {}
     end
     headings = heading_starts(content, first)
-    -- Sections: from the text start to the first heading (if any text
-    -- comes before it), then heading to heading.
     bounds = {}
     if #headings == 0 or headings[1] > first then
         table.insert(bounds, first)
@@ -240,7 +197,6 @@ function passage.split(content, max_chars, min_chars)
             table.insert(pieces, piece)
         end
     end
-    -- Merge slivers forward (into the next piece), the last one backward.
     merged = {}
     carry = nil
     for _, piece in ipairs(pieces) do
@@ -274,11 +230,6 @@ function passage.split(content, max_chars, min_chars)
     return passages
 end
 
---------------------------------------------------------------------------
--- Scoring and selection
---------------------------------------------------------------------------
-
--- The share of the query's distinct terms a passage contains.
 function term_share(text, terms)
     if #terms == 0 then
         return 0
@@ -295,9 +246,7 @@ end
 
 const dot = vector_lib.dot
 
--- What a passage is embedded as: its text, led by its heading when the
--- passage doesn't already start with it (a section's later pieces), so
--- its meaning includes what it's about. The cache is keyed by this.
+-- Prepends the enclosing heading when absent from p.text; cache hashes key on this string.
 function embed_text(p)
     if p.heading != nil and string.sub(p.text, 1, string.len(p.heading)) != p.heading then
         return p.heading .. "\n" .. p.text
@@ -305,7 +254,6 @@ function embed_text(p)
     return p.text
 end
 
--- Cuts text to at most `limit` characters at a word boundary.
 function cut_to(text, limit)
     if string.len(text) <= limit then
         return text
@@ -318,9 +266,6 @@ function cut_to(text, limit)
     return cut .. " ..."
 end
 
--- Formats the chosen passages, in document order, each marked with the
--- character it starts at (so the reader can go on from there with
--- entity.get field=content offset=...).
 function format_passages(chosen)
     table.sort(chosen, function(a, b) return a.offset < b.offset end)
     parts = {}
@@ -334,10 +279,6 @@ function format_passages(chosen)
     return table.concat(parts, "\n\n")
 end
 
--- passage.select(passages, scores, budget, per_document) -> chosen
--- The best-scoring passages, at most per_document of them, while their
--- total length fits the budget; the best one is cut to the budget if it
--- alone is longer. Pure, so it's unit-tested on its own.
 function passage.select(passages, scores, budget, per_document)
     order = {}
     for i = 1, #passages do
@@ -369,11 +310,6 @@ function passage.select(passages, scores, budget, per_document)
 end
 passage.format_passages = format_passages
 
--- passage.vectors(db_path, model, passages, max_new) -> {[hash] = unit
--- vector}, or nil, err when the provider fails. Sets each passage's
--- `embed` and `hash`; looks them all up in the cache in one query, and
--- embeds at most `max_new` of the missing ones in batched calls (in the
--- order given). A passage over the cap has no vector.
 function passage.vectors(db_path, model, passages, max_new)
     hashes = {}
     seen = {}
@@ -416,8 +352,6 @@ function passage.vectors(db_path, model, passages, max_new)
     return found
 end
 
--- The distinct words of a text worth matching on: lower case, 4 letters
--- or more (which leaves out most function words).
 function content_words(text)
     words = {}
     for word in string.gmatch(string.lower(tostring(text)), "[%w]+") do
@@ -428,10 +362,6 @@ function content_words(text)
     return words
 end
 
--- Which passages of a long document are compared, at most `limit`: the
--- ones sharing the largest share of their words with the other
--- document, ties to the earlier one. A short document's passages are
--- all compared.
 function comparison_candidates(passages, other_words, limit)
     if #passages <= limit then
         return passages
@@ -465,16 +395,8 @@ function comparison_candidates(passages, other_words, limit)
     return chosen
 end
 
--- How closely two documents share an idea somewhere in them, not just a
--- subject: the cosine of their most similar pair of passages
--- (doc/link-passage-gate.md). Whole-document similarity mostly measures
--- shared subject; the best passage pair also finds a small shared idea
--- inside documents about different things. Compares at most
--- `per_document` passages of each (comparison_candidates), embedding
--- what the cache lacks, up to `max_new` in all.
--- -> score, passage_a, passage_b; or nil, err when it can't be measured
--- (no embedding model, a provider failure, an empty document, or
--- nothing embedded within the cap).
+-- Max cosine across up to `per_document` word-overlap candidate passages per side,
+-- interleaving uncached passages so `max_new` embeds cover both documents.
 function passage.best_pair(db_path, model, content_a, content_b, per_document, max_new)
     if model == nil then
         return nil, "no embedding model"
@@ -488,7 +410,6 @@ function passage.best_pair(db_path, model, content_a, content_b, per_document, m
     side_a = comparison_candidates(all_a, content_words(content_b), per_document)
     side_b = comparison_candidates(all_b, content_words(content_a), per_document)
     both = {}
-    -- Interleaved, so a cap that runs out leaves both sides some vectors.
     for i = 1, math.max(#side_a, #side_b) do
         if side_a[i] != nil then
             table.insert(both, side_a[i])
@@ -526,17 +447,8 @@ function passage.best_pair(db_path, model, content_a, content_b, per_document, m
     return best, best_a, best_b
 end
 
--- passage.excerpts(db_path, results, query_text, query_vector, model, budget, full)
---   -> {[document id] = excerpt}
--- The excerpt search shows for each result: its best passages by
--- meaning (cosine with the query's embedding) plus a little by words
--- (passage_lexical_weight), within `budget` characters. A document
--- that fits the budget whole is shown whole. A document left out of the
--- map (no query embedding, a provider failure) falls back to the
--- caller's keyword window -- passage scoring never makes search worse.
--- All results share one cache lookup and one batched embedding call,
--- capped at passage_max_embeds_per_search new embeddings; passages over
--- the cap are scored by words only.
+-- Scores passages by cosine + passage_lexical_weight * term_share within `budget`;
+-- omits documents on missing vectors/errors so callers fall back to keyword snippets.
 function passage.excerpts(db_path, results, query_text, query_vector, model, budget, full)
     conf = config.load()
     per_document = conf.passages_per_document
@@ -554,7 +466,6 @@ function passage.excerpts(db_path, results, query_text, query_vector, model, bud
     query_unit = vector_lib.unpack(query_packed)
     terms = document_text.query_terms(query_text)
 
-    -- Split every result; documents that fit whole need nothing more.
     work = {}
     for _, r in ipairs(results) do
         content = r.content

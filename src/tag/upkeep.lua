@@ -1,40 +1,6 @@
--- Tag restructuring in core (doc/tag-ontology.md, phase 3b): the data
--- proposes, the agent decides. tag.lua keeps each tag's running centre
--- and places documents on save; this module watches the tags themselves:
---
---   split -- a tag whose spread grew past what it had when built (by
---            TAG_SPLIT_SPREAD) is cut in two by 2-means over its own
---            members; the agent says whether the halves are one subject
---            (SAME: nothing changes) or two (DIFFERENT: it names both,
---            keeping the current label where it still fits);
---   merge -- two tags whose centres came closer than any two were when
---            built; the agent says SAME (merged into the larger, named
---            for the whole) or DIFFERENT (kept apart);
---   fit   -- a tag whose members changed by TAG_FIT_CHANGE since its
---            label was last judged -- grown, or shrunk (found live on
---            celleste-lims: "R&D Meeting Notes" kept its label after its
---            meeting notes moved to another tag and only company admin
---            documents were left); the agent says whether the label and
---            description still fit (FITS) or proposes new ones (RENAME).
---
--- Spread comes from the running summary alone: the sum of a tag's unit
--- vectors has length members * mean cosine to the centre, so spread =
--- 1 - |sum| / members. Thresholds are relative -- to the tag's own built
--- spread, to the closest pair at build -- never fixed cosines.
---
--- A person's choices win: a manual tag is never split, merged or
--- renamed; a pinned membership never moves; a verdict is remembered and
--- not asked again: a declined split accepts the tag's looseness as its
--- new baseline, a declined merge stands until the tags' members change
--- by TAG_REJUDGE_CHANGE.
--- Every change is an ordinary entity write by "system" (ledgered, the
--- centres kept by tag.lua's membership hooks); a merged-away tag is
--- archived, never deleted.
---
--- Runs after `daat document embed-pending` embeds anything, when
--- config.lua's tag_restructure is on; `daat repair tags --restructure`
--- runs it by hand, with --dry-run (proposals only) and --judge (ask the
--- agent too, still writing nothing).
+-- Incremental tag restructuring (split, merge, and label-fit checks): relative
+-- spread/centre-closeness proposals judged by the LLM while preserving manual tags
+-- and pinned memberships. See doc/tag-ontology.md.
 
 const db = require("database")
 const entity = require("entity")
@@ -50,17 +16,12 @@ const tag_upkeep = {}
 const TAG_SPLIT_SPREAD = 1.15
 const TAG_REJUDGE_CHANGE = 0.10
 const TAG_FIT_CHANGE = 0.20
--- Agent calls per run, so one run's cost stays bounded; the rest wait
--- for the next run.
 const TAG_JUDGMENTS_PER_RUN = 5
--- A --pairs-above review asks about at most this many pairs.
 const TAG_REVIEW_PAIRS = 20
 const TAG_TWO_MEANS_ROUNDS = 10
 const TAG_PROMPT_TITLES = 8
 const TAG_PROMPT_EXCERPT = 200
 
--- Per tag: its spread when built (or last restructured) and its member
--- count when its label was last judged.
 const TAG_UPKEEP_SCHEMA = """
 CREATE TABLE IF NOT EXISTS tag_upkeep (
     tag_id INTEGER PRIMARY KEY,
@@ -69,9 +30,6 @@ CREATE TABLE IF NOT EXISTS tag_upkeep (
 );
 """
 
-
--- Every verdict, with the member counts it was given at -- the memory
--- that keeps a declined split or merge from being asked again.
 const TAG_JUDGMENT_SCHEMA = """
 CREATE TABLE IF NOT EXISTS tag_judgment (
     id INTEGER PRIMARY KEY %s,
@@ -130,7 +88,6 @@ function upkeep_spread(members, sum)
     return 1.0 - upkeep_norm(sum) / members
 end
 
--- Luam's and/or take booleans only, so no `rows or {}`: these stand in.
 function upkeep_list(rows)
     if rows == nil then
         return {}
@@ -145,7 +102,6 @@ function upkeep_string(value)
     return tostring(value)
 end
 
--- NULL comes back as nil or as an empty string depending on the backend.
 function sql_text(value)
     if value == nil or value == "" or value == "NULL" then
         return nil
@@ -159,14 +115,10 @@ function upkeep_save_baseline(db_path, tag_id, spread, fit_members)
 end
 
 function upkeep_save_merge_cosine(db_path, merge_cosine)
-    -- Full precision: the closest pair at build must not compare as
-    -- closer than itself once read back.
-    -- The pool's closest pair of centres when the tags were built.
+    -- Stored at full double precision so the build's closest pair never compares closer than itself.
     store_lib.set_number(db_path, "tag.upkeep_merge_cosine", merge_cosine)
 end
 
--- How close two tags are: the cosine of their centred centres (nil when
--- either has none -- a lone tag, or vectors of another length).
 function upkeep_closeness(a, b)
     if a.centred == nil or b.centred == nil or #a.centred != #b.centred then
         return nil
@@ -174,7 +126,6 @@ function upkeep_closeness(a, b)
     return tag.dot(a.centred, b.centred)
 end
 
--- The closest pair of tags (1.0 with fewer than two, so nothing merges).
 function upkeep_closest_pair(tags)
     best = nil
     for i = 1, #tags do
@@ -191,13 +142,8 @@ function upkeep_closest_pair(tags)
     return best
 end
 
--- Each tag's centre with the pool's average taken out (t.centred), for
--- comparing tags with each other. In daat's vectors every document in
--- one field shares a large common direction, so raw centres all sit close
--- (prod 2026-10-07: median pair 0.81, closest 0.97) while 92% of documents
--- are still nearest their own tag; with the average removed the median
--- pair is -0.07 and only real overlaps stay close. The average comes from
--- the running summaries: every tag's sum over all their members.
+-- Subtracts the member-weighted pool mean from each tag centre before inter-tag
+-- cosine comparisons so shared domain direction does not mask distinct topics.
 function upkeep_centre_tags(tags)
     if #tags < 2 then
         return
@@ -227,8 +173,6 @@ function upkeep_centre_tags(tags)
     end
 end
 
--- Every active tag with a centre: {{id, label, description, source,
--- parent, members, sum, centre, spread}, ...}, by id.
 function tag_upkeep.tags(db_path)
     rows = db.query(db_path, string.format("""
         SELECT c.tag_id, c.members, c.sum_json, t.label, t.description, t.source, t.parent
@@ -256,8 +200,6 @@ function tag_upkeep.tags(db_path)
     return tags
 end
 
--- Baselines as stored, filled in from the current state for any tag
--- (or a pool) that has none yet -- written back unless `dry_run`.
 function upkeep_baselines(db_path, tags, dry_run)
     stored = {}
     rows = db.query(db_path, "SELECT tag_id, built_spread, fit_members FROM tag_upkeep;")
@@ -282,7 +224,6 @@ function upkeep_baselines(db_path, tags, dry_run)
     return stored, merge_cosine
 end
 
--- `daat repair tags` rebuilt the centres: what's there now is "built".
 function tag_upkeep.record_baselines(db_path)
     tag_upkeep.init_schema(db_path)
     tags = tag_upkeep.tags(db_path)
@@ -293,8 +234,6 @@ function tag_upkeep.record_baselines(db_path)
     return #tags
 end
 
--- A tag's active, non-excluded memberships on active documents, each with
--- its tagging vector: {{membership, document, decision, vector}, ...}.
 function upkeep_members(db_path, tag_id)
     rows = db.query(db_path, string.format("""
         SELECT dt.id, dt.document, dt.decision, e.vector_json FROM document_tag dt
@@ -334,10 +273,7 @@ function upkeep_mean(vectors)
     return tag.unit(sum, nil)
 end
 
--- 2-means over the members with a vector, seeded deterministically (the
--- member farthest from the centre, then the one farthest from it), so the
--- same tag always splits the same way. -> a, b (member lists, a the
--- larger), or nil when the members don't divide.
+-- Deterministic farthest-point seeding so a tag splits reproducibly.
 function upkeep_two_means(members, centre)
     placed = {}
     for _, m in ipairs(members) do
@@ -402,17 +338,10 @@ function upkeep_two_means(members, centre)
     return a, b, ca, cb
 end
 
--- What the data proposes right now: splits first, then merges (closest
--- pair first, each tag in at most one proposal), then fit checks for
--- tags left untouched. Manual tags take no part. With `pairs_above` (a
--- review: tags built elsewhere can start closer than the build baseline
--- assumes), every pair above that cosine is proposed as a merge, and
--- nothing else.
+-- Proposes splits, then non-overlapping merges (closest first), then member-count
+-- fit checks; manual tags are never proposed.
 function tag_upkeep.proposals(db_path, dry_run, pairs_above, relabel)
     tags = tag_upkeep.tags(db_path)
-    -- `repair tags --relabel`: a label check on every computed tag, now
-    -- (decision log 2026-10-30: the 50 tags named before distinctive
-    -- words existed are re-checked once with them).
     if relabel == true then
         out = {}
         for _, t in ipairs(tags) do
@@ -471,10 +400,7 @@ function tag_upkeep.proposals(db_path, dry_run, pairs_above, relabel)
     return proposals
 end
 
--- A merge the agent declined (DIFFERENT) stands while both tags' member
--- counts are within TAG_REJUDGE_CHANGE of what it was judged at. (A
--- declined split moves the tag's built spread instead, and fit checks
--- are spaced by fit_members.)
+-- Declined merges stand until either tag's member count shifts by TAG_REJUDGE_CHANGE.
 function upkeep_standing_verdict(db_path, p)
     if p.kind != "merge" then
         return nil
@@ -514,8 +440,6 @@ function upkeep_context()
     return "Context about this knowledge base:\n" .. extra .. "\n\n"
 end
 
--- Titles (and the start of each document) for a prompt: the members
--- closest to `centre` first, or the newest when `newest` is set.
 function upkeep_titles(db_path, members, centre, newest)
     ranked = {}
     for _, m in ipairs(members) do
@@ -561,7 +485,6 @@ function upkeep_tag_header(t)
     return header
 end
 
--- The agent's answer: {verdict, reason, names = {A = {label, description}, ...}}.
 function tag_upkeep.parse(answer, verdicts)
     lines = {}
     for line in string.gmatch(upkeep_string(answer), "[^\n]+") do
@@ -604,10 +527,7 @@ function tag_upkeep.parse(answer, verdicts)
     return parsed
 end
 
--- Neighbouring tags shown to the label check.
 const UPKEEP_NEIGHBOURS = 5
--- Computed once per process: every active tag's distinctive words
--- (tag_terms.lua, against all the others) and the tags themselves.
 UPKEEP_EVIDENCE = nil
 
 function upkeep_naming_evidence(db_path)
@@ -627,7 +547,6 @@ function upkeep_naming_evidence(db_path)
     return UPKEEP_EVIDENCE
 end
 
--- The labels of the `n` tags nearest `t` by centred centre.
 function upkeep_neighbours(tags, t, n)
     near = {}
     for _, other in ipairs(tags) do
@@ -680,7 +599,6 @@ function upkeep_ask(db_path, p)
     return answer, err, {"FITS", "RENAME"}
 end
 
--- Another active tag already has this label (case-insensitive)?
 function upkeep_label_taken(db_path, label, except)
     rows = db.query(db_path, string.format(
         "SELECT id FROM tag WHERE LOWER(label) = LOWER(%s) AND (archived_at IS NULL OR archived_at = '');", db.quote(label)))
@@ -719,8 +637,6 @@ function upkeep_record(db_path, p, parsed)
         db.quote(p.kind), p.a.id, tag_b, p.a.members, members_b, db.quote(parsed.verdict), db.quote(parsed.reason)))
 end
 
--- After a change, the tags' current spread and members are their new
--- "built" state.
 function upkeep_rebaseline(db_path, ids)
     wanted = {}
     for _, id in ipairs(ids) do
@@ -733,22 +649,14 @@ function upkeep_rebaseline(db_path, ids)
     end
 end
 
--- A label judged against `members` documents: the next fit check waits
--- for TAG_FIT_CHANGE more, or fewer. The tag's built spread is left alone.
 function upkeep_save_fit(db_path, tag_id, members)
     db.exec(db_path, string.format("UPDATE tag_upkeep SET fit_members = %d WHERE tag_id = %d;", members, tonumber(tag_id)))
 end
 
--- A split judged SAME: the tag's current looseness is accepted as its
--- own, so it's proposed again only if it loosens TAG_SPLIT_SPREAD more.
 function upkeep_save_spread(db_path, tag_id, spread)
     db.exec(db_path, string.format("UPDATE tag_upkeep SET built_spread = %.17g WHERE tag_id = %d;", spread, tonumber(tag_id)))
 end
 
--- Moves every membership of tag `from` onto tag `into` (a document
--- already on `into` keeps that one and the other is archived), then
--- archives `from`. Ledgered writes; tag.lua's hooks keep the centres.
--- -> moved, deduplicated.
 function tag_upkeep.merge(db_path, into, from, author, reason)
     on_keep = {}
     for _, m in ipairs(upkeep_members(db_path, into)) do
@@ -770,12 +678,10 @@ function tag_upkeep.merge(db_path, into, from, author, reason)
     return moved, deduplicated
 end
 
--- Carries out a judged proposal. -> what was done, in words.
 function upkeep_apply(db_path, p, parsed)
     if p.kind == "split" then
         if parsed.verdict != "DIFFERENT" then
             if parsed.verdict == "SAME" then
-                -- One tag fits both halves: the label was judged too.
                 upkeep_save_spread(db_path, p.a.id, p.a.spread)
                 upkeep_save_fit(db_path, p.a.id, p.a.members)
             end
@@ -863,12 +769,7 @@ function upkeep_describe(p)
         p.a.id, p.a.label, p.a.members, p.fit_members)
 end
 
--- One upkeep pass. opts: judge (ask the agent), apply (write: verdicts,
--- changes, baselines), pairs_above (the merge review, never applied).
--- Without apply nothing is written. -> report lines.
 function tag_upkeep.run(db_path, opts)
-    -- Its own tables, idempotently: a CLI or job run on a store no web
-    -- request has touched since a deploy wouldn't have them yet.
     tag_upkeep.init_schema(db_path)
     report = {}
     if opts.pairs_above != nil and opts.apply then
@@ -915,7 +816,6 @@ function tag_upkeep.run(db_path, opts)
     return report
 end
 
--- For tag_build.lua and tag_cli.lua.
 tag_upkeep.context = upkeep_context
 tag_upkeep.titles = upkeep_titles
 tag_upkeep.members = upkeep_members

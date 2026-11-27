@@ -1,26 +1,15 @@
--- Distinctive words per tag (doc/tag-ontology.md, decision log
--- 2026-10-30): class-based TF-IDF, as in BERTopic -- a word scores by how
--- much of a tag's text it is, weighted by how rare it is across all tags
--- -- so a tag's words are the ones that set it apart from the others, not
--- the ones every tag shares ("culture", "cocoa"). They go to the agent
--- next to the tag's central documents when it names a tag: central
--- documents say what a tag is about, distinctive words how it differs
--- from its neighbours.
+-- Class-based TF-IDF distinctive terms per tag group for tag naming and fit checks.
+-- See doc/tag-ontology.md.
 
 const db = require("database")
 const document_text = require("document.text")
 
 const tag_terms = {}
 
--- How much of each document is read: its title and the start of its own
--- text (past any sync header).
 const TERMS_CHARS_PER_DOCUMENT = 4000
--- A word must appear in this many of a tag's documents to count, so one
--- long document can't fill a tag's list.
 const TERMS_MIN_DOCUMENTS = 2
 const TERMS_PER_TAG = 12
 
--- Common English filler beyond search's stopwords.
 const TERMS_STOPWORDS = {}
 for _, word in ipairs({
     "has", "have", "had", "can", "could", "will", "would", "should", "may", "might", "also", "such",
@@ -39,14 +28,10 @@ function terms_words(text, out)
     end
 end
 
--- {key -> {document id, ...}} -> {key -> {word, ...}}, most distinctive
--- first. Keys are whatever the caller groups by (a tag id, a planned
--- tag's number).
 function tag_terms.distinctive(db_path, groups, per_tag)
     if per_tag == nil then
         per_tag = TERMS_PER_TAG
     end
-    -- Each document's set of words, read once.
     wanted, ids = {}, {}
     for _, docs in pairs(groups) do
         for _, id in ipairs(docs) do
@@ -76,11 +61,9 @@ function tag_terms.distinctive(db_path, groups, per_tag)
             end
         end
     end
-    -- Per group: in how many of its documents each word appears.
     counts, totals = {}, {}
     across = {}
-    -- In how many groups a word appears: one in more than half of them
-    -- says nothing about any one group ("cocoa" in a cocoa lab).
+    -- Drop corpus-wide terms appearing in over half of the groups.
     groups_with = {}
     total_all, group_count = 0, 0
     for key, docs in pairs(groups) do

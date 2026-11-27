@@ -1,33 +1,6 @@
--- The broader tag level (doc/tag-ontology.md, "Broader tags"): the
--- computed tags are grouped into a few broad subjects, each a tag of its
--- own (source "broader") that the specific tags point to through
--- `parent`. The specific tags and their documents don't change; the
--- broad level is for browsing -- the graph's "Colour by tag" colours by
--- it, "Colour by sub-tag" by the specific tags (Ben, 2026-10-29: 50
--- tags were too many to see, without changing the clustering).
---
--- The broad tags come from a library, so they stay the same from run to
--- run (Ben, 2026-10-30): every broader tag ever written, in use (active)
--- or not (archived), plus the ones a person adds (`daat tag library
--- add`). One agent call gets the library and every specific tag (label
--- and description) and puts each tag in a library area by subject; only
--- when no area fits does it propose a NEW AREA, with a reason, which the
--- dry run shows for approval. Areas it picks keep their tag id (restored
--- if archived), areas it doesn't are archived, new ones are created. A
--- tag it leaves out joins the area whose tags' centred centres
--- (tag_upkeep.lua) are nearest its own.
---
--- Not by document similarity: on prod that grouped by kind of document
--- (literature, protocols, internal records), and given that grouping as
--- a start the agent only renamed it (2026-10-30).
---
--- A broad tag holds no documents of its own and has no centre, so a new
--- document is never placed in one. A person's parent is left as it is:
--- one pointing at a tag that isn't broader (their own nesting), and one
--- a person set to a broad tag -- the last ledger change to the tag's
--- parent by an author other than "system" (Ben, 2026-10-30: hand moves
--- stick; a rerun is a fresh judgment and moved tags back). A broad tag
--- such a hand placement points to counts as in use.
+-- Groups specific tags under library-backed broader tags (`source = 'broader'`)
+-- via `tag.parent` for browsing, preserving human-set parent assignments.
+-- See doc/tag-ontology.md.
 
 const db = require("database")
 const entity = require("entity")
@@ -49,9 +22,6 @@ NEW AREA: <label, 1-4 words> | <one-sentence description> | <why no library area
 - <tag label>
 Reply with those lines only."""
 
--- The library: every broader tag, active or archived, one per label
--- (the active one, else the lowest id). -> {{id, label, description,
--- archived}, ...} by label.
 function tag_broader.library(db_path)
     rows = db.query(db_path, """
         SELECT id, label, description, archived_at FROM tag WHERE source = 'broader'
@@ -72,8 +42,6 @@ function tag_broader.library(db_path)
     return library
 end
 
--- `daat tag library add "<label>" "<description>"`: a library area not in
--- use yet (an archived broader tag).
 function tag_broader.library_add(db_path, label, description, author)
     for _, entry in ipairs(tag_broader.library(db_path)) do
         if string.lower(entry.label) == string.lower(label) then
@@ -92,9 +60,8 @@ function tag_broader.library_add(db_path, label, description, author)
     return id
 end
 
--- Tags whose parent a person set last: {tag id -> parent id}. The
--- ledger is the record, so no flag of its own: an author other than
--- "system" (or none, for very old rows) on the latest parent change.
+-- Tags whose latest `parent` event in entity_event has a non-"system" author
+-- are human-placed and excluded from automated regrouping. See doc/decisions/007-usage-driven-knowledge-pool-and-curation-ladder.md.
 function tag_broader.hand_placed(db_path)
     rows = db.query(db_path, """
         SELECT entity_id, author FROM entity_event
@@ -121,9 +88,6 @@ function tag_broader.hand_placed(db_path)
     return out
 end
 
--- The specific tags to group: every active tag with a centre whose
--- parent is empty or a broad tag the system set (a person's nesting,
--- and a person's placement, stay).
 function tag_broader.specific_tags(db_path)
     hand = tag_broader.hand_placed(db_path)
     broad = {}
@@ -143,8 +107,6 @@ function tag_broader.specific_tags(db_path)
     return out
 end
 
--- The agent's reply: {{label, description, why, new, members = {lowercased
--- tag label -> true}}, ...}, in order.
 function tag_broader.parse(answer)
     areas = {}
     current = nil
@@ -182,8 +144,6 @@ function tag_broader.parse(answer)
     return areas
 end
 
--- The area whose assigned tags' centred centres are, on average, nearest
--- the tag's own. -> area index, or nil.
 function broader_nearest(t, tags, area_of)
     best, best_score = nil, -2.0
     sums, counts = {}, {}
@@ -206,7 +166,6 @@ function broader_nearest(t, tags, area_of)
     return best
 end
 
--- `daat tag broaden [--dry-run]`.
 function tag_broader.run(db_path, opts)
     lines = {}
     tags = tag_broader.specific_tags(db_path)
@@ -247,7 +206,6 @@ function tag_broader.run(db_path, opts)
         table.insert(lines, "Stopped: no area could be read from the agent's reply")
         return lines
     end
-    -- An AREA that isn't in the library is treated as new, reason unknown.
     for _, area in ipairs(areas) do
         area.entry = by_label[string.lower(area.label)]
         if area.entry != nil then
@@ -304,7 +262,7 @@ function tag_broader.run(db_path, opts)
             picked[area.entry.id] = true
         end
     end
-    -- Areas a person placed tags in stay in use.
+    -- Keep broader areas referenced by human-placed tags active.
     hand = tag_broader.hand_placed(db_path)
     held = 0
     for _, parent in pairs(hand) do
@@ -353,7 +311,6 @@ function tag_broader.run(db_path, opts)
                 broad_id, issues = entity.create(db_path, "tag", values, author)
                 if broad_id != nil then
                     created = created + 1
-                    -- The new area joins the library for later runs.
                     by_label[string.lower(area.label)] = {id = broad_id, label = area.label}
                 end
             end

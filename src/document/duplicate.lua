@@ -1,32 +1,6 @@
--- Duplicate papers: the same file synced from an external document store
--- into several folders arrives as several documents, one per synced item,
--- each with its own folder header and sometimes its own text extraction.
--- Every copy is searched, judged, distilled and linked on its own, so
--- the same facts get distilled twice and links to one paper are split
--- across its copies.
---
--- find_groups pairs copies two ways, with no model call:
--- * same text: the same body once the sync header (document.
---   preamble_end) is cut off and whitespace is collapsed;
--- * same paper: two PDFs with the same title once case, punctuation
---   and a leading year are dropped, and most of the body's word 5-grams
---   shared (DUPLICATE_MIN_SHARED) -- two extractions of one paper. Only
---   PDFs: two spreadsheets or protocols with the same title and most of
---   the text in common are usually two versions whose differences
---   matter.
--- Only externally synced files are considered (namespaced external_id
--- "<source>:...", or config.lua's duplicate_external_prefixes when set):
--- a page someone wrote is never folded into another, the same rule
--- knowledge.duplication_status keeps.
---
--- fold keeps the copy with the lowest id among those whose title says
--- what the file is (duplicate.poor_title), points links to the other
--- copies at it, and
--- archives them, recording duplicate_of/merged_into. Archiving is what
--- takes a copy out of the pool: its heat goes back to the pool, its
--- vector leaves its tags' centres, its embedding and outgoing links go
--- (document.on_entity_archived). A later sync updates the archived row
--- in place and doesn't bring it back.
+-- Exact-body and PDF word-5-gram duplicate detection and folding for externally
+-- synced documents (`daat repair duplicates`); user-authored documents are never folded.
+-- See doc/duplicate-papers.md and doc/decisions/007-usage-driven-knowledge-pool-and-curation-ladder.md.
 
 const document = require("document")
 const entity = require("entity")
@@ -36,12 +10,7 @@ const config = require("config")
 
 const duplicate = {}
 
--- A body shorter than this is a stub (a folder page, a file whose text
--- didn't extract): stubs look alike without being the same paper.
 const DUPLICATE_MIN_BODY = 2000
--- Share of word 5-grams two extractions of the same paper must have in
--- common (of the smaller set), and the least their word counts may
--- differ by (shorter / longer).
 const DUPLICATE_MIN_SHARED = 0.8
 const DUPLICATE_MIN_LENGTH_RATIO = 0.8
 const DUPLICATE_SHINGLE_WORDS = 5
@@ -58,8 +27,6 @@ function duplicate.body(content)
     return body
 end
 
--- The file type of a synced file, from its sync header's link
--- ("> **Source:** [folder/name.pdf](...)"), lower case, or nil.
 function duplicate.file_type(content)
     if content == nil then
         return nil
@@ -75,10 +42,6 @@ function duplicate.file_type(content)
     return string.lower(extension)
 end
 
--- A title that doesn't say what the file is: a bare number or date
--- ("17", "2025-03-12"), a few characters, or a copy's name ("- Copy",
--- "(2)"). Found in production: "17.pdf" kept over its copy titled
--- "Rojas et al 2015".
 function duplicate.poor_title(title)
     if title == nil then
         return true
@@ -87,8 +50,7 @@ function duplicate.poor_title(title)
     if string.find(lowered, "copy", 1, true) != nil or string.find(lowered, "%(%d+%)%s*$") != nil then
         return true
     end
-    -- Bytes of letters: ASCII ones, and any non-ASCII byte (a Hebrew
-    -- letter is two), since %a only knows ASCII.
+    -- Strip ASCII non-letters rather than matching %a so UTF-8 multibyte letters count.
     letters = string.gsub(lowered, "[%c%p%d%s]", "")
     return string.len(letters) < 4
 end
@@ -105,7 +67,6 @@ function duplicate.title_key(title)
     return key
 end
 
--- Word 5-grams of a body, as a set, and how many words it has.
 function duplicate.shingles(body)
     words = {}
     for word in string.gmatch(string.lower(body), "%w+") do
@@ -123,7 +84,6 @@ function duplicate.shingles(body)
     return set, count, #words
 end
 
--- Share of the smaller shingle set found in the larger one.
 function duplicate.shared(a, a_count, b, b_count)
     if a_count == 0 or b_count == 0 then
         return 0
@@ -198,7 +158,6 @@ function duplicate_join(parents, reasons, a, b, reason)
     if root_a == root_b then
         return
     end
-    -- The lower id stays the root: it's the copy that's kept.
     if root_b < root_a then
         root_a, root_b = root_b, root_a
     end
@@ -208,8 +167,6 @@ function duplicate_join(parents, reasons, a, b, reason)
     end
 end
 
--- Groups of copies of the same paper: a list of {keep = id, title =
--- title, copies = {{id, title, reason}, ...}}, ordered by the kept id.
 function duplicate.find_groups(db_path)
     rows = duplicate_candidates(db_path)
     titles = {}
@@ -316,10 +273,6 @@ function duplicate.find_groups(db_path)
     return groups
 end
 
--- Folds one copy into the kept document: links to the copy point at the
--- kept one (a link from the kept one to its own copy is archived), the
--- copy records where it went, and it's archived like any document
--- leaving the pool. Returns the number of links re-pointed.
 function duplicate.fold(db_path, copy_id, keep_id)
     copy_id = tonumber(copy_id)
     keep_id = tonumber(keep_id)
@@ -341,8 +294,6 @@ function duplicate.fold(db_path, copy_id, keep_id)
     return moved
 end
 
--- A connection document (A ↔ B) left linking one paper to itself once
--- its copies are folded says nothing; it's archived too.
 function duplicate_self_connections(db_path, keep_ids)
     found = {}
     for _, keep_id in ipairs(keep_ids) do
@@ -361,7 +312,6 @@ function duplicate_self_connections(db_path, keep_ids)
     return found
 end
 
--- `daat repair duplicates [--dry-run]`: report lines, ending with counts.
 function duplicate.repair(db_path, dry_run)
     lines = {}
     groups = duplicate.find_groups(db_path)

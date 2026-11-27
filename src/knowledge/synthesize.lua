@@ -1,20 +1,6 @@
--- The synthesize step of the tier ladder (doc/tier-curation-ladder.md,
--- phase 3): the tier-1 notes one tag holds are written up by the agent
--- as one structured reference on that subject, checked against those
--- notes by a second call, and kept as a tier-2 document (source_type
--- "reference") that links to every note it was made from.
---
--- A tag is due once it holds SYNTHESIZE_MIN_NOTES curated notes and has
--- no reference yet, or its notes changed since the reference was
--- written; the reference is then rewritten in place, never duplicated.
--- `daat repair synthesize` queues the due tags and runs them; a tag
--- whose notes don't make one subject, or whose subject is outside the
--- team's field, comes to "nothing" with the reason recorded -- a signal
--- for tag upkeep, not an error.
---
--- knowledge_reference keeps one row per tag: the hash of the notes it
--- last saw and how that went (pending, running, referenced, nothing,
--- rejected, failed), like knowledge_curation for the curate step.
+-- Tier-2 synthesis: compiles a tag's tier-1 curated notes (>= SYNTHESIZE_MIN_NOTES)
+-- into one source-checked `reference` document, rewritten in place when notes change.
+-- See doc/tier-curation-ladder.md.
 
 const db = require("database")
 const document = require("document")
@@ -26,9 +12,7 @@ const entity_lib = require("entity")
 
 const synthesize = {}
 
--- Notes a tag needs before it gets a reference.
 const SYNTHESIZE_MIN_NOTES = 3
--- Notes one reference is written from, the tag's most central first.
 const SYNTHESIZE_MAX_NOTES = 12
 
 const SYNTHESIZE_SYSTEM_PROMPT = """
@@ -72,7 +56,6 @@ function synthesize_record(db_path, tag_id, notes_hash, status, document_id, rea
         tonumber(tag_id), db.quote(notes_hash), db.quote(status), db.literal(document_id), db.literal(reason)))
 end
 
--- A tag's active curated notes, most central first.
 function synthesize.notes(db_path, tag_id)
     rows = db.query(db_path, string.format("""
         SELECT d.id, d.title, d.content, d.content_hash FROM document_tag dt
@@ -86,7 +69,6 @@ function synthesize.notes(db_path, tag_id)
     return rows
 end
 
--- What a reference is made from, as one hash: the notes it would read.
 function synthesize_notes_key(notes)
     parts = {}
     for i, note in ipairs(notes) do
@@ -102,9 +84,6 @@ function synthesize_notes_hash(notes)
     return document.content_hash(synthesize_notes_key(notes))
 end
 
--- Active tags with enough notes, most notes first, whose notes this
--- reference hasn't seen. With `recheck`, tags whose last try came to
--- nothing, was rejected or failed (or was left running) count too.
 const SYNTHESIZE_STALE_CLAIM_SECONDS = 900
 
 function synthesize_stale_cutoff(db_path)
@@ -141,9 +120,6 @@ function synthesize.due_tags(db_path, recheck)
     return due
 end
 
--- Takes a queued tag for this process: pending -> running, marked with a
--- token only this process knows, so two runners never write the same
--- reference (as curate_claim, src/curate.lua).
 function synthesize_claim(db_path, tag_id)
     crypto_lib = require("crypto")
     token = crypto_lib.random_hex(8)
@@ -168,17 +144,12 @@ function synthesize_title(text)
     return title, body
 end
 
--- A note as the writer reads it: without its "Source: [[...]]" line, so
--- the reference cites the note, not the raw source behind it (found on
--- prod 2026-10-29: the first reference cited source titles).
+-- Strip trailing Source links so synthesized references cite tier-1 notes rather than raw files.
 function synthesize_note_text(content)
     text = string.gsub(tostring(content), "\n*Source: [^\n]*%s*$", "")
     return text
 end
 
--- Writes one tag's reference now. Returns the status written:
--- "referenced", "nothing", "rejected", "failed" or "skipped" (the tag is
--- gone or has too few notes), and the reference's id when one was written.
 function synthesize.run(db_path, tag_id, author)
     agent_provider = agent_provider_lib
     tags = db.query(db_path, string.format(
@@ -239,7 +210,6 @@ function synthesize.run(db_path, tag_id, author)
         return "rejected", nil
     end
 
-    -- Every note it was made from is linked, cited or not.
     refs = {}
     for _, note in ipairs(used) do
         ref = document.link_ref(db_path, tonumber(note.id))
@@ -269,7 +239,6 @@ function synthesize.run(db_path, tag_id, author)
     return "referenced", reference_id
 end
 
--- Runs up to `limit` queued tags, oldest first. Returns report lines.
 function synthesize.run_pending(db_path, limit, author)
     if limit == nil then
         limit = 3
@@ -295,10 +264,7 @@ function synthesize.run_pending(db_path, limit, author)
     return lines
 end
 
--- References whose tag was archived (a rebuild archives every computed
--- tag): the reference is archived and its row dropped, so the new tags'
--- references don't sit beside stale ones (found 2026-10-30: the rebuild
--- left 15 references on archived tags). -> how many.
+-- Archives tier-2 references whose owning tag has been archived.
 function synthesize.archive_orphans(db_path, author, dry_run)
     rows = db.query(db_path, """
         SELECT k.tag_id, k.document_id FROM knowledge_reference k JOIN tag t ON t.id = k.tag_id
@@ -326,7 +292,6 @@ function synthesize.archive_orphans(db_path, author, dry_run)
     return archived
 end
 
--- `daat repair synthesize [--limit N] [--dry-run] [--recheck]`.
 function synthesize.repair(db_path, limit, dry_run, author, recheck)
     lines = {}
     orphans = synthesize.archive_orphans(db_path, author, dry_run)

@@ -1,10 +1,5 @@
--- Public knowledge-pool facade, delegating to focused submodules under src/knowledge/:
---   knowledge.store      - schema DDL, pool document helpers, and session transcript projection
---   knowledge.links      - co-retrieval link evaluation, passage gating, and connection repair
---   knowledge.review     - retrieval logging, spreading activation, and deferred/inline review
---   knowledge.curate     - tier-1 curation of used sources and quiet chat conversations
---   knowledge.synthesize - tier-2 tag reference synthesis
---   knowledge.distill    - tier-3 atomic record distillation
+-- Public knowledge-pool facade delegating to submodules under src/knowledge/
+-- (`store`, `links`, `review`, `curate`, `synthesize`, `distill`).
 
 const config = require("config")
 const curate_lib = require("knowledge.curate")
@@ -20,7 +15,6 @@ const knowledge = {}
 
 const KNOWLEDGE_MEMBER_WHERE = knowledge_store.KNOWLEDGE_MEMBER_WHERE
 
--- Storage & note creation (knowledge.store)
 knowledge.ensure_retrieval_review_columns = knowledge_store.ensure_retrieval_review_columns
 knowledge.init_schema = knowledge_store.init_schema
 knowledge.hand_rolled_sql_columns_text = knowledge_store.hand_rolled_sql_columns_text
@@ -31,7 +25,6 @@ knowledge.sync_session_document = knowledge_store.sync_session_document
 knowledge.set_tier = knowledge_store.set_tier
 knowledge.due_for_review = knowledge_store.due_for_review
 
--- Retrieval logging & review (knowledge.review)
 knowledge.distill_document = knowledge_review.distill_document
 knowledge.begin_retrieval = knowledge_review.begin_retrieval
 knowledge.queue_retrieval_hits = knowledge_review.queue_retrieval_hits
@@ -47,7 +40,6 @@ knowledge.apply_retrieval = knowledge_review.apply_retrieval
 knowledge.run_pending_reviews = knowledge_review.run_pending_reviews
 knowledge.search_for_display = knowledge_review.search_for_display
 
--- Co-retrieval links & connection repair (knowledge.links)
 knowledge.co_retrieval_eligible = knowledge_links.co_retrieval_eligible
 knowledge.co_retrieval_pairs = knowledge_links.co_retrieval_pairs
 knowledge.get_link_review = knowledge_links.get_link_review
@@ -67,10 +59,6 @@ knowledge.passes_passage_gate = knowledge_links.passes_passage_gate
 knowledge.evaluate_co_retrieval_pair = knowledge_links.evaluate_co_retrieval_pair
 knowledge.connection_reason = knowledge_links.connection_reason
 knowledge.repair_connections = knowledge_links.repair_connections
-
---------------------------------------------------------------------------
--- Stats, listings, graph nodes & CLI
---------------------------------------------------------------------------
 
 function count_rows(db_path, query)
     rows = db.query(db_path, query)

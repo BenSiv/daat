@@ -1,28 +1,6 @@
--- Tag upkeep in core (doc/tag-ontology.md, "The data decides the shape"):
--- each tag keeps a running centre -- its member count and the sum of its
--- members' vectors -- so a new or edited document can join its nearest
--- tag on save, without a batch job.
---
--- Vectors are the documents' cached embeddings (document_embedding),
--- cut to `tag_dims` and scaled to unit length, so a score is a cosine.
--- A centre counts every membership that isn't `excluded` (a `pinned` one
--- included: a person's assertion is a member like any other), whoever
--- wrote it -- this module's placement, a person, or an outside job
--- through the API -- because the membership hooks below keep tag_centre
--- in step with document_tag rather than placement updating it itself.
---
--- tag_centre is a derived index, like document_embedding: rebuilt from
--- document_tag + document_embedding by `daat repair tags`, the recovery
--- for anything that changes a vector without a hook (`daat repair
--- embeddings`, a raw SQL write) or two concurrent saves racing on one
--- centre's sum.
---
--- Evidence between tags (tag_evidence, "Evidence between tags" in the
--- doc): core's own kinds -- `link`, `connection`, `shared_link` and
--- `reference:<entity type>` -- are recomputed from document_link,
--- document_mention and document_tag when read and their inputs
--- changed, not on every write -- one outside job's apply writes thousands of
--- memberships, and nothing reads evidence until judgment or display.
+-- Tag schemas, incremental tag_centre maintenance, nearest-centre document
+-- placement, lazy tag_evidence lift computation, and inline #tag sync.
+-- See doc/tag-ontology.md.
 
 const db = require("database")
 const entity = require("entity")
@@ -107,8 +85,7 @@ CREATE TABLE IF NOT EXISTS tag_centre (
 
 const ACTIVE = "(archived_at IS NULL OR archived_at = '')"
 
--- Evidence a pair rests on before its lift counts, and how far lift is
--- pulled towards 1: PRIOR median-weights added to both sides.
+-- Lift requires >= MIN_SUPPORT supporting edges and shrinks toward 1 by PRIOR median weights.
 const TAG_EVIDENCE_MIN_SUPPORT = 3
 const TAG_EVIDENCE_PRIOR = 2.0
 
@@ -126,11 +103,9 @@ end
 const tag_unit = vector_lib.unit
 const tag_dot = vector_lib.dot
 
--- For tag_upkeep.lua, which works on the same vectors.
 tag.unit = tag_unit
 tag.dot = tag_dot
 
--- The document's tagging vector, or nil when it has no embedding yet.
 function tag.document_vector(db_path, document_id)
     rows = db.query(db_path, string.format(
         "SELECT vector_json FROM document_embedding WHERE document_id = %d;", tonumber(document_id)))
@@ -168,10 +143,7 @@ function tag_save_centre(db_path, tag_id, members, sum)
         db.replace_into(db_path), tonumber(tag_id), members, db.quote(json.encode(sum)), db.now_expr(db_path)))
 end
 
--- Adds `add` to a tag's centre and takes `remove` out of it, either may
--- be nil; both at once replaces a member's old vector with its new one.
--- A vector of the wrong length (tag_dims changed since the centre was
--- built) is skipped; `daat repair tags` rebuilds at the new length.
+-- Skips mismatched vector dimensions after a tag_dims change until `daat repair tags` rebuilds.
 function tag.adjust_centre(db_path, tag_id, add, remove)
     if add == nil and remove == nil then
         return
@@ -211,7 +183,6 @@ function tag.adjust_centre(db_path, tag_id, add, remove)
     db.transaction(db_path, run_adjust_centre_tx)
 end
 
--- Every active tag's centre, unit length: {{id=, centre=}, ...}.
 function tag.active_centres(db_path)
     rows = db.query(db_path, """
         SELECT c.tag_id, c.sum_json FROM tag_centre c JOIN tag t ON t.id = c.tag_id
@@ -241,10 +212,7 @@ function tag_memberships(db_path, document_id)
     return rows
 end
 
---------------------------------------------------------------------------
--- Membership hooks: tag_centre follows document_tag, whoever writes it.
---------------------------------------------------------------------------
-
+-- Membership hooks keep tag_centre synced across placement, manual, and API writes.
 function tag.on_membership_created(db_path, membership_id)
     row = entity.get(db_path, "document_tag", membership_id)
     if row == nil or row.decision == "excluded" then
@@ -292,12 +260,6 @@ function tag.on_membership_archived(db_path, membership_id, archived)
     end
 end
 
---------------------------------------------------------------------------
--- Document hooks
---------------------------------------------------------------------------
-
--- A document's vector changed (old may be nil: it wasn't counted yet):
--- swap it in every tag it belongs to.
 function tag.on_document_vector_changed(db_path, document_id, old)
     new = tag.document_vector(db_path, document_id)
     if new == nil then
@@ -310,7 +272,6 @@ function tag.on_document_vector_changed(db_path, document_id, old)
     end
 end
 
--- An archived document leaves its tags' centres; unarchived, it returns.
 function tag.on_document_archived(db_path, document_id, archived)
     rows = tag_memberships(db_path, document_id)
     if #rows == 0 then
@@ -331,14 +292,9 @@ function tag.on_document_archived(db_path, document_id, archived)
     end
 end
 
--- Documents the tier ladder wrote (doc/tier-curation-ladder.md): short
--- on purpose -- a tier-3 record is one to three sentences -- so they
--- always have a subject. Found 2026-10-29: 33 of 141 new records fell
--- under tag_min_text and stayed out of every tag.
+-- Curation-ladder documents (tier 1-3) are concise by design and bypass tag_min_text.
 const TAG_LADDER_SOURCE_TYPES = {curated = true, reference = true, record = true}
 
--- Too little text of its own to have a subject (tag_min_text): the
--- embedding's body_chars, or nil when not known yet.
 function tag_too_short(db_path, document_id)
     rows = db.query(db_path, string.format(
         "SELECT e.body_chars, d.source_type FROM document_embedding e JOIN document d ON d.id = e.document_id WHERE e.document_id = %d;",
@@ -356,17 +312,6 @@ function tag_too_short(db_path, document_id)
     return body_chars < config.load().tag_min_text
 end
 
--- Join the nearest tag: the best-scoring active centre, plus the second
--- best when it's within `tag_second_within` of the best -- unless the
--- document has too little text to have a subject (tag_too_short). Only `computed`
--- memberships are this function's to change: a `pinned` tag stays and
--- isn't duplicated, an `excluded` one is never chosen. Returns the
--- chosen tag ids (empty when there are no tags or no vector yet).
--- `daat repair tags --place-untagged`: places every active document
--- with an embedding and no tag that has a subject (enough text, or a
--- ladder document) -- the ones a save placed before any tag existed, or
--- while tags were being rebuilt. -> placed, left (still no tag: no
--- centre close enough).
 function tag.place_untagged(db_path)
     rows = db.query(db_path, """
         SELECT d.id FROM document d JOIN document_embedding e ON e.document_id = d.id
@@ -392,14 +337,14 @@ function tag.place_untagged(db_path)
     return placed, left
 end
 
+-- Assigns best active centre (plus second within tag_second_within); touches
+-- only computed memberships so pinned and excluded human choices always win.
 function tag.place_document(db_path, document_id)
     chosen = {}
     vector = tag.document_vector(db_path, document_id)
     if vector == nil then
         return chosen
     end
-    -- Too little text: no computed tag (one it had is archived); a
-    -- person's pinned tags stay.
     if tag_too_short(db_path, document_id) then
         for _, row in ipairs(tag_memberships(db_path, document_id)) do
             if row.decision == "computed" then
@@ -461,7 +406,6 @@ function tag.place_document(db_path, document_id)
     return chosen
 end
 
--- `daat repair tags`: every centre recomputed from active memberships.
 function tag.rebuild_centres(db_path)
     db.exec(db_path, "DELETE FROM tag_centre;")
     rows = db.query(db_path, """
@@ -507,10 +451,6 @@ function tag.rebuild_centres(db_path)
     return tags, members
 end
 
---------------------------------------------------------------------------
--- Evidence between tags
---------------------------------------------------------------------------
-
 function tag_evidence_fingerprint(db_path)
     rows = db.query(db_path, string.format("""
         SELECT (SELECT COUNT(*) FROM document_link WHERE to_document_id IS NOT NULL AND %s) AS links,
@@ -526,7 +466,6 @@ function tag_evidence_fingerprint(db_path)
         tostring(r.refs), tostring(r.ref_sum))
 end
 
--- Each active document's tags (excluded ones aren't memberships).
 function tag_document_tags(db_path)
     rows = db.query(db_path, """
         SELECT dt.document, dt.tag FROM document_tag dt JOIN document d ON d.id = dt.document
@@ -546,9 +485,7 @@ function tag_document_tags(db_path)
     return tags_of
 end
 
--- Adds one edge's unit to every tag pair it touches, shared evenly: a
--- document in two tags gives each half, so being in more tags never
--- makes an edge count more.
+-- Splits 1.0 edge weight evenly across touched tag pairs so multi-tag docs do not overweight.
 function tag_spread_edge(totals, from_tags, to_tags, ordered)
     share = 1.0 / (#from_tags * #to_tags)
     for _, a in ipairs(from_tags) do
@@ -567,14 +504,8 @@ function tag_spread_edge(totals, from_tags, to_tags, ordered)
     end
 end
 
--- Documents pointing at the same target -- an entity they reference, a
--- page they both link -- as evidence between their tags: `targets` maps
--- each target to {tag -> {document -> true}}. One unit per target,
--- shared across the tag pairs it touches (inside one tag included), so
--- a target named everywhere weighs almost nothing. A pair seen from
--- fewer than two documents on either side gets support 0 -- one
--- inventory sheet naming nine experiments shouldn't tie two tags -- but
--- its weight still counts towards the totals lift is measured against.
+-- Shares 1.0 weight per shared target across touched tag pairs (including self-pairs);
+-- inter-tag pairs with < 2 docs on either side get support = 0 while keeping weight in totals.
 function tag_shared_targets(targets)
     totals = {}
     for _, by_tag in pairs(targets) do
@@ -632,12 +563,8 @@ function tag_add_target(targets, target, tag_ids, document_id)
     end
 end
 
--- Core's evidence, computed: {link = {key -> total}, connection = {...},
--- shared_link = {...}, ["reference:<entity type>"] = {...}}.
--- link: a [[link]] between two tagged documents, directed. connection:
--- a connection document (document.is_connection_title, linking exactly
--- two documents) is one undirected edge between the two; it's an edge,
--- so its own links aren't counted as links.
+-- Connection documents (linking two docs) emit one undirected connection edge
+-- rather than two directed [[link]] edges.
 function tag_core_evidence(db_path)
     tags_of = tag_document_tags(db_path)
     rows = db.query(db_path, """
@@ -696,8 +623,6 @@ function tag_core_evidence(db_path)
     return computed
 end
 
--- Only a [[link]] has a direction; every other core kind is a shared
--- target or a connection, both undirected.
 function tag_core_direction(kind)
     if kind == "link" then
         return "directed"
@@ -709,9 +634,6 @@ function tag_round(x)
     return string.format("%.4f", x)
 end
 
--- Brings core's tag_evidence rows in line with what its inputs say now:
--- creates new pairs, updates changed ones, archives pairs that are gone.
--- Returns the number of rows written.
 function tag.refresh_evidence(db_path)
     computed = tag_core_evidence(db_path)
     existing = db.query(db_path, string.format(
@@ -751,7 +673,6 @@ function tag.refresh_evidence(db_path)
             end
         end
     end
-    -- The fingerprint of core evidence's inputs when it was last computed.
     store_lib.set_text(db_path, "tag.evidence_fingerprint", tag_evidence_fingerprint(db_path))
     return written
 end
@@ -770,12 +691,8 @@ function tag_median(values)
     return sorted[math.floor(#sorted / 2) + 1]
 end
 
--- Lift for every evidence row, by its own (kind, producer) group only:
--- observed weight against what the tags' totals in that group predict
--- (directed: out(a) * in(b) / m; undirected: k(a) * k(b) / 2m, k(a)^2 / 4m
--- inside one tag), both sides plus PRIOR median weights so a pair on a
--- couple of edges stays near 1. Rows under min_support get no lift.
--- Pure: takes and returns plain tables, so it's testable without a store.
+-- Computes shrunk lift per (kind, producer) group against independent marginals
+-- (directed out*in/m; undirected k_a*k_b/2m, or k_a^2/4m within one tag).
 function tag.lifts(rows, min_support)
     groups = {}
     for _, row in ipairs(rows) do
@@ -827,13 +744,6 @@ function tag.lifts(rows, min_support)
     return out
 end
 
---------------------------------------------------------------------------
--- #tag in text ("#tag in text" in the doc)
---------------------------------------------------------------------------
-
--- A tag's label as it's written in text: lowercase, every run of
--- anything but letters and digits one "-" ("Cocoa bean fermentation"
--- -> "cocoa-bean-fermentation").
 function tag.slug(label)
     slug, _ = string.gsub(string.lower(tostring(label)), "[^%w]+", "-")
     slug, _ = string.gsub(slug, "^%-+", "")
@@ -841,19 +751,13 @@ function tag.slug(label)
     return slug
 end
 
--- The label a new tag gets from its slug: "cocoa-bean" -> "Cocoa bean".
 function tag_label_from_slug(slug)
     label, _ = string.gsub(slug, "[%-_]+", " ")
     return string.upper(string.sub(label, 1, 1)) .. string.sub(label, 2)
 end
 
--- Calls replace(slug, written) for each #tag in plain text (no code in
--- it) and splices in what it returns, or keeps the text when it returns
--- nil. A tag starts the text or follows whitespace or "(" -- so a URL's
--- page#section never counts -- begins with a letter (#123 doesn't), and
--- isn't followed by "/" (no #a/b paths) or by "!"/"?" (a spreadsheet's
--- #REF!, #NAME? in imported text). "[[...]]" is skipped whole: a link's
--- text is a title, not tags.
+-- Matches #tag tokens after start/whitespace/'(', skipping [[...]] links, #123,
+-- URL fragments, #a/b paths, and spreadsheet errors (#REF!, #NAME?).
 function tag_replace_in_text(text, replace)
     out = {}
     pos = 1
@@ -896,8 +800,6 @@ function tag_replace_in_text(text, replace)
     return table.concat(out)
 end
 
--- tag_replace_in_text over a document's content, leaving code alone:
--- fenced blocks (``` or ~~~) and inline `code` spans pass through as is.
 function tag_replace_outside_code(content, replace)
     lines = {}
     fence = false
@@ -926,7 +828,6 @@ function tag_replace_outside_code(content, replace)
     return table.concat(lines, "\n")
 end
 
--- The #tags in a document's content, as slugs, each once, in order.
 function tag.text_tags(content)
     slugs, seen = {}, {}
     if content == nil then
@@ -957,20 +858,8 @@ function tag_slug_ids(db_path)
     return ids
 end
 
--- On save: each #tag the person wrote is a membership they asserted
--- (pinned, via text), created with the tag if it doesn't exist yet; one
--- that left the text is archived. While it's in the text it wins: a
--- computed membership becomes it, and so does an excluded one (a removal
--- elsewhere). A pinned membership set some other way is left as it is.
---
--- "Wrote" is exact: on an edit (`old_content` given), only #tags the
--- edit added are asserted -- text that was already there, an import's
--- say, isn't. And only a person's write counts at all: `author` "system"
--- or an API key's "api:<label>" (an import, a sync) is skipped, since
--- text a program copied in isn't anyone asserting a tag. Measured on
--- 6,865 imported documents, syncing their text would have made 172 tags
--- out of spreadsheet errors and catalogue numbers. A chat edit is the
--- chatting person's.
+-- Syncs human-written #tags (skipping "system" and "api:*" imports, and unchanged
+-- tokens on edits) as pinned via="text" memberships. See doc/decisions/007-usage-driven-knowledge-pool-and-curation-ladder.md.
 function tag.sync_text_tags(db_path, document_id, content, author, old_content)
     if author == nil or author == "system" or string.sub(tostring(author), 1, 4) == "api:" then
         return
@@ -1029,9 +918,7 @@ function tag.sync_text_tags(db_path, document_id, content, author, old_content)
     end
 end
 
--- For rendering: each #tag naming an existing tag becomes a link to the
--- tag's page, which document.render_html turns into a chip -- never a
--- [[link]], so it's never a document_link either.
+-- Rewrites existing #tags to tag detail links (not [[links]], avoiding document_link rows).
 function tag.inline_text_tags(db_path, content)
     ids = tag_slug_ids(db_path)
     return tag_replace_outside_code(content, function(slug, written)

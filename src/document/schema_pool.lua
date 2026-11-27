@@ -610,6 +610,8 @@ function doc_pool.pool_effective_heat(raw_heat, log_scale_at_write, log_pool_sca
     return raw_heat * math.exp(log_pool_scale - log_scale_at_write)
 end
 
+-- Conserves sum(effective_heat) == document_count * BASE_HEAT in log space without rewriting unretrieved rows.
+-- See doc/decisions/007-usage-driven-knowledge-pool-and-curation-ladder.md.
 function doc_pool.reinforce_pool_heat(db_path, document_id, delta)
     doc_pool.ensure_pool_state(db_path)
     delta = tonumber(delta)

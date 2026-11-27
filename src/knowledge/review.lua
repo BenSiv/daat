@@ -98,6 +98,8 @@ function knowledge_review.record_retrieval_hit(db_path, retrieval_id, document_i
     return delta
 end
 
+-- Only system-derived (`source_type` set) rows fold on hash match; user-authored docs stay active.
+-- See doc/decisions/007-usage-driven-knowledge-pool-and-curation-ladder.md.
 function knowledge_review.duplication_status(db_path, document_id, content_hash, source_type)
     if content_hash == nil or content_hash == "" then
         return "unique"

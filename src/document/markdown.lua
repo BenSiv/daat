@@ -172,6 +172,7 @@ function doc_markdown.render_markdown(content)
     return doc_markdown.render_plot_fences(markdown_lib.render(content))
 end
 
+-- #tags rewrite to detail?type=tag links before cmark-gfm and gain chip styling after so they never enter document_link.
 function doc_markdown.render_html(db_path, content)
     if content == nil or content == "" then
         return ""

@@ -1,22 +1,6 @@
--- The distill step of the tier ladder (doc/tier-curation-ladder.md,
--- "Tier 3 design"): a tier-2 reference is read with the notes it cites
--- and split into records -- one claim each, self-contained, citing its
--- notes -- kept at tier 3 (source_type "record").
---
--- Each candidate claim is embedded and compared with the records and the
--- legacy distilled facts already in the pool. Anything at
--- DISTILL_NEAR_COSINE or closer goes to one judge call: SAME (the claim
--- is already there), UPDATE (the candidate is more complete or exact:
--- the record is rewritten in place) or NEW. A legacy fact matched SAME
--- or UPDATE is archived with merged_into the record that covers it, so
--- the legacy set shrinks as tier 3 grows (Ben, 2026-10-29). A last call
--- checks every record to be written against the notes it cites; a
--- record that fails is dropped and counted.
---
--- knowledge_distillation keeps one row per reference: the content hash
--- it last saw and how that went, like knowledge_curation. A reference is
--- distilled again once it's rewritten; dedup keeps that from repeating
--- records.
+-- Tier-3 distillation: splits tier-2 references into self-contained atomic records
+-- (`source_type = 'record'`), deduplicates at >= DISTILL_NEAR_COSINE, absorbs covered
+-- legacy `distilled` facts, and source-checks against cited notes. See doc/tier-curation-ladder.md.
 
 const db = require("database")
 const entity = require("entity")
@@ -30,13 +14,8 @@ const agent_provider_lib = require("agent_provider")
 
 const distill = {}
 
--- Claims one reference yields at most.
 const DISTILL_MAX_CLAIMS = 12
--- Cosine at or above which a candidate and an existing record or legacy
--- fact are put to the judge (Ben, 2026-10-29: 0.80, measured on prod
--- before trusting it).
 const DISTILL_NEAR_COSINE = 0.80
--- Existing records shown to the judge per candidate.
 const DISTILL_JUDGE_MATCHES = 3
 
 const DISTILL_SYSTEM_PROMPT = """
@@ -85,9 +64,6 @@ function distill_stale_cutoff(db_path)
     return nil
 end
 
--- Active references, most retrieved first, whose current text hasn't
--- been distilled. With `recheck`, references whose last try came to
--- nothing or failed (or was left running) count too.
 function distill.due_references(db_path, recheck)
     rows = db.query(db_path, """
         SELECT id, title, content_hash, retrieval_count FROM document
@@ -109,7 +85,6 @@ function distill.due_references(db_path, recheck)
     return due
 end
 
--- The curated notes a reference links to: {title -> row}.
 function distill_notes(db_path, reference_id)
     rows = db.query(db_path, string.format("""
         SELECT DISTINCT d.id, d.title, d.content FROM document_link l
@@ -127,13 +102,11 @@ function distill_notes(db_path, reference_id)
     return notes, rows
 end
 
--- A note as the model reads it: without its "Source: [[...]]" line.
 function distill_note_text(content)
     text = string.gsub(tostring(content), "\n*Source: [^\n]*%s*$", "")
     return text
 end
 
--- The extract reply as candidates: {title, text, notes = {title...}}.
 function distill.parse_claims(reply)
     claims = {}
     current = nil
@@ -174,8 +147,6 @@ function distill_unit(vector)
     return vector_lib.unpack(vector_lib.pack(vector))
 end
 
--- Records and legacy facts with a stored vector for `model`:
--- {id, title, content, source_type, unit}.
 function distill_pool(db_path, model)
     rows = db.query(db_path, string.format("""
         SELECT d.id, d.title, d.content, d.source_type, e.vector_packed,
@@ -201,7 +172,6 @@ function distill_pool(db_path, model)
     return pool
 end
 
--- The pool entries at DISTILL_NEAR_COSINE or closer, nearest first.
 function distill_near(pool, unit)
     near = {}
     for _, entry in ipairs(pool) do
@@ -217,7 +187,6 @@ function distill_near(pool, unit)
     return near
 end
 
--- "SAME 2" -> "same", entry; "NEW" -> "new", nil.
 function distill_judge(candidate, near)
     agent_provider = agent_provider_lib
     lines = {"New claim: " .. candidate.title .. "\n" .. candidate.text, "", "Existing records:"}
@@ -257,9 +226,6 @@ function distill_body(db_path, candidate, notes)
     return body
 end
 
--- Distills one reference now. Returns the status written ("distilled",
--- "nothing", "failed", "skipped") and counts {new, updated, same,
--- rejected, absorbed}.
 function distill.run(db_path, reference_id, author)
     agent_provider = agent_provider_lib
     counts = {new = 0, updated = 0, same = 0, rejected = 0, absorbed = 0}
@@ -293,7 +259,6 @@ function distill.run(db_path, reference_id, author)
         return "failed", counts
     end
 
-    -- Dedup against the pool, and against this run's own candidates.
     model = agent_provider.embedding_model()
     pool = {}
     if model != nil then
@@ -327,7 +292,6 @@ function distill.run(db_path, reference_id, author)
         end
     end
 
-    -- Check every record to be written against the notes it cites.
     if #writes > 0 then
         lines = {}
         for i, w in ipairs(writes) do
@@ -365,17 +329,9 @@ function distill.run(db_path, reference_id, author)
                         "reference:" .. tostring(ref.id))
                     if record_id != nil then
                         knowledge.set_tier(db_path, record_id, 3)
-                        -- Embedded now, not after the worker's quiet
-                        -- period: the next reference's dedup has to see
-                        -- it (prod 2026-10-29: a batch of 11 references
-                        -- found 0 records already there with 34 of 141
-                        -- records embedded).
+                        -- Embed synchronously so subsequent references in the same batch deduplicate against this record.
                         document.refresh_embedding(db_path, record_id)
                         counts.new = counts.new + 1
-                        -- A legacy fact this record covers is absorbed.
-                        -- Once: a second candidate matching the same
-                        -- fact (prod 2026-10-29) leaves it where the
-                        -- first put it.
                         if w.match != nil and w.match.source_type == "distilled" and absorbed[w.match.id] != true then
                             absorbed[w.match.id] = true
                             archived_id = entity.archive(db_path, "document", w.match.id, author, nil, "covered by record #" .. tostring(record_id))
@@ -397,7 +353,6 @@ function distill.run(db_path, reference_id, author)
     return "distilled", counts
 end
 
--- Takes a queued reference for this process (as curate_claim).
 function distill_claim(db_path, reference_id)
     crypto_lib = require("crypto")
     token = crypto_lib.random_hex(8)
@@ -412,8 +367,6 @@ function distill_claim(db_path, reference_id)
     return row != nil and row.status == "running" and row.reason == token
 end
 
--- `daat repair distill [--limit N] [--dry-run] [--recheck]`, and the
--- jobs worker's `daat knowledge distill-due [N]`.
 function distill.repair(db_path, limit, dry_run, author, recheck)
     lines = {}
     due = distill.due_references(db_path, recheck)
