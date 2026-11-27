@@ -1,15 +1,4 @@
--- Example config-as-code content for `daat init --with-examples` --
--- a fresh, truly empty install gives a new user zero indication of what
--- a schema/view/extension/template file actually looks like or how to
--- write one. This module is the opt-in alternative: one small,
--- realistic, working example of each kind, so there's something real to
--- read and copy rather than an empty directory and a doc page.
---
--- Every writer here skips a destination that already exists rather
--- than overwriting it -- safe to run against an existing store too
--- (e.g. after deleting one example to see the rest regenerate), same
--- "never clobber real content" convention as schema.sync_table's own
--- add-column-only semantics.
+-- Starter config-as-code files written by `daat init --with-examples` (skips existing files).
 
 const paths = require("paths")
 const config = require("config")
@@ -172,15 +161,6 @@ return {
 }
 """
 
--- Every field commented out on purpose -- unlike theme.lua (no
--- sensible default exists for a color palette), config.lua's fields
--- already have documented defaults (see doc/architecture.md's own
--- table). The example leads with the local open-weights provider
--- (`ollama`: qwen3:8b + nomic-embed-text over localhost) rather than a
--- cloud vendor whose project id has no safe placeholder. A commented-out
--- file changes nothing (sandbox.run on an all-comments file returns nil,
--- same as no file at all) -- it's reference documentation of what's
--- available, not a behavior change.
 const EXAMPLE_CONFIG_LUA = """-- Deployment configuration (see doc/configuration.md for every section,
 -- field, default, and advanced tuning knob). Run `daat config check` to
 -- validate syntax and field names, or `daat config show` to inspect all
@@ -250,10 +230,6 @@ function write_if_missing(path, contents)
     return true
 end
 
--- Writes every example file, skipping any destination that already
--- exists. Returns the list of paths actually written (empty on a
--- store where every example already exists -- e.g. a second
--- `--with-examples` run).
 function examples.write_all(root)
     written = {}
 

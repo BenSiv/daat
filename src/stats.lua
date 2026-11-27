@@ -1,14 +1,7 @@
--- Least-squares fits for the chat agent's stats.fit tool. A growth rate
--- or doubling time read off two hand-picked points depends on which
--- points the model picks: first-vs-last over a culture that levelled
--- off counts the plateau as slow growth (found by the agent scorecard,
--- doc/agent-eval.md). A fit over every point, with the exponential
--- phase found from the data, gives one answer from the same rows.
+-- Ordinary least-squares linear and exponential-phase curve fitting for stats.fit.
 
 const stats = {}
 
--- Ordinary least squares y = intercept + slope * x. Returns slope,
--- intercept, r2 (1 when every point is on the line), or nil and why.
 function stats.linear_fit(xs, ys)
     n = #xs
     if n < 2 then
@@ -39,7 +32,6 @@ function stats.linear_fit(xs, ys)
     return slope, intercept, r2
 end
 
--- The points sorted by x, as parallel arrays.
 function sorted_points(xs, ys)
     order = {}
     for i = 1, #xs do
@@ -54,19 +46,12 @@ function sorted_points(xs, ys)
     return sx, sy
 end
 
--- How close a window's slope must come to the steepest one to count as
--- the same growth phase, and how straight (on a log scale) it must be.
 const PHASE_SLOPE_SHARE = 0.97
 const PHASE_MIN_R2 = 0.98
 const PHASE_MIN_POINTS = 3
 
--- Fits ln(y) = intercept + rate * x. With opts.x_min/x_max, over that
--- range only. Otherwise the exponential phase is found from the data:
--- among windows of consecutive points that are straight on a log scale
--- (r2 >= PHASE_MIN_R2), the steepest growth, widened to the longest
--- window that grows nearly as fast -- so a lag or a plateau at either
--- end is left out. Returns a table {rate, intercept, r2, n, x_from,
--- x_to, phase = "given"|"detected"|"all"}, or nil and why.
+-- Fits ln(y) = intercept + rate * x; without x_min/x_max, selects the longest
+-- contiguous log-linear window (r2 >= PHASE_MIN_R2) within PHASE_SLOPE_SHARE of peak rate.
 function stats.exponential_fit(xs, ys, opts)
     if opts == nil then
         opts = {}
@@ -145,8 +130,6 @@ function stats.exponential_fit(xs, ys, opts)
     return best
 end
 
--- The tool's text: what was fitted over which points, and the derived
--- values, so the model can quote the method as well as the result.
 function stats.describe(model, fit, x_column, y_column, total_points)
     lines = {}
     if model == "exponential" then

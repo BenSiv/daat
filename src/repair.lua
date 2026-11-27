@@ -1,18 +1,4 @@
--- `daat repair <name> [args]` -- rebuilds of state daat derives from its
--- own source-of-truth tables, kept out of the everyday command groups so
--- they don't crowd the CLI surface however many get added.
---
--- What belongs here: deterministic, idempotent, free to rerun at any
--- time, correct for any deployment -- the platform's own REINDEX. Every
--- write path already keeps this state current (entity.create/update's
--- document hooks), so a repair is only for recovery: a raw SQL insert, a
--- restored backup, a provider outage that dropped a best-effort
--- embedding. What doesn't: one-off migrations of a specific deployment's
--- data, or anything involving a model's judgment that should be reviewed
--- before it's written -- those live with the deployment, not here.
---
--- A new repair is one REPAIRS entry; `daat repair` with no name lists
--- them all.
+-- Idempotent rebuilds and maintenance passes over derived store state (`daat repair <name>`).
 
 const document = require("document")
 const tag = require("tag")
@@ -90,9 +76,6 @@ function repair_pool_count(cmd_args, db_path)
     print("document_count resynced to " .. tostring(count))
 end
 
--- With a document id, re-places that one document by nearest tag;
--- without, rebuilds every tag's centre from its memberships (after
--- `repair embeddings`, a raw SQL write, or a change of tag_dims).
 function repair_tags(cmd_args, db_path)
     entity_id = tonumber(cmd_args[2])
     if entity_id != nil then
@@ -117,8 +100,6 @@ function repair_tags(cmd_args, db_path)
         end
     end
     if flags["--relabel"] == true then
-        -- --dry-run: the agent's verdicts and proposed names, nothing
-        -- written; without it, renames applied.
         dry_run = flags["--dry-run"] == true
         report = tag_upkeep.run(db_path, {judge = true, apply = not dry_run, relabel = true})
         for _, line in ipairs(report) do
@@ -132,10 +113,6 @@ function repair_tags(cmd_args, db_path)
         return
     end
     if flags["--restructure"] == true then
-        -- --dry-run: proposals only; --judge with it: the agent's
-        -- verdicts too; neither: judge and apply (doc/tag-ontology.md).
-        -- --pairs-above C: every pair of tags above cosine C as a merge,
-        -- a review only.
         dry_run = flags["--dry-run"] == true
         if flags["--pairs-above"] == true and pairs_above == nil then
             print("Usage: daat repair tags --restructure --dry-run --judge --pairs-above <cosine>")
@@ -172,11 +149,6 @@ function repair_tag_evidence(cmd_args, db_path)
     print(string.format("Refreshed core tag evidence: %d row(s) written", written))
 end
 
--- --names-only rebuilds just entity_name_index, which is all entity.find
--- reads: seconds after a field is newly marked `identifier = true`, rather
--- than re-reading every document's prose too (~6,400 on celleste-lims).
--- Document references then catch up on each document's next save, or on a
--- full `repair references`.
 function repair_references(cmd_args, db_path)
     if #cmd_args > 2 or (cmd_args[2] != nil and cmd_args[2] != "--names-only") then
         print("Usage: daat repair references [--names-only]")
@@ -315,7 +287,6 @@ function repair_connections(cmd_args, db_path)
     end
 end
 
--- Ordered (a list, not a map) so `daat repair`'s listing is stable.
 const REPAIRS = {
     {name = "links", usage = "links [document_id | --all]", run = repair_links,
      description = "Re-parse [[...]] links from document content into document_link, for documents whose content changed since their links were last synced (--all: every document)."},

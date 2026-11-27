@@ -1,11 +1,5 @@
--- Extension manifest loading, the admin-approval registry, and the
--- after-hook job queue. See doc/extensibility.md for the extension
--- layout/capability model this implements.
---
--- Deliberately does not require "entity" (avoids a require cycle --
--- entity.lua requires this module to build ctx.create_entity/
--- update_entity bindings). extension.invoke() takes an already-built ctx
--- rather than building one itself.
+-- Extension manifest loading, content-pinned approval registry, and after-hook job queue.
+-- Does not require entity (avoids cycle; callers pass built ctx). See doc/extensibility.md.
 
 const db = require("database")
 const json = require("dkjson")
@@ -17,15 +11,7 @@ const store_lib = require("store")
 
 const extension = {}
 
--- How many retries make sense before giving up on a job plausibly
--- depends on how flaky a given deployment's own extensions/network are
--- -- not a bare hardcoded literal; read fresh from
--- config.load() per call rather than resolved once at load.
-
 extension.SCHEMA = """
--- VARCHAR(255), not TEXT -- MariaDB/InnoDB refuses a bare TEXT column
--- as a key without an explicit length; see ledger.lua's own SCHEMA
--- comment for the full reasoning.
 CREATE TABLE IF NOT EXISTS system_job (
     job_id INTEGER PRIMARY KEY %s,
     extension_name TEXT NOT NULL,
@@ -34,12 +20,6 @@ CREATE TABLE IF NOT EXISTS system_job (
     entity_id INTEGER NOT NULL,
     new_values_json TEXT,
     old_values_json TEXT,
-    -- VARCHAR(32), not TEXT -- real MySQL 8.0 (unlike MariaDB, which
-    -- allows this as an extension) rejects a literal DEFAULT value on
-    -- a BLOB/TEXT/GEOMETRY/JSON column outright ("can't have a default
-    -- value"). Found running tst/integration/mariadb_backend.bats
-    -- against a real Cloud SQL for MySQL instance, not anticipated
-    -- when the earlier MariaDB-only dialect work was verified.
     status VARCHAR(32) NOT NULL DEFAULT 'pending',
     attempts INTEGER NOT NULL DEFAULT 0,
     last_error TEXT,
@@ -55,11 +35,7 @@ function extension_schema_sql(db_path)
     )
 end
 
--- Approvals live in system_approval (store.lua), kind 'extension'.
--- Once per process and database: every entity create reaches here (via
--- enqueue_after_hooks), and on MariaDB any CREATE TABLE -- IF NOT EXISTS
--- included -- commits the open transaction implicitly, which would
--- split entity.create_batch's one transaction into one per row.
+-- Run DDL once per process/DB: MariaDB CREATE TABLE IF NOT EXISTS commits open transactions.
 const extension_schema_ready = {}
 
 function extension_schema_key(db_path)
@@ -77,9 +53,6 @@ function extension.init_schema(db_path)
     return result
 end
 
--- Names of extension directories under ext_dir that have both a
--- manifest.lua and a main.lua. A directory missing either is ignored,
--- not an error -- an in-progress scaffold can sit there harmlessly.
 function extension.names(ext_dir)
     names = {}
     attr = lfs.attributes(ext_dir)
@@ -98,29 +71,16 @@ function extension.names(ext_dir)
     return names
 end
 
--- True when `name` is a top-level AGENT_TOOLS group (src/agent_tools.lua)
--- -- an extension's own name can never collide with one of these, since
--- capabilities.tools entries dispatch under tool_name = manifest.name.
--- Read from AGENT_TOOLS itself rather than kept as a copy: the copy this
--- replaces missed calc, stats and result, added to AGENT_TOOLS after it
--- was written, so an extension named "stats" passed validation and then
--- had every tool it declared answered as unknown (#15). A group is now
--- reserved the moment it exists. Required lazily, inside the function,
--- because agent_tools requires this module at its own top level.
+-- Lazy require avoids cycle with agent_tools; prevents extension tool namespace collisions.
 function extension.is_reserved_tool_name(name)
     return require("agent_tools").AGENT_TOOLS[name] != nil
 end
 
--- An owned name becomes a file name (<kind>/<name>.lua) and, for a
--- schema, a table name -- the schema pattern is schema.valid_name_syntax's
--- own; view names may also carry hyphens (e.g. "widgets-in-stock").
 const OWNED_NAME_PATTERNS = {
     schemas = "^[a-z_][a-z0-9_]*$",
     views = "^[a-z0-9_][a-z0-9_-]*$",
 }
 
--- Structural validation only -- does the manifest make sense on its own
--- terms (mirrors schema.validate's role for schema files).
 function extension.validate_manifest(manifest)
     if type(manifest.name) != "string" or manifest.name == "" then
         return "manifest must have a non-empty string 'name'"
@@ -137,11 +97,6 @@ function extension.validate_manifest(manifest)
     if manifest.capabilities != nil and type(manifest.capabilities) != "table" then
         return "manifest '" .. tostring(manifest.name) .. "': 'capabilities' must be a table"
     end
-    -- capabilities.ui's mere presence opts an extension into a page at
-    -- /ext/<name> (see doc/plugin-system-research.md) -- no separate
-    -- 'path' field; the route is always derived from the extension's
-    -- own name, which sidesteps path-format/collision validation
-    -- entirely rather than needing it.
     if manifest.capabilities != nil and manifest.capabilities.ui != nil then
         ui = manifest.capabilities.ui
         if type(ui) != "table" then
@@ -154,17 +109,6 @@ function extension.validate_manifest(manifest)
             return "manifest '" .. tostring(manifest.name) .. "': capabilities.ui must have a non-empty string 'icon'"
         end
     end
-    -- capabilities.tools' entries are dispatched under tool_name =
-    -- manifest.name (see extension_tool_record in agent.lua) --
-    -- reusing the plain tool_name.method_name convention every built-in
-    -- AGENT_TOOLS entry already uses, with no separate namespace. That
-    -- only works if an extension's own name can never collide with one
-    -- of those built-in top-level groups, so it's rejected here, once,
-    -- rather than needing a remapping table at dispatch time. "Once"
-    -- covers extensions approved earlier too: load_manifest runs this on
-    -- every load, and a manifest that fails it is skipped by
-    -- approved_with_tools, so an extension whose name a later built-in
-    -- group takes simply stops loading, with this message as the reason.
     if manifest.capabilities != nil and manifest.capabilities.tools != nil then
         if extension.is_reserved_tool_name(manifest.name) then
             return "manifest '" .. tostring(manifest.name) .. "': extension name collides with a built-in tool group"
@@ -187,12 +131,6 @@ function extension.validate_manifest(manifest)
             end
         end
     end
-    -- capabilities.schemas/views name the entity types and views this
-    -- extension ships as its own schemas/<name>.lua and views/<name>.lua
-    -- files (see extension.owned_definitions). Declared by name rather
-    -- than discovered from the directory, so that owning a new entity
-    -- type -- a new table -- is a capabilities change that needs
-    -- re-approval, the same as any other grant.
     for _, kind in ipairs({"schemas", "views"}) do
         if manifest.capabilities != nil and manifest.capabilities[kind] != nil then
             owned = manifest.capabilities[kind]
@@ -206,15 +144,6 @@ function extension.validate_manifest(manifest)
             end
         end
     end
-    -- capabilities.manual_triggers declares admin-only "run this now"
-    -- buttons, listed and dispatched from
-    -- a dedicated /admin-triggers route (web.lua) -- never the chat
-    -- agent, never an ordinary user's own request. Unlike
-    -- capabilities.tools there's no shared dispatch namespace to worry
-    -- about (no is_reserved_tool_name-style check needed): the route path
-    -- is always /admin-triggers/<extension name>/<trigger name>, scoped
-    -- by construction, so two extensions' trigger names can never
-    -- collide with each other or with anything else.
     if manifest.capabilities != nil and manifest.capabilities.manual_triggers != nil then
         if type(manifest.capabilities.manual_triggers) != "table" then
             return "manifest '" .. tostring(manifest.name) .. "': capabilities.manual_triggers must be a list"
@@ -237,8 +166,6 @@ function extension.validate_manifest(manifest)
     return nil
 end
 
--- Loads a manifest from extensions/<name>/manifest.lua, sandboxed the
--- same data-only way a schema file is (see doc/schema.md).
 function extension.load_manifest(ext_dir, name)
     if not config.valid_resource_name(name) then
         return nil, "invalid extension name: " .. tostring(name)
@@ -271,8 +198,6 @@ function extension.load_main_source(ext_dir, name)
     return source
 end
 
--- Every extension directory found, each with its loaded manifest (or an
--- error) -- one bad extension's manifest error never hides the others.
 function extension.all(ext_dir)
     result = {}
     for _, name in ipairs(extension.names(ext_dir)) do
@@ -282,14 +207,7 @@ function extension.all(ext_dir)
     return result
 end
 
--- The schema or view definition files approved extensions own
--- (`kind` is "schemas" or "views"): one {name, path, extension} per
--- name declared in capabilities[kind], at <ext_dir>/<dir>/<kind>/<name>.lua.
--- An unapproved extension owns nothing -- its types are never
--- registered or updated, though a table registered while it was
--- approved keeps its data (the same as deleting a file from schemas/).
--- A declared file that doesn't exist is left for the caller to report
--- when it tries to load it.
+-- Schema/view files declared by approved extensions; unapproved extensions own nothing.
 function extension.owned_definitions(db_path, ext_dir, kind)
     result = {}
     for _, entry in ipairs(extension.all(ext_dir)) do
@@ -308,11 +226,7 @@ function extension.owned_definitions(db_path, ext_dir, kind)
     return result
 end
 
--- Merges a deployment directory's own <name>.lua files with the ones
--- approved extensions own for the same kind -- shared by schema.lua and
--- view.lua. Two sources defining the same name is an error, never a
--- silent override. Returns nil plus an error if `dir` itself is missing
--- and `dir_required` is true.
+-- Merges root definitions with approved extension definitions; duplicate names error.
 function extension.definition_files(db_path, dir, ext_dir, kind, dir_required)
     files = {}
     owner_of = {}
@@ -339,11 +253,6 @@ function extension.definition_files(db_path, dir, ext_dir, kind, dir_required)
     return files
 end
 
--- Approved extensions that also declare capabilities.ui -- the one
--- list both the nav rail (ui.page_shell) and the /ext/<name> route
--- dispatcher (web.lua) need; a bad manifest or an unapproved/no-ui
--- extension is silently excluded here rather than surfaced as an
--- error, same spirit as extension.matching's own filtering.
 function extension.approved_with_ui(db_path, ext_dir)
     result = {}
     for _, entry in ipairs(extension.all(ext_dir)) do
@@ -357,11 +266,6 @@ function extension.approved_with_ui(db_path, ext_dir)
     return result
 end
 
--- Approved extensions that also declare capabilities.tools -- the one
--- list the agent-tools registry/dispatch (agent.lua) needs, same
--- exclusion spirit as approved_with_ui: a bad manifest or an
--- unapproved/tool-less extension is silently excluded, not surfaced as
--- an error.
 function extension.approved_with_tools(db_path, ext_dir)
     result = {}
     for _, entry in ipairs(extension.all(ext_dir)) do
@@ -376,9 +280,6 @@ function extension.approved_with_tools(db_path, ext_dir)
     return result
 end
 
--- Approved extensions that also declare capabilities.manual_triggers --
--- the one list the /admin-triggers route (web.lua) needs, same
--- exclusion spirit as approved_with_ui/approved_with_tools.
 function extension.approved_with_manual_triggers(db_path, ext_dir)
     result = {}
     for _, entry in ipairs(extension.all(ext_dir)) do
@@ -417,9 +318,6 @@ function extension.matches_entity_type(manifest, entity_type)
     return false
 end
 
--- Extensions (name + manifest) declaring interest in this event + entity
--- type. Extensions with a bad manifest are silently excluded here (they
--- already surface via extension.all()/`daat extension list`).
 function extension.matching(ext_dir, event_name, entity_type)
     result = {}
     for _, entry in ipairs(extension.all(ext_dir)) do
@@ -431,8 +329,6 @@ function extension.matching(ext_dir, event_name, entity_type)
     end
     return result
 end
-
--- ---- Capability comparison (order-independent set equality) ----
 
 function string_set(list)
     set = {}
@@ -461,26 +357,13 @@ function string_sets_equal(a, b)
     return true
 end
 
--- Same-shape comparison for capabilities.ui -- its mere presence is a
--- real capability grant (a page at /ext/<name>, visible to every
--- user), so editing label/icon -- not just adding/removing the whole
--- block -- has to invalidate approval the same way any other
--- capabilities change does.
 function ui_equal(a, b)
     if a == nil then a = {} end
     if b == nil then b = {} end
     return a.label == b.label and a.icon == b.icon
 end
 
--- Order-independent structural equality -- needed because
--- extension.approve stores capabilities as a JSON round-trip
--- (extension.approved_capabilities decodes it back), and dkjson's own
--- encode has no canonical key ordering: two Lua tables built from the
--- exact same JSON can iterate their hash parts in different orders, so
--- comparing json.encode(a) == json.encode(b) string-for-string is
--- unreliable (this broke every capabilities.tools comparison the
--- first time it was tried -- see tst/integration/extension.bats'
--- tool-demo cases).
+-- Order-independent table equality (dkjson key order is non-canonical across round-trips).
 function deep_equal(a, b)
     if type(a) != type(b) then
         return false
@@ -507,10 +390,6 @@ function tool_spec_equal(a, b)
         and deep_equal(a.parameters, b.parameters)
 end
 
--- Same-shape comparison for capabilities.tools -- like capabilities.ui,
--- its presence is a real grant (a new tool the chat agent can call), so
--- editing a declared tool's description/parameters/destructive flag --
--- not just adding/removing one -- has to invalidate approval too.
 function tools_equal(a, b)
     if a == nil then a = {} end
     if b == nil then b = {} end
@@ -525,11 +404,6 @@ function tools_equal(a, b)
     return true
 end
 
--- Same-shape comparison for capabilities.manual_triggers -- like
--- capabilities.tools, its presence is a real grant (an admin-triggered
--- entry point into the extension's own code), so editing a declared
--- trigger's label/description -- not just adding/removing one -- has to
--- invalidate approval too.
 function manual_trigger_spec_equal(a, b)
     return a.name == b.name and a.label == b.label and a.description == b.description
 end
@@ -579,14 +453,6 @@ function extension.capabilities_equal(a, b)
     return manual_triggers_equal(a.manual_triggers, b.manual_triggers)
 end
 
--- ---- Admin-approval registry ----
---
--- Approving records the EXACT capabilities table present at approval
--- time. A manifest edited afterward to request more is treated as
--- unapproved again (extension.is_approved compares current vs. stored),
--- not silently granted the escalation -- see doc/extensibility.md,
--- "What extensions cannot do".
-
 function extension.approved_capabilities(db_path, name)
     extension.init_schema(db_path)
     approved = store_lib.approved_content(db_path, "extension", name)
@@ -617,26 +483,8 @@ function extension.revoke(db_path, name)
     store_lib.revoke(db_path, "extension", name)
 end
 
--- ---- Sandboxed invocation ----
---
--- Loads an extension's main.lua inside the capability-scoped sandbox
--- its manifest describes, and returns its hooks table (return
--- {on_before = ..., on_after = ...}, the same convention manifest.lua
--- already uses -- never a bare top-level `function on_before() end`
--- read back out of env afterward: a bare function statement is
--- implicit-local (see doc/why-luam.md), so it would compile to a real
--- local invisible to this file no matter what env the chunk ran under;
--- setfenv only ever redirects a *global* read/write, and a local was
--- never one).
---
--- Shared by extension.invoke (entity hooks) and the UI-route/action
--- dispatch (web.lua) -- both need "load this extension's code, get its
--- hooks table" and nothing else; what they call on that table differs
--- per call site. Returns (nil, nil) -- not an error -- when main.lua
--- doesn't return a hooks table at all, so a manifest can declare
--- interest in an event/route without every extension needing to
--- implement every hook it might see. Returns (nil, err) only for a
--- genuine load/run failure.
+-- Runs main.lua in a capability-scoped sandbox; extensions must return a hooks table
+-- (Luam top-level functions are implicit-local, never globals).
 function extension.load_hooks(ext_dir, name, manifest)
     main_src, err = extension.load_main_source(ext_dir, name)
     if main_src == nil then
@@ -661,11 +509,6 @@ function extension.call_bounded(fn, ...)
     return pcall(fn, ...)
 end
 
--- Calls hook_name (e.g. "on_before"/"on_after") from an extension's
--- hooks table. `ctx` is built by the caller (entity.lua owns
--- ctx.query/create_entity/update_entity, since it owns entity CRUD).
--- Returns (true, nil) if main.lua doesn't define hook_name at all, or
--- has no hooks table at all -- see extension.load_hooks' own comment.
 function extension.invoke(ext_dir, name, manifest, hook_name, new_values, old_values, ctx)
     hooks, err = extension.load_hooks(ext_dir, name, manifest)
     if hooks == nil then
@@ -681,11 +524,6 @@ function extension.invoke(ext_dir, name, manifest, hook_name, new_values, old_va
     return extension.call_bounded(hook_fn, new_values, old_values, ctx)
 end
 
--- ---- After-hook job queue ----
-
--- Enqueues one job per matching, approved extension. Unapproved
--- extensions are silently skipped here (not an error) -- approval is an
--- opt-in gate, not a misconfiguration.
 function extension.enqueue_after_hooks(db_path, ext_dir, event_name, entity_type, entity_id, new_values, old_values)
     extension.init_schema(db_path)
     for _, entry in ipairs(extension.matching(ext_dir, event_name, entity_type)) do
@@ -750,10 +588,6 @@ function extension.mark_job_done(db_path, job)
     ))
 end
 
--- A job keeps status='pending' (so it's retried) until it has failed
--- extension_max_job_attempts times, at which point it moves to 'failed'
--- and is no longer picked up -- one broken extension's job retries
--- forever inside its own row, never blocking or affecting any other job.
 function extension.mark_job_failed(db_path, job, message)
     attempts = tonumber(job.attempts) + 1
     status = "pending"

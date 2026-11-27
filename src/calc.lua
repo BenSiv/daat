@@ -1,13 +1,4 @@
--- Arithmetic for the chat agent's calc.evaluate tool: the model writes a
--- formula over values it got from a tool, and this computes it. A model
--- doing logs and ratios in its head drifts from run to run (found by
--- the agent scorecard, doc/agent-eval.md: one doubling time came back
--- as 3.63, 3.75 and 3.85 hours from the same readings), and SQLite has
--- no LN/EXP to push the maths into a query instead.
---
--- A small recursive-descent parser over numbers, + - * / ^, parentheses
--- and a fixed set of functions -- never load()/loadstring(), so a
--- formula can't run anything but arithmetic.
+-- Safe recursive-descent arithmetic evaluator for calc.evaluate (never calls load/loadstring).
 
 const calc = {}
 
@@ -34,8 +25,6 @@ const FUNCTIONS = {
     max = {-1, function(a) return fold(a, math.max) end},
 }
 
--- Where a function is only defined for some inputs, say so instead of
--- returning nan/inf the model might quote as a result.
 const DOMAIN = {
     ln = function(a) return a[1] > 0 end,
     log10 = function(a) return a[1] > 0 end,
@@ -77,7 +66,6 @@ function tokenize(text)
     return tokens
 end
 
--- Evaluates `expression` and returns the number, or nil and why not.
 function calc.evaluate(expression)
     if type(expression) != "string" or string.find(expression, "%S") == nil then
         return nil, "empty expression"
@@ -87,8 +75,6 @@ function calc.evaluate(expression)
         return nil, err
     end
     state = {i = 1}
-    -- The parse functions call each other recursively, so they live in a
-    -- table and are looked up when called, not when defined.
     p = {}
 
     function p.peek()
@@ -104,7 +90,6 @@ function calc.evaluate(expression)
         return tok
     end
 
-    -- Each parse_* returns value, err; err set means stop.
     function p.parse_expr()
         left, e = p.parse_term()
         if e != nil then
@@ -251,8 +236,6 @@ function calc.evaluate(expression)
     return value
 end
 
--- The tool's text: the formula and its value, so the model can quote
--- both. %.10g keeps full useful precision without float noise.
 function calc.format(expression, value)
     return expression .. " = " .. string.format("%.10g", value)
 end

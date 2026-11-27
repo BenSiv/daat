@@ -1,34 +1,12 @@
--- The store's own bookkeeping: `system_state` (named single values a
--- deployment keeps between requests) and the schema migrations that
--- move an existing store from one table layout to the next.
---
--- Migrations (doc/schema-revision.md) run before any module creates its
--- tables, from every entry point that opens the store: web.handle_request,
--- main.lua's CLI dispatch, and `daat init`. They have to run first: the
--- modules' CREATE TABLE IF NOT EXISTS would otherwise create an empty
--- table under a new name before the migration could rename the old one
--- into its place.
---
--- Each migration is idempotent and checks the real schema, so a store
--- in any state -- fresh, old, or half-migrated after a failure -- ends
--- up in the same place. The store's schema version (system_state
--- 'store.schema_version') only lets an up-to-date store skip the checks
--- with one query. On MySQL the whole run holds one named lock and
--- re-reads the version under it: the first requests after a deploy
--- would otherwise migrate concurrently, and DDL isn't transactional.
---
--- Merged or replaced tables are renamed to <name>_legacy, not dropped,
--- so nothing is lost if a migration turns out wrong; a later migration
--- drops them once a release has run on the new layout.
+-- Persistent deployment state (system_state, system_approval) and idempotent
+-- schema migrations run under a database lock before module init_schema calls.
+-- See doc/schema-revision.md and doc/decisions/004-sandboxed-content-and-hash-keyed-approvals.md.
 
 const db = require("database")
 
 const store = {}
 
--- SQL expression evaluating to 'YYYY-MM-DD HH:MM:SS' `seconds` in the
--- past, on the exact same clock and timezone basis as `db.now_expr`
--- (`datetime('now', 'localtime')` on SQLite, `NOW()` on MariaDB/MySQL) --
--- avoids both localtime-vs-UTC drift and client-vs-database clock skew.
+-- Past timestamp on the same DB clock/timezone basis as db.now_expr.
 function store.ago_expr(db_path, seconds)
     secs = math.max(0, math.floor(tonumber(seconds)))
     if db.is_mariadb(db_path) then
@@ -46,11 +24,7 @@ CREATE TABLE IF NOT EXISTS system_state (
 );
 """
 
--- An admin's approval of one named thing whose exact content was
--- reviewed: an extension's capabilities (JSON), a saved view's SQL
--- text. Approval holds only while the current content still matches
--- (extension.is_approved, view.is_approved), so an edit after approval
--- needs approving again.
+-- Content-pinned admin approvals; invalidated automatically when SQL or capabilities change.
 const SYSTEM_APPROVAL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS system_approval (
     kind VARCHAR(16) NOT NULL,
@@ -71,7 +45,6 @@ function store.ensure_system_tables(db_path)
     db.exec(db_path, string.format(SYSTEM_APPROVAL_SCHEMA, db.now_expr(db_path)))
 end
 
--- store.approved_content(db_path, kind, name) -> content | nil
 function store.approved_content(db_path, kind, name)
     rows = db.query(db_path, string.format("SELECT approved_content FROM system_approval WHERE kind = %s AND name = %s;",
         db.quote(kind), db.quote(name)))
@@ -90,7 +63,6 @@ function store.revoke(db_path, kind, name)
     db.exec(db_path, string.format("DELETE FROM system_approval WHERE kind = %s AND name = %s;", db.quote(kind), db.quote(name)))
 end
 
--- store.get_text / store.get_number(db_path, name) -> value | nil
 function store.get_text(db_path, name)
     rows = db.query(db_path, string.format("SELECT text_value FROM system_state WHERE name = %s;", db.quote(name)))
     if rows == nil or rows[1] == nil then
@@ -112,16 +84,11 @@ function store.set_text(db_path, name, value)
         db.replace_into(db_path), db.quote(name), db.literal(value), db.now_expr(db_path)))
 end
 
--- Full precision (%.17g): a value written and read back must compare
--- equal to itself.
+-- %.17g preserves exact IEEE-754 round-trip precision.
 function store.set_number(db_path, name, value)
     db.exec(db_path, string.format("%s system_state (name, text_value, number_value, updated_at) VALUES (%s, NULL, %.17g, %s);",
         db.replace_into(db_path), db.quote(name), value, db.now_expr(db_path)))
 end
-
---------------------------------------------------------------------------
--- Migration helpers
---------------------------------------------------------------------------
 
 function exists(db_path, table_name)
     return db.table_exists(db_path, table_name)
@@ -139,9 +106,7 @@ function store.has_column(db_path, table_name, column_name)
     return columns_of(db_path, table_name)[column_name] == true
 end
 
--- Race-safe additive column helper across SQLite and MySQL/MariaDB:
--- concurrent workers adding the same column tolerate "Duplicate column name"
--- as long as the column exists afterwards.
+-- Tolerates concurrent workers racing on ADD COLUMN.
 function store.ensure_column(db_path, table_name, column_name, column_sql)
     if store.has_column(db_path, table_name, column_name) then
         return false
@@ -190,10 +155,7 @@ function row_count(db_path, table_name)
     return tonumber(rows[1].n)
 end
 
--- Renames `old` to `new` when only `old` exists. When both exist and
--- `new` is empty (created by a run that failed before the rename), the
--- empty one is dropped first. Both present with rows in `new` is a
--- state no migration produces, so it stops rather than guess.
+-- Drops an empty target left by an interrupted run; errors if both tables hold rows.
 function store.rename_table(db_path, old, new)
     if not exists(db_path, old) then
         return
@@ -207,7 +169,6 @@ function store.rename_table(db_path, old, new)
     db.exec(db_path, "ALTER TABLE " .. db.quote_ident(old) .. " RENAME TO " .. db.quote_ident(new) .. ";")
 end
 
--- Moves a replaced table out of the way, keeping its rows.
 function store.retire_table(db_path, old)
     if not exists(db_path, old) then
         return
@@ -219,13 +180,9 @@ function store.retire_table(db_path, old)
     db.exec(db_path, "ALTER TABLE " .. db.quote_ident(old) .. " RENAME TO " .. db.quote_ident(legacy) .. ";")
 end
 
---------------------------------------------------------------------------
--- Migrations, in order. Never edit one that has shipped; add a new one.
---------------------------------------------------------------------------
-
+-- Ordered migrations; never edit shipped entries, and keep SQL self-contained.
 const MIGRATIONS = {}
 
--- 1. Checkpoint values that each had a one-row table move to system_state.
 table.insert(MIGRATIONS, {version = 1, name = "checkpoints into system_state", run = function(db_path)
     if exists(db_path, "schema_sync_state") then
         rows = db.query(db_path, "SELECT content_signature FROM schema_sync_state WHERE id = 1;")
@@ -250,9 +207,6 @@ table.insert(MIGRATIONS, {version = 1, name = "checkpoints into system_state", r
     end
 end})
 
--- 2. knowledge_context (one row per model call) and knowledge_chat_eval
--- (one row per chat reply, keyed to its call) become agent_model_call.
--- Frozen self-contained SQL (never calls live require("agent") methods).
 table.insert(MIGRATIONS, {version = 2, name = "agent_model_call", run = function(db_path)
     if not exists(db_path, "knowledge_context") then
         return
@@ -312,7 +266,6 @@ table.insert(MIGRATIONS, {version = 2, name = "agent_model_call", run = function
     store.retire_table(db_path, "knowledge_context")
 end})
 
--- 3. extension_approval and view_approval become system_approval rows.
 table.insert(MIGRATIONS, {version = 3, name = "system_approval", run = function(db_path)
     store.ensure_system_tables(db_path)
     for _, old in ipairs({{"extension_approval", "extension", "capabilities_json"}, {"view_approval", "view", "sql_text"}}) do
@@ -324,8 +277,6 @@ table.insert(MIGRATIONS, {version = 3, name = "system_approval", run = function(
     end
 end})
 
--- 4. dropdown_list (names only) and dropdown_value become
--- entity_dropdown_value. Frozen self-contained SQL.
 table.insert(MIGRATIONS, {version = 4, name = "entity_dropdown_value", run = function(db_path)
     db.exec(db_path, """
         CREATE TABLE IF NOT EXISTS entity_dropdown_value (
@@ -342,8 +293,6 @@ table.insert(MIGRATIONS, {version = 4, name = "entity_dropdown_value", run = fun
     store.retire_table(db_path, "dropdown_list")
 end})
 
--- 5. One prefix per domain (doc/schema-revision.md, "Naming proposal").
--- Plain renames: same columns, same rows, same index names.
 const STORE_RENAMES = {
     {"user", "auth_user"},
     {"api_key", "auth_api_key"},
@@ -365,10 +314,6 @@ table.insert(MIGRATIONS, {version = 5, name = "domain table names", run = functi
     end
 end})
 
--- 6. knowledge_retrieval_document (one row per document a retrieval
--- returned) becomes knowledge_retrieval_hit and takes in
--- knowledge_review's outcome for the same (retrieval, document); the
--- review's unused action_summary isn't carried over.
 table.insert(MIGRATIONS, {version = 6, name = "knowledge_retrieval_hit", run = function(db_path)
     if exists(db_path, "knowledge_retrieval_document") then
         store.rename_table(db_path, "knowledge_retrieval_document", "knowledge_retrieval_hit")
@@ -386,7 +331,6 @@ table.insert(MIGRATIONS, {version = 6, name = "knowledge_retrieval_hit", run = f
         db.exec(db_path, "ALTER TABLE knowledge_retrieval_hit ADD COLUMN reviewed_at TEXT DEFAULT NULL;")
     end
     if exists(db_path, "knowledge_review") then
-        -- The latest review per (retrieval, document), in one statement.
         latest = "(SELECT %s FROM knowledge_review r WHERE r.retrieval_id = knowledge_retrieval_hit.retrieval_id " ..
             "AND r.document_id = knowledge_retrieval_hit.document_id ORDER BY r.id DESC LIMIT 1)"
         sets = {}
@@ -400,11 +344,6 @@ table.insert(MIGRATIONS, {version = 6, name = "knowledge_retrieval_hit", run = f
     end
 end})
 
--- 7. Tiers restart from 0 (doc/tier-curation-ladder.md): every document
--- above tier 0 in production was an unprocessed source, labelled by a
--- judge that saw only its body. Only documents the curation writes can
--- hold a tier from here on; old judgments are cleared so they're made
--- again under the new rule. Content is untouched.
 table.insert(MIGRATIONS, {version = 7, name = "tier reset for the curation ladder", run = function(db_path)
     if exists(db_path, "document") then
         db.exec(db_path, "UPDATE document SET tier = 0 WHERE tier IS NOT NULL AND tier != 0;")
@@ -414,8 +353,6 @@ table.insert(MIGRATIONS, {version = 7, name = "tier reset for the curation ladde
     end
 end})
 
--- 8. Agent messages are typed (doc/agent-data.md, "Storage";
--- doc/chat-history-migration.md, step 1). Frozen self-contained SQL.
 table.insert(MIGRATIONS, {version = 8, name = "typed agent messages", run = function(db_path)
     if not exists(db_path, "agent_message") then
         return
@@ -449,9 +386,6 @@ table.insert(MIGRATIONS, {version = 8, name = "typed agent messages", run = func
     """)
 end})
 
--- 9. Widens agent_message.content (and pending_action/background_task
--- payload columns) from TEXT (65,535 bytes on MariaDB/MySQL) to
--- LONGTEXT. Frozen self-contained SQL.
 table.insert(MIGRATIONS, {version = 9, name = "agent payload columns longtext", run = function(db_path)
     if not db.is_mariadb(db_path) then
         return
@@ -467,8 +401,6 @@ table.insert(MIGRATIONS, {version = 9, name = "agent payload columns longtext", 
     end
 end})
 
--- 10. Deferred retrieval review (doc/tier-curation-ladder.md, Phase 2).
--- Frozen self-contained SQL.
 table.insert(MIGRATIONS, {version = 10, name = "deferred retrieval review queue", run = function(db_path)
     if not exists(db_path, "knowledge_retrieval") then
         return
@@ -484,10 +416,6 @@ table.insert(MIGRATIONS, {version = 10, name = "deferred retrieval review queue"
         "CREATE INDEX knowledge_retrieval_status_id_idx ON knowledge_retrieval(status, id);")
 end})
 
--- 11. Full log-space per-document heat scale (`log_scale_at_write`,
--- backfilled from `LN(scale_at_write)`) plus atomic active-pool
--- membership flag (`pool_active`), and resyncing `document_count`.
--- Frozen self-contained SQL.
 function migrate_pool_conservation_columns(db_path)
     if not exists(db_path, "document") then
         return
@@ -520,8 +448,6 @@ end
 
 table.insert(MIGRATIONS, {version = 11, name = "log_scale_at_write and pool_active conservation columns", run = migrate_pool_conservation_columns})
 
--- 12. Consolidates scattered module-level additive columns into one
--- versioned, race-safe migration pass across existing core tables.
 table.insert(MIGRATIONS, {version = 12, name = "consolidate core module columns", run = function(db_path)
     store.ensure_columns(db_path, "entity_event", {{"reason", "TEXT"}})
     store.ensure_columns(db_path, "entity_type", {
@@ -578,13 +504,6 @@ table.insert(MIGRATIONS, {version = 12, name = "consolidate core module columns"
     store.ensure_columns(db_path, "entity_name_index", {{"distinctive", "INTEGER NOT NULL DEFAULT 1"}})
 end})
 
--- 13. Index entity_event by entity (#9, #62 review). entity.relationships
--- reads each archived row's latest archive reason with MAX(event_id)
--- WHERE entity_id = ..., which without this scanned the whole ledger
--- once per archived row (200k+ events on a production store). entity_id
--- comes from one integer sequence shared by every type, so
--- (entity_id, event_id) is two integers: no TEXT key length on MariaDB.
--- ledger.history's per-entity reads use it too. Frozen self-contained SQL.
 table.insert(MIGRATIONS, {version = 13, name = "entity_event entity_id index", run = function(db_path)
     if not exists(db_path, "entity_event") then
         return
@@ -593,12 +512,6 @@ table.insert(MIGRATIONS, {version = 13, name = "entity_event entity_id index", r
         "CREATE INDEX entity_event_entity_id_idx ON entity_event(entity_id, event_id);")
 end})
 
--- 14. entity.update, entity.archive, and entity.unarchive previously stamped
--- updated_by and last_event_id without advancing updated_at, leaving
--- updated_at frozen at created_at across every projected entity table.
--- Backfills stale updated_at values from each row's last_event_id row in
--- entity_event while preserving any row whose updated_at is already newer
--- (e.g. a document touched by curation after its last ledger edit).
 table.insert(MIGRATIONS, {version = 14, name = "backfill entity updated_at from ledger", run = function(db_path)
     if not exists(db_path, "entity_event") or not exists(db_path, "entity_type") then
         return
@@ -652,8 +565,6 @@ function current_version(db_path)
     return version
 end
 
--- store.migrate(db_path): brings the store's tables to the current
--- layout. Cheap when already current: one query.
 function store.migrate(db_path)
     target = latest_version()
     ok_ver, ver = pcall(current_version, db_path)

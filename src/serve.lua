@@ -1,14 +1,5 @@
--- Local HTTP-to-CGI development server (`daat serve`).
---
--- Wraps Python 3's standard-library HTTP server to dispatch every local
--- HTTP request through the compiled `daat` CGI binary with full CGI
--- environment variables (`GATEWAY_INTERFACE`, `DOCUMENT_ROOT`,
--- `REQUEST_METHOD`, `PATH_INFO`, `QUERY_STRING`, `CONTENT_TYPE`,
--- `CONTENT_LENGTH`, `HTTP_COOKIE`, `HTTP_X_CSRF_TOKEN`, `HTTP_X_API_KEY`).
---
--- Intended strictly for local development and evaluation (`127.0.0.1` by
--- default); production deployments should run behind a TLS reverse proxy
--- with Apache `mod_cgid` or equivalent.
+-- Local HTTP-to-CGI development server (`daat serve`); dispatches requests to the daat binary.
+-- Development use only (no TLS); use a reverse proxy with CGI in production.
 
 const config = require("config")
 const external_tool = require("external_tool")

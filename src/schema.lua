@@ -1,7 +1,4 @@
--- Schema-as-code: loads entity type definitions (Luam table files, see
--- doc/schema.md) and generates/migrates the real typed SQL table each
--- one describes. This is the only place field-type -> SQL-type mapping
--- happens.
+-- Loads sandboxed entity/dropdown definitions and syncs projected SQL tables. See doc/schema.md.
 
 const db = require("database")
 const sandbox = require("sandbox")
@@ -50,67 +47,21 @@ end
 
 const FIELD_TYPES = {"text", "number", "date", "select", "reference", "multi_select", "multi_reference", "sql_select", "polymorphic_reference", "multi_polymorphic_reference"}
 
--- Field types stored in a companion junction table (schema.
--- ensure_multi_field_table) instead of as a column on the entity's own
--- projected table (see doc/schema.md's "Multivalue fields" section).
--- Mirrors the singular select/reference split (a fixed-list value vs.
--- a real link to another entity type), not one generic "multivalue"
--- flag, since the junction table's second column differs (a literal
--- value vs. a real FK).
+-- Stored in companion <entity_type>_<field> junction tables rather than scalar columns.
 const MULTI_FIELD_TYPES = {multi_select = true, multi_reference = true}
 
 function is_multi_field_type(t)
     return MULTI_FIELD_TYPES[t] == true
 end
 
--- A reference whose *target type itself varies per row* -- a sample's
--- "source" can be a plant or another sample, decided per row, not a
--- fixed entity_type the way a plain `reference` field declares one.
--- Real-world check before building this (2026-07-28): every genuine
--- case in this deployment's actual data has a small, enumerable set of
--- possible target types (2, never "any registered type"), so this
--- isn't a generic "reference of unknown shape" -- each field declares
--- its own closed `allowed_entity_types` list, validated the same
--- strictness as a plain `select` field's declared value list.
---
--- Stored in ONE shared table (entity_ref, see schema.
--- ensure_entity_source_table) rather than a table per (entity_type,
--- field_name) the way multi_reference's own junction tables work --
--- schema.ensure_multi_field_table's per-type table can't represent
--- "this row's target type differs from that row's," since its FK is
--- fixed to one ref_type at table-creation time. polymorphic_reference
--- (one target) and multi_polymorphic_reference (several, e.g.
--- product.source can legitimately have more than one) mirror the
--- existing reference/multi_reference singular/plural split rather than
--- inventing a single type with a cardinality flag, matching this
--- codebase's own established convention (select/multi_select is the
--- same split).
+-- Target type varies per row; stored in shared entity_ref table. See doc/schema.md.
 const POLYMORPHIC_FIELD_TYPES = {polymorphic_reference = true, multi_polymorphic_reference = true}
 
 function is_polymorphic_field_type(t)
     return POLYMORPHIC_FIELD_TYPES[t] == true
 end
 
---------------------------------------------------------------------------
--- Named, reusable dropdown value lists (see doc/schema.md's "Named
--- dropdown lists" section)
---------------------------------------------------------------------------
---
--- A select/multi_select field can either inline its own `values` list
--- (unchanged, existing behavior) or reference a shared, named list via
--- `dropdown = "<name>"` -- config-as-code files under dropdowns/*.lua,
--- the same convention schemas/*.lua already uses. Resolved into
--- entity_field.enum_values at schema.register time (see
--- resolve_field_values below), so entity.validate's own enum-checking
--- code needs no changes at all -- it already just decodes enum_values
--- as a plain list, agnostic of whether it came from an inline list or a
--- shared dropdown.
 const DROPDOWN_SCHEMA = """
--- VARCHAR(255), not TEXT -- same MariaDB/InnoDB key-length reasoning as
--- ledger.lua's own entity_type/entity_field (a bare TEXT/BLOB column
--- can't be part of a key without an explicit bounded length).
--- One row per value of a named dropdown list; a list exists exactly
--- when it has values (schema.validate_dropdown requires at least one).
 CREATE TABLE IF NOT EXISTS entity_dropdown_value (
     list_name VARCHAR(255) NOT NULL,
     value VARCHAR(255) NOT NULL,
@@ -125,8 +76,6 @@ function schema.init_schema(db_path)
     db.exec(db_path, DROPDOWN_SCHEMA)
 end
 
--- Structural validation for a dropdowns/*.lua file -- same shape/rigor
--- as schema.validate for an entity schema file.
 function schema.validate_dropdown(def)
     if type(def) != "table" then
         return "dropdown definition must be a table"
@@ -166,16 +115,6 @@ function schema.load_dropdown_file(path)
     return def
 end
 
--- Upserts one dropdown's value list -- delete-then-reinsert (same
--- "recompute wholesale" pattern document.sync_links already uses for
--- document_link), so removing a value from the schema file actually
--- removes it here too, not just additive drift.
--- One multi-row INSERT for every value, not one INSERT per value --
--- the per-value form is the dominant cost in schema.sync_all's own
--- per-request overhead once a deployment has enough dropdowns/values.
--- schema.validate_dropdown already requires a non-empty `values` list,
--- so the #def.values == 0 guard here is just defensive, not a real
--- case for a well-formed file.
 function schema.register_dropdown(db_path, def)
     function write_dropdown_tx()
         db.exec(db_path, string.format("DELETE FROM entity_dropdown_value WHERE list_name = %s;", db.quote(def.name)))
@@ -194,11 +133,6 @@ function schema.register_dropdown(db_path, def)
     return db.transaction(db_path, write_dropdown_tx)
 end
 
--- The current value list for a named dropdown, in declaration order --
--- empty (not an error) if the name doesn't exist, so a field.dropdown
--- typo fails the same way an empty inline `values = {}` list already
--- would (every submitted value rejected as "not in the declared list"),
--- not with a confusing crash.
 function schema.dropdown_values(db_path, name)
     rows = db.query(db_path, string.format(
         "SELECT value FROM entity_dropdown_value WHERE list_name = %s ORDER BY value_order ASC;", db.quote(name)
@@ -213,11 +147,6 @@ function schema.dropdown_values(db_path, name)
     return values
 end
 
--- A select/multi_select field's resolved allowed-values list -- inline
--- `values` if given, otherwise the current contents of the named
--- `dropdown` it references. Called at schema.register time so
--- entity_field.enum_values always reflects the dropdown's *current*
--- values, the same way it already gets re-applied on every sync.
 function resolve_field_values(db_path, field)
     if field.values != nil then
         return field.values
@@ -228,14 +157,7 @@ function resolve_field_values(db_path, field)
     return {}
 end
 
--- Every generated entity table's own columns (builtin_columns below,
--- plus "id" itself) -- a field sharing one of these names fails at
--- `schema add` time with a raw "duplicate column name" SQL error
--- instead of a clear message. Listed here, not derived from builtin_columns()
--- itself, since that function needs a live db_path (for
--- db.now_expr's backend-specific default) that schema.validate itself
--- is never given, and every name in it is a plain string literal
--- anyway.
+-- Builtin columns present on every projected entity table (cannot be reused as field names).
 const RESERVED_FIELD_NAMES = {
     "id", "created_by", "created_at", "updated_by", "updated_at",
     "last_event_id", "external_id", "name", "archived_at",
@@ -250,18 +172,8 @@ function is_reserved_field_name(name)
     return false
 end
 
--- Strictly reserved SQL keywords across SQLite 3.45 and MariaDB 10.11 (#65):
--- words that fail unquoted table DDL/DML on either backend (59 in SQLite,
--- 241 in MariaDB, 249 in the union -- 190 of which pass on a local SQLite
--- store and only syntax-error on MariaDB in production, such as `release`,
--- `condition`, `procedure`, `signal`, `match`, `range`, `interval`, `key`).
--- Checked on entity-type names (`def.name`), NEVER on `field.name`: column
--- identifiers are quoted via `db.quote_ident`, and real schemas already use
--- fields named `sql` and `usage`, whereas entity-type names appear unquoted
--- in raw `SELECT ... FROM <type>` queries across views, `/sql`, and
--- `entity.query`. Non-reserved SQL keywords (`status`, `source`, `subject`,
--- `type`, `user`, `reference`, `view`, `query`, ...) are intentionally NOT
--- listed here so ordinary domain nouns stay usable.
+-- SQL keywords reserved unquoted in SQLite or MariaDB; checked on entity-type names only
+-- (columns are quoted via db.quote_ident). See doc/mariadb-migration.md.
 const RESERVED_SQL_WORDS = {
     "accessible", "add", "all", "alter", "analyze", "and", "as", "asc",
     "asensitive", "autoincrement", "before", "between", "bigint", "binary",
@@ -316,9 +228,7 @@ function is_reserved_sql_word(name)
     return type(name) == "string" and RESERVED_SQL_WORDS_SET[string.lower(name)] == true
 end
 
--- Hand-rolled internal platform and engine system tables that are never
--- registered entity schemas: allowing a user schema file to claim one of
--- these names would `ALTER TABLE` live auth/ledger/agent storage.
+-- Internal platform tables that user entity schemas must never shadow.
 const RESERVED_PLATFORM_TABLES = {
     "agent_background_task", "agent_message", "agent_model_call",
     "agent_pending_action", "agent_session", "auth_api_key",
@@ -344,32 +254,17 @@ function is_reserved_table_name(name)
     return type(name) == "string" and RESERVED_PLATFORM_TABLES_SET[string.lower(name)] == true
 end
 
--- Whether `name` has the shape a real registered entity-type or field name
--- could ever have -- lowercase ASCII letters/digits/underscore, not starting
--- with a digit. Shared by `schema.validate` (structural schema-file check)
--- and HTTP route parameter guards (`web/entity_routes.lua`, `ui/data_pages.lua`).
 function schema.valid_name_syntax(name)
     return type(name) == "string" and string.match(name, "^[a-z_][a-z0-9_]*$") != nil
 end
 
--- "text" is LONGTEXT, not TEXT -- MariaDB's plain TEXT caps at 65,535
--- *bytes*, not characters, so multi-KB content routinely exceeds it
--- ("Data too long for column"); SQLite has no such cap regardless of
--- the declared type name. Safe to change unconditionally rather than
--- branch per backend: SQLite's type-affinity rules key off the
--- substring "TEXT" in the declared type name, so a LONGTEXT column
--- behaves identically to a plain TEXT one there (verified directly:
--- stores 500KB with no truncation, `pragma_table_info` reports the
--- type as declared).
+-- LONGTEXT avoids MariaDB's 64 KB TEXT cap while keeping SQLite TEXT affinity. See doc/mariadb-migration.md.
 const SQL_TYPE = {
     text = "LONGTEXT",
     number = "REAL",
     date = "TEXT",
     select = "TEXT",
     reference = "INTEGER",
-    -- A plain TEXT column like "text" -- the only difference
-    -- is entity.validate's value check (must be a single plain SELECT,
-    -- see view.is_select_only), not storage.
     sql_select = "TEXT",
 }
 
@@ -382,9 +277,6 @@ function is_valid_field_type(t)
     return false
 end
 
--- Loads a schema definition from a Luam table file, sandboxed (see
--- doc/schema.md: schema files are executable, not inert data, so they
--- run through the same environment extension code would).
 function schema.load_file(path)
     file = io.open(path, "r")
     if file == nil then
@@ -406,10 +298,7 @@ function schema.load_file(path)
     return def
 end
 
--- Structural validation only -- does the definition make sense on its
--- own terms. Whether it's consistent with what's already registered
--- (e.g. a reference to an unknown entity_type) is checked at register
--- time, since that needs the database.
+-- Offline structural check; cross-entity checks run at register/entity.validate time.
 function schema.validate(def)
     if type(def) != "table" then
         return "schema definition must be a table"
@@ -429,24 +318,12 @@ function schema.validate(def)
     if type(def.fields) != "table" then
         return "schema '" .. tostring(def.name) .. "' must have a 'fields' list"
     end
-    -- Type-level (not per-field) opt-in flags: a schema can require
-    -- entity.update/entity.archive be given a non-empty `reason`
-    -- before either is allowed to proceed for this type. Optional,
-    -- default false either way -- most schemas set neither. Checked
-    -- via direct true/false comparison (matching how required, display,
-    -- and other boolean fields in this file are checked).
     if def.require_reason_on_update != nil and def.require_reason_on_update != true and def.require_reason_on_update != false then
         return string.format("schema '%s': 'require_reason_on_update' must be true or false", def.name)
     end
     if def.require_reason_on_archive != nil and def.require_reason_on_archive != true and def.require_reason_on_archive != false then
         return string.format("schema '%s': 'require_reason_on_archive' must be true or false", def.name)
     end
-    -- Another type-level opt-in flag, same shape as the two
-    -- above -- a schema can require Admin capability to create/update/
-    -- archive rows of this type (e.g. label_template, whose `sql_select`
-    -- field is genuinely executable). Anyone can still read/view rows
-    -- of the type; this only gates writes. Enforced in web.lua, not
-    -- here (schema.lua has no notion of an HTTP session/capability).
     if def.admin_write_only != nil and def.admin_write_only != true and def.admin_write_only != false then
         return string.format("schema '%s': 'admin_write_only' must be true or false", def.name)
     end
@@ -492,13 +369,7 @@ function schema.validate(def)
                 end
             end
         end
-        -- A field people name an entity by, without it being the label
-        -- (lab_number, a catalog number): reference.lua indexes it, so
-        -- entity.find and document references can resolve it. Only text
-        -- and select hold a name as written. A link names another entity
-        -- and a multivalue field isn't a column; a number reads back
-        -- changed (SQLite stores 17 as REAL 17.0), and an sql_select holds
-        -- another row's id or token, not a name anyone writes.
+        -- Indexed by document.reference; restricted to text/select so stored values round-trip verbatim.
         if field.identifier != nil and field.identifier != true and field.identifier != false then
             return string.format("schema '%s' field '%s': 'identifier' must be true or false", def.name, field.name)
         end
@@ -506,18 +377,7 @@ function schema.validate(def)
             return string.format("schema '%s' field '%s': type '%s' can't be an identifier, only text and select can",
                 def.name, field.name, field.type)
         end
-        -- Optional bounds on a "number" field -- UI-hint only for now
-        -- (wired into the registration table's <input type="number">
-        -- min/max, see ui.lua), not yet enforced server-side. A real
-        -- bug found in production: without this, the registration
-        -- table's number input had no min/max at all, so its native
-        -- spinner arrows could be clicked past any sensible bound
-        -- (e.g. past 5 for a 1-5 field) with no feedback. Server-side
-        -- range enforcement, if a schema author needs it, is still a
-        -- before-hook extension's job (see software's
-        -- task-priority-range) -- consolidating that into a generic,
-        -- schema-declared, DB-enforced constraint is a bigger change
-        -- (entity_field would need new columns) not attempted here.
+        -- UI input bounds hint only; server-side range checks belong in before-hook extensions.
         if field.min != nil and type(field.min) != "number" then
             return string.format("schema '%s' field '%s': 'min' must be a number", def.name, field.name)
         end
@@ -531,13 +391,6 @@ function schema.validate(def)
     return nil
 end
 
--- Registers a validated schema definition: upserts entity_type/entity_field
--- rows, then creates or migrates the projected table.
--- entity_field predates the `display` flag (see schema.fields()'s own
--- header comment on entity_display_label in ui.lua) -- ledger.lua's
--- CREATE TABLE IF NOT EXISTS never retrofits an existing table, so this
--- migrates it the same way sync_table() already migrates per-type
--- tables: additive, idempotent, safe to re-run on every sync.
 function ensure_entity_field_display_column(db_path)
     store_lib.ensure_columns(db_path, "entity_field", {
         {"display", "INTEGER DEFAULT 0"},
@@ -558,9 +411,8 @@ function schema.register(db_path, def)
     ensure_entity_field_display_column(db_path)
     ensure_entity_type_reason_flag_columns(db_path)
 
-    -- Sync DDL first (outside db.transaction so MariaDB never implicitly
-    -- commits a half-written metadata transaction, and before committing
-    -- entity_field so an incompatible multivalue change aborts cleanly).
+    -- Sync DDL outside db.transaction: MariaDB implicitly commits open transactions on DDL.
+    -- See doc/mariadb-migration.md.
     schema.sync_table(db_path, def)
 
     function write_schema_metadata_tx()
@@ -620,12 +472,7 @@ function schema.register(db_path, def)
             ))
         end
 
-        -- A field dropped from the schema file stops being a field: forms,
-        -- tables and validation all read entity_field, so its stale row
-        -- would keep it showing (and a required one would keep blocking
-        -- creates). Only the field's definition goes -- its column and every
-        -- value in it stay in the table (nothing is ever deleted), so
-        -- putting the field back restores it with its data.
+        -- Retire removed entity_field metadata without dropping projected table columns or data.
         current_names = {}
         for _, field in ipairs(def.fields) do
             table.insert(current_names, db.quote(field.name))
@@ -643,28 +490,7 @@ function schema.register(db_path, def)
     return true
 end
 
--- Always-present bookkeeping columns, independent of anything a schema
--- file declares -- external_id lets an external importer (e.g.
--- import_data_rest.py) look up "does a row for this source record
--- already exist" and upsert instead of blindly re-creating it every
--- sync run (a real, confirmed-live duplication bug this fixed: entity
--- tables had no external-id concept at all, so every run re-inserted
--- every source row from scratch).
---
--- "name" is the same idea for a real display label: an external source
--- like Benchling already assigns every record a genuine name (e.g. a
--- container literally named "50L stainless steel bioreactor"), distinct
--- from any of its own schema fields. Confirmed live: an importer was
--- already fetching this value to use as a natural key for dedup
--- matching, then discarding it -- never persisting it anywhere. A
--- schema-author's own {display = true} field (schema.lua's
--- entity_field.display column) is a reasonable per-type fallback for
--- data that has no such external source, but shouldn't be the first
--- choice when a real name already exists.
--- A function of db_path, not a static table, since created_at/
--- updated_at's default-value expression is backend-specific
--- (db.now_expr) -- db_path isn't known at module-load time, only once
--- schema.sync_table is actually called.
+-- System columns added to every projected entity table; archived_at != NULL marks soft-archived rows.
 function builtin_columns(db_path)
     now_expr = db.now_expr(db_path)
     return {
@@ -675,33 +501,14 @@ function builtin_columns(db_path)
         {name = "last_event_id", sql_type = "INTEGER"},
         {name = "external_id", sql_type = "TEXT"},
         {name = "name", sql_type = "TEXT"},
-        -- NULL means active; a real timestamp means archived. Never a
-        -- boolean/plain flag -- recording *when* costs nothing extra and
-        -- means "archived" doesn't need a second column to also answer
-        -- "since when". Nothing ever hard-deletes a row; this plus the
-        -- ledger's own 'archive' event (ledger.append_archive) are the only
-        -- two places "this entity is no longer active" is recorded, and
-        -- both are additive, not destructive.
         {name = "archived_at", sql_type = "TEXT"},
     }
 end
-
---------------------------------------------------------------------------
--- Multivalue fields -- a companion junction table per (entity_type,
--- field_name) instead of a column on the entity's own table (see
--- doc/schema.md's "Multivalue fields" section). Mirrors document_link's
--- own shape (a real many-to-many table, composite PK, no surrogate id)
--- -- the pattern this codebase already uses for "this row connects to
--- several others."
---------------------------------------------------------------------------
 
 function schema.multi_field_table_name(entity_type, field_name)
     return entity_type .. "_" .. field_name
 end
 
--- The junction table's own second column name -- "<field>_id" for a
--- multi_reference (it holds a real FK to another entity), plain "value"
--- for a multi_select (a literal string, no FK target to name it after).
 function multi_field_value_column(field)
     if field.type == "multi_reference" then
         return field.name .. "_id"
@@ -709,10 +516,6 @@ function multi_field_value_column(field)
     return "value"
 end
 
--- Idempotent (CREATE TABLE IF NOT EXISTS) -- called both from
--- schema.sync_table (so a schema sync alone is enough to create it) and
--- lazily before every write, so a table created before this field
--- existed still picks it up without a separate migration step.
 function schema.ensure_multi_field_table(db_path, entity_type, field)
     table_name = schema.multi_field_table_name(entity_type, field.name)
     parent_col = entity_type .. "_id"
@@ -752,13 +555,7 @@ function schema.ensure_multi_field_table(db_path, entity_type, field)
     quoted_value = db.quote_ident(value_col)
     quoted_entity = db.quote_ident(entity_type)
     if field.type == "multi_reference" then
-        -- `field` arrives in two different shapes depending on caller:
-        -- a raw schemas/*.lua field definition (schema.sync_table,
-        -- `.entity_type`) or an entity_field DB row (schema.
-        -- multi_fields_by_name -> entity.lua, `.ref_entity_type`).
-        -- Checking both is not redundancy for its own sake -- treating
-        -- this as one shape was a real bug (silently FK'd every
-        -- multi_reference junction table back at its own parent type).
+        -- Accepts both raw schema defs (.entity_type) and entity_field DB rows (.ref_entity_type).
         ref_type = entity_type
         if field.ref_entity_type != nil and field.ref_entity_type != "" then
             ref_type = field.ref_entity_type
@@ -776,9 +573,6 @@ function schema.ensure_multi_field_table(db_path, entity_type, field)
         """, quoted_table, quoted_parent, quoted_value, quoted_parent, quoted_value,
              quoted_parent, quoted_entity, quoted_value, db.quote_ident(ref_type))
     else
-        -- VARCHAR(255), not TEXT -- same MariaDB/InnoDB key-length
-        -- reasoning as ledger.lua/document_link (a bare TEXT/BLOB
-        -- column can't be part of a key without a bounded length).
         ddl_sql = string.format("""
             CREATE TABLE IF NOT EXISTS %s (
                 %s INTEGER NOT NULL,
@@ -799,10 +593,6 @@ function schema.ensure_multi_field_table(db_path, entity_type, field)
     bucket[table_name] = value_col
 end
 
--- Accepts either a real Lua array (already-parsed JSON, or a
--- programmatic caller) or a comma-separated string (CLI convenience --
--- every other CLI field value already arrives as a plain string) and
--- normalizes both into a plain array of trimmed, non-empty items.
 function schema.normalize_multi_value(value)
     if value == nil then
         return {}
@@ -820,11 +610,6 @@ function schema.normalize_multi_value(value)
     return items
 end
 
--- Replaces the full current set for one entity's multivalue field --
--- delete-then-reinsert (same "recompute wholesale" pattern document.
--- sync_links already uses for document_link), not an incremental
--- add/remove -- simpler, and correct either way since the caller always
--- submits the complete intended set, not a delta.
 function schema.write_multi_field(db_path, entity_type, entity_id, field, value)
     schema.ensure_multi_field_table(db_path, entity_type, field)
     table_name = schema.multi_field_table_name(entity_type, field.name)
@@ -849,8 +634,6 @@ function schema.write_multi_field(db_path, entity_type, entity_id, field, value)
     end
 end
 
--- The current set for one entity's multivalue field, as a plain array
--- (of ids for multi_reference, of strings for multi_select).
 function schema.read_multi_field(db_path, entity_type, entity_id, field)
     table_name = schema.multi_field_table_name(entity_type, field.name)
     if db.table_exists(db_path, table_name) == false then
@@ -872,9 +655,6 @@ function schema.read_multi_field(db_path, entity_type, entity_id, field)
     return values
 end
 
--- Every multivalue field on `entity_type`, keyed by field name -- the
--- lookup entity.create/update/get all need to tell a multivalue field
--- apart from a plain column.
 function schema.multi_fields_by_name(db_path, entity_type)
     result = {}
     for _, field in ipairs(schema.fields(db_path, entity_type)) do
@@ -885,8 +665,6 @@ function schema.multi_fields_by_name(db_path, entity_type)
     return result
 end
 
--- Same lookup as multi_fields_by_name, for polymorphic_reference/
--- multi_polymorphic_reference fields.
 function schema.polymorphic_fields_by_name(db_path, entity_type)
     result = {}
     for _, field in ipairs(schema.fields(db_path, entity_type)) do
@@ -897,21 +675,8 @@ function schema.polymorphic_fields_by_name(db_path, entity_type)
     return result
 end
 
---------------------------------------------------------------------------
--- Polymorphic references (a "source" that can be a plant or a sample,
--- decided per row) -- see is_polymorphic_field_type's own header
--- comment for why this needs a different storage shape than
--- multi_reference's per-(entity_type, field_name) junction table.
---------------------------------------------------------------------------
-
--- ONE shared table across every polymorphic field on every entity type
--- -- not a table per (entity_type, field_name) the way
--- ensure_multi_field_table creates, since to_type itself varies row by
--- row and can't be a fixed FK target. No FK constraints on from_id/
--- to_id (the target table varies), so referential integrity here is
--- enforced at the application layer (entity.validate), the same trust
--- boundary reference/multi_reference already put on entity.lua rather
--- than the database for their own existence checks.
+-- Shared polymorphic reference table (target table varies per row, so referential
+-- integrity is enforced in entity.validate rather than SQL FKs).
 function schema.ensure_entity_source_table(db_path)
     cache_key = schema_cache_key(db_path)
     if _entity_source_ready[cache_key] == true then
@@ -948,14 +713,6 @@ function schema.ensure_entity_source_table(db_path)
     _entity_source_ready[cache_key] = true
 end
 
--- A single polymorphic item, in whichever shape the caller handed it:
--- already a real {type=..., id=...} table (JSON API payloads, decoded
--- by dkjson before reaching here), or a CLI-friendly "type:id" string
--- (e.g. "sample:92785") -- the CLI's plain `field=value` args have no
--- native table shape, so this is the same "flexible input, one real
--- internal shape" split schema.normalize_multi_value already draws for
--- multi_reference's own comma-separated ids, just with a type prefix
--- since a bare id alone doesn't say which table it belongs to.
 function parse_polymorphic_item(item)
     if type(item) == "table" then
         return item
@@ -968,10 +725,7 @@ function parse_polymorphic_item(item)
     return {type = string.sub(s, 1, colon_pos - 1), id = tonumber(string.sub(s, colon_pos + 1))}
 end
 
--- Normalizes a polymorphic field's raw input value (nil, a single
--- {type=,id=} table, a list of them, or a CLI "type:id[,type:id...]"
--- string) into a plain list of {type=, id=} tables -- schema.
--- normalize_multi_value's own counterpart for this field family.
+-- Normalizes {type, id} tables or CLI "type:id,..." strings into a list of {type, id} tables.
 function schema.normalize_polymorphic_value(value)
     if value == nil then
         return {}
@@ -1002,9 +756,6 @@ function schema.normalize_polymorphic_value(value)
     return items
 end
 
--- Replaces the full current set for one entity's polymorphic field --
--- same delete-then-reinsert "recompute wholesale" pattern
--- write_multi_field already uses.
 function schema.write_polymorphic_field(db_path, entity_type, entity_id, field, value)
     schema.ensure_entity_source_table(db_path)
     db.exec(db_path, string.format(
@@ -1019,8 +770,6 @@ function schema.write_polymorphic_field(db_path, entity_type, entity_id, field, 
     end
 end
 
--- The current set for one entity's polymorphic field, as a plain array
--- of {type=, id=} tables (schema.read_multi_field's own counterpart).
 function schema.read_polymorphic_field(db_path, entity_type, entity_id, field)
     if db.table_exists(db_path, "entity_ref") == false then
         return {}
@@ -1039,18 +788,7 @@ function schema.read_polymorphic_field(db_path, entity_type, entity_id, field)
     return values
 end
 
--- Creates the projected table if it doesn't exist, or adds any columns
--- for fields/builtins that aren't present yet. Never drops or renames a
--- column -- that's a deliberately manual, reviewed operation, not an
--- automatic one. Multivalue fields never become a column
--- here at all -- schema.ensure_multi_field_table gives them their own
--- companion junction table instead.
--- Every request runs schema init, so concurrent first requests after a
--- deploy can all see a table, column or index missing and race to add
--- it -- found rehearsing against real MySQL 8, where the losers raise
--- ("Table 'tag' already exists", "Duplicate column name", "Duplicate
--- key name") and the request 500s. A failed DDL statement is only an
--- error if what it adds still doesn't exist afterwards.
+-- Concurrent workers may race on additive DDL; ignore DDL errors if the target now exists.
 function add_unless_present(db_path, sql, present)
     ok, err = pcall(db.exec, db_path, sql)
     if ok == false and not present() then
@@ -1127,21 +865,8 @@ function schema.sync_table(db_path, def)
     ensure_external_id_index(db_path, def.name)
 end
 
--- A cheap-to-compute stand-in for "have the schemas/dropdowns
--- directories changed at all since the last real sync" -- name +
--- mtime + size per .lua file (sorted, so file iteration order never
--- matters), concatenated. Re-running the sync (schema.sync_all's own
--- loops below) costs real, multi-second time once a deployment has
--- enough schema/dropdown files against a real remote database -- a
--- plain filesystem stat of every file is negligible by comparison, so
--- this lets sync_all skip the expensive work entirely on the
--- overwhelming majority of requests in steady-state traffic (nothing
--- changed since last time).
---
--- Approved extensions' own schema files count too, which also covers
--- approval itself: approving or revoking an extension adds or removes
--- its files from extension.owned_definitions, so the signature changes
--- and the next request re-syncs.
+-- Stat signature across dropdowns/, schemas/, and approved extension schemas so
+-- steady-state requests skip schema.sync_all when nothing on disk or in approvals changed.
 function schema.content_signature(db_path, root)
     paths_to_stat = {}
     for _, dir in ipairs({config_lib.dropdowns_dir(root), config_lib.schemas_dir(root)}) do
@@ -1170,16 +895,10 @@ function schema.content_signature(db_path, root)
     return table.concat(parts, "|")
 end
 
--- Every schema definition file this deployment loads: schemas/*.lua
--- plus the ones approved extensions own (see
--- extension.definition_files). Each is {name, path, extension?}.
 function schema.definition_files(db_path, root)
     return extension_lib.definition_files(db_path, config_lib.schemas_dir(root), config_lib.extensions_dir(root), "schemas", true)
 end
 
--- The file defining entity type `name`, or nil. schemas/<name>.lua is
--- checked first, without touching extensions at all, since every
--- /browse, /detail and /register request comes through here.
 function schema.definition_path(db_path, name, root)
     path = paths.joinpath(config_lib.schemas_dir(root), name .. ".lua")
     if paths.file_exists(path) then
@@ -1197,9 +916,6 @@ function schema.definition_path(db_path, name, root)
     return nil
 end
 
--- A cheap signature of the schemas/dropdowns directories' content as
--- of the last real schema.sync_all pass (see schema.content_signature
--- for why it exists), kept in system_state.
 function schema.stored_sync_signature(db_path)
     return store_lib.get_text(db_path, "schema.sync_signature")
 end
@@ -1208,18 +924,7 @@ function schema.store_sync_signature(db_path, signature)
     store_lib.set_text(db_path, "schema.sync_signature", signature)
 end
 
--- Scans the schemas directory, registers any schema files found,
--- and ensures all projected tables are synced/created.
--- Dropdowns first, always -- an entity schema field can reference a
--- named dropdown (`dropdown = "..."`), and schema.register resolves
--- that reference's *current* values immediately (into entity_field.
--- enum_values), so the dropdown must already be registered by the time
--- any schema file referencing it is processed. dropdowns/ missing
--- entirely is fine (no dropdowns defined yet) -- only schemas/ missing
--- is a real error, since every deployment has at least that directory.
---
--- Skipped entirely when content_signature matches what was
--- stored after the last real pass -- see that function's own comment.
+-- Registers dropdowns before schemas so dropdown-backed enum_values resolve on first pass.
 function schema.sync_all(db_path, root)
     config = config_lib
 
@@ -1267,8 +972,6 @@ function schema.sync_all(db_path, root)
             if def == nil then
                 return false, "failed to load " .. f.path .. ": " .. tostring(load_err)
             end
-            -- An extension may only define the types it declared -- its
-            -- declared names are what was approved.
             if f.extension != nil and def.name != f.name then
                 return false, "extension '" .. f.extension .. "' declares schema '" .. f.name ..
                     "' but " .. f.path .. " defines '" .. tostring(def.name) .. "'"
@@ -1313,15 +1016,8 @@ function schema.sync_all(db_path, root)
     return db.with_lock(db_path, "daat_schema_sync", 120, run_locked_sync)
 end
 
--- The schema layout as a plain Luam table: {name, fields = {{name, label,
--- type, required, values?, ref_entity_type?}, ...}}. Shared by
--- schema.show_json (JSON for the client-side registration table) and
--- the browse/detail HTML views (web.lua/ui.lua) -- one source of
--- truth for "what does this entity type's layout look like", native
--- consumers don't need to decode JSON just to get a Luam table back.
--- Prefers labels from the version-controlled schema file if available,
--- falling back to the database description (e.g. for a schema whose
--- file was since removed but whose table/data still exists).
+-- Merges file labels/bounds with entity_field.enum_values (for dropdown-backed selects);
+-- falls back to entity_field metadata when the schema file was removed.
 function schema.layout(db_path, name)
     path = schema.definition_path(db_path, name)
     def = nil
@@ -1330,20 +1026,6 @@ function schema.layout(db_path, name)
     end
 
     if def != nil then
-        -- A field.dropdown = "<name>" reference has no `values` of its
-        -- own in the raw file -- schema sync resolves the dropdown's
-        -- current values into this field's own `entity_field.enum_values`
-        -- column (see schema.sync_all), which is the only place they
-        -- live for a dropdown-referencing field. This loop must check
-        -- both the raw file's own `field.values` (a field that inlines
-        -- its own literal list) AND the resolved dropdown values --
-        -- checking only the former sends no `values` array at all for
-        -- a dropdown-referencing select field, and the register page's
-        -- own client-side JS (addRow(), ui.lua) crashes on
-        -- `field.values.forEach` the instant it reaches one, breaking
-        -- the whole batch-entry table for any entity type with a
-        -- dropdown-based select (e.g. cell_line's required
-        -- `tissue_code`), not just that one field.
         dkjson = json_lib
         db_fields_by_name = {}
         for _, f in ipairs(schema.fields(db_path, name)) do
@@ -1423,7 +1105,6 @@ function schema.layout(db_path, name)
     end
 end
 
--- Renders the schema structure as a JSON string (see schema.layout).
 function schema.show_json(db_path, name)
     layout, err = schema.layout(db_path, name)
     if layout == nil then
@@ -1432,18 +1113,9 @@ function schema.show_json(db_path, name)
     return json_lib.encode(layout)
 end
 
--- Resource filename guard for views, templates, and extensions, which
--- may carry hyphens (e.g. "widgets-in-stock", "widget-intake") unlike SQL
--- entity-type names, while still rejecting path separators, "..", leading
--- dots/hyphens, whitespace, quotes, and HTML metacharacters before any
--- paths.joinpath or sandbox.run call.
 schema.valid_resource_name = config_lib.valid_resource_name
 
--- Whether `entity_type` has been registered at all. A registered type
--- can legitimately have zero custom fields (e.g. a schema whose only
--- data is its name plus the system-managed created/updated columns),
--- so callers must not use "schema.fields() returned nothing" as a
--- stand-in for "this type doesn't exist" -- that conflates the two.
+-- Checks entity_type directly (a registered schema may have zero custom fields).
 function schema.is_registered(db_path, entity_type)
     cache_key = schema_cache_key(db_path)
     reg_bucket = _registered_cache[cache_key]
@@ -1465,9 +1137,6 @@ function schema.is_registered(db_path, entity_type)
     return found
 end
 
--- Plain Levenshtein edit distance -- used to guess an intended entity type
--- name (below) and column name (agent_tools.lua's closest_column), never
--- on a performance-sensitive path, so no need for anything fancier.
 function levenshtein(a, b)
     la, lb = #a, #b
     if la == 0 then
@@ -1496,14 +1165,6 @@ end
 
 schema.levenshtein = levenshtein
 
--- Best-guess registered entity type for a name that turned out not to be
--- registered -- e.g. an agent (or API caller) passing the plural "samples"
--- when the real type is "sample". Returns nil when nothing registered is
--- close enough: a wrong-but-confident suggestion is worse than none for a
--- caller deciding whether to retry with it. Found live: an agent burned a
--- whole extra tool call listing every entity type just to self-correct
--- this exact plural guess, because the error it got back for "samples"
--- gave it nothing to go on.
 function schema.suggest_type(db_path, entity_type)
     if type(entity_type) != "string" or entity_type == "" then
         return nil
@@ -1522,11 +1183,6 @@ function schema.suggest_type(db_path, entity_type)
     return best
 end
 
--- Reason-for-change opt-in flags for one registered entity
--- type -- what entity.update/entity.archive check before requiring
--- (or not) a non-empty `reason` argument. Defaults both false for an
--- unregistered type rather than erroring -- callers already handle
--- "no such entity" separately.
 function schema.reason_flags(db_path, entity_type)
     rows = db.query(db_path, string.format(
         "SELECT require_reason_on_update, require_reason_on_archive FROM entity_type WHERE name = %s;",
@@ -1541,9 +1197,6 @@ function schema.reason_flags(db_path, entity_type)
     }
 end
 
--- Whether writes (create/update/archive) to this entity type
--- require Admin capability -- checked in web.lua, which has the HTTP
--- session's capabilities in scope (schema.lua/entity.lua don't).
 function schema.admin_write_only(db_path, entity_type)
     rows = db.query(db_path, string.format(
         "SELECT admin_write_only FROM entity_type WHERE name = %s;", db.quote(entity_type)
@@ -1554,8 +1207,6 @@ function schema.admin_write_only(db_path, entity_type)
     return tonumber(rows[1].admin_write_only) == 1
 end
 
--- The registered field list for an entity type, in declaration order --
--- what entity.lua validates rows against.
 function schema.fields(db_path, entity_type)
     cache_key = schema_cache_key(db_path)
     fields_bucket = _fields_cache[cache_key]
@@ -1579,10 +1230,6 @@ function schema.fields(db_path, entity_type)
     return shallow_copy_list(rows)
 end
 
--- Preloads `entity_field` rows for every registered entity type in one query
--- instead of issuing N sequential `SELECT * FROM entity_field WHERE
--- entity_type = ?` round-trips (used by `/data`'s schema.relationships and
--- relation diagram across 40+ entity types).
 function schema.preload_all_fields(db_path, entity_types)
     types = entity_types
     if types == nil then
@@ -1632,11 +1279,6 @@ function schema.preload_all_fields(db_path, entity_types)
     end
 end
 
--- Every reference relationship between registered entity types --
--- {from_type, to_type, field_name}, one per reference-typed field, across
--- every registered schema. Backs the Data page's entity-relation diagram;
--- a pure introspection query (like schema.fields()), so it belongs here
--- rather than in ui.lua/web.lua alongside the rendering.
 function schema.relationships(db_path, entity_types)
     types = entity_types
     if types == nil then
@@ -1648,24 +1290,8 @@ function schema.relationships(db_path, entity_types)
         fields = schema.fields(db_path, t.name)
         for _, field in ipairs(fields) do
             if (field.type == "reference" or field.type == "multi_reference") and field.ref_entity_type != nil and field.ref_entity_type != "" then
-                -- field_type lets a caller tell a plain
-                -- `reference` (a real column on from_type -- reverse-
-                -- queryable directly, see web.lua's related_records)
-                -- apart from `multi_reference` (stored in a separate
-                -- junction table instead, schema.ensure_multi_field_table
-                -- -- not reverse-queryable the same way).
                 table.insert(edges, {from_type = t.name, to_type = field.ref_entity_type, field_name = field.name, field_type = field.type})
             elseif is_polymorphic_field_type(field.type) and field.allowed_entity_types != nil then
-                -- One edge per allowed target type -- a real lineage
-                -- investigation (research.investigate/entity.relationships)
-                -- needs to see e.g. "sample.source -> plant" AND
-                -- "sample.source -> sample" both, not just one collapsed
-                -- row hiding which types are actually possible. Found
-                -- live: a chat query exploring "sample lineages" missed
-                -- this kind of edge entirely before polymorphic fields
-                -- existed at all, since there was nowhere for it to show
-                -- up in this list -- don't repeat that gap now that
-                -- there is one.
                 allowed_types = json_lib.decode(field.allowed_entity_types)
                 if allowed_types != nil then
                     for _, to_type in ipairs(allowed_types) do
@@ -1686,7 +1312,6 @@ function schema.list(db_path)
     return rows
 end
 
--- CLI entry point: `daat schema <add|list|show|show-json|sync> [args]`
 function schema.do_schema(cmd_args, db_path)
     action = cmd_args[1]
 
@@ -1761,12 +1386,7 @@ function schema.do_schema(cmd_args, db_path)
     return 1
 end
 
--- Exposed purely so tst/unit/schema.lua can reach it across the
--- require() boundary -- see the matching comment in
--- agent_claude.lua.
 schema.is_multi_field_type = is_multi_field_type
--- Also entity.build_ctx's ctx.query, which needs the same real-column
--- rule ensure_table uses for its filter keys.
 schema.is_polymorphic_field_type = is_polymorphic_field_type
 schema.is_reserved_field_name = is_reserved_field_name
 schema.is_reserved_sql_word = is_reserved_sql_word
