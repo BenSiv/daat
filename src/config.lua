@@ -1,18 +1,5 @@
--- Deployment paths, declarative configuration schema, validation, and
--- CLI inspection (`daat config <show|check>`).
---
--- A deployment's root holds `.store/` (SQLite file + session secret),
--- `schemas/`, `dropdowns/`, `extensions/`, `views/`, `templates/`, and
--- two optional sandboxed-Lua data files:
---   - `config.lua`: structured operational configuration organized into
---     seven sections (`database`, `agent`, `knowledge`, `search`, `mail`,
---     `ui`, `extensions`). Secrets never live in `config.lua`; they are
---     read from environment variables (`DAAT_MARIADB_PASSWORD`,
---     `DAAT_SMTP_PASSWORD`, `DAAT_GRAPH_CLIENT_SECRET`,
---     `ANTHROPIC_API_KEY`, `OLLAMA_API_KEY` / `OPENAI_API_KEY`,
---     `GOOGLE_SEARCH_API_KEY` / `GOOGLE_SEARCH_ENGINE_ID`).
---   - `theme.lua`: optional branding (`site_name`, `has_logo`,
---     `hide_home_heading`, `system_prompt_extra`, `colors`).
+-- Deployment paths, sandboxed config.lua/theme.lua schema validation, and CLI inspection.
+-- Secrets are rejected in config files and read only from environment variables. See doc/configuration.md.
 
 const db_lib = require("database")
 const json = require("dkjson")

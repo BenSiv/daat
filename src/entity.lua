@@ -1,10 +1,5 @@
--- Entity CRUD on top of the ledger: "all-or-nothing per submit"
--- validation -- nothing is written to the ledger or the projected table
--- unless every value passes.
---
--- Validates structurally (required/type/enum/reference-exists) here;
--- scriptable before-hooks (extension-authored validation rules, see
--- doc/extensibility.md) plug into the same contract, run after.
+-- All-or-nothing entity CRUD over the append-only ledger and projected tables.
+-- See doc/decisions/003-append-only-ledger-and-soft-archive.md and doc/extensibility.md.
 
 const db = require("database")
 const ledger = require("ledger")
@@ -23,8 +18,7 @@ function entity.register_lifecycle_listener(listener)
     table.insert(lifecycle_listeners, listener)
 end
 
--- has_error used before its own definition below -- pre-declared,
--- see ../../luam/doc/forward_references.md
+-- Forward declaration for Luam implicit-local scoping.
 has_error = nil
 
 function is_number(v)
@@ -43,12 +37,7 @@ function has_capability_item(list, item)
     return false
 end
 
--- ctx.query/create_entity/update_entity, capability-gated per manifest --
--- shared between before-hooks (synchronous, entity.validate) and
--- after-hooks (entity.run_pending_jobs). Lives here, not in
--- extension.lua, because it needs entity.create/entity.update -- see
--- extension.lua's header comment for why that module can't require this
--- one back.
+-- Capability-gated hook context; lives here so extension.lua stays free of a require cycle.
 function entity.build_ctx(db_path, manifest, read_only)
     capabilities = manifest.capabilities
     ctx = {}
@@ -61,19 +50,13 @@ function entity.build_ctx(db_path, manifest, read_only)
         if can_read == false then
             error("Extension '" .. tostring(manifest.name) .. "' does not have read.entity capability")
         end
-        -- read.entity means registered entity types, not any table: a
-        -- plain table_exists check let an extension read auth_user (password
-        -- hashes), auth_api_key, document_embedding, ...
+        -- Restrict read.entity to registered entity tables and their scalar/system columns.
         if schema.is_registered(db_path, target_type) == false then
             error("ctx.query: '" .. tostring(target_type) .. "' is not a registered entity type")
         end
         if db.table_exists(db_path, target_type) == false then
             return {}
         end
-        -- Filter keys must be real columns of the type's table -- its
-        -- system columns or a field that isn't multi-valued/polymorphic
-        -- (those live in side tables) -- since they're spliced into SQL
-        -- as identifiers.
         columns = {}
         for _, field in ipairs(schema.fields(db_path, target_type)) do
             if schema.is_multi_field_type(field.type) == false and schema.is_polymorphic_field_type(field.type) == false then
@@ -168,8 +151,6 @@ function run_before_hooks(db_path, entity_type, new_values, old_values, is_updat
     return issues
 end
 
--- Structural validation against a registered schema. Returns a list of
--- {field, severity, message} issues -- empty if the row is clean.
 function entity.validate(db_path, entity_type, values, old)
     is_update = (old != nil)
     issues = {}
@@ -305,11 +286,6 @@ function entity.validate(db_path, entity_type, values, old)
                 end
             end
 
-            -- A genuinely executable field (label_template.sql and any
-            -- future schema that reuses this type) -- reject anything
-            -- but a single plain SELECT before it ever reaches the
-            -- ledger. Re-checked again at render time (label.lua), not
-            -- trusted from storage alone.
             if field.type == "sql_select" and view.is_select_only(value) == false then
                 table.insert(issues, {field = field.name, severity = "error",
                     message = "must be a single, plain SELECT statement (no ';', no DDL/DML/pragma)"})
@@ -317,7 +293,6 @@ function entity.validate(db_path, entity_type, values, old)
         end
     end
 
-    -- Run lifecycle validators and before-hooks if there are no severe structural errors
     if not has_error(issues) then
         for _, listener in ipairs(lifecycle_listeners) do
             if listener.on_validate != nil then
@@ -349,8 +324,7 @@ function has_error(issues)
     return false
 end
 
--- Pre-settles any lazy companion/system DDL before entering db.transaction,
--- since MariaDB/MySQL implicitly commits an open transaction on CREATE/ALTER.
+-- Settle lazy companion/system DDL before db.transaction (MariaDB DDL commits implicitly).
 function settle_entity_write_ddl(db_path, entity_type, multi_fields, polymorphic_fields)
     extension.init_schema(db_path)
     if multi_fields != nil then
@@ -431,13 +405,6 @@ function lock_entity_row_for_update(db_path, entity_type, entity_id)
     end
 end
 
--- Creates an entity. Returns (entity_id, issues) on success, or
--- (nil, issues) if validation failed. Multivalue fields never become a
--- column in the main INSERT -- they're written to their own companion
--- junction table (schema.write_multi_field) once the row's own id
--- exists. A create's own field_changes (ledger.append_create, below)
--- needs no special handling for them: JSON already represents an array
--- fine as the "new" value.
 function entity.create(db_path, entity_type, values, author, source)
     issues = entity.validate(db_path, entity_type, values)
     if has_error(issues) then
@@ -449,11 +416,6 @@ function entity.create(db_path, entity_type, values, author, source)
     polymorphic_fields = schema.polymorphic_fields_by_name(db_path, entity_type)
     settle_entity_write_ddl(db_path, entity_type, multi_fields, polymorphic_fields)
 
-    -- The ledger's own audit copy normalizes a multivalue field to a
-    -- real array (matching entity.update's own field_changes shape)
-    -- rather than whatever raw form the caller submitted (a CLI's
-    -- comma-separated string, an already-real JSON array, ...) -- audit
-    -- history should read the same way regardless of create vs. update.
     ledger_values = {}
     scalar_values = {}
     for name, value in pairs(values) do
@@ -514,10 +476,6 @@ function entity.create(db_path, entity_type, values, author, source)
     return entity_id, issues
 end
 
--- Whether two multivalue sets are the same, order-independent (a
--- junction table's own SELECT has no guaranteed row order, and neither
--- does the caller's own submitted list necessarily) -- a real set
--- comparison, not a positional one.
 function multi_values_equal(a, b)
     if #a != #b then
         return false
@@ -534,11 +492,6 @@ function multi_values_equal(a, b)
     return true
 end
 
--- Same idea as multi_values_equal, for a polymorphic field's set of
--- {type=, id=} tables -- tostring(v) on a table gives an opaque
--- "table: 0x..." address, never equal across two distinct tables even
--- when their type/id contents match, so this compares the actual
--- type:id pair instead.
 function polymorphic_values_equal(a, b)
     if #a != #b then
         return false
@@ -555,17 +508,6 @@ function polymorphic_values_equal(a, b)
     return true
 end
 
--- Updates an entity. Computes the old/new diff itself (from the current
--- projected row). `reason` is optional unless this type's schema set
--- require_reason_on_update -- checked here, not in ledger.lua, since
--- the ledger itself has no opinion on any particular type's own policy.
---
--- Multivalue fields are diffed as real old/new *sets* here, not just a
--- scalar inequality check, and resynced into their own companion
--- junction table (schema.write_multi_field) after the row's own UPDATE
--- -- without this, editing a multi_reference/multi_select field would
--- be completely invisible to ledger history, undermining this
--- platform's core "every change is ledgered" guarantee.
 function entity.update(db_path, entity_type, entity_id, values, author, source, reason)
     initial = entity.get(db_path, entity_type, entity_id)
     if initial == nil then
@@ -699,16 +641,7 @@ function entity.update(db_path, entity_type, entity_id, values, author, source, 
     return updated_id, final_issues
 end
 
--- Archives an entity -- never deletes it. The row stays in the
--- projected table (still reachable via entity.get, still queryable in
--- /sql) with archived_at set; entity.list/entity.count exclude it by
--- default (pass include_archived=true to see it). Full ledger history
--- (ledger.history) is untouched either way -- this only ever adds an
--- 'archive' event, on top of whatever create/update events already
--- exist for this entity. `reason` is optional unless this type's schema
--- set require_reason_on_archive -- archiving is the stronger candidate
--- for a schema to actually require one (rarer, more consequential than
--- a routine field edit).
+-- Soft-archives an entity (sets archived_at and appends an archive event; rows are never deleted).
 function entity.archive(db_path, entity_type, entity_id, author, source, reason)
     initial = entity.get(db_path, entity_type, entity_id)
     if initial == nil then
@@ -764,9 +697,6 @@ function entity.archive(db_path, entity_type, entity_id, author, source, reason)
     return archived_id, issues
 end
 
--- Reverses entity.archive -- also never deletes anything, just another
--- additive ledger event (an 'update' clearing archived_at, the same
--- shape any other field-level edit takes).
 function entity.unarchive(db_path, entity_type, entity_id, author, source, reason)
     initial = entity.get(db_path, entity_type, entity_id)
     if initial == nil then
@@ -815,7 +745,6 @@ function entity.unarchive(db_path, entity_type, entity_id, author, source, reaso
     return unarchived_id, issues
 end
 
--- Runs validation on a batch of row values.
 function entity.validate_batch(db_path, entity_type, rows_values)
     batch_issues = {}
     for i, values in ipairs(rows_values) do
@@ -832,12 +761,6 @@ function entity.validate_batch(db_path, entity_type, rows_values)
     return batch_issues
 end
 
--- Creates a batch of entities atomically. `source.notebook_entry_id`
--- (if given) is shared by every row in the batch -- one embedded
--- registration table submission is one notebook-entry context -- but
--- each row gets its own source_row_id (its position in the batch), so
--- the ledger can tell which specific row of a multi-row submission
--- produced which entity.
 function entity.create_batch(db_path, entity_type, rows_values, author, source)
     batch_issues = entity.validate_batch(db_path, entity_type, rows_values)
     if has_error(batch_issues) then
@@ -847,7 +770,6 @@ function entity.create_batch(db_path, entity_type, rows_values, author, source)
         source = {}
     end
 
-    -- DDL commits implicitly on MariaDB: settle all companion/pool schemas before the transaction.
     multi_fields = schema.multi_fields_by_name(db_path, entity_type)
     polymorphic_fields = schema.polymorphic_fields_by_name(db_path, entity_type)
     settle_entity_write_ddl(db_path, entity_type, multi_fields, polymorphic_fields)
@@ -861,8 +783,7 @@ function entity.create_batch(db_path, entity_type, rows_values, author, source)
                 return false, issues
             end
             table.insert(created_ids, id)
-            -- Checked per row, so a dropped MariaDB connection costs at
-            -- most the one row written on the new connection.
+            -- Abort on mid-batch reconnect so at most one row lands outside the rolled-back tx.
             if check_alive() == false then
                 error(string.format("the database connection dropped during the batch: rows before row %d were " ..
                     "rolled back, row %d (%s id %s) may have been saved -- check before retrying", i, i, entity_type, tostring(id)))
@@ -878,19 +799,8 @@ function entity.create_batch(db_path, entity_type, rows_values, author, source)
     return created_ids, batch_issues
 end
 
--- Overrides a multi_reference/polymorphic_reference field's raw column
--- value with its real value, read from the companion multi_value/
--- entity_ref table instead -- every raw "SELECT * FROM <entity_type>"
--- reader needs this, not just entity.get. multi_reference fields never
--- have a column at all, so a raw row simply lacks the key (harmless);
--- polymorphic_reference fields are different when a field *converts* to
--- one from a plain column type (e.g. sample.source: text ->
--- polymorphic_reference) -- schema sync is additive-only and never
--- drops the old column, so a raw row still carries that column's old,
--- stale value under the same key. Skipping this override for any new
--- raw-row reader reproduces the exact crash class this guards against:
--- a polymorphic column's stale string value reaching code that expects
--- the real {type=,id=} table shape (e.g. `ipairs` on a plain string).
+-- Hydrates multivalue/polymorphic fields from companion tables, overwriting any stale
+-- scalar column left behind if a field changed type.
 function entity.apply_computed_field_overrides(db_path, entity_type, rows)
     if rows == nil or #rows == 0 then
         return rows
@@ -985,15 +895,6 @@ function entity.apply_computed_field_overrides(db_path, entity_type, rows)
     return rows
 end
 
--- Attaches every multivalue field's current set to the returned row --
--- one extra schema.fields lookup plus one query per multivalue field on
--- this entity type, on every single call, including the "does this
--- referenced row exist" checks entity.validate itself makes. Accepted
--- as-is for correctness (a caller reading a row should see its true
--- complete shape) rather than optimized away -- revisit only if this
--- entity type's real read volume makes it actually show up, the same
--- "no premature optimization" bar this codebase already applies
--- elsewhere (e.g. document.search's own O(n) scan).
 function entity.get(db_path, entity_type, entity_id)
     if db.table_exists(db_path, entity_type) == false then
         return nil
@@ -1008,16 +909,6 @@ function entity.get(db_path, entity_type, entity_id)
     return rows[1]
 end
 
--- `limit`/`offset` are both optional; omit either (or both) for the
--- full unpaginated result, kept for callers that already assume that
--- (e.g. views/extensions built before pagination existed).
---
--- Archived entities (archived_at IS NOT NULL) are excluded by default --
--- `/browse` and friends shouldn't fill up with retired rows -- pass
--- `include_archived=true` for the rare caller that wants them too (an
--- "include archived" toggle, an admin audit view, etc.). Archiving
--- never removes a row, so it's always still reachable via entity.get
--- or raw /sql regardless of this default.
 function entity.list(db_path, entity_type, limit, offset, include_archived)
     if db.table_exists(db_path, entity_type) == false then
         return {}
@@ -1116,18 +1007,8 @@ function entity.count_since_event(db_path, entity_type, since_event)
     return val
 end
 
--- Batched active row counts across a list of registered entity types for
--- `/data`. Every create, archive and unarchive of a registered entity
--- appends an `entity_event` row, so `MAX(event_id)` + the sorted type list
--- uniquely identifies when active counts can change:
---   1. Exact cache hit in `system_state` ('entity.active_counts_cache'):
---      0 table scans and 0 `information_schema` round-trips.
---   2. Incremental refresh when new ledger events arrived: recounts only
---      the distinct `entity_type`s with create/archive/unarchive events
---      after the cached `max_event_id` (leaving 70k-row unchanged tables
---      untouched).
---   3. Cold start or schema-set change: checks table existence once via
---      `db.get_tables` and batches `SELECT COUNT(*)` in `UNION ALL` chunks.
+-- Caches per-type active counts in system_state keyed by (types_sig, MAX(event_id)),
+-- recounting only entity types touched by newer create/archive/unarchive events.
 const ACTIVE_COUNTS_STATE_KEY = "entity.active_counts_cache"
 const COUNT_UNION_CHUNK_SIZE = 25
 
@@ -1293,24 +1174,8 @@ function entity.counts_by_type(db_path, entity_types)
     return counts
 end
 
--- Archived rows per registered type, with the most common reasons given
--- when they were archived, for entity.relationships (#9). "Leave out
--- superseded runs" sent the agent searching documents for 14-30 steps
--- for what superseded meant; the archive reason in entity_event said it.
--- entity.relationships is step 1 of nearly every chat turn and research
--- pass, so this follows counts_by_type above to stay cheap on a
--- production store (34 types, 200k+ events, ~1-2 ms per query):
---   1. Cache hit in system_state on (types_sig, MAX(event_id)): one PK
---      read each, no table scanned.
---   2. New events since: re-read only the types that had an archive, or
---      an update touching archived_at (an unarchive), after the cached max.
---   3. Cold start: archived counts batched in UNION ALL chunks, then the
---      reasons only for types that have archived rows. Each row's reason
---      is its latest archive event, an index seek on entity_event's
---      (entity_id, event_id) (store.lua migration 13).
--- Returns {type = {total = n, reasons = {{reason = text, n = count}, ...}}}
--- for types with archived rows only, reasons most common first, at most
--- ARCHIVED_REASONS_KEPT, empty or missing ones left out.
+-- Incremental system_state cache of archived counts and top archive reasons per type,
+-- invalidated per entity_type via entity_event (same event_id watermark as counts_by_type).
 const ARCHIVED_SUMMARY_STATE_KEY = "entity.archived_summary_cache"
 const ARCHIVED_REASONS_KEPT = 3
 
@@ -1364,8 +1229,6 @@ function archived_reasons(db_path, name)
     return reasons
 end
 
--- The summary entries for `names`, from scratch: counts batched, reasons
--- only where something is archived.
 function archived_summary_for(db_path, names)
     summary = {}
     counts = run_batched_archived_counts(db_path, names, existing_tables_set(db_path))
@@ -1453,8 +1316,6 @@ function entity.archived_summary(db_path, entity_types)
     if summary == nil then
         summary = archived_summary_for(db_path, type_names)
     end
-    -- Cached only when no event landed while it was being computed, as
-    -- counts_by_type does, so a concurrent archive is never skipped.
     post_ok, post_rows = pcall(db.query, db_path, "SELECT COALESCE(MAX(event_id), 0) AS max_id FROM entity_event;")
     if post_ok == true and post_rows != nil and post_rows[1] != nil and to_int_or_zero(post_rows[1].max_id) == current_max_id then
         pcall(store_lib.set_text, db_path, ARCHIVED_SUMMARY_STATE_KEY, json.encode({
@@ -1466,11 +1327,6 @@ function entity.archived_summary(db_path, entity_types)
     return summary
 end
 
--- Filtered siblings of entity.list/entity.count, for "every X that
--- references this Y" (e.g. a mixture's ingredients) -- field_name/value
--- are trusted the same way entity_type already is throughout this file
--- (schema-registered names from web.lua, not raw user input), quoted
--- for safety regardless.
 function entity.list_by_field(db_path, entity_type, field_name, value, limit, offset, include_archived)
     if db.table_exists(db_path, entity_type) == false then
         return {}
@@ -1507,12 +1363,6 @@ function entity.count_by_field(db_path, entity_type, field_name, value, include_
     return tonumber(rows[1].n)
 end
 
--- The schema-declared {display = true} field (if any) and every
--- {identifier = true} field for this type. Builtin "name" is always
--- checked first by search_across_types; display and identifier fields
--- give locally created rows and code-named records (lab_number,
--- asset_code) the same discoverability in /data's search box and the
--- document editor's @mention dropdown.
 function search_fields_for_type(db_path, entity_type)
     display_field = nil
     identifier_fields = {}
@@ -1527,14 +1377,8 @@ function search_fields_for_type(db_path, entity_type)
     return display_field, identifier_fields
 end
 
--- Picks the primary label and optional subtitle for a search hit:
--- builtin `name` first, then the schema's display field, falling back
--- to a matching (or first) identifier value on display-less schemas.
--- When the query matched an identifier rather than the primary label
--- (e.g. "EXP-027" on an experiment titled "Growth of S. demo..."),
--- the identifier becomes `label` -- so @mention inserts "[EXP-027](...)"
--- matching what the author typed -- and the primary label rides along
--- as `subtitle` so the dropdown still shows which record it is.
+-- Promotes a matched identifier field to label so @mention inserts the typed code,
+-- keeping the primary name as subtitle.
 function search_row_label(row, display_field, identifier_fields, query_lower)
     primary_label = nil
     if row.name != nil and tostring(row.name) != "" then
@@ -1577,13 +1421,6 @@ function search_row_label(row, display_field, identifier_fields, query_lower)
     return primary_label, subtitle
 end
 
--- Cross-type "find this row" search for /data's search box and the
--- document editor's @mention dropdown: one bounded LIKE per type
--- against builtin `name`, the schema's display field (if any), and any
--- `identifier = true` fields. A type with none of those populated
--- matches nothing without needing a special-case skip list.
--- `per_type_limit` bounds each query; `total_limit` truncates the
--- combined result.
 function entity.search_across_types(db_path, query_text, per_type_limit, total_limit)
     if query_text == nil or query_text == "" then
         return {}
@@ -1638,14 +1475,6 @@ function entity.search_across_types(db_path, query_text, per_type_limit, total_l
     return results
 end
 
--- Drains the after-hook job queue: runs each pending job (oldest first,
--- up to `limit`), marking it done or failed. A job that errors stays
--- 'pending' (and gets retried on the next run) until it has failed
--- extension.MAX_JOB_ATTEMPTS times; one job's failure never affects any
--- other job. Intended to be invoked periodically by whatever the
--- deployer already uses for scheduled tasks (cron, etc.) -- platform is a
--- one-shot CGI/CLI process, so there's no long-lived place inside it to
--- run this on a timer itself.
 function entity.run_pending_jobs(db_path, limit)
     ext_dir = config.extensions_dir()
     ran = 0
@@ -1685,13 +1514,6 @@ function entity.run_pending_jobs(db_path, limit)
     return {ran = ran, failed = failed}
 end
 
--- A multivalue field's value is a plain Lua array -- tostring() on that
--- gives an unreadable "table: 0x..." pointer, so this renders it as a
--- real bracketed, comma-joined list instead. Scalars pass through.
--- A single polymorphic-reference item ({type=, id=}) as "type:id" --
--- matches the same CLI-facing convention entity create/update already
--- accept for these fields, so what a user sees here is exactly what
--- they could paste back in.
 function format_cli_polymorphic_item(item)
     return tostring(item.type) .. ":" .. tostring(item.id)
 end
@@ -1732,15 +1554,7 @@ function parse_kv_args(args, start)
     return values
 end
 
--- Builds a {key_field_value: id} map from `rows` (each carrying
--- `key_field`, `id`, and `archived_at`), preferring an active row over
--- an archived one whenever the same key value labels more than one row
--- -- see external-ids/field-map's own comments in do_entity for why
--- this matters: without it, the first (or last, depending on the
--- backend's own row order) row found for a duplicated key wins
--- arbitrarily, which can silently point an importer's upsert at an
--- invisible archived duplicate while the real, visible row goes stale
--- forever.
+-- Maps key_field -> id across all rows, preferring active rows over archived duplicates.
 function entity_id_map_prefer_active(rows, key_field)
     result = {}
     result_is_archived = {}
@@ -1755,7 +1569,6 @@ function entity_id_map_prefer_active(rows, key_field)
     return result
 end
 
--- CLI entry point: `daat entity <create|list|show|validate-json|create-json> [args]`
 function entity.do_entity(cmd_args, db_path)
     action = cmd_args[1]
 
@@ -1887,20 +1700,6 @@ function entity.do_entity(cmd_args, db_path)
         return
     end
 
-    -- {external_id: id} for every row of `entity_type` that has one --
-    -- a real, backend-agnostic (SQLite or MariaDB, via database.lua's
-    -- own dispatch) read path an external importer can use to detect "does
-    -- a row for this source record already exist" and upsert instead of
-    -- blindly re-creating it every run. Every row regardless of
-    -- archived_at -- an archived row's external_id is still "already
-    -- imported," not fair game to recreate -- but when the same
-    -- external_id somehow labels more than one row (a prior duplicate-
-    -- creation bug, a race), an active row always wins over an archived
-    -- one via entity_id_map_prefer_active below: an importer upserting
-    -- by this map must land on the row a human can actually see, not
-    -- silently keep re-updating an invisible archived duplicate while
-    -- the real one goes stale forever -- confirmed live, exactly this
-    -- shape of bug (see also field-map below, same fix, same reason).
     if action == "external-ids" then
         entity_type = cmd_args[2]
         if entity_type == nil then
@@ -1920,11 +1719,6 @@ function entity.do_entity(cmd_args, db_path)
         return
     end
 
-    -- {field_value: id} for every row of `entity_type` with a non-null,
-    -- non-empty value for `field_name` -- same backend-agnostic lookup
-    -- as external-ids, for an importer keying off some other natural
-    -- column instead of (or in addition to) external_id. Same active-
-    -- over-archived preference as external-ids above, same reason.
     if action == "field-map" then
         entity_type = cmd_args[2]
         field_name = cmd_args[3]
@@ -1947,13 +1741,6 @@ function entity.do_entity(cmd_args, db_path)
         return
     end
 
-    -- Lets an external importer find every existing row referencing a
-    -- given parent (e.g. an entity_type with no stable per-row
-    -- external_id of its own, like a Mixture ingredient line item) so
-    -- it can archive-then-recreate them safely instead of accumulating
-    -- duplicates on every re-sync. Thin CLI wrapper around the existing
-    -- entity.list_by_field -- no new logic, just a new entry point for
-    -- it.
     if action == "list-by-field" then
         entity_type = cmd_args[2]
         field_name = cmd_args[3]
@@ -2029,10 +1816,6 @@ function entity.do_entity(cmd_args, db_path)
     print("Usage: daat entity <create|list|show|update|validate-json|create-json|update-json|external-ids|field-map|list-by-field> [args]")
 end
 
--- CLI entry point: `daat extension <list|show|approve|revoke|run-pending> [args]`
--- Lives here rather than in extension.lua for the same reason build_ctx
--- does: run-pending needs entity.create/entity.update, and extension.lua
--- can't require this module back without a require cycle.
 function entity.do_extension(cmd_args, db_path)
     action = cmd_args[1]
     ext_dir = config.extensions_dir()

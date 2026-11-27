@@ -1,12 +1,5 @@
--- Custom SQL-query views: a named, read-only SELECT query rendered as
--- a generic table, defined the same way schemas/extensions are (a
--- Luam table file, version-controlled alongside them). A view has
--- direct database access the same way an extension does, so it goes
--- through the same admin-approval registry -- approving records the
--- exact SQL text at approval time, and if the file is edited
--- afterward, the view is unapproved again until re-approved (same
--- escalation-detection principle as extension.capabilities_equal, just
--- keyed on the query text instead of a capabilities table).
+-- Read-only SQL views, ad-hoc /sql execution, and table-allowlisted agent queries.
+-- See doc/decisions/004-sandboxed-content-and-hash-keyed-approvals.md.
 
 const db = require("database")
 const json = require("dkjson")
@@ -20,17 +13,11 @@ const extension_lib = require("extension")
 
 const view = {}
 
--- Approvals live in system_approval (store.lua), kind 'view'.
 function view.init_schema(db_path)
     store_lib.ensure_system_tables(db_path)
 end
 
--- Rejects anything but a single, plain SELECT statement: no stacked
--- statements (a ";" anywhere but optionally trailing), and no
--- DDL/DML/pragma/attach keywords, matched on word boundaries (not bare
--- substring search -- platform's own tables have columns like
--- updated_at/updated_by, which a naive substring check for "update"
--- would wrongly reject).
+-- Matched on token/word boundaries so column names like updated_at are not rejected.
 const FORBIDDEN_SQL_WORDS = {
     "insert", "update", "delete", "drop", "alter", "attach", "detach",
     "pragma", "create", "replace", "vacuum", "reindex", "trigger", "exec",
@@ -43,14 +30,8 @@ for _, w in ipairs(FORBIDDEN_SQL_WORDS) do
     FORBIDDEN_SQL_WORDS_SET[w] = true
 end
 
--- Lexical scanner over a single SQL query string. Produces a flat list of
--- `{kind, value, raw, depth}` tokens (`kind` in `"word"`, `"ident"`,
--- `"string"`, `"punct"`, `"number"`), stripping `--`, `#`, and standard
--- `/* ... */` comments while rejecting MySQL executable comments
--- (`/*! ... */`), unclosed literals/comments, and unbalanced parentheses.
--- Quoted identifiers (`"..."`, `` `...` ``, `[...]`) are unquoted into
--- `kind = "ident"` so table allowlists see the real identifier regardless
--- of quoting style.
+-- Tokenizes SQL while stripping comments, rejecting MySQL /*! ... */ comments, and
+-- unquoting identifiers so table allowlists see real names.
 function scan_sql_tokens(sql_text)
     if type(sql_text) != "string" then
         return nil, "query must be a string"
@@ -180,17 +161,11 @@ function scan_sql_tokens(sql_text)
     return tokens, nil
 end
 
--- Nil when sql_text is a single plain SELECT, else why not -- naming
--- the offending token, so the agent fixes the actual problem instead of
--- guessing (seen in prod: REPLACE() refused as "not a plain SELECT").
 function view.select_only_problem(sql_text)
     if type(sql_text) != "string" then
         return "must start with SELECT (or WITH ... SELECT)"
     end
-    -- Conservative backslash guard: SQLite and default-mode MySQL disagree
-    -- on whether \' ends a literal, so when any backslash appears in the
-    -- query text, inspect every word across the raw text before trusting
-    -- literal boundaries.
+    -- SQLite and MySQL disagree on \' escaping; scan raw words whenever a backslash is present.
     if string.find(sql_text, "\\", 1, true) != nil then
         raw_lower = string.lower(sql_text)
         for _, word in ipairs(FORBIDDEN_SQL_WORDS) do
@@ -243,12 +218,6 @@ function view.is_select_only(sql_text)
     return view.select_only_problem(sql_text) == nil
 end
 
--- A view may declare at most one runtime parameter (e.g. scoping a
--- lookup to one experiment's samples), bound through sqlite's own
--- prepared-statement API (view.run below) -- never string-interpolated
--- into the SQL text, so there's no injection surface from the value
--- itself regardless of type. `type` controls the coercion applied
--- before binding, not any kind of SQL-text validation.
 const PARAM_TYPES = {"integer", "number", "text"}
 
 function is_valid_param_type(t)
@@ -270,12 +239,6 @@ function view.validate(def)
     if view.is_select_only(def.sql) == false then
         return "view '" .. tostring(def.name) .. "': sql must be a single, plain SELECT statement (no ';', no DDL/DML/pragma)"
     end
-    -- An optional MariaDB-specific variant, for the rare view whose SQL
-    -- genuinely can't be written as one expression valid on both
-    -- backends (e.g. SQLite's julianday() vs. MariaDB's DATEDIFF() --
-    -- see doc/mariadb-migration.md). Absent for every other view; only
-    -- needed when a portable expression doesn't exist at all, not as a
-    -- general escape hatch.
     if def.sql_mariadb != nil then
         if type(def.sql_mariadb) != "string" or def.sql_mariadb == "" then
             return "view '" .. tostring(def.name) .. "': sql_mariadb must be a non-empty string if present"
@@ -296,10 +259,7 @@ function view.validate(def)
         if type(def.param.name) != "string" or def.param.name == "" then
             return "view '" .. tostring(def.name) .. "': param must have a non-empty string 'name'"
         end
-        -- "id" and "name" collide with Fossil's own /ext dispatch
-        -- parameters -- a query param with either of these names never
-        -- reaches platform at all, so reject them here rather than let
-        -- an author discover it as a mysterious 404 later.
+        -- 'id' and 'name' collide with CGI/Fossil /ext dispatch query parameters.
         if def.param.name == "id" or def.param.name == "name" then
             return "view '" .. tostring(def.name) .. "': param name can't be 'id' or 'name' -- both collide with Fossil's own /ext dispatch (see doc/deployment.md)"
         end
@@ -307,13 +267,6 @@ function view.validate(def)
             return "view '" .. tostring(def.name) .. "': param 'type' must be one of integer/number/text"
         end
     end
-    -- Optional: which single entity type this view is primarily about,
-    -- if any (a view can join across types, so there isn't always one --
-    -- see ui.render_view's own comment). Purely a rendering hint for
-    -- the "+ Register new" link; not cross-checked against schema.list()
-    -- here since view.load/validate has no db_path to check against --
-    -- a typo'd name just means a broken register link, not a security
-    -- concern (the /register route validates the type itself).
     if def.entity_type != nil and (type(def.entity_type) != "string" or def.entity_type == "") then
         return "view '" .. tostring(def.name) .. "': entity_type must be a non-empty string if present"
     end
@@ -336,15 +289,10 @@ function view.load_file(path)
     return result
 end
 
--- Every view definition file this deployment loads: views/*.lua plus
--- the ones approved extensions own (see extension.definition_files).
 function view.definition_files(db_path, root)
     return extension_lib.definition_files(db_path, config_lib.views_dir(root), config_lib.extensions_dir(root), "views", false)
 end
 
--- An extension-owned view must define the name it declared, since
--- that's the name its extension was approved for (and the name view
--- approval is recorded under).
 function load_definition_file(f)
     def, err = view.load_file(f.path)
     if def != nil and f.extension != nil and def.name != f.name then
@@ -354,8 +302,6 @@ function load_definition_file(f)
     return def, err
 end
 
--- views/<name>.lua first, without touching extensions at all -- the
--- nav rail checks for prioritized_tasks on every request.
 function view.load(db_path, name, root)
     if not schema.valid_resource_name(name) then
         return nil, "invalid view name: " .. tostring(name)
@@ -389,10 +335,6 @@ function view.all(db_path, root)
     return result
 end
 
--- The SQL text that actually runs for this backend -- def.sql_mariadb
--- when running under MariaDB and present, def.sql otherwise. The one
--- place `def.sql` gets read directly for execution is replaced by this
--- everywhere below.
 function view.effective_sql(db_path, def)
     if db.is_mariadb(db_path) and def.sql_mariadb != nil then
         return def.sql_mariadb
@@ -400,12 +342,7 @@ function view.effective_sql(db_path, def)
     return def.sql
 end
 
--- What gets recorded/compared for approval -- both variants combined
--- into one string when sql_mariadb is present, so editing *either* one
--- (not just whichever currently runs on this deployment's own backend)
--- invalidates approval. A dev iterating against SQLite locally should
--- still be forced to re-approve after touching the MariaDB-only half
--- of a view they can't even exercise locally.
+-- Includes both SQLite and MariaDB SQL variants so editing either invalidates approval.
 function view.approval_identity(def)
     if def.sql_mariadb == nil then
         return def.sql
@@ -436,9 +373,6 @@ function view.revoke(db_path, name)
     store_lib.revoke(db_path, "view", name)
 end
 
--- Runs an approved view's query. `param_value` is required iff the
--- view declares `param` (ignored otherwise). Returns (rows, err) --
--- rows is a list of {column_name = value} tables either way.
 function view.run(db_path, def, param_value)
     param_type = nil
     if def.param != nil then
@@ -447,35 +381,7 @@ function view.run(db_path, def, param_value)
     return view.run_sql(db_path, view.effective_sql(db_path, def), param_type, param_value)
 end
 
--- Runs a validated, parameterized SELECT: `sql_text` must contain
--- exactly one literal '?' placeholder if `param_type` is non-nil.
--- Returns (rows, err) -- rows is a list of {column_name = value}
--- tables. Shared by view.run (named/approved views) and label.lua's
--- label.render -- one dual-backend-safe implementation, not two.
---
--- SQLite: real bind-parameter execution via sqlite3's own prepared-
--- statement API -- never string-interpolated into the SQL text (db.
--- exec/db.query's own %s substitution is fine for identifiers/
--- literals platform itself builds, but a runtime-supplied value needs
--- the real thing). sqlite3 isn't shared as a global across modules in
--- Luam (each require() gets its own reference; see luam/lib/database.lua
--- for the same require), so it's pulled in locally here rather than
--- assumed available.
---
--- MariaDB: no equivalent path exists -- luam's own mariadb binding
--- (lib/mariadb/lmariadb.c) deliberately does NOT expose a
--- prepared-statement/cursor object at all (see its own header comment).
--- Falls back to safely-encoded substitution instead: param_type is
--- restricted to integer/number/text (view.validate already enforces
--- this on param.type), so the substituted value is either a
--- tonumber()-coerced literal (a number can never carry an injection
--- payload, regardless of quoting) or db.quote()'d text (the same
--- escaping helper trusted everywhere else in this codebase) --
--- genuinely safe for these specific types, just not a real prepared
--- statement.
--- Executes a view's SELECT across SQLite and MariaDB, delegating
--- single-parameter binding to `db.query_params` (`luam/lib/database.lua`)
--- so this file never imports `sqlite3` or `database_adapter` directly.
+-- Single-statement SELECT runner; binds optional '?' parameter via db.query_params.
 function view.run_sql(db_path, sql_text, param_type, param_value)
     if view.is_select_only(sql_text) == false then
         return nil, "refusing to run: not a plain SELECT"
@@ -492,37 +398,12 @@ function view.run_sql(db_path, sql_text, param_type, param_value)
     return db.query_params(db_path, sql_text, {{type = param_type, value = param_value}})
 end
 
--- Ad-hoc, unsaved SELECT execution against the entity store -- for
--- one-off exploration, not embeddable/shareable content, so unlike a
--- named view there's nothing to approve (the caller enforcing Setup/
--- Admin capability -- see web.lua's /sql route -- already *is* the
--- approval: nobody untrusted can reach this). Still SELECT-only via
--- the same is_select_only guard, and returns column names separately
--- from db.query's rows (which are unordered Lua tables keyed by
--- column name) so results render with real, ordered headers even for
--- an empty result set.
--- Best-effort single-table guess for "which table is this query
--- primarily about" -- used for the "id" self-reference special case in
--- web.lua (the queried table's own id column). Still just the first
--- `FROM <table>` match, alias discarded (a result column is looked up
--- by its own name, not by qualified alias.column, so the alias itself
--- is never needed). See guess_tables below for the full table list a
--- query reads from, joins included.
+-- Heuristic FROM/JOIN table extraction for UI reference-column linking on ad-hoc /sql results.
 function view.guess_from_table(sql_text)
     table_name = string.match(sql_text, "[Ff][Rr][Oo][Mm]%s+[`\"]?([A-Za-z_][A-Za-z0-9_]*)[`\"]?")
     return table_name
 end
 
--- Best-effort guess of every table a query reads from: the primary
--- FROM table plus any JOINed tables -- INNER/LEFT/RIGHT/OUTER/CROSS
--- JOIN all end in the literal word "JOIN" immediately before the table
--- name, so one case-insensitive match covers every join variant.
--- Still string-matching, not a real SQL parser: comma-joins ("FROM a,
--- b"), subqueries, and CTEs aren't covered, and each table's alias (if
--- any) is discarded -- reference_columns below only needs the real
--- table name to look up entity_field metadata, since a query's result
--- columns are keyed by their own (possibly aliased-away) name, not by
--- qualified alias.column.
 function view.guess_tables(sql_text)
     tables = {}
     seen = {}
@@ -540,15 +421,6 @@ function view.guess_tables(sql_text)
     return tables
 end
 
--- {column_name -> ref_entity_type} for a set of tables' reference-type
--- fields, via the same entity_field metadata schema.layout() already
--- exposes (see ui.lua's display_field_value) -- used here directly by
--- table name since an ad-hoc query has no schema.layout() call of its
--- own. Accepts either a single table name (back-compat for callers that
--- only ever guessed one table) or a list (see guess_tables) -- merged in
--- list order, first table wins a column-name collision, so a query's
--- primary FROM table takes precedence over a joined table that happens
--- to reuse the same column name.
 function view.reference_columns(db_path, table_names)
     columns = {}
     if table_names == nil then
@@ -573,32 +445,7 @@ function view.reference_columns(db_path, table_names)
     return columns
 end
 
--- Uses db.query (not sqlite3.open directly) so this dispatches
--- correctly to either backend and returns (rows, column_names) either
--- way -- both vendored query functions (luam's sqlite_query/
--- mariadb_query) throw via error() on invalid SQL rather than returning
--- nil+err, so this is pcalled to convert a typo'd ad-hoc query into
--- this page's own inline error message instead of a generic 500.
--- A query with no LIMIT of its own gets one added automatically -- an
--- unbounded admin power-query against a real production table has no
--- reason to ever render thousands of full rows at once. Same
--- word-boundary convention is_select_only's own FORBIDDEN_SQL_WORDS
--- check uses, so "LIMIT" inside a string literal or column alias isn't
--- mistaken for a real clause keyword -- and isn't mistaken the other
--- way either (a query that only *mentions* limit without one is still
--- capped).
--- Fetches one extra row past the cap, not to display it, just to tell
--- "exactly N rows" apart from "N rows, and more exist" for the UI's
--- own truncation notice -- a second COUNT(*) query would double the
--- real cost this exists to avoid.
---
--- How much a deployment's own admin/agent-facing row caps below should
--- actually be depends on things this code doesn't know -- how much data
--- a given deployment holds, how big a table a human reasonably wants to
--- browse at once, how much context budget the configured AGENT_MODEL
--- has -- so neither is a bare hardcoded literal; each is read fresh
--- from config.load() per call (not resolved once at load).
-
+-- Fetches row_cap + 1 rows when uncapped to detect truncation without a second COUNT(*).
 function view.run_adhoc(db_path, sql_text)
     problem = view.select_only_problem(sql_text)
     if problem != nil then
@@ -641,46 +488,8 @@ function view.run_adhoc(db_path, sql_text)
     return column_names, rows, nil, truncated
 end
 
---------------------------------------------------------------------------
--- Read-only SQL for the chat agent -- entity.list's own single-table
--- exact-match filter can't express joins/aggregates/grouping, which
--- real questions genuinely need (see agent.lua's entity.query tool)
---------------------------------------------------------------------------
---
--- A materially stricter boundary than the admin-only /sql console
--- (view.run_adhoc above) needs, even though both start from the same
--- is_select_only check: a human typing SQL into an admin-gated console
--- is one trust level, an LLM composing SQL from a conversation
--- (prompt injection can steer what gets generated in a way a human's
--- own intent never is) is a different, lower one. entity.list/
--- entity.get structurally can never reach a non-entity table at all
--- (they only ever go through the schema-registered entity
--- abstraction) -- this tool has to enforce that same boundary itself,
--- by checking every table the query actually references against the
--- registered entity type list, rejecting anything else (auth_user's
--- password hashes, auth_api_key secrets, agent_message/agent_pending_action,
--- system_state, or any other internal table entity.list/get
--- could never expose either).
-
--- The single source of truth for "this is a real, hand-rolled table the
--- model is allowed to know exists and name" -- deliberately narrow, not
--- "every hand-rolled table" (agent_message/agent_pending_action/
--- agent_background_task, system_state, auth_user/auth_api_key with real
--- secrets, ...). Whether a table belongs here is a real per-table
--- security judgment call, not a mechanical copy-paste -- the comment
--- above run_agent_query names agent_message/agent_pending_action
--- specifically as tables that must stay opaque to the model.
---
--- That judgment call is made exactly once, here -- agent_tools.lua's own
--- HAND_ROLLED_ENTITY_FIELDS (the per-table entity.fields column-listing
--- functions) validates its own keys against this table at load time
--- (errors loudly, not silently, on a mismatch) rather than hand-
--- maintaining a second, independently-drifting copy of the same
--- decision. A table can be named here without also being in
--- HAND_ROLLED_ENTITY_FIELDS (not every real table gets its own
--- individual entity.fields listing -- document_link/knowledge_pool_state
--- are only ever named in prose, via document.knowledge_pool_sql_columns_text)
--- but never the other way around.
+-- Non-entity internal tables documented to the agent (cross-checked by agent_tools.lua);
+-- auth/session/pending-action tables must never appear here.
 const HAND_ROLLED_DOCUMENTED_TABLES = {
     document_link = true,
     entity_event = true,
@@ -691,15 +500,8 @@ const HAND_ROLLED_DOCUMENTED_TABLES = {
     knowledge_retrieval_hit = true,
     agent_model_call = true,
 }
--- Attached to the module table too (not just left as the bare global
--- run_agent_query itself uses below) -- a require()'d module's own
--- top-level locals/globals aren't visible to the file that required it,
--- only what it explicitly returns, and agent_tools.lua's own load-time
--- consistency check needs real cross-file access to this table.
 view.HAND_ROLLED_DOCUMENTED_TABLES = HAND_ROLLED_DOCUMENTED_TABLES
 
--- Words that terminate a FROM/JOIN table-reference item or cannot be a
--- bare table alias.
 const SQL_CLAUSE_WORDS = {
     ["as"] = true, where = true, on = true, using = true, join = true, straight_join = true,
     left = true, right = true, inner = true, outer = true, cross = true, full = true,
@@ -719,12 +521,8 @@ function is_ident_token(tok)
     return tok != nil and (tok.kind == "word" or tok.kind == "ident")
 end
 
--- Shared token-level extractor for every FROM / JOIN / STRAIGHT_JOIN
--- clause across the query (including inside subqueries and CTE bodies).
--- Handles bare and quoted identifiers (`"tbl"`, `` `tbl` ``, `[tbl]`),
--- schema-qualified names (`db.tbl`), comments, subqueries followed by
--- comma-joins (`FROM (SELECT ...) s, other_tbl`), and aliased comma-joins
--- (`FROM a x, b y`). Returns `{entries = {{lower=, raw=, alias=}, ...}}`.
+-- Extracts {lower, raw, alias, keyword} for every FROM/JOIN table reference across
+-- subqueries, CTE bodies, quoted/qualified names, and comma-joins.
 function scan_table_references(sql_text)
     tokens, _ = scan_sql_tokens(sql_text)
     if tokens == nil then
@@ -753,9 +551,6 @@ function scan_table_references(sql_text)
                 end
 
                 if cur.kind == "punct" and cur.value == "(" and cur.depth == clause_depth then
-                    -- Derived subquery or parenthesized join; its inner FROM/JOIN
-                    -- clauses are visited by the outer `i` scan, so advance past
-                    -- the matching `)` at `clause_depth` to see any trailing `, tbl`.
                     k = k + 1
                     while k <= n do
                         t2 = tokens[k]
@@ -769,9 +564,7 @@ function scan_table_references(sql_text)
                     t_lower = cur.value
                     t_raw = cur.raw
                     k = k + 1
-                    -- Schema-qualified `schema.table` stays qualified so e.g.
-                    -- `main.auth_user` or `doc.auth_user` cannot match an
-                    -- unqualified registered table name.
+                    -- Keep schema.table qualified so e.g. main.auth_user never matches an unqualified entry.
                     if k + 1 <= n and tokens[k].kind == "punct" and tokens[k].value == "."
                             and tokens[k].depth == clause_depth and is_ident_token(tokens[k + 1]) then
                         t_lower = t_lower .. "." .. tokens[k + 1].value
@@ -797,8 +590,6 @@ function scan_table_references(sql_text)
                     break
                 end
 
-                -- Scan forward at `clause_depth` to either `,` (next comma-joined
-                -- table in this FROM clause) or the end of the FROM clause.
                 found_comma = false
                 while k <= n do
                     tk = tokens[k]
@@ -838,10 +629,7 @@ function referenced_table_names(sql_text)
     return names
 end
 
--- Names a leading WITH-clause defines at depth 0:
---   WITH [RECURSIVE] a [(c1, c2)] AS (...), b AS (...) SELECT ...
--- Token-scoped to depth 0 in the leading WITH header so `<ident> AS (`
--- inside a string literal or comment can never whitelist a table name.
+-- Leading depth-0 CTE names defined by WITH [RECURSIVE] <name> [(cols)] AS (...).
 function cte_names(sql_text)
     names = {}
     tokens, _ = scan_sql_tokens(sql_text)
@@ -862,7 +650,6 @@ function cte_names(sql_text)
         end
         cte_name = cte_tok.value
         k = k + 1
-        -- Optional CTE column list: `WITH totals(day, n) AS (...)`
         if k <= #tokens and tokens[k].kind == "punct" and tokens[k].value == "(" and tokens[k].depth == 0 then
             k = k + 1
             while k <= #tokens do
@@ -881,7 +668,6 @@ function cte_names(sql_text)
             break
         end
         table.insert(names, cte_name)
-        -- Advance past the CTE body's closing `)` at depth 0
         k = k + 1
         while k <= #tokens do
             if tokens[k].kind == "punct" and tokens[k].value == ")" and tokens[k].depth == 0 then
@@ -899,11 +685,6 @@ function cte_names(sql_text)
     return names
 end
 
--- view.query_aliases(sql_text) -> {name = table}: every table a FROM or
--- JOIN clause names, under its own name and under its alias
--- ("FROM experiment e", "JOIN project AS p", "FROM a x, b y"), all
--- lowercased. For telling the model, when a query fails on a column,
--- which table that column's prefix stands for (#8).
 function view.query_aliases(sql_text)
     aliases = {}
     for _, entry in ipairs(scan_table_references(tostring(sql_text))) do
@@ -915,19 +696,8 @@ function view.query_aliases(sql_text)
     return aliases
 end
 
--- Registered entity tables plus the storage tables that hold their
--- own multi-valued/polymorphic field values -- entity data the model can
--- already read one row at a time via entity.get, just not joinable in
--- SQL without these. Seen in prod: "Unknown column 'cm.usage'" (a
--- multi_select lives in its junction table) and sample lineage walked
--- ~25 entity.get calls deep because entity_ref was refused. None of
--- these hold anything beyond entity ids/types/values.
---
--- document_link and entity_event follow the same rule from the other
--- side: the agent sees what a user sees. Every document page shows its
--- links, every detail page shows its ledger history -- the agent could
--- read neither across rows (document.links is one document at a time,
--- entity.get returns current values only).
+-- Tables allowed in agent entity.query: registered entity types, their multivalue/polymorphic
+-- junction tables, document_link, and entity_event.
 function view.queryable_tables(db_path)
     allowed = {entity_ref = true, document_link = true, entity_event = true}
     for _, t in ipairs(schema.list(db_path)) do
@@ -941,15 +711,7 @@ function view.queryable_tables(db_path)
     return allowed
 end
 
--- Every registered entity table carries archived_at (see
--- schema.lua's RESERVED_FIELD_NAMES), and archived rows stay in the
--- table -- so a query that never mentions archived_at silently counts
--- them as live. Seen in prod: a nightly archive-and-recreate sync
--- turned a 5-ingredient recipe into 143 rows. Rewriting the model's
--- SQL to filter them would have to understand its aliases/joins/CTEs;
--- a note naming the affected tables is structural enough to reliably
--- surface the problem, and leaves the choice (sometimes archived rows
--- ARE wanted) with the query's author.
+-- Warns the agent when a query omits archived_at on entity tables containing archived rows.
 function archived_rows_note(db_path, sql_text, referenced)
     if string.find(string.lower(sql_text), "archived_at", 1, true) != nil then
         return nil
@@ -979,12 +741,6 @@ function archived_rows_note(db_path, sql_text, referenced)
         ". Archived rows are deleted/superseded records -- unless you specifically want them, re-run with `<table>.archived_at IS NULL` for each."
 end
 
--- A separate, smaller default cap than adhoc_row_cap -- that
--- one is sized for a human reading an HTML table in a browser; this
--- result goes straight into the model's own prompt/context, where 1000
--- rows would be wasteful at best and a real token-cost problem at
--- worst (and the right number here depends on the configured
--- AGENT_MODEL's own context budget, not just this code).
 function view.run_agent_query(db_path, sql_text)
     problem = view.select_only_problem(sql_text)
     if problem != nil then
@@ -1005,22 +761,9 @@ function view.run_agent_query(db_path, sql_text)
     for _, name in ipairs(referenced) do
         if allowed[name] == nil then
             if HAND_ROLLED_DOCUMENTED_TABLES[name] == true then
-                -- A real table, not a typo -- just intentionally excluded
-                -- from this tool (system/derived event logs, never
-                -- schema.register()'d; see doc/architecture.md's own
-                -- "Hand-rolled tables" list). Distinguished from the
-                -- generic "unregistered type" message below so the
-                -- caller (the model, per its own system-prompt
-                -- instruction to self-verify SQL via this tool before
-                -- presenting it) doesn't mistake this refusal for a
-                -- broken query and "fix" it into something else --
-                -- it's still valid SQL for the admin /sql console,
-                -- which has no such restriction.
                 return nil, nil, "refusing to run: '" .. name .. "' is a real table, but intentionally excluded from entity.query (a hand-rolled system/derived log, not a registered entity type) -- this isn't a typo or a broken query, just not self-verifiable through this tool; it's still valid SQL for the admin /sql console"
             end
             message = "refusing to run: '" .. name .. "' is not a registered entity type -- only registered entity tables can be queried this way"
-            -- SQL written before daat's schema revision (in chat history
-            -- or a compaction summary) can still use an old table name.
             renamed = store_lib.RENAMED_TABLES[name]
             if renamed != nil then
                 message = message .. " ('" .. name .. "' was renamed to '" .. renamed .. "')"
@@ -1067,11 +810,6 @@ function view.run_agent_query(db_path, sql_text)
             table.insert(capped_rows, rows[i])
         end
         rows = capped_rows
-        -- One extra query, only paid when we already know the cap was hit:
-        -- tells the caller (and the model reading the tool result) the
-        -- real match count instead of just "more than the cap", which
-        -- otherwise makes it impossible to tell a 201-row result apart
-        -- from a 90,000-row one.
         count_ok, count_rows = pcall(db.query, db_path, "SELECT COUNT(*) AS n FROM (" .. body .. ") AS _agent_query_count;")
         if count_ok == true and count_rows != nil and count_rows[1] != nil then
             total_count = tonumber(count_rows[1].n)
@@ -1080,9 +818,6 @@ function view.run_agent_query(db_path, sql_text)
     return column_names, rows, nil, truncated, total_count, archived_rows_note(db_path, sql_text, referenced)
 end
 
--- The SQL dialect entity.query actually runs, named for the model so it
--- doesn't guess (seen in prod: sqlite_master/julianday tried ~15 times
--- against MariaDB).
 function view.sql_dialect_name()
     config = config_lib
     if config.db_backend() == "mariadb" then
@@ -1091,12 +826,7 @@ function view.sql_dialect_name()
     return "SQLite dialect: use julianday()/strftime(), no DATEDIFF; no LN/EXP/POWER (use calc.evaluate on the returned values)"
 end
 
--- What to tell the model about a failed query. A missing table or
--- column is a guessed name, not a dialect problem: naming the dialect
--- there sent the agent after date functions instead of the schema
--- (found by the agent scorecard, doc/agent-eval.md). Everything else
--- keeps the dialect note, since a wrong function or syntax is the
--- common other cause.
+-- Route missing table/column errors to schema discovery tools rather than SQL dialect hints.
 const SCHEMA_ERROR_PATTERNS = {"no such column", "no such table", "unknown column", "unknown table", "doesn't exist"}
 
 function view.sql_error_hint(err_text)
@@ -1110,7 +840,6 @@ function view.sql_error_hint(err_text)
     return view.sql_dialect_name()
 end
 
--- CLI entry point: `daat view <list|show|approve|revoke> [args]`
 function view.do_view(cmd_args, db_path)
     action = cmd_args[1]
 

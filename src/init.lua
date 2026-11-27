@@ -1,6 +1,4 @@
--- `daat init`: creates the local store (.store/, holding the
--- database) plus the schemas/extensions/views/templates directories in
--- the current directory.
+-- Initializes a deployment directory (.store/ and config-as-code folders).
 
 const paths = require("paths")
 const config = require("config")
@@ -16,10 +14,6 @@ const store_lib = require("store")
 
 const init = {}
 
--- config.db_path returns either a SQLite file path (a string) or a
--- MariaDB connection descriptor (a table) -- this is the one place
--- that needs a human-readable label for either shape, since ".." can't
--- concatenate a table the way it can a path string.
 function describe_db_target(target)
     if type(target) == "table" then
         return target.host .. ":" .. tostring(target.port) .. "/" .. tostring(target.database)
@@ -27,16 +21,6 @@ function describe_db_target(target)
     return target
 end
 
--- --with-examples: a plain `daat init` deliberately stays a truly
--- empty, generic install -- no seed content forced on every deployment.
--- This is the opt-in alternative: one small, realistic, working example
--- of each config-as-code kind (schemas/extensions/views/templates) plus
--- an example theme.lua and a documented, fully commented-out
--- config.lua reference, so a new user has something real to read and
--- copy instead of an empty directory. Safe to pass again later, even
--- against an already-initialized store (e.g. after deleting one example
--- to see it regenerate) -- examples.write_all skips any destination
--- that already exists rather than overwriting it.
 function has_with_examples_flag(cmd_args)
     for _, arg in ipairs(cmd_args) do
         if arg == "--with-examples" then

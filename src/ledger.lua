@@ -1,12 +1,5 @@
--- The entity ledger: an append-only event log plus the registry tables
--- (entity_type/entity_field) that describe what kinds of entities exist.
--- See doc/architecture.md, "The entity ledger: event-sourced, not
--- file-versioned" -- this file is exactly that design, nothing more.
---
--- entity_event rows are never updated or deleted. An entity's identity
--- (entity_id) is the event_id of its own create event -- no separate
--- sequence needed, and it ties identity directly to the ledger rather
--- than to whatever the projected table's storage happens to assign.
+-- Append-only entity event log and entity_type/entity_field registries.
+-- entity_id equals the event_id of its create event. See doc/decisions/003-append-only-ledger-and-soft-archive.md.
 
 const db = require("database")
 const json = require("dkjson")
@@ -15,15 +8,6 @@ const store_lib = require("store")
 const ledger = {}
 
 ledger.SCHEMA = """
--- VARCHAR(255), not TEXT, on every column that's a primary or
--- composite key below -- MariaDB/InnoDB refuses a bare TEXT/BLOB
--- column in a key without an explicit bounded length ("BLOB/TEXT
--- column 'name' used in key specification without a key length"),
--- unlike SQLite, which has no such restriction. VARCHAR(n) behaves
--- identically to TEXT in SQLite (both get TEXT type affinity, the
--- length is purely decorative there), so this is safe for both
--- engines rather than needing a backend branch -- non-key TEXT
--- columns elsewhere in this file are untouched.
 CREATE TABLE IF NOT EXISTS entity_type (
     name VARCHAR(255) PRIMARY KEY,
     created_at TEXT DEFAULT (%s),
@@ -51,11 +35,6 @@ CREATE TABLE IF NOT EXISTS entity_event (
     entity_id INTEGER,
     entity_type TEXT NOT NULL,
     event_type TEXT NOT NULL,
-    -- LONGTEXT, not TEXT -- this stores a JSON diff that includes the
-    -- full old/new value of whatever changed, so any "text"-typed field
-    -- (schema.lua's own SQL_TYPE.text, same reasoning) can make this
-    -- exceed MariaDB's real TEXT cap (65,535 bytes) just as easily as
-    -- the column it's recording a change to.
     field_changes LONGTEXT NOT NULL,
     author TEXT,
     created_at TEXT DEFAULT (%s),
@@ -65,11 +44,6 @@ CREATE TABLE IF NOT EXISTS entity_event (
 );
 """
 
--- CREATE TABLE IF NOT EXISTS never retrofits an existing table -- same
--- reasoning/pattern as schema.lua's own
--- ensure_entity_field_display_column. A brand-new store gets `reason`
--- straight from ledger.SCHEMA above; an existing one needs this to
--- pick it up.
 function ensure_entity_event_reason_column(db_path)
     store_lib.ensure_column(db_path, "entity_event", "reason", "TEXT")
 end
@@ -79,14 +53,10 @@ function ledger.init_schema(db_path)
         db.now_expr(db_path), db.autoincrement_keyword(db_path), db.now_expr(db_path)
     ))
     ensure_entity_event_reason_column(db_path)
-    -- A new store gets the per-entity index here; an existing one from
-    -- store.lua's migration 13, which explains it.
     store_lib.ensure_index(db_path, "entity_event", "entity_event_entity_id_idx",
         "CREATE INDEX entity_event_entity_id_idx ON entity_event(entity_id, event_id);")
 end
 
--- Appends a 'create' event and returns the new entity_id.
--- `values` is a plain {field_name = value} table.
 function ledger.append_create(db_path, entity_type, values, author, source)
     if source == nil then
         source = {}
@@ -104,13 +74,8 @@ function ledger.append_create(db_path, entity_type, values, author, source)
         db.literal(source.notebook_entry_id),
         db.literal(source.row_id)
     )
-    -- db.exec's second return value is last_insert_rowid(), read on the
-    -- same connection the insert itself just ran on -- inherently
-    -- connection-scoped, so two concurrent creates can never collide on
-    -- the same entity_id (see doc/mariadb-migration.md's "Bug found
-    -- during this investigation" for the race this replaced).
-    -- Wrapped in db.transaction (re-entrant when already inside entity.create)
-    -- so entity_id = NULL is never observed or stranded on failure.
+    -- Connection-scoped last_insert_rowid inside db.transaction prevents concurrent ID races
+    -- or observable entity_id = NULL rows. See doc/mariadb-migration.md.
     function write_create_event()
         _, new_entity_id = db.exec(db_path, statement)
         db.exec(db_path, string.format(
@@ -121,12 +86,6 @@ function ledger.append_create(db_path, entity_type, values, author, source)
     return db.transaction(db_path, write_create_event)
 end
 
--- Appends an 'update' event for an existing entity_id. `field_changes`
--- is a plain {field_name = {old = ..., new = ...}} table -- callers
--- compute the diff themselves, since only they know the entity's
--- current projected values. `reason` is optional -- nil for the common
--- case, a schema can require entity.update supply one via its own
--- require_reason_on_update flag before ever reaching here.
 function ledger.append_update(db_path, entity_type, entity_id, field_changes, author, source, reason)
     if source == nil then
         source = {}
@@ -141,20 +100,10 @@ function ledger.append_update(db_path, entity_type, entity_id, field_changes, au
         db.literal(source.row_id),
         db.literal(reason)
     )
-    -- Same as append_create above: the connection-scoped insert_id,
-    -- immune to a concurrent writer's own insert racing ahead of a
-    -- separate SELECT MAX(event_id).
     _, event_id = db.exec(db_path, statement)
     return event_id
 end
 
--- Appends an 'archive' event -- never a delete. Returns the new
--- event_id, same as append_update, so callers can stamp
--- last_event_id on the projected table consistently either way.
--- `reason` is optional, same as append_update's own -- archiving is
--- the stronger candidate for a schema to actually
--- require one (see entity.archive), but the ledger itself doesn't
--- enforce that; validation happens one layer up.
 function ledger.append_archive(db_path, entity_type, entity_id, author, source, reason)
     event_id = ledger.append_update(db_path, entity_type, entity_id, {}, author, source, reason)
     db.exec(db_path, string.format(
@@ -163,9 +112,6 @@ function ledger.append_archive(db_path, entity_type, entity_id, author, source, 
     return event_id
 end
 
--- Full event history for one entity, oldest first.
--- entity.fields('entity_event'): the same history every detail page
--- shows a user, queryable by the agent via entity.query.
 const ENTITY_EVENT_SQL_COLUMNS = {
     {name = "event_id", note = "primary key, in write order"},
     {name = "entity_id", note = "the entity's id -- ids come from one sequence shared by every entity type, so also filter entity_type"},
@@ -200,19 +146,11 @@ function ledger.history(db_path, entity_id)
     return rows
 end
 
--- A multivalue field's old/new decodes from JSON as a plain Lua array,
--- not a scalar -- tostring() on that gives an unreadable "table: 0x..."
--- pointer, so this renders it as a real bracketed list instead. Scalars
--- pass straight through unchanged.
 function format_change_value(v)
     if type(v) == "table" then
         parts = {}
         for _, item in ipairs(v) do
             if type(item) == "table" and item.type != nil then
-                -- A polymorphic-reference item ({type=, id=}) -- plain
-                -- tostring(item) on a table gives an opaque "table:
-                -- 0x..." address, same fix as entity.lua's own
-                -- format_cli_value.
                 table.insert(parts, tostring(item.type) .. ":" .. tostring(item.id))
             else
                 table.insert(parts, tostring(item))
@@ -223,7 +161,6 @@ function format_change_value(v)
     return tostring(v)
 end
 
--- CLI entry point: `daat ledger <show|history> <entity_id>`
 function ledger.do_ledger(cmd_args, db_path)
     action = cmd_args[1]
     entity_id = tonumber(cmd_args[2])

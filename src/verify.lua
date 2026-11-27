@@ -1,21 +1,8 @@
--- Formal store specification & invariant verifier (`daat store verify`).
---
--- Checks four families of algebraic / state invariants directly against any
--- SQLite or MariaDB store (read-only, zero mutations):
---   L1 (`verify.pool_thermodynamics`): Knowledge-pool conservation of total
---       effective heat (`sum H_eff == |D_active| * BASE_HEAT`), strict
---       positivity, `document_count` and `pool_active` exactness, and
---       `document_link.raw_strength >= 1.0`.
---   L2 (`verify.ledger_projection`): Event-sourcing fold homomorphism from
---       `entity_event` onto every registered entity table and its companion
---       multi-value / polymorphic junction tables, plus event-id identity
---       and orphan-row detection.
---   L3 (`verify.derived_indexes`): Agreement between live source tables and
---       derived indexes (`document_link` active outgoing links,
---       `entity_name_index`, and `tag_centre` vector sums / member counts).
---   L4 (`verify.ontology_and_tiers`): Acyclicity of `document.parent_id` and
---       active `tag.parent` forests, plus tier-ladder provenance (`tier > 0`
---       implies `knowledge.can_hold_tier(source_type)`).
+-- Read-only store invariant verifier (`daat store verify`):
+--   L1 pool_thermodynamics: effective heat conservation, pool_active/count, link floor
+--   L2 ledger_projection:   entity_event fold agreement with projected + companion tables
+--   L3 derived_indexes:     document_link, entity_name_index, and tag_centre agreement
+--   L4 ontology_and_tiers:  document/tag parent acyclicity and tier provenance
 
 const db = require("database")
 const json = require("dkjson")
@@ -68,10 +55,6 @@ function make_violation(law, code, message, details)
     end
     return v
 end
-
---------------------------------------------------------------------------
--- Law L1: Knowledge-pool thermodynamics & conservation of heat
---------------------------------------------------------------------------
 
 function verify.pool_thermodynamics(db_path)
     violations = {}
@@ -199,10 +182,6 @@ function verify.pool_thermodynamics(db_path)
         total_effective_heat = total_eff,
     }
 end
-
---------------------------------------------------------------------------
--- Law L2: Ledger fold homomorphism & event-id identity
---------------------------------------------------------------------------
 
 function normalize_scalar_for_compare(val, field_type)
     if val == nil or tostring(val) == "" then
@@ -468,10 +447,6 @@ function verify.ledger_projection(db_path)
     }
 end
 
---------------------------------------------------------------------------
--- Law L3: Derived-index agreement (document_link, entity_name_index, tag_centre)
---------------------------------------------------------------------------
-
 function verify.derived_indexes(db_path)
     violations = {}
 
@@ -725,10 +700,6 @@ function verify.derived_indexes(db_path)
     }
 end
 
---------------------------------------------------------------------------
--- Law L4: Forest acyclicity (document.parent_id, tag.parent) & tier provenance
---------------------------------------------------------------------------
-
 function detect_parent_cycles(parent_of, law_code, label_prefix, violations)
     state = {}
     ids = {}
@@ -846,10 +817,6 @@ function verify.ontology_and_tiers(db_path)
         violations = violations,
     }
 end
-
---------------------------------------------------------------------------
--- Full store verification & CLI entry point (`daat store verify [--json]`)
---------------------------------------------------------------------------
 
 function verify.check_all(db_path)
     l1 = verify.pool_thermodynamics(db_path)
