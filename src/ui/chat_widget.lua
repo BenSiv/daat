@@ -1,10 +1,4 @@
--- View-model builder and asset renderer for the floating chat widget
--- embedded in ui.page_shell.
---
--- Keeps server-side state decisions in Luam (whether PDF/DOCX
--- attachments are enabled, layout constants, CSP nonce) and keeps the
--- CSS, HTML skeleton, and ~600-line client-side controller in raw
--- standalone assets (`ui/chat_widget.{css,html,js}`).
+-- View-model builder and asset renderer for the floating chat widget in ui.page_shell.
 
 const asset = require("asset")
 const render_lib = require("render")

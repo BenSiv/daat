@@ -38,9 +38,6 @@ window.PlatformJS = (function(){
         };
     }
 
-    // triggerEl: the element a click ON does not count as "outside".
-    // getContainer(): returns the currently-open results element, or
-    // null/undefined if none is open right now.
     function onOutsideClick(triggerEl, getContainer, closeFn) {
         document.addEventListener('click', function(e){
             var container = getContainer();
@@ -82,22 +79,8 @@ window.PlatformJS = (function(){
         }
     }
 
-    // Reference-field autocomplete: debounced search, a transient results
-    // dropdown, pick via mousedown+preventDefault+refocus (avoids the
-    // blur race a plain click/onclick handler has), and clearCellError on
-    // pick. Previously two near-identical hand copies (register's batch
-    // table and the single-row edit form) that had silently drifted:
-    // edit's showed the literal text "undefined" for every suggestion
-    // (it read item.label, but /api/autocomplete only ever returns
-    // {id, name}) and never cleared a prior error-highlight on pick.
-    // Both are fixed here by construction, not by choice -- there's only
-    // one implementation now.
+    // Read input.parentElement at render time (caller attaches input to DOM after setup) and pick on mousedown before blur.
     function setupAutocomplete(input, refType, multi, baseUrl) {
-        // input.parentElement is read fresh at render time, not captured
-        // here -- setupAutocomplete is always called before its caller
-        // appends `input` into the DOM (both addRow() and buildFields()
-        // build the whole cell before attaching it), so a captured
-        // `const wrapper = input.parentElement` would be null forever.
         var resultsContainer = null;
         function closeResults() {
             if (resultsContainer) { resultsContainer.remove(); resultsContainer = null; }
@@ -142,16 +125,8 @@ window.PlatformJS = (function(){
         onOutsideClick(input, function(){ return resultsContainer; }, closeResults);
     }
 
-    // Same search/pick UX as setupAutocomplete, but the target type
-    // comes from typeSelect's own current value at query/pick time
-    // (re-read live, not captured once) since a polymorphic field's
-    // target type is chosen by the user, not declared by the schema.
-    // Inserts "type:id", not a bare id, so the submitted value
-    // round-trips through schema.normalize_polymorphic_value the same
-    // way a hand-typed one would.
+    // Reads typeSelect.value live and emits "type:id" tokens.
     function setupPolymorphicAutocomplete(input, typeSelect, multi, baseUrl) {
-        // See setupAutocomplete's own comment: input.parentElement must
-        // be read fresh at render time, not captured at setup time.
         var resultsContainer = null;
         function closeResults() {
             if (resultsContainer) { resultsContainer.remove(); resultsContainer = null; }
@@ -198,15 +173,7 @@ window.PlatformJS = (function(){
         onOutsideClick(input, function(){ return resultsContainer; }, closeResults);
     }
 
-    // Builds one field's input control, appending it (and, for a
-    // polymorphic field, its type-picker <select> too) into `container`
-    // -- the caller's own per-field wrapper div. Previously two ~120-line
-    // near-duplicate switches (register's addRow() and the single-row
-    // edit form's buildFields()); the only real difference between the
-    // two pages was whether a field has an existing value to prefill
-    // (opts.value) -- register's blank rows simply never pass one.
-    // opts.locked (register-only) short-circuits everything
-    // else for a `?lock_<field>=<value>` field.
+    // Shared field control builder for /register (opts.locked) and /entity-edit (opts.value).
     function buildFieldInput(field, container, opts) {
         opts = opts || {};
         var current = opts.value;

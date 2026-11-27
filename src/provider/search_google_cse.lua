@@ -1,15 +1,4 @@
--- Google Programmable Search (Custom Search JSON API) backend for
--- search_provider.lua's own facade -- selected by config.lua's
--- search_provider = "google_cse", no longer hardcoded into the calling
--- code the way the old, single-file web_search.lua was.
---
--- Requires GOOGLE_SEARCH_API_KEY and GOOGLE_SEARCH_ENGINE_ID in the
--- environment (PassEnv'd the same way ANTHROPIC_API_KEY/
--- DAAT_MARIADB_PASSWORD already are -- see apache-platform.conf).
--- The engine id ("cx") comes from a Programmable Search Engine
--- configured to search the whole web, created separately at
--- programmablesearchengine.google.com -- no Terraform/gcloud path
--- creates that half, only the API key itself.
+-- Google Custom Search JSON API provider (GOOGLE_SEARCH_API_KEY + GOOGLE_SEARCH_ENGINE_ID).
 
 const json = require("dkjson")
 const external_tool = require("external_tool")
@@ -31,16 +20,6 @@ function search_credentials()
     return key, cx
 end
 
--- query -> (response_table, err). response_table is always shaped like
--- Google CSE's own real JSON body ({items = {{title=,link=,snippet=},
--- ...}}) -- already the canonical shape search_provider.format_results
--- expects, no translation needed. Mirrors agent_claude.lua's
--- claude_post shape: shell_quote every value (only the key/cx/query are
--- ever shell-interpolated, never response content), GET via
--- -G/--data-urlencode (CSE is GET-based, unlike the LLM providers'
--- POST-with-temp-file), io.popen, and the same four-stage error
--- handling every provider call here already uses (missing credentials
--- -> no response -> bad JSON -> API-level error).
 function search_google_cse.search(query)
     key, cx, cred_err = search_credentials()
     if key == nil then

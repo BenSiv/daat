@@ -15,14 +15,7 @@
         var action = btn.getAttribute('data-action');
         var staticArgs = {};
         try { staticArgs = JSON.parse(btn.getAttribute('data-args') || '{}'); } catch (parseErr) {}
-        // Object.assign into a fresh {} (never the parsed value
-        // directly) -- an empty Lua table has no way to say "object,
-        // not array", so a button with no static args of its own
-        // renders as data-args="[]"; assigning string keys straight
-        // onto a real Array works in JS but JSON.stringify then
-        // silently drops them (only numeric indices survive), so the
-        // typed input's value would vanish on the wire. A plain object
-        // literal as the merge target sidesteps the ambiguity entirely.
+        // Merge into {} because empty Lua tables serialize as data-args="[]", and JSON.stringify drops string keys on Arrays.
         var args = Object.assign({}, staticArgs, collectInputArgs());
         var actionUrl = window.location.pathname.replace(/\/ext\/([^/]+)\/?$/, '/api/v1/extensions/$1/actions');
         btn.disabled = true;

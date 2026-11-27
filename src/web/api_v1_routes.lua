@@ -1,8 +1,4 @@
--- Versioned REST API dispatcher (/api/v1/*).
---
--- Routes every /api/v1/* request across the domain modules (authenticated
--- either via X-Api-Key or browser session + X-CSRF-Token on writes) and
--- returns a structured JSON 404 for any unmatched /api/v1 path.
+-- Dispatches /api/v1/* requests across domain route modules; unmatched paths return JSON 404.
 
 const auth_routes = require("web.auth_routes")
 const entity_routes = require("web.entity_routes")

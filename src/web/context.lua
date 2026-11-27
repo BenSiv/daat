@@ -1,9 +1,4 @@
--- Shared request context, security headers, page shell wrapper, and
--- generic helpers for web route modules (`src/web/*.lua`).
---
--- Replaces module-global response_nonce / response_csrf_header with an
--- explicit per-request `req` table so concurrent or persistent-worker
--- requests never share mutable state.
+-- Shared per-request `req` context, security headers, page shell wrappers, and JSON/CSRF helpers.
 
 const cgi_lib = require("cgi")
 const auth = require("auth")

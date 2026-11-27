@@ -6,9 +6,6 @@
     const entityId = boot.entity_id;
     const baseUrl = window.location.pathname.replace(/\/entity-edit\/?$/, "");
 
-    // Field lookup stays bespoke here (document-global, not
-    // row-scoped like register's) -- only the "mark this input
-    // errored" mechanics are shared.
     function highlightError(fieldName, message) {
         const input = document.querySelector(`[name="${fieldName}"]`);
         if (!input) return;

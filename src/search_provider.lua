@@ -1,27 +1,5 @@
--- The seam a real web-search backend plugs into -- same shape as
--- agent_provider.lua's own facade (see that file's header), just for
--- internet_search.search (src/agent.lua's own AGENT_TOOLS entry)
--- instead of the chat LLM. Loaded dynamically by name
--- (config.load().search_provider, no default: unset means
--- no web search; "google_cse" for src/provider/search_google_cse.lua)
--- rather than required directly, so swapping backends -- or substituting
--- the deterministic test provider -- is a config change, not a code
--- change (see doc/architecture.md's "Providers" section for why this
--- exists as a third tier alongside core and extensions).
---
--- search(query) -> (response, err). `response` is always shaped like
--- {items = {{title=, link=, snippet=}, ...}} regardless of which
--- backend produced it -- Google CSE's own real JSON body happens to
--- already be this shape, so src/provider/search_google_cse.lua needs
--- no translation step, but a future backend with a different wire
--- format would translate into this same canonical shape before
--- returning, the same way agent_provider.lua's own {content,
--- stopReason} is canonical across every LLM backend. format_results
--- lives here, at the facade, rather than per-backend, because it only
--- ever needs to understand this one canonical shape. Implementations
--- live under src/provider/ (search_google_cse.lua, search_test.lua) --
--- this facade file itself stays one level up, same split as
--- agent_provider.lua/src/provider/agent_*.lua.
+-- Web-search provider facade returning canonical {items = {{title, link, snippet}}} results.
+-- Dynamically loads provider.search_<name>; see doc/decisions/002-provider-facade-tier.md.
 
 const config = require("config")
 
@@ -50,13 +28,7 @@ function search_provider.search(query)
     return provider.search(query)
 end
 
--- Formats a canonical {items=...} response's title/link/snippet into a
--- plain-text block for the model -- same shape document.search's own
--- dispatch branch uses (src/agent.lua), one result per entry, and
--- deliberately NOT JSON: putting the URL directly in each result's own
--- header, not buried inside a structured blob, makes citing the source
--- the path of least resistance rather than something the model has to
--- remember to dig out.
+-- Plain-text "title (url)\nsnippet" blocks for direct citation by the agent.
 function search_provider.format_results(response)
     items = nil
     if response != nil then

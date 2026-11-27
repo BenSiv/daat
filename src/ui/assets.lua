@@ -1,11 +1,5 @@
--- Small helper shared by UI modules that inline extracted JS/CSS
--- assets into CGI HTML responses while binding the per-request CSP
--- nonce via render.lua's HTML-escaped {{ nonce }} placeholder.
---
--- Callers pass `asset.read("ui/...")` directly as `code` / `css` (a
--- literal `asset.read("...")` at the call site, just like `require`, so
--- `luam/lib/static/build.lua` discovers every bundled asset statically
--- at compile time).
+-- Wraps bundled JS/CSS assets in inline <script nonce="...">/<style> tags.
+-- Callers must pass literal asset.read("ui/...") results so static builds bundle them.
 
 const render_lib = require("render")
 

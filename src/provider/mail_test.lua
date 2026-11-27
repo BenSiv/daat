@@ -1,9 +1,4 @@
--- A deterministic, network-free mail backend for tests -- selected the
--- same way search_test.lua is (config.lua's mail_provider = "test").
--- Appends each message as one JSON line to the file named by
--- MAIL_TEST_OUTBOX, so a bats test can read back exactly what would
--- have been sent (recipient, subject, body, and the full raw message)
--- instead of standing up a real SMTP server.
+-- Deterministic test mail provider: appends JSON lines to MAIL_TEST_OUTBOX.
 
 const json = require("dkjson")
 

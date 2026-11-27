@@ -1,9 +1,4 @@
 -- View-model builder and template renderer for /documents.
---
--- Keeps recursive tree building, content-search passage formatting, and
--- JSON boot serialization in Luam while keeping the page shell, CSS,
--- and fuzzy title-search controller as raw standalone assets
--- (`ui/document_tree.{html,css,js}`).
 
 const asset = require("asset")
 const html_lib = require("html")
@@ -12,9 +7,6 @@ const render_lib = require("render")
 
 const document_tree = {}
 
--- Groups a flat {id, title, parent_id} list by parent, keyed "root" for
--- top-level rows -- one query from document.all_active(), built into a
--- nested tree here rather than one query per level.
 function document_tree.build_index(rows)
     by_parent = {}
     for _, row in ipairs(rows) do
@@ -30,10 +22,7 @@ function document_tree.build_index(rows)
     return by_parent
 end
 
--- Renders one tree level as collapsible <details>/<summary> nodes,
--- collapsed by default at every depth. A folder row (one with children)
--- toggles on a click of its title; the small open arrow after the title
--- navigates to the folder's own page.
+-- Folder rows toggle children on title click and open their own page via the trailing arrow link.
 function document_tree.render_level(by_parent, key, depth)
     children = by_parent[key]
     if children == nil then
@@ -57,7 +46,6 @@ function document_tree.render_level(by_parent, key, depth)
     return items
 end
 
--- Flat {id, title} pairs for the fuzzy-search box's client-side matching.
 function document_tree.search_index_json(rows)
     index = {}
     for _, row in ipairs(rows) do
@@ -66,9 +54,6 @@ function document_tree.search_index_json(rows)
     return html_lib.json_for_script(json.encode(index))
 end
 
--- The content-search results above the tree: the same results, and the
--- same passages, the agent's document.search returns for the query
--- (knowledge.search_for_display).
 function document_tree.render_search_results(query, results)
     if query == nil or query == "" then
         return ""

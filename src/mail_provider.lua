@@ -1,15 +1,5 @@
--- The seam outbound mail plugs into -- same facade shape as
--- search_provider.lua (see that file's header, and
--- doc/architecture.md's "Providers" section). Loaded dynamically by
--- name (config.load().mail_provider -- no default: nil
--- means this deployment sends no mail at all), so swapping backends or
--- substituting the deterministic test provider is a config change.
---
--- send({to=, from_name=, subject=, body=}) -> (true, err). The facade
--- owns validation and builds the one canonical RFC 5322 message text
--- every backend is handed (message.raw), so header-injection checks
--- live in exactly one place rather than per backend. Implementations
--- live under src/provider/ (mail_smtp.lua, mail_test.lua).
+-- Outbound mail facade: validates bare addr-spec addresses and builds CR/LF-safe RFC 5322 MIME.
+-- Dynamically loads provider.mail_<name>; see doc/decisions/002-provider-facade-tier.md and doc/auth.md.
 
 const config = require("config")
 
@@ -31,11 +21,7 @@ function mail_provider.load()
     return mod
 end
 
--- A bare addr-spec only (no display name, no comments): exactly one
--- "@", no whitespace/control characters, nothing that could break out
--- of a header line or a curl --mail-rcpt argument. Deliberately
--- stricter than RFC 5322 allows -- a real user's address fits this,
--- and anything that doesn't is far more likely a mistake or an attack.
+-- Bare addr-spec only (no display name, whitespace, or control chars).
 function mail_provider.valid_address(address)
     if type(address) != "string" or string.len(address) > 254 then
         return false
@@ -43,10 +29,6 @@ function mail_provider.valid_address(address)
     return string.match(address, "^[%w%.%+%-_']+@[%w%-]+%.[%w%.%-]+$") != nil
 end
 
--- Header values we build ourselves (site name, subject) still get CR/LF
--- stripped -- they come from deployment config/code, not a user, but a
--- stray newline in theme.lua's site_name shouldn't be able to forge a
--- header either.
 function header_value(s)
     return string.gsub(tostring(s), "[\r\n]", " ")
 end

@@ -3,15 +3,7 @@
     var input = document.getElementById('platform-document-search-input');
     var results = document.getElementById('platform-document-search-results');
 
-    // Simple ordered-subsequence fuzzy match: every character of
-    // the query must appear in the title, in order (not
-    // necessarily contiguous) -- consecutive matches score higher,
-    // so "exp277" ranks "Experiment 277" above a title that merely
-    // contains the same letters scattered further apart. A title
-    // that contains the query as typed ranks above every scattered
-    // match, and one that starts with it above that: "Chat: " lists
-    // the chat transcripts first, not "Characterisation: ..." titles
-    // that only share its letters.
+    // Ordered-subsequence match; contiguous runs, substring matches, and prefix matches rank higher.
     function fuzzyScore(query, title) {
         var qi = 0, score = 0, lastMatch = -2;
         var q = query.toLowerCase(), t = title.toLowerCase();
@@ -28,8 +20,6 @@
         return score;
     }
 
-    // Enough to list a whole group ("Chat: ") in the scrolling
-    // dropdown; past it, say how many matched so nothing looks missing.
     var MAX_RESULTS = 50;
 
     function renderResults(query) {
@@ -62,8 +52,7 @@
     PlatformJS.onOutsideClick(input, function(){ return results; }, function(){
         results.classList.remove('platform-document-search-open');
     });
-    // Enter searches the contents (the form submits), unless a title
-    // was picked with the arrow keys, which opens it.
+    // Enter submits full-text search unless an arrow-highlighted title link is active.
     var active = -1;
     function highlight(links) {
         links.forEach(function(a, i){ a.classList.toggle('platform-search-active', i === active); });

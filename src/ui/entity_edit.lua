@@ -1,9 +1,4 @@
--- View-model builder and template renderer for /entity-edit (single-row
--- entity edit form).
---
--- Keeps action-button/status-placeholder validation (page.lua) and JSON
--- boot serialization in Luam while keeping the CSS, HTML shell, and
--- form controller in standalone assets (`ui/entity_edit.{css,html,js}`).
+-- View-model builder and template renderer for /entity-edit (see doc/templating.md).
 
 const asset = require("asset")
 const html_lib = require("html")

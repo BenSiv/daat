@@ -1,9 +1,4 @@
--- View-model builder and template renderer for /document-edit.
---
--- Computes form field values, prefill handling, error banner HTML, and
--- the JSON boot payload (`initial_value`) in Luam while keeping the
--- page shell, CSS, and ToastUI + inline `[[` / `@` mention controller
--- as raw standalone assets (`ui/document_edit.{html,css,js}`).
+-- View-model builder and template renderer for /document-edit (see doc/templating.md).
 
 const asset = require("asset")
 const html_lib = require("html")
