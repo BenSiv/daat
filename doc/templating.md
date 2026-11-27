@@ -24,9 +24,9 @@ Render an inner fragment to a string first, then embed the *result* into an oute
 
 `ui.lua` already has a typed-table -> renderer mechanism for *untrusted* content: the extension canvas (`ui.validate_canvas`/`ui.render_canvas`, vocabulary `heading`/`text`/`table`/`button`). Its entire reason to exist is being a narrow **trust boundary** -- a plugin's page is restricted to that closed vocabulary specifically so deployment-authored extension code can never emit arbitrary HTML/JS. Its own header comment says to grow that vocabulary "only when a real plugin needs a new element type... not speculatively" -- narrowness is the point, not an oversight.
 
-`page.lua` is the same *pattern* (typed section table -> dispatch-by-type renderer, string leaves through `render.lua`) applied to daat's own first-party pages instead -- a completely separate module, vocabulary, and code path, with no security boundary to protect (every caller is trusted core code, not an attacker). Sharing one vocabulary between the two would mean either crippling core pages down to the canvas's deliberately tiny set, or growing the canvas to match core's real needs and handing extensions that same expanded surface -- both wrong, for different reasons. Never add a section/element type to one because the other needs it.
+`page.lua` is the same *pattern* (typed section table -> dispatch-by-type renderer, string leaves through `render.lua`) applied to daat's own first-party pages instead -- a completely separate module, vocabulary, and code path, with no security boundary to protect (every caller is trusted core code, not an attacker; see [006-trusted-page-sections-vs-extension-canvas.md](decisions/006-trusted-page-sections-vs-extension-canvas.md)). Sharing one vocabulary between the two would mean either crippling core pages down to the canvas's deliberately tiny set, or growing the canvas to match core's real needs and handing extensions that same expanded surface -- both wrong, for different reasons. Never add a section/element type to one because the other needs it.
 
-`page.lua`'s own vocabulary grows the same way the canvas's and `template.lua`'s did: only when a real page actually needs a new section type. Current vocabulary and what motivated each addition: `form` (`ui.render_login`); `subheading` and standalone `message` (`ui.render_account` -- headings and a message banner that sit *outside* any form, unlike login's, which are form fields); `table`, and a form field's `value`/`placeholder`/`size` attributes plus an optional (not required) `label` (`ui.render_admin_users` -- a dynamic per-row table whose cells hold compact, label-less inline forms); `secret_reveal` (`ui.render_admin_api_keys` -- a one-time "here's a secret, it won't be shown again" banner, bold instruction text plus a distinct `<code>` value, a genuinely different shape from `message`'s single escaped string). A `form` section's fields support `text`/`password`/`hidden` (the CSRF token needed a way to appear with no visible label); `submit_class` lets a form pick "btn-primary" (default) or "btn-secondary" (account's Log out button, admin-users'/admin-api-keys' per-row "Set"/archive actions) since not every submit button is the primary action on its page.
+`page.lua`'s own vocabulary grows the same way the canvas's and `template.lua`'s did: only when a real page actually needs a new section type. Current vocabulary and what motivated each addition: `form` (`ui.render_login`, with optional `message_css_class` for non-error form notices); `subheading` and standalone `message` (`ui.render_account` -- headings and a message banner that sit *outside* any form, unlike login's, which are form fields); `table`, and a form field's `value`/`placeholder`/`size` attributes plus an optional (not required) `label` (`ui.render_admin_users` -- a dynamic per-row table whose cells hold compact, label-less inline forms); `secret_reveal` (`ui.render_admin_api_keys` -- a one-time "here's a secret, it won't be shown again" banner, bold instruction text plus a distinct `<code>` value, a genuinely different shape from `message`'s single escaped string); and `actions` / `status_placeholder` (`ui.render`, `ui.render_entity_edit`, `ui.render_admin_triggers` -- where `actions` buttons also accept an optional `data = {key = value}` table rendered as escaped `data-<key>="..."` attributes so Extension-declared trigger names never cross into inline JS). A `form` section's fields support `text`/`password`/`hidden` (the CSRF token needed a way to appear with no visible label); `submit_class` lets a form pick "btn-primary" (default) or "btn-secondary" (account's Log out button, admin-users'/admin-api-keys' per-row "Set"/archive actions) since not every submit button is the primary action on its page.
 
 **A field's `label` is optional, and that changes what else renders.** `ui.render_login`/`ui.render_account`'s fields all had a real `<label>`; `ui.render_admin_users`'s compact per-row/create-user fields use `placeholder` instead and have no visible label at all. `render_page_field` skips the `<label>` line when `field.label` is `nil` -- and skips the input's `id` attribute too, not just the label, since an `id` with no `<label for="...">` pointing at it is dead markup the original never had. Don't default `id` to "always present" the way `autocomplete`/`required` safely can; it's the one attribute whose only reason to exist depends on something else (the label) also existing.
 
@@ -80,6 +80,29 @@ Client-side JavaScript, substantial stylesheets, and coarse logic-less HTML page
   - `<feature>.lua` computes all server-side decisions, permissions, recursive/branching leaf fragments, and `page.lua` sections in Luam, then returns a plain `view_model` table for `render.render(asset.read("ui/<feature>.html"), vm)`.
   - Server-computed data crosses to client JS through `<script type="application/json" id="platform-<feature>-boot">{{{ boot_json }}}</script>` (encoded with `dkjson.encode` + `html.json_for_script`, which escapes `<` as `\u003c` so `</script>` or `<!--` in user text can never break out of the tag) or `data-*` DOM attributes -- never by interpolating string literals into JavaScript source.
 - **SQL stays inline in Luam.** Unlike JS/CSS, SQL queries in `daat` are short, carry zero string-escape friction in Luam, and sit directly beside their parameter binding and row unpacking.
+
+## Document templates (`templates/*.lua`, `src/template.lua`)
+
+Document templates (`templates/<name>.lua`, exposed at `/templates` and to the chat agent via `template.list` / `template.get`) are deployment-authored starter layouts loaded under `sandbox.data_env()` and validated by `template.validate`:
+
+```lua
+return {
+  name = "bioreactor_experiment", -- must match filename (schema.valid_resource_name)
+  label = "Bioreactor Experiment",
+  description = "Starting layout for a bioreactor run Document.",
+  default_path = "Experiments/Bioreactor Experiment", -- optional: prefills Title on /templates (falls back to label)
+  sections = {
+    {type = "heading", text = "Objective"},
+    {type = "text", text = "Hypothesis and run parameters..."},
+    {type = "registration_table", entity_type = "experiment",
+      label = "Experiment", columns = {"number", "title"}},
+    {type = "lookup_view", view_name = "samples_by_experiment",
+      label = "Samples for this experiment"},
+  },
+}
+```
+
+- **Inert Markdown output (no Admin approval needed):** `template.render` produces a plain Markdown snippet that a user (or `document.create`) pastes into a new Document — `registration_table` renders a root-relative `[Open registration table ->](/register?type=...&columns=...)` link, and `lookup_view` emits an inert `{{view:<view_name>:EXPERIMENT_ID}}` placeholder (`EXPERIMENT_ID` is filled in by hand after pasting and expanded at Document view time by `ui.expand_inline_views`). Because templates never execute SQL or write rows directly, they need no `system_approval` entry ([006-trusted-page-sections-vs-extension-canvas.md](decisions/006-trusted-page-sections-vs-extension-canvas.md)).
 
 ## Scope summary of `page.lua` conversions
 

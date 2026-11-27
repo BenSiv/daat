@@ -83,8 +83,15 @@ every change, the rule changes here first.
   function. No work at file load time beyond `require`s and constants.
 - **Luam's implicit locals, no `local`** (`doc/onboarding.md`, "Coding
   conventions").
-- **Comments carry the reasoning**: why, what was rejected, what was found
-  live that led here. Match the surrounding file.
+- **Source comments state current-state contracts and non-obvious invariants
+  only** ([onboarding.md](onboarding.md), "Coding conventions"). Keep inline
+  comments terse (1–2 lines); on subtle runtime, SQL, or wire traps where a
+  reader might undo intentional behavior, add a short `-- See doc/...`
+  pointer. Never record design history, incident dates, or rejected options
+  in source comments — cross-cutting architectural choices belong in
+  [decisions/README.md](decisions/README.md) (`doc/decisions/NNN-<slug>.md`)
+  and SQL-dialect, wire-protocol, or subsystem specifics belong in topic docs
+  under `doc/*.md`.
 - **SQL that works on both backends.** Every query runs on SQLite and
   MariaDB; `doc/mariadb-migration.md`, "Dialect differences", lists the ones
   that matter.

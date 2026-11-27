@@ -107,7 +107,16 @@ graph TB
 
 ## Deliberate tradeoffs, not gaps
 
-Three choices worth stating explicitly as decisions, so a future reader doesn't mistake any of them for an oversight and "fix" something that was actually reasoned about on purpose:
+Cross-cutting architectural choices and their revisit triggers are recorded as numbered Architecture Decision Records in [decisions/README.md](decisions/README.md):
+- [001 — CGI-per-Request Process Isolation & Connection Lifecycle](decisions/001-cgi-per-request-lifecycle.md)
+- [002 — Three-Tier Trust Boundary & Config-Selected Provider Facades](decisions/002-provider-facade-tier.md)
+- [003 — Append-Only Entity Ledger, Projected Relational Storage & Soft-Archive](decisions/003-append-only-ledger-and-soft-archive.md)
+- [004 — Unified Lua Sandboxing, Content-Keyed Approvals & Split Hook Execution](decisions/004-sandboxed-content-and-hash-keyed-approvals.md)
+- [005 — Rule-Based Agent Control, Persisted Approval Gates & Detached Execution Queues](decisions/005-agent-approval-gate-and-detached-queues.md)
+- [006 — Separate Vocabularies for Trusted Pages, Extension Canvas & Document Templates](decisions/006-trusted-page-sections-vs-extension-canvas.md)
+- [007 — Unified Knowledge Pool, Conserved Heat & Usage-Driven Curation Ladder](decisions/007-usage-driven-knowledge-pool-and-curation-ladder.md)
+
+Three choices worth stating explicitly in prose as well, so a future reader doesn't mistake any of them for an oversight and "fix" something that was actually reasoned about on purpose:
 
 **CGI-per-request is a small-scale-simplicity choice, not an unoptimized bootstrap path.** `main.lua`'s `main()` dispatches, from the same single compiled binary, either into CLI command handling or `web.handle_request` depending on whether `GATEWAY_INTERFACE`/`REQUEST_METHOD` are set -- and in production, Apache's `mod_cgid` spawns a fresh OS process per web request (see "Overview" above, and `src/web.lua:1502`'s own comment noting two concurrent requests against the same chat session "run as separate OS processes against the same store" as a direct consequence). No persistent application server to manage, restart, or monitor separately from the web server itself -- one more piece of daat's "single, self-contained application" property (`doc/why-luam.md`'s "A single small binary" section). Because bundled `.lua` modules are precompiled to bytecode in `.rodata` and loaded lazily (`5.6 ms` binary boot), both SQLite (`sqlite_keep_open(true)`) and MariaDB (`get_mariadb_connection` without per-call `COM_PING`) reuse one live database connection across the entire request, and built-in `init_schema` hooks are signature-gated in `system_state`, CGI-per-request serves `/login` in `9–28 ms` (`320–479 req/s` at `c = 16`) and 100-row Entity browse pages in `21–95 ms` (`doc/performance.md`). The decision, stated plainly: CGI-per-request stays as-is until deployment scale actually requires eliminating the remaining `~4–6 ms` per-request MariaDB connection setup or scaling past several hundred requests/sec per host -- at which point persistent worker mode (`#57`, scoped in `doc/performance.md`, "Option 3") is the already-identified fix, not new design work.
 

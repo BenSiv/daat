@@ -118,7 +118,7 @@ A change to the agent's behaviour (a prompt, a tool, the turn loop) is judged by
 - Luam has no `local` keyword -- bare assignment scopes to the enclosing block automatically. Every file in `src/` relies on this; don't reach for `local` out of habit if you're used to standard Lua.
 - Bind top-level module imports, exported module tables, and file-scope constants with `const` (`const db = require("database")`, `const mymod = {}`) so compile-time immutability prevents accidental reassignment or shadowing.
 - `review-checklist.md` collects the rules every change is reviewed against: process, the agent loop, code and tests. Read it before your first PR.
-- Comments in this codebase are dense, first-person engineering-log prose (rationale, rejected alternatives, explicit tradeoffs), not terse conventional comments -- match the existing style in a file rather than switching it to something terser.
+- Source comments state terse current-state contracts and non-obvious invariants only (1–2 lines), never design history, incident dates, or rejected alternatives; on subtle runtime, SQL, or wire traps, add a short `-- See doc/...` pointer. Record cross-cutting architectural choices and deliberate tradeoffs in [decisions/README.md](decisions/README.md) (`doc/decisions/NNN-<slug>.md`), and fold SQL-dialect, wire-protocol, and module specifics into the matching topic doc under `doc/*.md`.
 
 ## Docs that mix in private deployment details
 
@@ -130,6 +130,7 @@ A few design and migration notes in this directory record empirical measurements
 
 ## Where to go next
 
+- [decisions/README.md](decisions/README.md) -- Architecture Decision Records (ADRs) for cross-cutting module boundaries, non-obvious invariants, and deliberate tradeoffs.
 - `configuration.md` -- full `config.lua`, `theme.lua`, and environment-variable reference (`daat config check` / `daat config show`).
 - `architecture.md` -- the full entity-history model, sandboxing, and auth/session design (the big one -- start here for depth).
 - `database-concurrency.md` -- cross-backend transactions, advisory locks, SQLite WAL `fcntl` invariants, and `daat store verify` (L1--L4).

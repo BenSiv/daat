@@ -71,12 +71,14 @@ A manifest declares what an extension needs; it's granted exactly that and nothi
 - `read: [entity]` -- read-only lookups into current entity state via `ctx.query(entity_type, filter)`. No raw query language is ever exposed: `entity_type` must be a registered entity type (not an internal table like `user` or `api_key`), and `filter` is per-field equality on the type's own single-valued fields or its system columns (`id`, `name`, `external_id`, `created_at`, `archived_at`, ...) -- anything else is an error.
 - `write: [entity]` -- access to create or update entities via `ctx`. Most extensions (especially validation rules) declare no write access at all.
 - `net: outbound` -- opts into outbound networking being available to the extension. Absent by default; an extension that doesn't declare this has no network access, full stop.
-- `ui: {label, icon}` -- opts into a page at `/ext/<name>`, described as a typed "canvas" element tree rather than raw HTML/JS, plus named button actions the page can trigger. See doc/plugin-system-research.md for the full design.
-- `tools: [{name, description, parameters, destructive?}]` -- contributes named tools the chat agent can call mid-conversation, dispatched under `tool_name.method_name` the same way built-in tool groups are. See doc/plugin-system-research.md.
+- `ui: {label, icon}` -- opts into a page at `/ext/<name>`, described as a typed "canvas" element tree (`heading`, `text`, `table`, `button`, `input` in `ui.validate_canvas`) rather than raw HTML/JS, plus named button actions the page can trigger. See `plugin-system-research.md` and [006-trusted-page-sections-vs-extension-canvas.md](decisions/006-trusted-page-sections-vs-extension-canvas.md).
+- `tools: [{name, description, parameters, destructive?}]` -- contributes named tools the chat agent can call mid-conversation, dispatched under `<extension_name>.<tool_name>` the same way built-in tool groups are. Every tool must declare a JSON Schema `parameters` table (`#20`), the Extension's `name` cannot collide with a built-in `AGENT_TOOLS` group (`extension.is_reserved_tool_name`, `#15`), and tool names must avoid `__` so Claude/Ollama `.` <-> `__` wire mapping round-trips cleanly (`#21`, [agent-protocol.md](agent-protocol.md)).
 - `schemas: [<entity type>]` / `views: [<view name>]` -- the extension ships these entity types and views itself, as `extensions/<name>/schemas/<type>.lua` and `extensions/<name>/views/<view>.lua` -- see "Extension-owned entity types and views" below.
-- `manual_triggers: [{name, label, description}]` -- contributes admin-only "run this now" buttons, listed and dispatched from a dedicated `/admin-triggers` route rather than an extension's own `/ext/<name>` page (an extension can offer a manual trigger with no UI page at all). Unlike every other capability, reaching the dispatch route needs the account's own Admin capability, not merely the extension's approval -- a manual trigger runs someone's explicit request, on demand, not a reaction to a write any user made or a tool the model itself decided to call. Runs synchronously and returns a plain `{message = "..."}`; a trigger whose real work is slow is expected to kick that work off elsewhere (an outbound call, a queue write) and return quickly itself, the same way a `ui` action must.
+- `manual_triggers: [{name, label, description}]` -- contributes admin-only "run this now" buttons, listed and dispatched from a dedicated `/admin-triggers` route (`/admin-triggers/<extension>/<trigger>`) rather than an extension's own `/ext/<name>` page (an extension can offer a manual trigger with no UI page at all). Unlike every other capability, reaching the dispatch route needs the account's own Admin capability, not merely the extension's approval -- a manual trigger runs someone's explicit request, on demand, not a reaction to a write any user made or a tool the model itself decided to call. Runs synchronously and returns a plain `{message = "..."}`; a trigger whose real work is slow is expected to kick that work off elsewhere (an outbound call, a queue write) and return quickly itself, the same way a `ui` action must.
 
-An extension needs an explicit approval before any of its hooks/routes/tools/triggers run at all, and the exact capabilities it declared at that moment are what get recorded as approved. If the manifest's declared capabilities change afterward -- including editing an already-approved `ui`/`tools`/`manual_triggers` entry, not just adding or removing one -- approval is automatically treated as stale until a human reviews and re-approves it -- an extension can't silently escalate what it's allowed to touch just by editing its own manifest.
+Extension directory names and resource names must pass `config.valid_resource_name` (lowercase ASCII letters, digits, `_`, `-`; directories missing either `manifest.lua` or `main.lua` are ignored so unfinished scaffolds do not error). Every Extension invocation (`on_before`, `on_after`, `render`, UI actions, `tools`, and `manual_triggers`) executes inside `sandbox.extension_env` under `extension.call_bounded` (`sandbox.pcall_bounded`). Queued `system_job` rows from `after_*` hooks are claimed atomically (`status = 'running:<token>'`, recovering crashed claims after `900 s`) and retried up to `extensions.max_job_attempts` (default `5`) before moving to `'failed'` so one broken Extension job never blocks others.
+
+An extension needs an explicit approval (`system_approval`, `kind = 'extension'`) before any of its hooks/routes/tools/triggers run at all, and the exact capabilities it declared at that moment are what get recorded as approved ([004-sandboxed-content-and-hash-keyed-approvals.md](decisions/004-sandboxed-content-and-hash-keyed-approvals.md)). `extension.capabilities_equal` compares stored vs. current capabilities via order-independent set and deep table equality (avoiding `dkjson.encode` hash-key ordering drift), and `agent.tool_registry` re-checks approval on every call so revoking or editing an Extension's manifest takes effect immediately, mid-turn included.
 
 ## Extension-owned entity types and views
 
@@ -95,6 +97,30 @@ An extension never creates tables itself -- there's no DDL capability. Its schem
 - **Declared by name.** Only the names listed in `capabilities.schemas`/`views` are loaded, and the listed names are part of what gets approved -- so owning a new entity type (a new table) is a capabilities change that makes the extension unapproved until someone re-approves it. Editing an already-declared schema's fields doesn't: that deploys the same way a change to `schemas/` does. A file must define the name it's declared under, or schema sync fails.
 - **Only while approved.** An unapproved extension's types are never registered or updated. Revoking one (or deleting it) never drops anything: a table registered while it was approved keeps its data, exactly like deleting a file from `schemas/`.
 - **No overriding.** The same entity type or view name defined twice -- in `schemas/` and an extension, or in two extensions -- fails schema sync (or `daat view list`) with an error naming both, rather than one silently winning.
+
+## Saved Views (`views/*.lua`, `src/view.lua`)
+
+Saved Views are named, read-only `SELECT` queries stored in `views/<name>.lua` (or inside an approved Extension's `extensions/<ext>/views/<name>.lua` when listed in `capabilities.views`), loaded under `sandbox.data_env()`:
+
+```lua
+return {
+  name = "widgets-in-stock",
+  title = "Widgets in stock",
+  entity_type = "widget", -- optional: renders "+ Register new" on /view
+  param = {name = "min_qty", type = "integer"}, -- optional: integer | number | text (never 'id' or 'name')
+  sql = "SELECT id, label, quantity FROM widget WHERE quantity >= ? AND archived_at IS NULL ORDER BY label ASC;",
+  sql_mariadb = nil, -- optional MariaDB-specific SQL when no single portable expression exists (e.g. DATEDIFF vs julianday)
+  columns = {
+    {name = "id", label = "ID"},
+    {name = "label", label = "Label"},
+    {name = "quantity", label = "Quantity"},
+  },
+}
+```
+
+- **Exact-SQL approval (`system_approval`, `kind = 'view'`):** Views do not execute on `/view`, inline `{{view:...}}` embeds, or the agent's `view.run` tool until approved via `daat view approve <name>` or `/system`. `view.approval_identity` records `sql` (combined with `sql_mariadb` when present), so editing either query string invalidates approval immediately ([004-sandboxed-content-and-hash-keyed-approvals.md](decisions/004-sandboxed-content-and-hash-keyed-approvals.md)). Runtime parameters (`?`) execute via `db.query_params` rather than raw string interpolation.
+- **Lexical `SELECT`-only enforcement (`view.select_only_problem`):** Shared across Saved Views, `label_template.sql`, `/sql` (`view.run_adhoc`), and `entity.query` (`view.run_agent_query`). A token scanner strips `--`, `#`, and `/* ... */` comments while rejecting MySQL executable comments (`/*! ... */`), stacked `;` statements, backslash-ambiguous literals, and `FORBIDDEN_SQL_WORDS` (`insert`, `update`, `delete`, `drop`, `alter`, `attach`, `pragma`, `replace`, `outfile`, `load_file`, `get_lock`, `sleep`, `benchmark`, ...).
+- **Agent `entity.query` table boundary vs. `/sql` console:** Setup/Admin `/sql` (`view.run_adhoc`, capped at `ui.adhoc_row_cap`) can read any table, whereas the chat agent's `entity.query` (`view.run_agent_query`, capped at `agent.query_row_cap`) parses every `FROM`/`JOIN` target across CTEs and subqueries and restricts access to `view.queryable_tables`: registered Entity tables, their `<type>_<field>` multivalue junctions, `entity_ref`, `document_link`, and `entity_event` — keeping `auth_user`, `auth_api_key`, `agent_message`, and `agent_pending_action` unreachable even under prompt injection, and appending an explicit warning note whenever a query omits `archived_at` on a table that contains archived rows.
 
 ## What extensions cannot do today
 

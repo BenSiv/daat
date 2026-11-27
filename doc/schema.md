@@ -119,9 +119,21 @@ return {
 
 Dropdown files live in `dropdowns/*.lua`, loaded the same config-as-code way `schemas/*.lua` is. A dropdown's current values are resolved into the field's own `enum_values` at schema-sync time, so editing `dropdowns/work_process.lua` and re-syncing updates every field that references it -- one edit, not a hunt-and-replace across every schema file that happened to inline the same list. This is purely a literal-value mechanism -- no foreign key, no entity type involved -- entirely separate from `reference`/`multi_reference`, which are real entity links.
 
-## Type-level flags -- `admin_write_only`
+## Type-level flags -- `admin_write_only` and audit-reason requirements
 
-A definition can opt into `admin_write_only = true` at the top level (alongside `name`/`fields`), requiring Admin capability to create/update/archive any row of that type (checked in `web.lua`'s entity-write routes, not here -- schema.lua has no notion of an HTTP session). Anyone can still read/view rows of the type; this only gates writes. Meant for entity types whose data is itself sensitive or consequential in a way ordinary lab entities aren't -- see `label_template` below, the first real consumer.
+A definition can opt into three optional boolean flags at the top level (alongside `name`/`fields`):
+
+- `admin_write_only = true`: requires Admin (`a`) capability to create, update, archive, or unarchive any Entity of this type (enforced in `web/entity_routes.lua`, `web/api_v1_routes.lua`, and `agent_tools.check_write_capability`). Baseline (`i`) accounts can still read/browse rows. Used for Entity types whose fields carry operational authority, such as `label_template` below.
+- `require_reason_on_update = true` / `require_reason_on_archive = true`: requires callers (`entity.update` / `entity.archive` across UI, `/api/v1`, CLI, and chat tools) to supply a non-empty free-text `reason`, persisted on the resulting `entity_event.reason` ledger row.
+
+## Naming rules, built-in columns & reserved words
+
+- **Identifier syntax (`schema.valid_name_syntax`):** Entity-type and field names must match `^[a-z_][a-z0-9_]*$` (lowercase ASCII letters, digits, and underscores, never starting with a digit).
+- **Built-in columns (`RESERVED_FIELD_NAMES`):** Every generated Entity table automatically carries `id`, `created_by`, `created_at`, `updated_by`, `updated_at`, `last_event_id`, `external_id`, `name`, and `archived_at`. Custom fields cannot reuse any of these names (for example, name a custom title column `label`, not `name`):
+  - `external_id` (indexed via `idx_<type>_external_id`) lets external sync scripts upsert idempotently (`daat entity external-ids <type>` and `daat entity field-map <type> <field>` return `{key: id}` across all rows while preferring active rows over archived duplicates).
+  - `name` stores an external source's primary display name when imported, checked ahead of the schema's `{display = true}` field by `ui.entity_display_label` and `entity.search_across_types`.
+  - `archived_at` is `NULL` while active and holds a timestamp once archived ([003-append-only-ledger-and-soft-archive.md](decisions/003-append-only-ledger-and-soft-archive.md)).
+- **Reserved SQL keywords & internal tables (`#65`):** Entity-type names (`def.name`) cannot collide with any of `daat`'s internal platform tables (`RESERVED_PLATFORM_TABLES`: `auth_user`, `entity_event`, `agent_session`, ...) or the 249-word union of SQLite 3.45 and MariaDB 10.11 strictly reserved SQL keywords (`RESERVED_SQL_WORDS`, e.g. `release`, `condition`, `range`, `match`, `key`), because Entity-type names appear unquoted in raw `SELECT ... FROM <type>` queries across Saved Views ([extensibility.md](extensibility.md)), `/sql`, and `entity.query`. Field names (`field.name`) *may* use SQL keywords such as `sql` or `usage`, because generated DDL/DML always quotes column identifiers via `db.quote_ident`.
 
 ## Label printing (`label_template`)
 
@@ -146,7 +158,7 @@ return {
 
 `sql`'s `sql_select` type means it's rejected at save time if it's anything but a plain `SELECT` (reusing the same check `views/*.lua` already uses) -- re-checked again at render time too, storage is never trusted alone. `admin_write_only` means only an Admin can create or edit a `label_template` row; anyone who can view an entity's `/detail` page can still print it.
 
-## Master/detail: a entity type with a variable-length list of children
+## Master/detail: an entity type with a variable-length list of children
 
 Some entities are naturally a fixed set of fields plus however many child rows a user adds -- e.g. a `composite` entity built from however many `component` rows describe it. No new storage concept is needed for this: `component` is just its own entity type with a plain `reference` field pointing at `composite`, exactly like any other `reference`. Children aren't picked from a pre-existing list the way a `multi_reference` value would be -- each one is entered fresh alongside its parent -- so the junction-table mechanism above doesn't apply here at all.
 
@@ -178,14 +190,16 @@ Three generic mechanisms, computed from `schema.relationships()` (every `referen
 
 A definition file is executable, not inert data the way a YAML/JSON file would have been -- so it isn't loaded by simply running it: it's bound to a restricted execution environment that can only construct and return a plain description, nothing that could touch the filesystem, network, or anything else an extension might legitimately need. Same security posture a data format would have had, without needing a second parser to get there.
 
-## What a definition generates
+## What a definition generates & additive schema sync
 
-Loading a definition does two things:
+Loading a definition (`schema.register` / `schema.sync_all`) does two things:
 
-1. Registers (or updates) the entity type's own field list, which the history log and validation both read at runtime.
-2. Generates (or migrates) a real, typed table for that entity type -- `reagent(id, lot_number, concentration, prepared_on, status, prepared_from, created_by, created_at, updated_by, updated_at, last_event_id, archived_at)` -- the thing a dashboard actually queries. A `multi_select`/`multi_reference` field never becomes a column here -- it gets its own companion junction table instead (see above). A `polymorphic_reference`/`multi_polymorphic_reference` field never becomes a column either -- it's stored in the shared `entity_ref` table instead (see "Polymorphic references" above).
+1. Registers (or updates) the Entity type's metadata in `entity_type` and `entity_field`, which the ledger, forms, and validation read at runtime (`schema.sync_all` syncs `dropdowns/*.lua` first in one transaction so `dropdown = "..."` references resolve into `entity_field.enum_values`, then registers `schemas/*.lua` iteratively so cross-type foreign keys settle regardless of filename order, gated behind `schema.sync_signature` in `system_state` under `db.with_lock("daat_schema_sync")`).
+2. Generates (or migrates) a real, typed table for that Entity type -- `reagent(id, lot_number, concentration, prepared_on, status, prepared_from, created_by, created_at, updated_by, updated_at, last_event_id, external_id, name, archived_at)` -- the table Views, `/browse`, `/sql`, and `entity.query` read (`text` maps to `LONGTEXT` so values over 64 KB never truncate on MariaDB; see [mariadb-migration.md](mariadb-migration.md)). `multi_select`/`multi_reference` fields project into `<entity_type>_<field>` junction tables, and `polymorphic_reference`/`multi_polymorphic_reference` fields project into the shared `entity_ref` table.
 
-Changes to a definition are themselves ordinary version-control commits: renaming or adding a field is a diff against `schemas/reagent.lua`, reviewable and revertable the same way any other change is.
+**Additive-only evolution & field retirement ([003-append-only-ledger-and-soft-archive.md](decisions/003-append-only-ledger-and-soft-archive.md)):** `schema.sync_table` never automatically drops or renames SQL columns. Removing a field from `schemas/<type>.lua` deletes its `entity_field` metadata row (hiding it from forms, `/browse`, and validation) while preserving the underlying column and all stored values so re-adding the field restores its data. If a scalar column is later converted into a multivalue or polymorphic field of the same name, `entity.apply_computed_field_overrides` overwrites the stale scalar column value in memory from the companion junction/`entity_ref` table on every read; changing a field between `multi_select` and `multi_reference` drops and recreates `<type>_<field>` only when the companion table is empty, raising an error if rows already exist.
+
+Changes to a definition are themselves ordinary version-control commits: renaming or adding a field is a diff against `schemas/reagent.lua`, reviewable and revertable the same way any other change is. For read-only SQL reporting over these tables, see Saved Views (`views/*.lua`) in [extensibility.md](extensibility.md).
 
 ## Where a generic data format still shows up
 

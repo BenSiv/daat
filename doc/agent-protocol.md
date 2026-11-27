@@ -9,12 +9,15 @@ This wasn't always true. `AGENT_TOOLS`' tool-parameter schemas used to be author
 ## The provider interface
 
 ```lua
+provider.default_model           -- string: default chat/generation model when config.lua omits agent.model
+provider.default_embedding_model -- string (optional): default embedding model when config.lua omits knowledge.embedding_model
 provider.generate(model, system_prompt, prompt) -> (text, err, usage, thinking)
 provider.converse(model, system_prompt, messages, tools) -> (response, err, usage)
-provider.embeddings(model, text) -> (vector, err)  -- optional
+provider.embeddings(model, text) -> (vector, err)               -- optional
+provider.embeddings_batch(model, texts) -> (vectors, err)       -- optional; agent_provider falls back to per-text .embeddings()
 ```
 
-Loaded dynamically by name (`config.load().agent_provider`, unset by default) via `agent_provider.lua`, so switching providers -- or swapping in the deterministic `test` provider for repeatable, cost-free test runs -- is a config change, not a code change.
+Loaded dynamically by name (`config.load().agent_provider`, unset by default) via `agent_provider.lua`, so switching providers -- or swapping in the deterministic `test` provider for repeatable, cost-free test runs -- is a config change, not a code change (see [002-provider-facade-tier.md](decisions/002-provider-facade-tier.md)). Core code names no model; passing `nil` for `model` resolves `agent.model` / `knowledge.embedding_model` from `config.lua` and falls back to the active provider's `default_model` / `default_embedding_model`.
 
 ## Messages
 
@@ -62,9 +65,51 @@ A provider whose native schema convention differs from this is expected to trans
 
 Some vendors offer tools they execute themselves (Anthropic's `web_search`, `code_execution`, etc.) -- these run before the provider adapter (or `agent.lua`) ever sees them, which means they can't be gated by the pending-approval flow every destructive `AGENT_TOOLS` entry already goes through (`agent.create_pending_action`). A capability like web search, if added, belongs in `AGENT_TOOLS` as an ordinary custom tool backed by our own API call inside `agent.execute_tool` -- going through the same approval gate as `entity.create`/`document.create` -- not as a vendor's server-executed tool. No provider adapter should declare one of these on the wire.
 
+## Provider Wire Translations & Live-Verified Quirks
+
+All vendor-specific wire rules live inside `src/provider/agent_*.lua` so `agent.lua` and `AGENT_TOOLS` remain vendor-agnostic ([review-checklist.md](review-checklist.md), "A stable base, a flexible shell"):
+
+### Shared transport & serialization invariants
+- **Temp-file `curl` payloads & explicit timeouts:** HTTP providers (`vertex`, `claude`, `ollama`) write JSON request bodies to temporary files (`curl -d @file` via `external_tool.with_temp_file`) rather than shell-interpolating prompt/response text, and bound requests with explicit `--max-time` (`120 s` on `agent_vertex.lua` and `agent_ollama.lua`) so a hung upstream API surfaces a clean connectivity error instead of freezing the CGI process until Apache `mod_cgid` times out.
+- **Empty JSON Schema `properties` (`#20`):** In Lua, an empty `{}` table has no object-vs-array distinction and `dkjson.encode` serializes it as `[]`. Vertex rejects `{"type":"OBJECT","properties":[]}` with HTTP `400 INVALID_ARGUMENT` on tool declaration alone. Therefore `AGENT_TOOLS`' `EMPTY_OBJECT_SCHEMA` (`src/agent_tools.lua`), `vertex_schema_from_canonical`, and `agent_ollama.lua`'s `empty_json_object()` attach `{__jsontype = "object"}` whenever `properties` or tool `arguments` is empty.
+- **History pairing & `self_check` framing (`src/agent.lua`):** Both Vertex and Claude reject requests containing unpaired tool calls or orphaned tool results. `agent.pair_tool_results` repairs history before `.converse()` (synthesizing explicit error results for interrupted calls, warning against re-running crashed `'running'` writes via `agent.interrupted_writes` `#22`, and degrading legacy pre-JSON rows to user notes). Automated `self_check` critiques are sent as `user` messages prefixed with `[Automated self-check, not the real user ...]` because vendor wire protocols strictly alternate `user`/`assistant` turns and unlabelled critiques caused models to hallucinate a repetitive user loop.
+
+### Google Vertex AI (`src/provider/agent_vertex.lua`)
+- **Defaults & config:** `default_model = "gemini-3.5-flash-lite"` (`:generateContent`), `default_embedding_model = "text-embedding-005"` (`:predict`); reads `agent.vertex_project` (required) and `agent.vertex_region` (default `"global"`).
+- **`DEFAULT_REGION = "global"` & bare hostname:** Current Gemini 3.x models (`gemini-3.5-flash-lite`) return `404` on regional endpoints such as `us-central1` and are served on `"global"`. Unlike regional locations (`{region}-aiplatform.googleapis.com`), `"global"` uses the bare host `https://aiplatform.googleapis.com` (`global-aiplatform.googleapis.com` does not resolve in DNS).
+- **Mandatory `thoughtSignature` <-> `thinking_signature` round-trip (Gemini 3.x):**
+  - Vertex represents reasoning parts as `{text = ..., thought = true}` and places them *ahead* of visible answer parts in `candidates[1].content.parts[]` (`vertex_text_and_thinking_from_parts` separates `thought == true` parts so `generate()` never mistakes internal reasoning for the final answer).
+  - Any part may carry `thoughtSignature`, captured onto canonical blocks as `thinking_signature` and echoed back as `part.thoughtSignature`. On Gemini 3.x, omitting `thoughtSignature` when replaying a `functionCall` part fails immediately with HTTP `400 INVALID_ARGUMENT` (`Function call ... is missing a thought_signature`).
+  - On parallel tool-call turns (`2+` `functionCall` parts in one response), Vertex attaches `thoughtSignature` **only to the first `functionCall` part**; subsequent calls in that turn carry none and expect none echoed back. Signatures on final `text`/`thinking` parts are optional (recommended for continuity, not enforced).
+- **Landmine — never send or echo `functionCall.id` / `functionResponse.id`:** Although Gemini 3 responses include an `id` field on `functionCall` (and direct Gemini Developer API docs say to echo it on `functionResponse`), Vertex AI's `generateContent` proto rejects any `functionCall` or `functionResponse` carrying an `id` field with HTTP `400 INVALID_ARGUMENT`. `agent_vertex.lua` deliberately ignores wire `id`s, synthesizes turn-local `call_1..call_N` IDs for `agent.lua`, and merges consecutive canonical `toolResult` messages into a **single** `{role = "user", parts = [...]}` entry (`is_tool_response_group`) matched positionally by tool `name` (splitting parallel `functionResponse`s across separate `user` entries also fails with HTTP `400`).
+- **`finishReason` vs. `stopReason`:** Vertex returns `finishReason = "STOP"` even when a turn ends in tool calls; `stopReason = "toolUse"` must be derived from the presence of any `functionCall` part (`MAX_TOKENS` -> `"length"`, `SAFETY`/`RECITATION`/other non-`STOP` -> `"error"`; `agent.lua` retries `MALFORMED_FUNCTION_CALL` / `MALFORMED_RESPONSE` once per turn with `MALFORMED_CALL_NOTE`).
+- **`thinkingConfig` (`agent.thinking`):** `includeThoughts = true` alone emits zero thoughts on models whose default thinking budget is off (`gemini-3.5-flash-lite`). `vertex_thinking_config` maps `"off"` -> `{includeThoughts = false}`, `"summary"` -> `{includeThoughts = true, thinkingLevel = "MEDIUM"}`, and `"full"` -> `{includeThoughts = true, thinkingLevel = "HIGH"}`.
+- **Schema proto enums, token caching & batch embeddings:** `vertex_schema_from_canonical` uppercases JSON Schema `type` names (`"object"` -> `"OBJECT"`, etc.). Access tokens are cached in `.store/vertex-token-cache.json` (`60 s` expiry margin), fetched first from the local GCE metadata server (`10 s` timeout, avoiding per-call `gcloud` Python startup and credential-file lock contention) with off-GCE `gcloud auth print-access-token` fallback and one-shot cache eviction + retry on `401`/`UNAUTHENTICATED`. `embeddings_batch` chunks up to `100` texts / `30,000` chars (under Vertex's `250`-instance / `20,000`-token `:predict` limits) and recursively bisects batches on `"input token count"` errors when dense numeric/non-English text packs at `~1.4 chars/token`.
+
+### Anthropic Claude (`src/provider/agent_claude.lua`)
+- **Defaults & auth:** `default_model = "claude-sonnet-5"` (`POST https://api.anthropic.com/v1/messages`, `anthropic-version: 2023-06-01`, `ANTHROPIC_API_KEY`); no `.embeddings` support.
+- **Tool-name charset mapping (`#21`):** Claude restricts tool names to `^[a-zA-Z0-9_-]{1,128}$`, forbidding dots in `daat`'s `<group>.<method>` names (`document.search`). `claude_wire_tool_name` / `claude_canonical_tool_name` map `.` <-> `__` on tool declarations, replayed `tool_use` blocks, and incoming responses, and reject Extension tool names that already contain `__` or exceed `128` characters with a clear local error.
+- **Schemas, IDs & thinking:** Canonical lowercase JSON Schema maps directly to `input_schema` (refusing any tool missing `parameters`, `#20`). Anthropic's native `toolu_...` IDs are preserved verbatim across `tool_use` and `tool_result` (`role = "user"`, carrying `is_error`), `thinking` block `signature` round-trips via `thinking_signature`, and `claude_thinking_config` maps `"summary"` / `"full"` to `{type = "enabled", budget_tokens = 2048 | 8192}` while raising `max_tokens` (`budget_tokens + 4096 | 8192`) to satisfy Anthropic's `max_tokens > budget_tokens` constraint.
+
+### Ollama & OpenAI-Compatible Servers (`src/provider/agent_ollama.lua`)
+- **Defaults & endpoints:** `default_model = "qwen3:8b"`, `default_embedding_model = "nomic-embed-text"` against `agent.ollama_url` (default `"http://127.0.0.1:11434/v1"`, endpoints `/chat/completions` and `/embeddings`, optional `OLLAMA_API_KEY` or `OPENAI_API_KEY` Bearer token). Compatible without code changes with Ollama, `llama-server`, vLLM, LM Studio, OpenRouter, and OpenAI.
+- **Tool-name charset & JSON-string arguments (`#21`):** OpenAI-compatible servers enforce `^[a-zA-Z0-9_-]{1,64}$` (`64`-character cap, stricter than Claude's `128`), using the same `.` <-> `__` translation. Outgoing `tool_calls[].function.arguments` are JSON-encoded strings (decoded back to tables on receipt), and `toolResult` maps to `{role = "tool", tool_call_id = ...}`.
+- **Three-way reasoning capture & opt-in `reasoning_effort`:** Open-weights servers return reasoning via `message.reasoning` (Ollama, OpenRouter), `message.reasoning_content` (vLLM, DeepSeek, `llama-server --reasoning-format deepseek`), or leading `<think>...</think>` tags inside `message.content`. `ollama_blocks_from_message` handles all three, always stripping `<think>...</think>` from visible text even when `agent.thinking == "off"`. Outgoing `reasoning_effort` (`"none"` / `"medium"` / `"high"`) is omitted unless `agent.ollama_reasoning_effort = true`, because Ollama and strict OpenAI servers return HTTP `400` when `reasoning_effort` is sent to models without thinking support (`llama3.2`, `gemma3`).
+- **`finish_reason` fallback & batch embeddings:** `ollama_finish_reason_to_canonical` returns `"toolUse"` whenever `message.tool_calls` is non-empty even if a local server reports `finish_reason = "stop"`. `embeddings_batch` sends `{model, input = texts}` in one request and reorders `response.data` by `item.index` when present.
+
+### Deterministic Test Stub (`src/provider/agent_test.lua`)
+- Selected via `agent = { provider = "test" }` in `config.lua`; exercises the exact production turn/compaction/curation code paths with deterministic `ceil(chars / 4)` token counts and zero network calls.
+- Controlled via environment variables:
+  - `AGENT_TEST_RESPONSES`: `\x01`-delimited list of scripted replies (`generate()` returns raw text; `converse()` JSON-decodes canonical `{content, stopReason}` objects; repeats the last entry once exhausted).
+  - `AGENT_TEST_GENERATE_RESPONSES`: separate `\x01`-delimited list and counter for `generate()`, preventing side-effect calls (curation, link/tier judgment, tag naming) from consuming scripted `converse()` turns during scorecard runs.
+  - `AGENT_TEST_SELF_CHECK_RESPONSE`: JSON override for no-tools `converse()` calls (`run_self_check` and turn-limit wrap-ups), which otherwise auto-reply `CONFIRM` without advancing `AGENT_TEST_RESPONSES`.
+  - `AGENT_TEST_THINKING` / `AGENT_TEST_GENERATE_THINKING`: inject synthetic `thinking` blocks/strings when `agent.thinking != "off"`.
+  - `AGENT_TEST_CAPTURE_SYSTEM_PROMPT`, `AGENT_TEST_CAPTURE_PROMPT`, `AGENT_TEST_CAPTURE_MESSAGES`: write exact received inputs to disk for unit/integration assertions.
+  - `AGENT_TEST_PROMPT_TOKENS` (override reported `prompt_tokens` for compaction tests), `AGENT_TEST_CONVERSE_DELAY` (sleep seconds for detached-turn heartbeat/staleness tests), and `AGENT_TEST_EMBEDDINGS=terms` / `AGENT_TEST_EMBEDDINGS_LOG` / `AGENT_TEST_EMBEDDINGS_FAIL` (64-dim word-hash vectors, call logging, or forced failure for embedding/passage tests).
+
 ## Adding a new provider
 
-1. Write `src/provider/agent_<name>.lua` implementing `.generate`/`.converse` (and `.embeddings` if the vendor has one).
+1. Write `src/provider/agent_<name>.lua` setting `default_model` (and `default_embedding_model` if supported) and implementing `.generate`/`.converse` (plus `.embeddings`/`.embeddings_batch` if available).
 2. Translate `messages`/`tools` from the canonical shape above into the vendor's real wire format, and the vendor's response back into canonical blocks/`stopReason` -- entirely within that one file.
 3. No changes needed to `agent.lua`, `web.lua`, or the existing test suite (`src/provider/agent_test.lua`'s scripted fixtures already use this canonical shape directly).
-4. Set `config.load().agent_provider` to `"<name>"` to switch.
+4. Set `agent = { provider = "<name>" }` in `config.lua` to switch.
