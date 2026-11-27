@@ -18,21 +18,9 @@
         var timer = null;
         var loaded = false;
         trigger.addEventListener('mouseenter', function(){
-            // .platform-popover's default CSS is `position: absolute`
-            // relative to the trigger -- fine standalone, but a long
-            // result table is wrapped in `.platform-table-wrapper
-            // { overflow-x: auto }`, and per the CSS Overflow spec
-            // setting only one axis forces the *other* axis to compute
-            // as auto too (an explicit `overflow-y: visible` on the
-            // wrapper gets overridden back to auto by that same rule,
-            // so it's not a viable CSS-only fix), so the wrapper clips/
-            // traps the popover instead of letting it float free.
-            // Repositioned to `position: fixed` with real
-            // viewport coordinates here escapes that clipping
-            // entirely, since a fixed-position element is placed
-            // relative to the viewport, not any scrolling ancestor.
+            // Viewport-relative position:fixed prevents clipping inside .platform-table-wrapper (overflow-x:auto).
             var rect = trigger.getBoundingClientRect();
-            var popWidth = 320; // matches .platform-popover's max-width
+            var popWidth = 320;
             var left = Math.min(rect.left, window.innerWidth - popWidth - 12);
             left = Math.max(left, 8);
             pop.style.position = 'fixed';

@@ -27,10 +27,7 @@ const KNOWLEDGE_TIER_CAPTIONS = {
     [3] = "Short, single-subject, distilled to one idea.",
 }
 
--- Multi-hue cool sequential ramp fitting the default slate + indigo (#4f46e5)
--- theme (sky -> cobalt -> brand indigo -> deep violet; OKLab L ~0.75 -> 0.62
--- -> 0.51 -> 0.34, >= 2.1:1 contrast on #f8fafc/#ffffff), so all four tiers
--- stay clearly distinct on small graph nodes as well as /knowledge tile borders.
+-- Sequential cool-hue palette keeping Tiers 0-3 distinct on graph nodes and /knowledge tiles.
 const KNOWLEDGE_TIER_COLORS = {
     [0] = "#55bbdc",
     [1] = "#2988e4",

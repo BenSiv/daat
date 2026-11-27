@@ -1,22 +1,5 @@
--- Real login/session auth, replacing web.lua's Phase 0
--- AUTH_USER/AUTH_CAPABILITIES/AUTH_NONCE env-var stub.
---
--- Password storage: bcrypt (require("bcrypt"), luam/lib/bcrypt/bcrypt.c).
--- Session cookies: no server-side session rows -- the cookie itself is
--- "<login>.<expiry_unix>.<hmac_hex>", verified with
--- require("hmac").sha256 keyed by a per-store secret generated once at
--- init (config.session_secret_path) and never transmitted. The HMAC
--- also covers the account's session_version, which lives only in the
--- user row: bumping it (every password change does) voids every cookie
--- issued before, without keeping a list of sessions. Capabilities are
--- deliberately NOT embedded in the cookie: they're looked up fresh
--- from the user table on every request, so a capability change or
--- archive takes effect on the user's very next request rather than
--- only after their session cookie expires. See doc/auth.md for why
--- each piece is built the way it is.
--- CSRF: a separate, unsigned random token, double-submitted (cookie +
--- request field/header must match) -- doesn't need HMAC signing since
--- it's only ever compared to itself, not decoded or trusted alone.
+-- Password (bcrypt), HMAC-signed session cookie, double-submit CSRF, API key, and email-link auth.
+-- Capabilities and session_version are read live per request; see doc/auth.md.
 
 const db = require("database")
 const paths = require("paths")
@@ -28,22 +11,16 @@ const config_lib = require("config")
 
 const auth = {}
 
--- hex_encode used before its own definition below -- pre-declared,
--- see ../../luam/doc/forward_references.md
 hex_encode = nil
 
-const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7 -- 7 days
+const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7
 auth.SESSION_TTL_SECONDS = SESSION_TTL_SECONDS
 
+-- Dual-backend auth DDL; see doc/auth.md and doc/mariadb-migration.md.
 auth.SCHEMA = """
--- VARCHAR(255), not TEXT -- MariaDB/InnoDB refuses a bare TEXT column
--- as a key without an explicit length; see ledger.lua's own SCHEMA
--- comment for the full reasoning.
 CREATE TABLE IF NOT EXISTS auth_user (
     login VARCHAR(255) PRIMARY KEY,
     password_hash TEXT NOT NULL,
-    -- VARCHAR(32), not TEXT -- see extension.lua's system_job.status
-    -- for why: real MySQL 8.0 rejects a literal DEFAULT on TEXT columns.
     cap VARCHAR(32) NOT NULL DEFAULT '',
     email VARCHAR(255) DEFAULT NULL,
     email_verified_at INTEGER DEFAULT NULL,
@@ -52,12 +29,6 @@ CREATE TABLE IF NOT EXISTS auth_user (
     archived_at TEXT
 );
 
--- One row per emailed forgot-password link. Only a keyed hash of the
--- token is stored (auth.reset_token_hash), so a leaked database row
--- can't be replayed as a working link. issued_at/expires_at/used_at are
--- unix seconds (INTEGER), not the TEXT now() timestamps used elsewhere,
--- because they're compared against os.time() directly -- the same
--- reason the session cookie's own expiry is a unix integer.
 CREATE TABLE IF NOT EXISTS auth_email_link (
     token_hash VARCHAR(64) PRIMARY KEY,
     login VARCHAR(255) NOT NULL,
@@ -68,11 +39,6 @@ CREATE TABLE IF NOT EXISTS auth_email_link (
     used_at INTEGER
 );
 
--- External-integration auth, independent of any human user -- a key's
--- capabilities are its own, not derived from whoever created it (see
--- doc/architecture.md's "Auth" section). `label` (not a synthetic id)
--- is the primary key, same convention as user.login -- an
--- operator-chosen, human-meaningful, unique name.
 CREATE TABLE IF NOT EXISTS auth_api_key (
     label VARCHAR(255) PRIMARY KEY,
     key_hash TEXT NOT NULL,
@@ -82,30 +48,7 @@ CREATE TABLE IF NOT EXISTS auth_api_key (
 );
 """
 
--- Columns added after these tables already existed in real deployments,
--- so migrations rather than SCHEMA edits (CREATE TABLE IF NOT EXISTS
--- never adds a column to an existing table).
---
--- user.email: nullable -- an account with no email simply can't use the
--- forgot-password flow.
---
--- user.email_verified_at: when the account's current email was last
--- proven reachable -- set by completing a link emailed to that exact
--- address, cleared whenever the address changes. Unix seconds, like
--- auth_email_link's own times. Forgot-password only mails a verified
--- address (find_reset_account), so a mistyped address never receives
--- reset links.
---
--- user.session_version: covered by every session cookie's signature
--- (cookie_signature), and bumped by auth.set_password -- so changing a
--- password, by any route, ends every session that existed before it.
---
--- auth_email_link.purpose: "reset" (forgot-password), "setup" (an
--- account with no password yet chooses its first one -- that's also
--- how its address gets verified) or "verify" (an account that already
--- has a password confirms a new address by entering that password; it
--- can't set one). auth_email_link.email: the address the link went to.
--- A link only works while that is still the account's address.
+-- Incremental column migrations for pre-existing deployments.
 function ensure_auth_columns(db_path)
     store_mod = store_lib
     store_mod.ensure_columns(db_path, "auth_user", {
@@ -125,10 +68,6 @@ function auth.init_schema(db_path)
     return ok, err
 end
 
--- A per-store HMAC secret, generated once via CSPRNG and never
--- rotated automatically (rotating it invalidates every outstanding
--- session cookie, so that's an explicit operator action, not implicit
--- request-time behavior).
 function auth.ensure_session_secret(root)
     config = config_lib
     path = config.session_secret_path(root)
@@ -168,10 +107,7 @@ function random_hex_token(num_bytes)
     return crypto_lib.random_hex(num_bytes)
 end
 
--- Not a full constant-time comparison across arbitrary lengths (Lua's
--- string library gives no cheaper primitive), but both inputs here are
--- always fixed-length hex digests/tokens, so length itself leaks
--- nothing an attacker doesn't already know.
+-- Fixed-length digest/token comparison without early byte exit.
 function constant_time_equal(a, b)
     if string.len(a) != string.len(b) then
         return false
@@ -185,17 +121,11 @@ function constant_time_equal(a, b)
     return diff == 0
 end
 
---------------------------------------------------------------------------
--- User management
---------------------------------------------------------------------------
-
 function auth.create_user(db_path, login, password, cap)
     if login == nil or login == "" then
         return nil, "login is required"
     end
-    -- Session cookies encode "<login>.<expiry>.<sig>" with "." as the
-    -- field separator, so a login containing "." would make its own
-    -- cookie unparseable.
+    -- "." delimits "<login>.<expiry>.<hmac>" in session cookies.
     if string.find(login, ".", 1, true) != nil then
         return nil, "login cannot contain '.'"
     end
@@ -242,10 +172,7 @@ function auth.list_users(db_path, include_archived)
     return rows
 end
 
--- Also bumps session_version, which ends every existing session for
--- the account: whoever changes a password (the user on /account, an
--- admin, a reset link) wants the old one, and any session opened with
--- it, to stop working. /account re-issues the caller's own cookie.
+-- Bumps session_version to revoke all prior session cookies.
 function auth.set_password(db_path, login, password)
     user = auth.get_user(db_path, login)
     if user == nil then
@@ -262,31 +189,20 @@ function auth.set_password(db_path, login, password)
     return true
 end
 
--- An invited account has no password until its setup link is used.
--- Its password_hash holds this marker rather than a hash of some
--- random string, so "has this account ever had a password?" is a
--- fact the code can check (auth.has_password), not a guess. It can't
--- match any password: bcrypt.verify rejects it as an invalid hash.
+-- Sentinel rejected by bcrypt.verify for invited accounts before setup.
 const NO_PASSWORD_HASH = "!no-password"
 
 function auth.has_password(user)
     return user != nil and user.password_hash != nil and user.password_hash != NO_PASSWORD_HASH
 end
 
--- Stored lowercased, and unique across accounts (checked here, not
--- via a DB constraint -- see ensure_auth_columns for why this is
--- a migration), so the forgot-password form can accept an email and
--- resolve it to exactly one account. "" clears it. A changed address
--- starts unverified (email_verified_at NULL); setting the same address
--- again leaves its verification alone. A change or clear also voids
--- every link already mailed for the account: fixing a mistyped address
--- must cut off whoever received a link at the wrong one.
 function void_account_links(db_path, login)
     db.exec(db_path, string.format(
         "UPDATE auth_email_link SET used_at = %d WHERE login = %s AND used_at IS NULL;", os.time(), db.quote(login)
     ))
 end
 
+-- Lowercased unique email; changing or clearing resets verification and voids pending links.
 function auth.set_email(db_path, login, email)
     user = auth.get_user(db_path, login)
     if user == nil then
@@ -341,9 +257,6 @@ function auth.set_capabilities(db_path, login, cap)
     return true
 end
 
--- Archive/unarchive, not delete -- same nullable-timestamp convention
--- as entity.lua's archived_at, so a login can never be silently wiped;
--- an archived user just can no longer authenticate (see auth.login).
 function auth.archive_user(db_path, login)
     user = auth.get_user(db_path, login)
     if user == nil then
@@ -366,13 +279,7 @@ function auth.unarchive_user(db_path, login)
     return true
 end
 
---------------------------------------------------------------------------
--- API keys
---------------------------------------------------------------------------
-
--- auth.create_api_key(db_path, label, cap) -> raw_key_string | nil, err
--- Returns the raw key exactly once -- only its bcrypt hash is ever
--- stored, the same guarantee password_hash gives for user passwords.
+-- Returns the raw key once; only its bcrypt hash is persisted.
 function auth.create_api_key(db_path, label, cap)
     if label == nil or label == "" then
         return nil, "label is required"
@@ -432,8 +339,6 @@ function auth.set_api_key_capabilities(db_path, label, cap)
     return true
 end
 
--- Archive/unarchive, not delete -- same convention as archive_user; an
--- archived key just can no longer authenticate (see auth.verify_api_key).
 function auth.archive_api_key(db_path, label)
     key = auth.get_api_key(db_path, label)
     if key == nil then
@@ -456,11 +361,7 @@ function auth.unarchive_api_key(db_path, label)
     return true
 end
 
--- auth.verify_api_key(db_path, raw_key) -> api_key_row | nil
--- The key is hashed, so (unlike auth.login, which looks up a known
--- login) there's no indexed lookup by value -- every active row's hash
--- is checked in turn. Fine at this platform's real scale (a small
--- number of trusted integrations, not a public API).
+-- Scans active bcrypt hashes (unindexed by raw value; see doc/auth.md).
 function auth.verify_api_key(db_path, raw_key)
     if raw_key == nil or raw_key == "" then
         return nil
@@ -477,13 +378,7 @@ function auth.verify_api_key(db_path, raw_key)
     return nil
 end
 
---------------------------------------------------------------------------
--- Login + session cookies
---------------------------------------------------------------------------
-
--- auth.login(db_path, login, password) -> cap_string | nil, err_string
--- An unknown login still pays for one bcrypt run, so how long a failed
--- login takes doesn't tell a caller whether the login exists.
+-- Runs dummy bcrypt on unknown/passwordless logins to equalize timing.
 function auth.login(db_path, login, password)
     if login == nil or password == nil then
         return nil, "invalid login or password"
@@ -502,9 +397,6 @@ function auth.login(db_path, login, password)
     return user.cap
 end
 
--- session_version is signed but not carried in the cookie: it's read
--- from the user row at verify time, so a bumped version changes the
--- expected signature and every older cookie stops matching.
 function cookie_signature(secret, login, expiry, session_version)
     return hmac.sha256(secret, login .. "." .. tostring(expiry) .. "." .. tostring(session_version))
 end
@@ -517,10 +409,7 @@ function user_session_version(user)
     return version
 end
 
--- auth.issue_session_cookie(root, db_path, login) -> cookie_value_string | nil, err
--- Signs the account's canonical login (as stored), not whatever spelling
--- the caller typed -- MySQL's default collation matches logins
--- case-insensitively.
+-- Signs canonical stored user.login + expiry + session_version; verify enforces exact-case match.
 function auth.issue_session_cookie(root, db_path, login)
     secret, err = auth.session_secret(root)
     if secret == nil then
@@ -535,10 +424,6 @@ function auth.issue_session_cookie(root, db_path, login)
     return user.login .. "." .. tostring(expiry) .. "." .. sig
 end
 
--- auth.verify_session_cookie(root, db_path, cookie_value) -> user_row | nil, err
--- Returns the account only if the signature, the expiry and the
--- account's current session_version all check out and the account is
--- active, so callers can't forget one of those checks.
 function auth.verify_session_cookie(root, db_path, cookie_value)
     if cookie_value == nil or cookie_value == "" then
         return nil, "no session cookie"
@@ -561,8 +446,6 @@ function auth.verify_session_cookie(root, db_path, cookie_value)
     if user == nil or (user.archived_at != nil and user.archived_at != "") then
         return nil, "no such active user"
     end
-    -- Exact login, not the collation's case-insensitive match: the
-    -- signature covers the stored spelling.
     if user.login != login then
         return nil, "invalid session signature"
     end
@@ -573,10 +456,6 @@ function auth.verify_session_cookie(root, db_path, cookie_value)
     return user
 end
 
---------------------------------------------------------------------------
--- CSRF (double-submit cookie)
---------------------------------------------------------------------------
-
 function auth.generate_csrf_token()
     token, err = random_hex_token(24)
     if token == nil then
@@ -585,12 +464,6 @@ function auth.generate_csrf_token()
     return token
 end
 
--- A fresh per-request CSP nonce (replacing the old AUTH_NONCE env-var
--- stub, which used to relay Fossil's own per-request CSP nonce -- there
--- is no Fossil wrapper providing one anymore). Same shape as a CSRF
--- token but a distinct name since the two are semantically unrelated
--- (one gates inline <script> execution via CSP, the other guards
--- against cross-site form submission).
 function auth.generate_nonce()
     nonce, err = random_hex_token(16)
     if nonce == nil then
@@ -609,29 +482,14 @@ function auth.verify_csrf(cookie_token, submitted_token)
     return constant_time_equal(cookie_token, submitted_token)
 end
 
---------------------------------------------------------------------------
--- Forgot-password reset links
---------------------------------------------------------------------------
-
-const RESET_TTL_SECONDS = 60 * 60 -- 1 hour
--- At most one new link per account per window, so the (unauthenticated)
--- request form can't be used to flood someone's inbox.
+const RESET_TTL_SECONDS = 60 * 60
 const RESET_THROTTLE_SECONDS = 5 * 60
 
--- Keyed with the store's session secret rather than a bare digest, and
--- deterministic (unlike bcrypt), so a token can be looked up directly by
--- its hash -- the token itself is 32 random bytes, so there's nothing
--- for a slow hash to protect against brute-forcing.
+-- Keyed HMAC digest for indexed one-time token lookup.
 function reset_token_hash(secret, token)
     return hmac.sha256(secret, "password-reset." .. token)
 end
 
--- An identifier containing "@" is treated as an email, anything else as
--- a login. Only an active, non-Admin account with an email on file
--- qualifies. Admin ("a") accounts are excluded on purpose: emailed
--- recovery makes an account only as safe as its mailbox, and a
--- compromised admin mailbox shouldn't hand over the whole platform --
--- another admin resets them instead (/admin-users-password).
 function default_cap(cap)
     if cap == nil then
         return ""
@@ -643,6 +501,7 @@ function is_admin(user)
     return string.find(default_cap(user.cap), "a", 1, true) != nil
 end
 
+-- Active non-Admin accounts with a verified email only (see doc/auth.md).
 function find_reset_account(db_path, identifier)
     if identifier == nil then
         return nil
@@ -669,13 +528,8 @@ function find_reset_account(db_path, identifier)
     return user
 end
 
--- A setup link has longer to live than a reset one: it's the first
--- email a new account gets, often read days after the admin sent it.
 const SETUP_TTL_SECONDS = 7 * 24 * 60 * 60
 
--- Issues one emailed link (purpose "reset" or "setup") to user.email and
--- sends it. -> true | nil, err. The link is the same /reset-password
--- page either way; only its lifetime and the email's wording differ.
 function send_account_link(root, db_path, user, purpose, site_name)
     config = config_lib
     secret, err = auth.session_secret(root)
@@ -698,10 +552,7 @@ function send_account_link(root, db_path, user, purpose, site_name)
     ))
 
     base_url = string.gsub(config.load().public_url, "/+$", "")
-    -- In the #fragment, not the query string: browsers never send a
-    -- fragment to the server, so the token can't land in the web
-    -- server's or a load balancer's access log. /reset-password's own
-    -- script moves it into the form, which POSTs it.
+    -- Token rides in #fragment to stay out of server/proxy access logs.
     link = base_url .. "/reset-password#token=" .. token
     subject = "Reset your " .. site_name .. " password"
     lines = {
@@ -749,9 +600,7 @@ function send_account_link(root, db_path, user, purpose, site_name)
         body = table.concat(lines, "\n"),
     })
     if sent == nil then
-        -- Void the unsent link rather than delete it (nothing is ever
-        -- deleted -- see doc/architecture.md), and so it doesn't count
-        -- against the throttle: the user can retry straight away.
+        -- Mark used_at on send failure (append-only; avoids burning the 5-minute throttle).
         db.exec(db_path, string.format(
             "UPDATE auth_email_link SET used_at = %d WHERE token_hash = %s;", now, db.quote(token_hash)
         ))
@@ -760,16 +609,7 @@ function send_account_link(root, db_path, user, purpose, site_name)
     return true
 end
 
--- auth.send_setup_link(root, db_path, login, site_name) -> true | nil, err
--- Admin-triggered (account creation, setting an email), so no throttle.
--- Which link goes out depends on the account, because the address is
--- unverified and may be mistyped -- whoever reads it mustn't be able
--- to take the account over:
---   * no password yet (invited): a "setup" link that chooses one. Only
---     for non-Admin accounts; Admins get a password from another Admin.
---   * has a password: a "verify" link, which also asks for that
---     password, so it proves the reader is the account's owner as well
---     as the mailbox's. It can't change the password.
+-- Sends "setup" if passwordless (non-Admin), or "verify" (requires current password) if password exists.
 function auth.send_setup_link(root, db_path, login, site_name)
     user = auth.get_user(db_path, login)
     if user == nil or (user.archived_at != nil and user.archived_at != "") then
@@ -787,19 +627,6 @@ function auth.send_setup_link(root, db_path, login, site_name)
     return send_account_link(root, db_path, user, "setup", site_name)
 end
 
--- auth.invite_user(root, db_path, login, email, cap, site_name)
---   -> true | nil, err
--- Creates an account that has no usable password yet and emails it a
--- setup link: choosing a password through the link is also what
--- verifies the address, and the admin never knows the password. The
--- email is required and checked before anything is created. If only
--- the send fails, the account exists and the error says so --
--- setting the email again resends the link.
---
--- Not for Admin accounts: a setup link is only as safe as the mailbox
--- it lands in, and the address hasn't been verified yet. An Admin is
--- created with a password (daat user add, or /admin-users without
--- mail), or created without "a" and promoted once it has one.
 function auth.invite_user(root, db_path, login, email, cap, site_name)
     if email == nil or email == "" then
         return nil, "email is required"
@@ -833,11 +660,7 @@ function auth.invite_user(root, db_path, login, email, cap, site_name)
     return true
 end
 
--- auth.request_password_reset(root, db_path, identifier, site_name)
---   -> true (a link was emailed) | false (nothing to do: no matching
---      account, no email on file, or throttled) | nil, err (send failed)
--- The caller must show the same response for true and false alike, so
--- the form never reveals whether an account exists.
+-- Returns true (sent), false (unknown/unverified/throttled), or nil, err; callers render identical UX for true/false.
 function auth.request_password_reset(root, db_path, identifier, site_name)
     config = config_lib
     user = find_reset_account(db_path, identifier)
@@ -861,13 +684,7 @@ function auth.request_password_reset(root, db_path, identifier, site_name)
     return true
 end
 
--- auth.check_account_link(root, db_path, token) -> login, link | nil
--- Valid means: issued by this store, not yet used, not expired, the
--- account is still active, and the address it was mailed to is still
--- the account's address. A "reset" or "setup" link (both set a
--- password) is also refused for an Admin -- checked again here, not
--- only when the link was issued, so an account promoted after its link
--- went out can't use it. link is the auth_email_link row (purpose, email).
+-- Requires active account, matching current user.email, and non-Admin for password-setting links.
 function check_account_link(root, db_path, token)
     if token == nil or string.match(token, "^%x+$") == nil or string.len(token) != 64 then
         return nil
@@ -887,10 +704,6 @@ function check_account_link(root, db_path, token)
     if user == nil or (user.archived_at != nil and user.archived_at != "") then
         return nil
     end
-    -- Mailed to an address the account no longer has (or, for a row
-    -- from before addresses were recorded, to an unknown one): refused,
-    -- so correcting a mistyped address cuts off the wrong recipient
-    -- even if set_email's voiding were ever bypassed.
     link = rows[1]
     if link.email == nil or link.email == "" or link.email != user.email then
         return nil
@@ -901,8 +714,6 @@ function check_account_link(root, db_path, token)
     return user.login, link
 end
 
--- auth.check_password_reset(root, db_path, token) -> login, link | nil
--- A link that sets a password: "reset" or "setup", never "verify".
 function auth.check_password_reset(root, db_path, token)
     login, link = check_account_link(root, db_path, token)
     if login == nil or (link.purpose != "reset" and link.purpose != "setup") then
@@ -911,7 +722,6 @@ function auth.check_password_reset(root, db_path, token)
     return login, link
 end
 
--- auth.check_email_verification(root, db_path, token) -> login, link | nil
 function auth.check_email_verification(root, db_path, token)
     login, link = check_account_link(root, db_path, token)
     if login == nil or link.purpose != "verify" then
@@ -920,10 +730,7 @@ function auth.check_email_verification(root, db_path, token)
     return login, link
 end
 
--- Using any link voids every other outstanding link for the account,
--- so an older email lying around can't be used afterwards, and marks
--- the address the link went to as verified (check_account_link has
--- already confirmed it's still the account's address).
+-- Voids all outstanding links for login and marks link.email verified.
 function finish_account_link(db_path, login, link)
     void_account_links(db_path, login)
     db.exec(db_path, string.format(
@@ -932,10 +739,6 @@ function finish_account_link(db_path, login, link)
     ))
 end
 
--- auth.complete_password_reset(root, db_path, token, new_password)
---   -> login | nil, err
--- Setting the password also ends every existing session for the
--- account (auth.set_password bumps session_version).
 function auth.complete_password_reset(root, db_path, token, new_password)
     login, link = auth.check_password_reset(root, db_path, token)
     if login == nil then
@@ -952,11 +755,6 @@ function auth.complete_password_reset(root, db_path, token, new_password)
     return login
 end
 
--- auth.complete_email_verification(root, db_path, token, password)
---   -> login | nil, err
--- The account's current password is required as well as the link:
--- the link proves the mailbox, the password proves the account, and
--- an address only becomes a reset destination with both.
 function auth.complete_email_verification(root, db_path, token, password)
     login, link = auth.check_email_verification(root, db_path, token)
     if login == nil then
@@ -968,10 +766,6 @@ function auth.complete_email_verification(root, db_path, token, password)
     finish_account_link(db_path, login, link)
     return login
 end
-
---------------------------------------------------------------------------
--- CLI: `daat user <add|invite|passwd|email|capabilities|list|archive|unarchive> ...`
---------------------------------------------------------------------------
 
 function auth.do_user(cmd_args, db_path)
     action = cmd_args[1]
@@ -993,7 +787,6 @@ function auth.do_user(cmd_args, db_path)
         return
     end
 
-    -- Run from the store root, like every other CLI command ("." below).
     if action == "invite" then
         config = config_lib
         login = cmd_args[2]
@@ -1130,10 +923,6 @@ function auth.do_user(cmd_args, db_path)
 
     print("Usage: daat user <add|passwd|email|capabilities|list|archive|unarchive> ...")
 end
-
---------------------------------------------------------------------------
--- CLI: `daat api-key <create|list|capabilities|archive|unarchive> ...`
---------------------------------------------------------------------------
 
 function auth.do_api_key(cmd_args, db_path)
     action = cmd_args[1]

@@ -1,27 +1,5 @@
--- First-party-only page-section vocabulary: daat's OWN trusted pages
--- built as a typed table of sections instead of ad hoc string
--- concatenation, dispatched to a renderer -- the same "typed-table ->
--- trusted renderer" shape template.lua and ui.lua's own extension
--- canvas already use.
---
--- Deliberately NOT the same mechanism as ui.lua's canvas
--- (ui.validate_canvas/ui.render_canvas). That one exists to be a
--- narrow, deliberately-limited TRUST BOUNDARY: a plugin's page is
--- restricted to a closed vocabulary specifically so untrusted,
--- deployment-authored extension code can never emit arbitrary
--- HTML/JS. This module has no such boundary to protect -- every
--- caller is daat's own first-party code building its own pages -- so
--- its vocabulary can and should grow to cover what daat's real pages
--- actually need, without that growth ever widening what an extension
--- is allowed to do. Sharing one vocabulary between the two would mean
--- either crippling core pages down to the canvas's narrow set, or
--- growing the canvas to match core's needs and handing extensions
--- that same expanded surface -- both wrong for different reasons, see
--- doc/templating.md.
---
--- Vocabulary grows only when a real page needs a new section type,
--- same discipline template.lua's own four types and the canvas's own
--- four element types were grown under -- not speculatively.
+-- Trusted first-party page-section validator and HTML renderer.
+-- Distinct from ui.render_canvas and template.lua; see doc/decisions/006-trusted-page-sections-vs-extension-canvas.md.
 
 const html_lib = require("html")
 const render_lib = require("render")
@@ -30,10 +8,6 @@ const page = {}
 
 const FORM_FIELD_TYPES = {text = true, password = true, hidden = true, checkbox = true, file = true, textarea = true}
 
--- Validates one field list (a form's own top-level `fields`, or one of
--- its `groups[i].fields` -- see `form`'s own validation below for why
--- a form can have both). Split out so both call the exact same rules,
--- not two copies of them.
 function validate_fields(fields, label)
     for j, field in ipairs(fields) do
         if FORM_FIELD_TYPES[field.type] == nil then
@@ -47,9 +21,6 @@ function validate_fields(fields, label)
                 return string.format("%s field #%d (hidden): missing 'value'", label, j)
             end
         elseif field.label != nil and (type(field.label) != "string" or field.label == "") then
-            -- label is optional (an inline table-cell field renders
-            -- with no visible <label>, see .platform-admin-inline-form
-            -- callers) -- but if given at all, it has to be real text.
             return string.format("%s field #%d: 'label' must be a non-empty string if given", label, j)
         end
         if field.wrapper_class != nil and (type(field.wrapper_class) != "string" or field.wrapper_class == "") then
@@ -65,13 +36,6 @@ function validate_fields(fields, label)
     return nil
 end
 
--- Validates one section, returning an error string prefixed with
--- `label` (e.g. "page section #3" at the top level, or a nested
--- "page section #2 (table) row #1 cell #2 item #1" for a section
--- embedded in a table cell -- see the `table` type below) or nil.
--- Split out from page.validate so table cells can validate their own
--- nested sections through the exact same rules, not a second copy of
--- them.
 function validate_section(section, label)
     if section.type == "subheading" then
         if type(section.text) != "string" or section.text == "" then
@@ -123,14 +87,6 @@ function validate_section(section, label)
         if fields_err != nil then
             return fields_err
         end
-        -- groups: fields visually grouped under their own heading
-        -- inside this same <form> (settings' Site/Branding/Colors/Chat
-        -- assistant sections) -- HTML forms can't nest, so this is how
-        -- one real <form> with one real submit button still gets more
-        -- than one flat field list. section.fields stays for anything
-        -- that isn't part of a visible group (a form-wide hidden CSRF
-        -- token); groups is only for fields with a heading to sit
-        -- under. Both can be present on the same form at once.
         if section.groups != nil then
             if type(section.groups) != "table" then
                 return label .. " (form): 'groups' must be a list if given"
@@ -191,13 +147,7 @@ function validate_section(section, label)
                 for k, item in ipairs(cell) do
                     item_label = string.format("%s (table) row #%d cell #%d item #%d", label, r, c, k)
                     if type(item) == "table" then
-                        -- Only 'form' or 'html_fragment' -- not any section type
-                        -- generally -- since render_page_table only knows
-                        -- how to render these two (see its own header
-                        -- comment on why that's not generic dispatch). Keep
-                        -- this in sync with render_page_table's own
-                        -- capability rather than accepting something
-                        -- validate allows but render would silently drop.
+                        -- Keep in sync with render_page_table's supported nested cell types.
                         if item.type == "html_fragment" then
                             if type(item.html) != "string" then
                                 return item_label .. " (html_fragment): missing 'html'"
@@ -251,18 +201,7 @@ function validate_section(section, label)
     return nil
 end
 
--- Checks each section's `type` against the known vocabulary and that
--- type's required fields. Not a trust boundary (every caller is
--- first-party code, not an attacker) -- this is a fast, clear error
--- for a programmer mistake (a typo'd type, a missing field) instead of
--- a silently blank or malformed page, the same role template.validate
--- plays for template sections. Unlike template.validate/
--- ui.validate_canvas, though, a failure here is never a real,
--- expected error path -- section lists are always hardcoded literals
--- daat's own code just built two lines above the validate call, never
--- external/untrusted data -- so callers are expected to `error()` on a
--- non-nil return, not thread nil+err onward the way those two do (see
--- doc/templating.md).
+-- Validates trusted section literals; callers error() on non-nil return (see doc/templating.md).
 function page.validate(sections)
     if type(sections) != "table" then
         return "page must be a list of sections"
@@ -276,14 +215,6 @@ function page.validate(sections)
     return nil
 end
 
--- Shared by the standalone `message` section type and `form`'s own
--- inline `message` field -- one styled banner shape, the CSS class
--- always supplied by the caller rather than hardcoded here, since
--- different pages currently style this differently (login's shared
--- .platform-error-banner, account's own .platform-account-message/
--- -error, the admin pages' own .platform-admin-message/-error) and
--- unifying those CSS classes is a separate decision from this
--- migration, not bundled into it.
 function render_page_message(css_class, text)
     return render_lib.render(
         "<div class=\"{{{ css_class }}}\">{{ text }}</div>",
@@ -291,11 +222,6 @@ function render_page_message(css_class, text)
     )
 end
 
--- A one-time "here's a secret value, it will never be shown again"
--- banner (an API key's raw value right after creation) -- a real,
--- different shape from render_page_message's plain single string: bold
--- instruction text plus the value itself in a distinct <code> run, not
--- one escaped sentence.
 function render_page_secret_reveal(css_class, instruction, value)
     return render_lib.render(
         "<div class=\"{{{ css_class }}}\"><strong>{{ instruction }}</strong> <code>{{ value }}</code></div>",
@@ -303,13 +229,7 @@ function render_page_secret_reveal(css_class, instruction, value)
     )
 end
 
--- One optional HTML attribute, escaped, omitted entirely when `value`
--- is nil -- shared by every optional string-valued <input> attribute
--- (value/placeholder/size/autocomplete/accept) instead of a separate
--- hand-written branch per attribute. Only nil omits it -- an empty
--- string is a real, different value (a color field with nothing typed
--- into it yet still needs value="", not the attribute vanishing
--- entirely) and renders as an empty attribute, not nothing.
+-- Omit only when value is nil; "" renders an explicit empty attribute.
 function attr_fragment(name, value)
     if value == nil then
         return ""
@@ -317,23 +237,8 @@ function attr_fragment(name, value)
     return " " .. name .. "=\"" .. html_lib.html_escape(tostring(value)) .. "\""
 end
 
--- The <label>+<input>/<textarea> pair for one field, everything except
--- the hidden type and the optional wrapper_class handled by
--- render_page_field itself below. label_line is "" (not a blank line)
--- when field.label is nil -- an inline, no-label field (an admin
--- table's compact per-row inputs, shown via placeholder instead) never
--- had a spare blank line where its label would have been, and neither
--- should this. Checkbox is the one type whose label comes AFTER its
--- input rather than before (matching a native checkbox's usual reading
--- order: the box, then what it means).
 function render_page_field_inner(field)
-    -- id defaults to field.name, but only when there's a real label to
-    -- target it -- an unmatched id is dead weight, not a neutral
-    -- default. field.id overrides that default outright, for the one
-    -- other real reason a field needs a stable id with no label at
-    -- all: client-side JS addressing it directly (the SQL console's
-    -- own query box is found by a fixed id, not by name, to sync it
-    -- from elsewhere in the page).
+    -- Emit id=field.name only when paired with a <label> unless field.id overrides it.
     id_attr = ""
     label_line = ""
     if field.id != nil then
@@ -348,11 +253,6 @@ function render_page_field_inner(field)
         )
     end
 
-    -- A class on the input/textarea element itself -- distinct from
-    -- wrapper_class, which wraps the whole label+input pair in an
-    -- outer div. Some CSS targets the field element directly (the SQL
-    -- console's own .platform-sql-input styles the <textarea> itself,
-    -- no wrapper involved) rather than a container around it.
     class_attr = attr_fragment("class", field.css_class)
 
     if field.type == "checkbox" then
@@ -416,21 +316,12 @@ function render_page_field(field)
     )
 end
 
--- One group of fields under its own heading, inside a form -- HTML
--- forms can't nest, so this is the shape a real page (settings'
--- Site/Branding/Colors/Chat assistant) uses instead: one real <form>,
--- several visually distinct field groups inside it.
 function render_page_group(group)
     fields_html = {}
     for _, field in ipairs(group.fields) do
         table.insert(fields_html, render_page_field(field))
     end
     fields_joined = table.concat(fields_html)
-    -- An optional extra wrapper around the WHOLE field list (not each
-    -- field individually, that's a field's own wrapper_class) -- e.g.
-    -- settings' Colors group needs one shared grid container around
-    -- all of its color fields together, on top of each color field's
-    -- own individual wrapper_class.
     if group.fields_wrapper_class != nil then
         fields_joined = render_lib.render(
             "    <div class=\"{{{ wrapper_class }}}\">\n{{{ fields }}}    </div>\n",
@@ -484,8 +375,6 @@ function render_page_form(section)
         heading_inner = render_lib.render("<h2>{{ heading }}</h2>", {heading = section.heading})
     end
 
-    -- message_css_class: for a form whose message isn't an error (e.g.
-    -- login's "password updated" notice); defaults to the error banner.
     message_inner = ""
     if section.message != nil and section.message != "" then
         message_inner = render_page_message(default_message_css_class(section.message_css_class), section.message)
@@ -520,29 +409,7 @@ function render_page_form(section)
     })
 end
 
--- A table whose cells can hold plain text, a nested `form` (an admin
--- table's per-row action forms), or an `html_fragment` item --
--- {type="html_fragment", html = "..."}, a pre-rendered, already-safe
--- HTML fragment the caller built itself (html.html_escape/render.lib
--- directly), inserted as-is, never re-escaped. For the one real case
--- that needs it so far: the SQL console's reference-column cells are
--- real <a href="detail?...">popover-linked anchors
--- (render_reference_value), not plain text -- a plain string item
--- would have HTML-escaped the whole anchor tag into visible markup
--- instead of a real link. `form`/`html_fragment` dispatch
--- directly rather than through the generic render_page_section: that
--- function is defined further down this file and itself dispatches to
--- render_page_table for `table` sections, so calling it from here
--- would be real mutual recursion between two separately-named
--- functions -- unlike validate_section's own self-recursion (safe: a
--- function can always call itself by name, since the assignment
--- finishes before the body ever runs), two DIFFERENT functions each
--- calling the other hits the same forward-reference trap as
--- doc/templating.md's ordering gotcha, because whichever is defined
--- first still sees the other as an unset global at the time its own
--- body is compiled. Extend this (both here and validate_section's own
--- matching check) if a third nested kind is ever genuinely needed in a
--- cell -- not before.
+-- html_fragment inserts pre-escaped HTML verbatim; calls render_page_form directly to avoid mutual-recursion forward-ref trap (see doc/templating.md).
 function render_page_table(section)
     header_cells = ""
     for _, col in ipairs(section.columns) do
@@ -574,14 +441,6 @@ function render_page_table(section)
         "<table{{{ id_attr }}}{{{ css_class_attr }}}><thead><tr>{{{ header_cells }}}</tr></thead><tbody>{{{ body_rows }}}</tbody></table>",
         {id_attr = id_attr, css_class_attr = css_class_attr, header_cells = header_cells, body_rows = body_rows}
     )
-    -- wrapper_class is a separate outer <div> around the whole table --
-    -- distinct from css_class, which is a class on the <table> element
-    -- itself (admin-users'/admin-api-keys' own tables need only that).
-    -- The SQL console's results table needs both: a wrapping
-    -- .platform-table-wrapper div (a shape shared/copy-pasted across
-    -- nine other render_* functions, per platform_table_wrapper_css's
-    -- own comment -- a genuinely recurring shape, not a one-off) around
-    -- a <table> that itself carries its own id, not a class.
     if section.wrapper_class == nil then
         return "    " .. table_html .. "\n"
     end
@@ -591,25 +450,7 @@ function render_page_table(section)
     )
 end
 
--- A group of plain, non-submit buttons -- JS-driven (register's own
--- Add Row/Submit Batch, edit's own Save changes), never inside a
--- <form> (that's what the `form` type's own submit button is for, a
--- different case entirely). `style` is a rare, deliberate exception to
--- page.lua's usual class-only styling convention: edit's own action
--- group needs a bit of extra top margin its neighbor (a fields list
--- with no bottom margin of its own) doesn't provide, while register's
--- neighbor (a table wrapper that already carries margin-bottom)
--- doesn't -- a real, per-instance layout difference between the two
--- real callers, not something worth inventing a new CSS class for one
--- inline value.
---
--- A button's optional `data` table (used by the admin manual-trigger
--- page) mirrors the canvas system's own data-action/
--- data-args convention: auxiliary values a click handler needs, carried
--- as escaped data-* attributes rather than interpolated into inline JS
--- text, so an extension-declared string (a trigger's own name) can
--- never break out of a <script> block the way string-formatting it
--- directly into one could.
+-- Escapes button.data into data-* attributes so extension trigger names never enter inline JS.
 function render_page_actions(section)
     buttons_html = {}
     for _, button in ipairs(section.buttons) do
@@ -630,10 +471,6 @@ function render_page_actions(section)
     )
 end
 
--- Renders one section to HTML. Split out from page.render for the
--- same reason validate_section is split from page.validate: a table
--- cell's nested section renders through this exact function too, not
--- a second copy of the dispatch.
 function render_page_section(section)
     if section.type == "subheading" then
         return render_lib.render("    <h3>{{ text }}</h3>\n", {text = section.text})
@@ -656,8 +493,6 @@ function render_page_section(section)
     return ""
 end
 
--- Turns a validated section list into real HTML. Caller is expected to
--- have already checked page.validate.
 function page.render(sections)
     parts = {}
     for _, section in ipairs(sections) do

@@ -1,42 +1,5 @@
--- Entry templates: reusable document layouts (a Luam table file,
--- version-controlled alongside schemas/extensions/views -- see
--- doc/schema.md's conventions), rendered into a plain Markdown snippet
--- the user copies into a new document they create themselves.
---
--- Deliberately a snippet generator, not a live wiki-write: platform's own
--- sandboxed request-handling has no path to invoke Fossil's own
--- wiki-create machinery (that's a `fossil` CLI operation, done outside
--- platform entirely -- see e.g. convert_entries_to_wiki.py, a standalone
--- script, not a platform extension). A template only ever produces inert
--- text, so unlike views (raw SQL) or extensions (sandboxed code), it
--- carries no execution risk and needs no admin-approval registry.
---
--- Shape:
---   return {
---       name = "bioreactor_experiment",  -- must match the filename
---       label = "Bioreactor Experiment",
---       description = "...",
---       default_path = "Notebook/Bioreactor Experiment",  -- optional, see below
---       sections = {
---           {type = "heading", text = "Objective"},
---           {type = "text", text = "..."},
---           {type = "registration_table", entity_type = "experiment",
---               label = "Experiment", columns = {"number", "title"}},
---           {type = "lookup_view", view_name = "samples_by_experiment",
---               label = "Samples for this experiment"},  -- an inert
---               -- {{view:...:EXPERIMENT_ID}} marker (see ui.lua's
---               -- expand_inline_views) -- EXPERIMENT_ID is a literal
---               -- placeholder the user replaces by hand once pasted
---               -- into a real document, same as registration_table's own
---               -- generic, un-filled-in link above.
---       },
---   }
---
--- default_path is optional: it's the title value ui.render_template
--- prefills the new document's Title field with (ui.lua's own
--- render_template falls back to `label` if absent) -- a deployment's own
--- document-naming convention (e.g. a folder-path prefix) belongs here, in
--- a deployment's own template files, never hardcoded into platform itself.
+-- Loads sandboxed templates/<name>.lua definitions and renders inert Markdown snippets.
+-- Needs no admin approval; see doc/decisions/006-trusted-page-sections-vs-extension-canvas.md and doc/templating.md.
 
 const paths = require("paths")
 const lfs = require("lfs")
@@ -118,12 +81,7 @@ function template.all(templates_dir)
     return result
 end
 
--- Builds the registration-table link for a rendered template snippet.
--- Root-relative (assumes the app is mounted at "/") since this
--- Markdown is meant to be copied out and pasted somewhere else
--- entirely (a document, a message) -- unlike every other link this
--- app renders for its own pages, there's no "current page" to resolve
--- a relative reference against here.
+-- Root-relative href so snippets work regardless of where they are pasted.
 function render_registration_table(section)
     label = section.label
     if label == nil then
@@ -136,13 +94,7 @@ function render_registration_table(section)
     return "**" .. label .. "** -- [Open registration table ->](" .. href .. ")"
 end
 
--- An inert `{{view:...}}` marker for a template snippet -- a template
--- is reusable across many future documents, so it has no experiment id
--- of its own to bind (unlike convert_entries_to_pages.py, which already
--- knows the real experiment_id at content-generation time). The
--- EXPERIMENT_ID placeholder is meant to be replaced by hand after
--- pasting the snippet into a real document, same philosophy as
--- render_registration_table's own generic, un-filled-in link.
+-- Emits an inert {{view:...:EXPERIMENT_ID}} placeholder for manual substitution.
 function render_lookup_view(section)
     label = section.label
     if label == nil then

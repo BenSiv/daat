@@ -1,30 +1,14 @@
 (function(){
-    // Starts in 'markdown' mode -- the familiar plain-text +
-    // toolbar experience -- with 'wysiwyg' (syntax hidden, edit
-    // the rendered view directly) one click away via the
-    // editor's own built-in mode tab, not a separate feature to
-    // build. getMarkdown() on submit keeps document-save's
-    // contract (a plain markdown `content` field) unchanged --
-    // schema.lua/document.lua/cmark downstream never know the
-    // editor changed.
     var editor = new toastui.Editor({
         el: document.querySelector('#platform-toastui-editor'),
         height: '460px',
         initialEditType: 'markdown',
         previewStyle: 'vertical',
-        // Toast UI reports each page load to Google Analytics
-        // unless told not to -- the deployment's hostname and page
-        // URLs would leave for a third party. The CSP's connect-src
-        // blocks it too; this stops it being attempted at all.
+        // Disable ToastUI's default Google Analytics beacon.
         usageStatistics: false,
         initialValue: JSON.parse(document.getElementById('platform-document-edit-boot').textContent).initial_value,
         placeholder: 'Write in Markdown. Type [[ to link another document, or @ to reference an entity.',
-        // WYSIWYG mode has no built-in notion of this project's own
-        // "[[title]]" link syntax -- without a widget rule it shows
-        // as inert literal text. This only styles it as recognized
-        // syntax while editing; resolved-vs-dangling status is still
-        // computed server-side (document.render_html), same as
-        // before -- getMarkdown() on submit is untouched either way.
+        // Styles [[wikilinks]] in WYSIWYG mode; resolved vs. dangling status renders server-side.
         widgetRules: [{
             rule: /\[\[([^\]]+)\]\]/,
             toDOM: function(text) {
@@ -40,30 +24,11 @@
     var hiddenContent = document.getElementById('platform-document-content-hidden');
     var currentDocId = form.elements['entity_id'] ? form.elements['entity_id'].value : '';
     form.addEventListener('submit', function(){
-        // ToastUI v3's Markdown mode unwraps `widgetRules` nodes in
-        // getMarkdown(), whereas its WYSIWYG convertor leaves
-        // `$$widget0 [[...]]$$` intact -- strip the wrapper here so
-        // saving from either tab writes plain `[[...]]` Markdown.
+        // ToastUI WYSIWYG leaves $$widgetN [[...]]$$ wrappers in getMarkdown(); strip before save.
         hiddenContent.value = editor.getMarkdown().replace(/\$\$widget\d+\s(\[\[[^\[\]\n]+\]\])\$\$/g, '$1');
     });
 
-    // One shared inline link picker for both grammars in a document:
-    //   1. `[[` searches active documents (/api/document-search ->
-    //      document.search_for_link) and inserts `item.link_ref`
-    //      (`[[title]]` or `[[folder/title]]`), so saved content
-    //      keeps human titles rather than internal ids.
-    //   2. `@` searches entities across types (/api/entity-search ->
-    //      entity.search_across_types, including `identifier = true`
-    //      fields) and inserts `[label](detail?type=...&entity_id=...)`
-    //      so document.sync_links' [[...]] regex never turns an
-    //      entity mention into a document_link edge.
-    //
-    // ToastUI v3's Markdown-mode selection coordinates are 1-based
-    // (`[1, 1]` is line 1, col 1), so reading the current line via
-    // `editor.getSelectedText([line, 1], [line, ch])` avoids both
-    // the 0-vs-1 line offset bug and re-serializing the whole
-    // document on every keystroke; WYSIWYG mode uses numeric
-    // ProseMirror offsets (`[from, to]`).
+    // Inline picker: "[[" inserts [[title]] document refs; "@" inserts [label](detail?...) links so sync_links ignores them.
     var mentionWrap = document.querySelector('.platform-mention-wrap');
     var mentionResults = document.getElementById('platform-mention-results');
     var mentionState = null;
@@ -159,6 +124,7 @@
         try { return editor.getSelectedText(startPos, endPos) || ''; } catch (_) { return ''; }
     }
 
+    // ToastUI Markdown selection is [1-based line, 1-based col]; WYSIWYG uses ProseMirror numeric offsets.
     function getCursorLineContext() {
         var sel = editor.getSelection();
         if (!sel || sel.length < 2) { return null; }
@@ -268,9 +234,7 @@
     });
 
     mentionResults.addEventListener('mousedown', function(e){
-        // mousedown, not click -- fires before the editor's own
-        // blur/selection-change handling, so mentionState is still
-        // the one captured on the keyup that opened this popover.
+        // Handle on mousedown before editor blur clears mentionState.
         var item = e.target.closest('.platform-mention-item');
         if (!item || !mentionState) { return; }
         e.preventDefault();

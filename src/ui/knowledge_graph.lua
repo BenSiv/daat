@@ -1,11 +1,4 @@
--- View-model builder and template renderer for /knowledge-graph
--- (doc/knowledge-graph-explorer.md).
---
--- Keeps all server-side preparation in Luam (building the tier legend,
--- escaping the JSON boot payload for inline <script>) and keeps the
--- CSS, HTML shell, and 1,000+ line force-simulation JS as standalone
--- raw assets (`ui/knowledge_graph.{css,html,js}`) with zero string
--- interpolation inside JS or CSS.
+-- View-model builder and template renderer for /knowledge-graph (see doc/knowledge-graph-explorer.md).
 
 const asset = require("asset")
 const html_lib = require("html")

@@ -6,13 +6,7 @@
     const baseUrl = window.location.pathname.replace(/\/register\/?$/, "");
     let rowCounter = 0;
 
-    // Which document this registration table is embedded in, for
-    // ledger provenance (source_notebook_entry_id).
-    // An explicit ?entry= on this iframe's own src overrides
-    // auto-detection via document.referrer (the parent page's URL,
-    // set by the browser for a same-origin iframe navigation) --
-    // useful when referrer policies strip it, or to label it by
-    // something other than a raw URL.
+    // Provenance: explicit ?entry= overrides same-origin iframe document.referrer.
     const urlParams = new URLSearchParams(window.location.search);
     let notebookEntry = urlParams.get("entry");
     if (!notebookEntry && document.referrer) {
@@ -48,12 +42,7 @@
             const wrapper = document.createElement("div");
             wrapper.classList.add("cell-input-wrapper");
 
-            // A locked field (?lock_<name>=<value>) shows a fixed,
-            // read-only display -- e.g. which mixture these
-            // ingredients belong to -- plus a same-named hidden
-            // input so submitBatch()'s existing
-            // querySelector(`[name="..."]`) collection picks up the
-            // value with no changes needed there at all.
+            // ?lock_<field>=<value> renders read-only text plus a hidden input collected by submitBatch().
             const locked = lockedFields[field.name];
             PlatformJS.buildFieldInput(field, wrapper, { locked: locked, baseUrl: baseUrl });
             td.appendChild(wrapper);
@@ -78,9 +67,7 @@
         tbody.appendChild(tr);
     }
 
-    // Row/field lookup stays bespoke here (register's inputs share
-    // one bare `name` per <tr>, so a lookup needs the row too) --
-    // only the "mark this input errored" mechanics are shared.
+    // Scopes field lookup to rowIndex since every <tr> repeats field names.
     function highlightError(rowIndex, fieldName, message) {
         const tbody = document.getElementById("table-body");
         const tr = tbody.getElementsByTagName("tr")[rowIndex];
@@ -108,10 +95,6 @@
                 if (el) {
                     let val = el.value;
                     if (field.type === "number" && val !== "") { val = parseFloat(val); }
-                    // Both multivalue types send a real JSON array
-                    // in the payload, not a joined string -- /api/
-                    // submit's body is already JSON, so there's no
-                    // wire-format reason to flatten one.
                     if (field.type === "multi_select") {
                         val = Array.from(el.selectedOptions).map(o => o.value);
                     } else if (field.type === "multi_reference" || field.type === "multi_polymorphic_reference") {

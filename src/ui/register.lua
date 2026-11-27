@@ -1,9 +1,4 @@
--- View-model builder and template renderer for /register (batch entity
--- registration grid).
---
--- Keeps action-button/status-placeholder validation (page.lua) and JSON
--- boot serialization in Luam while keeping the CSS, HTML shell, and
--- grid controller in standalone assets (`ui/register.{css,html,js}`).
+-- View-model builder and template renderer for /register (see doc/templating.md).
 
 const asset = require("asset")
 const html_lib = require("html")

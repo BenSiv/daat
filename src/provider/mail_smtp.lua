@@ -1,17 +1,4 @@
--- SMTP backend for mail_provider.lua's own facade, via a curl shell-out
--- (curl speaks SMTP natively -- no new binary in the image, same
--- external_tool.lua pattern every other outbound call here uses).
---
--- config.lua: smtp_url (e.g. "smtp://smtp.gmail.com:587" or
--- "smtps://host:465") and optional smtp_user; the password is
--- DAAT_SMTP_PASSWORD in the environment (PassEnv'd the same way
--- DAAT_MARIADB_PASSWORD is). No smtp_user means no AUTH at all --
--- an IP-allowlisted relay. TLS is always required (--ssl-reqd:
--- STARTTLS on smtp://, implicit on smtps://), never silently
--- downgraded to plaintext.
---
--- The credentials go in a curl -K config file (os.tmpname -> 0600),
--- never on the command line, where any local `ps` could read them.
+-- SMTP mail provider via curl (--ssl-reqd enforced; credentials in 0600 curl -K file; see doc/auth.md).
 
 const external_tool = require("external_tool")
 const config = require("config")
@@ -20,13 +7,11 @@ const mail_smtp = {}
 
 const SMTP_TIMEOUT_SECONDS = 30
 
--- curl -K config syntax: a double-quoted value, backslash-escaped.
 function curl_config_quote(s)
     return "\"" .. string.gsub(string.gsub(s, "\\", "\\\\"), "\"", "\\\"") .. "\""
 end
 
 function mail_smtp.send(message)
-    -- This backend's own config.lua settings (config.setting).
     conf = {}
     for _, key in ipairs({"smtp_url", "smtp_user"}) do
         if type(config.setting(key)) == "string" then

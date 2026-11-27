@@ -1,24 +1,5 @@
--- Microsoft Graph backend for mail_provider.lua's own facade: sends as
--- mail_from through Graph's sendMail, authenticated as an app
--- (OAuth 2.0 client credentials) rather than as a mailbox with a
--- password -- Exchange Online is retiring password (Basic) auth for
--- SMTP, and this needs no SMTP AUTH setting on the mailbox at all.
---
--- config.lua: graph_tenant_id and graph_client_id (an Entra app
--- registration -- neither is secret); the client secret is
--- DAAT_GRAPH_CLIENT_SECRET in the environment, same split as
--- smtp_user/DAAT_SMTP_PASSWORD. The app needs the Graph Mail.Send
--- *application* permission, which on its own can send as any mailbox
--- in the tenant -- the tenant admin scopes it to mail_from with
--- Exchange Online RBAC for Applications (or an application access
--- policy). That scoping is the admin's side, not something this code
--- can check.
---
--- The message itself is the facade's own message.raw (RFC 5322),
--- handed to Graph base64-encoded with Content-Type: text/plain --
--- Graph's MIME send -- so headers are built and validated in exactly
--- one place, same as for mail_smtp.lua. The client secret and the
--- bearer token go in curl -K config files, never on the command line.
+-- Microsoft Graph sendMail provider (OAuth 2.0 client_credentials + base64 MIME; see doc/auth.md).
+-- Secrets and bearer tokens pass via 0600 curl -K temp files, never argv.
 
 const json = require("dkjson")
 const external_tool = require("external_tool")
@@ -31,27 +12,21 @@ const TOKEN_URL_TEMPLATE = "https://login.microsoftonline.com/%s/oauth2/v2.0/tok
 const SEND_URL_TEMPLATE = "https://graph.microsoft.com/v1.0/users/%s/sendMail"
 const GRAPH_SCOPE = "https://graph.microsoft.com/.default"
 
--- curl -K config syntax: a double-quoted value, backslash-escaped.
 function curl_config_quote(s)
     return "\"" .. string.gsub(string.gsub(s, "\\", "\\\\"), "\"", "\\\"") .. "\""
 end
 
--- A tenant is a GUID or a domain (celleste-bio.com), a client id a
--- GUID -- either way only letters, digits, "." and "-". Anything else
--- would end up inside the token URL.
+-- Restricts tenant/client IDs before interpolating into the token URL.
 function valid_id(s)
     return type(s) == "string" and string.match(s, "^[%w%.%-]+$") != nil
 end
 
--- Splits curl's -w trailer ("\nhttp_status=NNN") off the response body.
 function split_status(output)
     status = string.match(output, "http_status=(%d+)%s*$")
     body = string.gsub(output, "\n?http_status=%d+%s*$", "")
     return status, body
 end
 
--- Graph/Entra error bodies: {"error": {"code", "message"}} from Graph,
--- {"error", "error_description"} from the token endpoint.
 function error_detail(body)
     parsed = json.decode(body)
     if type(parsed) != "table" then
@@ -66,7 +41,6 @@ function error_detail(body)
     return string.sub(body, 1, 300)
 end
 
--- -> (access_token, err)
 function mail_graph.token(conf, secret)
     curl_config = table.concat({
         "url = " .. curl_config_quote(string.format(TOKEN_URL_TEMPLATE, conf.graph_tenant_id)),
@@ -93,7 +67,6 @@ function mail_graph.token(conf, secret)
 end
 
 function mail_graph.send(message)
-    -- This backend's own config.lua settings (config.setting).
     conf = {graph_tenant_id = config.setting("graph_tenant_id"), graph_client_id = config.setting("graph_client_id")}
     if not valid_id(conf.graph_tenant_id) then
         return nil, "mail.graph_tenant_id is not set (or invalid) in config.lua"
@@ -111,8 +84,6 @@ function mail_graph.send(message)
         return nil, token_err
     end
 
-    -- message.from_address already passed mail_provider.valid_address,
-    -- so it's safe as a URL path segment.
     curl_config = table.concat({
         "url = " .. curl_config_quote(string.format(SEND_URL_TEMPLATE, message.from_address)),
         "header = " .. curl_config_quote("Authorization: Bearer " .. token),
@@ -130,7 +101,6 @@ function mail_graph.send(message)
                 return nil, "no response from Microsoft Graph (is curl installed?)"
             end
             status, body = split_status(output)
-            -- sendMail answers 202 Accepted with an empty body.
             if status == "202" then
                 return true
             end

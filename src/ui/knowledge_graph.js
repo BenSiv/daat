@@ -13,31 +13,20 @@
     var tagForceInput = document.getElementById('platform-kg-tag-force');
     var forcesResetBtn = document.getElementById('platform-kg-forces-reset');
     var nodes = [], links = [], byId = {};
-    // Only linked nodes take part in the force simulation (simNodes);
-    // orphans -- most of a real pool -- have no springs, only
-    // repulsion, and every one of them made every frame's all-pairs
-    // loops longer (5.5k nodes: ~130ms/frame; 1.3k linked: ~18ms).
-    // They're laid out in a static grid instead (placeOrphans).
+    // Only linked nodes (degree > 0) run O(n^2) physics; orphans sit in a static grid (placeOrphans). See doc/knowledge-graph-explorer.md.
     var simNodes = [], orphans = [];
 
-    // -- Colour, filter, hide orphans (doc/structure-layers.md, "Graph
-    // view"). Filtering only hides: hidden nodes keep their place in
-    // the simulation, so toggling doesn't reshuffle the layout.
+    // Legend and orphan filters hide nodes at draw time without perturbing simulation coordinates.
     var boot = JSON.parse(document.getElementById('platform-kg-boot').textContent);
     var TIER_LEGEND = boot.tier_legend;
     var TIER_DEFAULTS = {};
     TIER_LEGEND.forEach(function(t) { TIER_DEFAULTS[t.tier] = t.color; });
-    // Distinct categorical colours for the most common tags; the
-    // rest share "Other tags", untagged nodes are grey.
     var TAG_PALETTE = ['#4e79a7', '#f28e2b', '#e15759', '#76b7b2', '#59a14f', '#edc948',
                        '#b07aa1', '#ff9da7', '#9c755f', '#17becf', '#bcbd22', '#8c564b'];
     var OTHER_TAG_COLOR = '#94a3b8', NO_TAG_COLOR = '#cbd5e1';
     var colorBy = document.getElementById('platform-kg-color-by');
     var hideOrphansInput = document.getElementById('platform-kg-hide-orphans');
     var legendItems = document.getElementById('platform-kg-legend-items');
-    // Orphans hidden by default (they sit in a static grid, not the
-    // layout). v2: a v1 entry stored hideOrphans:false whenever the
-    // colour was changed, so only its colour choice carries over.
     var VIEW_KEY = 'platform-kg-view-v2';
     var view = { colorBy: 'tier', hideOrphans: true };
     try {
@@ -54,8 +43,7 @@
 
     function saveView() { try { localStorage.setItem(VIEW_KEY, JSON.stringify(view)); } catch (e) {} }
 
-    // "tag" colours by the broad tag (tag.parent; a tag without one
-    // is its own group), "subtag" by the specific tag itself.
+    // "tag" groups by parent tag; "subtag" uses specific tags.
     function firstLabel(n) {
         var list = view.colorBy === 'subtag' ? n.tags : ((n.groups && n.groups.length) ? n.groups : n.tags);
         return (list && list.length) ? list[0] : null;
@@ -86,12 +74,7 @@
         if (view.colorBy === 'tier') {
             TIER_LEGEND.forEach(function(t) { entries.push({ key: 'tier:' + t.tier, label: t.label, color: tierColor(t.tier) }); });
         } else {
-            // Largest first by documents (each counted under its main
-            // tag), ties by name so the order is stable; then "Other
-            // tags", then "No tag". Counts are shown so the order reads.
-            // Only what the graph shows is counted: with orphans hidden
-            // (the default), connected nodes only -- so order, the 12
-            // colours and the numbers all describe the visible graph.
+            // Ranks top 12 tags across currently included nodes so counts match the visible graph.
             var counts = {}, untagged = 0;
             nodes.forEach(function(n) {
                 if (view.hideOrphans && n.degree === 0) { return; }
@@ -140,15 +123,8 @@
         view.hideOrphans = hideOrphansInput.checked; saveView(); buildLegend(); draw();
     });
 
-    // Screen-space pan/zoom over a fixed "world" (the coordinates
-    // layout() computes once at load) -- node positions themselves
-    // never change on pan/zoom, only how they're projected to the
-    // canvas (draw()'s ctx.setTransform below).
+    // World coordinates stay fixed during pan/zoom; autoFit frames visible nodes until user interaction.
     var camera = { x: 0, y: 0, scale: 1 };
-    // The view opens zoomed out to the whole graph and keeps it in
-    // frame while the layout settles, until the viewer pans, zooms
-    // or drags; Reset view goes back to that. MIN_SCALE is low so a
-    // large pool still fits.
     var MIN_SCALE = 0.02, MAX_SCALE = 4;
     var autoFit = true;
     function fitView() {
@@ -171,10 +147,6 @@
         };
     }
 
-    // Full height by default: fill the viewport from the canvas's own
-    // top edge down, leaving room for the legend row. The Forces panel
-    // is deliberately not counted -- opening it adds height below and
-    // the page scrolls, instead of shrinking the canvas to make room.
     function resize() {
         canvas.width = canvas.parentElement.clientWidth - 16;
         var top = canvas.getBoundingClientRect().top + window.scrollY;
@@ -185,8 +157,7 @@
     resize();
     window.addEventListener('resize', function() { resize(); draw(); });
 
-    // Theme colours are read once, not per node/edge per frame --
-    // getComputedStyle on every draw call was a real cost at pool size.
+    // Cache root CSS variables once instead of calling getComputedStyle per frame.
     var cssVarCache = {};
     function cssVar(name, fallback) {
         if (!(name in cssVarCache)) {
@@ -209,9 +180,7 @@
         return Math.max(4, Math.min(22, 4 + h * 6));
     }
 
-    // Batched: edges grouped by (width, opacity) bucket and nodes by
-    // colour, one path each, instead of one stroke/fill per element --
-    // and anything outside the visible world rectangle is skipped.
+    // Batch strokes by (width, alpha) and fills by color, culling off-screen primitives.
     function draw() {
         if (autoFit) { fitView(); }
         ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -266,12 +235,6 @@
             ctx.fill();
         });
     }
-
-    // -- Interaction: pan, zoom, drag-to-reposition, click-to-
-    // navigate, hover tooltips (doc/knowledge-graph-explorer.md
-    // Phase 3). No live physics here -- layout() below still just
-    // settles once on load; dragging a node only ever moves that
-    // one node's own x/y, nothing reacts to it.
 
     function screenToWorld(sx, sy) {
         return { x: (sx - camera.x) / camera.scale, y: (sy - camera.y) / camera.scale };
@@ -342,8 +305,6 @@
             return;
         }
         if (dragNode != null) {
-            // Un-pin -- the node rejoins the live simulation instead
-            // of staying frozen wherever it was dropped.
             dragNode.fixed = false;
             saveCachedLayout();
             wakeSimulation(1.0);
@@ -373,10 +334,7 @@
         if (n) {
             dragNode = n;
             autoFit = false;
-            // Pinned while held -- the live simulation skips force
-            // integration for it (simStep below), so the mouse is
-            // the only thing moving it, but its neighbors still
-            // feel it and react in real time.
+            // Pin during pointer hold so neighbors react live without force integration fighting the cursor.
             dragNode.fixed = true;
             dragMoved = false;
             wakeSimulation();
@@ -443,68 +401,21 @@
         draw();
     });
 
-    // Force-directed layout -- repulsion between every node pair,
-    // spring attraction along edges, a mild pull toward center,
-    // velocity damping. Was a one-shot batch (250 iterations, then
-    // frozen) through Phase 2; now runs live via requestAnimationFrame
-    // and only goes idle once total kinetic energy drops below
-    // SLEEP_ENERGY, the same "settle, then sleep until disturbed"
-    // shape d3-force's alpha decay uses -- so dragging a node (see
-    // onDragMove/mousedown above) wakes real physics instead of just
-    // moving one node in isolation. fixed=true (set while a node is
-    // held) skips force integration for that node only -- everyone
-    // else still reacts to it living wherever the mouse puts it.
-    // User-tunable via the Forces panel below (Repel/Link/Link
-    // distance/Center) -- kept as plain vars, reassigned directly by
-    // the slider handlers, same as any other live setting here.
     var REPULSION = 6000;
     var SPRING = 0.02;
     var SPRING_LENGTH = 70;
     var CENTER_PULL = 0.001;
-    // Tag force: every node is pulled toward the middle of the other
-    // nodes sharing its tag (the broad tag, as "Colour by tag"), so
-    // documents about the same thing gather even with no link between
-    // them -- always on, whatever the colouring. A quarter of a link's
-    // spring by default, so links still decide the shape and tags only
-    // group what links leave loose. Toward a centre rather than a
-    // spring per same-tag pair: O(n) a frame, where pairs would be
-    // O(n^2) inside a big tag.
+    // O(n) attraction toward each broad tag's centroid so unlinked same-topic nodes cluster.
     var TAG_PULL = 0.005;
     var FORCE_DEFAULTS = { repulsion: REPULSION, spring: SPRING, springLength: SPRING_LENGTH, centerPull: CENTER_PULL, tagPull: TAG_PULL };
-    var SPRING_STRENGTH_CAP = 3; // caps a heavily-reinforced edge's pull -- raw_strength grows unbounded over time (link-strength-redesign.md), layout shouldn't
-    var DAMPING = 0.8; // was 0.85 -- kills more velocity per frame, so overshoot/oscillation dies out instead of visibly jittering
-    var MAX_SPEED = 8; // per-axis px/frame clamp -- keeps any single step's force spike (e.g. two nodes landing very close) from reading as a jerk
+    var SPRING_STRENGTH_CAP = 3;
+    var DAMPING = 0.8;
+    var MAX_SPEED = 8;
     var SLEEP_ENERGY = 0.02;
     var simRunning = false;
-
-    // Not user-tunable -- a hard floor so two large (high-heat) nodes
-    // can never visually overlap regardless of what Repel/Link force
-    // is set to. Enforced as a direct position correction
-    // (resolveCollisions below), not another force competing with
-    // repulsion/spring for the same velocity budget -- an earlier
-    // version added this as extra repulsion inside the force loop,
-    // which fought the spring force every frame (each pulling a
-    // connected pair back into overlap that the "force" then had to
-    // push apart again) and kept average kinetic energy from ever
-    // dropping below SLEEP_ENERGY, so the sim visibly never settled.
     var COLLISION_PADDING = 4;
-
-    // Extra center-pull for well-connected nodes, on top of the flat
-    // CENTER_PULL every node gets -- so a densely-linked core visibly
-    // gravitates to the middle while sparsely-connected nodes drift
-    // toward the edges, without needing actual connected-component
-    // detection. log1p keeps one very high-degree hub from being
-    // pulled in disproportionately harder than everything else --
-    // connWeight is summed edge strength (set on data load below),
-    // so a single strong link already counts, not just raw degree.
     var CENTER_CONNECTIVITY_GAIN = 0.6;
 
-    // Forces panel -- Obsidian-style live-adjustable Repel/Link/Link
-    // distance/Center sliders, wired straight to the vars above (read
-    // fresh by simStep every frame, no restart needed). Values and
-    // the panel's own open/closed state persist per-browser in
-    // localStorage, same try/catch-wrapped convention as the layout
-    // cache below and the chat widget's own OPEN_KEY.
     var FORCES_OPEN_KEY = 'platform-kg-controls-open';
     var FORCES_VALUES_KEY = 'platform-kg-physics-v1';
 
@@ -519,9 +430,7 @@
     function saveForcesOpen(open) {
         try {
             window.localStorage.setItem(FORCES_OPEN_KEY, open ? '1' : '0');
-        } catch (err) {
-            // ignore -- purely a return-visit convenience
-        }
+        } catch (err) {}
     }
 
     function loadForceValues() {
@@ -538,9 +447,7 @@
             window.localStorage.setItem(FORCES_VALUES_KEY, JSON.stringify({
                 repulsion: REPULSION, spring: SPRING, springLength: SPRING_LENGTH, centerPull: CENTER_PULL, tagPull: TAG_PULL
             }));
-        } catch (err) {
-            // ignore -- next load just falls back to defaults
-        }
+        } catch (err) {}
     }
 
     function updateForceLabels() {
@@ -620,20 +527,11 @@
         applyForceValuesToInputs();
         try {
             window.localStorage.removeItem(FORCES_VALUES_KEY);
-        } catch (err) {
-            // ignore
-        }
+        } catch (err) {}
         wakeSimulation();
     });
 
-    // Direct position correction for any pair whose circles overlap
-    // -- run after forces/positions are otherwise finalized for the
-    // frame, so it always wins regardless of how hard repulsion/
-    // spring/center are pulling two nodes together. Two passes: the
-    // first can reintroduce a small overlap with a third node while
-    // separating a pair, the second cleans most of that up -- cheap
-    // (same O(n^2) shape as repulsion above) and visually sufficient,
-    // not meant to be an exact iterative solver.
+    // Two-pass position separation plus closing-velocity cancellation so tight springs still settle below SLEEP_ENERGY.
     function resolveCollisions() {
         for (var pass = 0; pass < 2; pass++) {
             for (var i = 0; i < simNodes.length; i++) {
@@ -645,20 +543,13 @@
                     var minDist = nodeRadius(a.heat) + nodeRadius(b.heat) + COLLISION_PADDING;
                     if (dist >= minDist) { continue; }
                     var overlap = minDist - dist;
-                    var nx = dx / dist, ny = dy / dist; // unit vector from b to a
+                    var nx = dx / dist, ny = dy / dist;
                     var aMove = a.fixed ? 0 : (b.fixed ? 1 : 0.5);
                     var bMove = b.fixed ? 0 : (a.fixed ? 1 : 0.5);
                     a.x += nx * overlap * aMove;
                     a.y += ny * overlap * aMove;
                     b.x -= nx * overlap * bMove;
                     b.y -= ny * overlap * bMove;
-                    // Cancel whatever part of each node's velocity is
-                    // still driving them together -- otherwise a
-                    // spring/repulsion combo that wants this pair
-                    // closer than minDist keeps re-adding the same
-                    // "closing" velocity every frame even though the
-                    // position keeps getting corrected, so kinetic
-                    // energy never drops and the sim never sleeps.
                     if (!a.fixed) {
                         var avn = a.vx * nx + a.vy * ny;
                         if (avn < 0) { a.vx -= avn * nx; a.vy -= avn * ny; }
@@ -672,14 +563,11 @@
         }
     }
 
-    // A node's tags for grouping: its broad tags (main first), or its
-    // tags when they have no broader one -- the "Colour by tag" level.
     function groupTags(n) {
         var list = (n.groups && n.groups.length) ? n.groups : n.tags;
         return list || [];
     }
 
-    // Middle of each tag's simulated nodes: {tag: {x, y, count}}.
     function tagCentres() {
         var centres = {};
         simNodes.forEach(function(n) {
@@ -712,9 +600,6 @@
         links.forEach(function(e) {
             var a = byId[e.from], b = byId[e.to];
             if (!a || !b) { return; }
-            // Weighted by the edge's own strength -- previously flat
-            // regardless of raw_strength, so a well-worn connection
-            // and a barely-reinforced one pulled exactly as hard.
             var strength = (typeof e.strength === 'number') ? e.strength : 1.0;
             var pull = Math.min(SPRING_STRENGTH_CAP, Math.max(0.2, strength));
             var dx = b.x - a.x, dy = b.y - a.y;
@@ -724,8 +609,6 @@
             if (!a.fixed) { a.vx += fx; a.vy += fy; }
             if (!b.fixed) { b.vx -= fx; b.vy -= fy; }
         });
-        // Toward each tag's centre, split across a node's tags (a main
-        // tag and a close second each pull half).
         if (TAG_PULL > 0) {
             var centres = tagCentres();
             simNodes.forEach(function(n) {
@@ -758,14 +641,7 @@
         return energy;
     }
 
-    // Orphans in a square grid just below the linked cluster -- one
-    // grid, in one fixed order: hottest first, then highest tier, then
-    // by tag (untagged last), then id. Grouping by whatever the colour
-    // shows would reshuffle on every colour change; this order reads
-    // the same under any colouring. Visible and clickable, but outside
-    // the simulation. Run after each settle, since the cluster's
-    // extent moves; a dragged orphan (manual) keeps wherever it was
-    // dropped.
+    // Deterministic heat/tier/tag/id grid below the linked cluster; preserves manually dragged orphans.
     function orphanOrder(a, b) {
         var ta = groupTags(a)[0], tb = groupTags(b)[0];
         return ((b.heat || 0) - (a.heat || 0)) ||
@@ -796,12 +672,7 @@
         });
     }
 
-    // Alpha cooling (`simAlpha`) guarantees convergence to sleep even on
-    // dense tag/collision clusters where un-cooled forces would keep
-    // `avgEnergy` hovering above `SLEEP_ENERGY` indefinitely (which
-    // previously prevented `saveCachedLayout()` from ever running). While
-    // a node is actively held (`dragNode != null`), `simAlpha` stays at
-    // 1.0 so live neighbor reactions remain immediate.
+    // Alpha decay guarantees sleep convergence on dense clusters; held at 1.0 during active drag.
     var simAlpha = 1.0;
     var simFrames = 0;
     var ALPHA_DECAY = 0.982;
@@ -841,22 +712,7 @@
         }
     }
 
-    // Settled positions persist across page loads in this browser
-    // (`platform-kg-layout-v2`). Two rules keep return visits genuinely
-    // cached instead of replaying the latest connection's settle on every
-    // reload:
-    //   1. Only linked (`simNodes`, degree > 0) positions and manually
-    //      dragged orphans go into the cache -- never auto-placed grid
-    //      orphans. Otherwise an orphan that later gains a link restores
-    //      its old bottom-grid coordinates instead of spawning beside its
-    //      new neighbor.
-    //   2. `graphSig` records the linked topology (sorted linked node IDs,
-    //      sorted `from>to` edges, and force slider values). When a reload
-    //      matches `graphSig` with zero uncached linked nodes, `layout()`
-    //      restores exact coordinates and skips physics altogether; when a
-    //      new connection arrives, `layout()` saves immediately after its
-    //      initial pre-settle (plus periodic/pagehide/sleep checkpoints)
-    //      so the next reload is already warm.
+    // Cache only simNodes and manually dragged orphans; exact graphSig hit skips initial physics settle.
     var LAYOUT_CACHE_KEY = 'platform-kg-layout-v2';
     var LEGACY_LAYOUT_CACHE_KEY = 'platform-kg-layout-v1';
 
@@ -907,10 +763,7 @@
                 manualOrphans: manualOrphans
             }));
             window.localStorage.removeItem(LEGACY_LAYOUT_CACHE_KEY);
-        } catch (err) {
-            // Private browsing, storage disabled, quota -- fine to
-            // skip; next load just falls back to a fresh layout.
-        }
+        } catch (err) {}
     }
 
     window.addEventListener('pagehide', function() {
@@ -949,10 +802,7 @@
                 n.y = pos.y;
             } else {
                 uncachedCount++;
-                // A newly-linked node (new document or former orphan that
-                // just gained an edge) spawns near its already-positioned
-                // neighbors rather than flying in from the orphan grid or
-                // a random corner.
+                // Spawn newly linked nodes near cached neighbors.
                 var neighborIds = neighborsOf[n.id] || [];
                 var sumX = 0, sumY = 0, count = 0;
                 neighborIds.forEach(function(nid) {
@@ -973,9 +823,6 @@
             n.vy = 0;
             n.fixed = false;
         });
-        // Exact cache hit: linked nodes, edges, and force settings are
-        // unchanged since the last saved layout -- paint immediately
-        // without running synchronous steps or waking the simulation.
         if (cached != null && uncachedCount === 0 && cached.graphSig === currentSig) {
             placeOrphans();
             return;
@@ -999,11 +846,6 @@
         byId = {};
         nodes.forEach(function(n) { byId[n.id] = n; n.connWeight = 0; n.degree = 0; });
         links = (data.edges || []).filter(function(e) { return byId[e.from] && byId[e.to]; });
-        // Summed incident edge strength, not just a raw edge count --
-        // a node with one heavily-reinforced link is "more connected"
-        // in the same sense the spring force already treats it, so
-        // the extra center-pull below (CENTER_CONNECTIVITY_GAIN) uses
-        // the same notion of connectedness the rest of the page does.
         links.forEach(function(e) {
             var strength = (typeof e.strength === 'number') ? e.strength : 1.0;
             byId[e.from].connWeight += strength;
@@ -1012,8 +854,6 @@
             byId[e.to].degree += 1;
         });
         simNodes = nodes.filter(function(n) { return n.degree > 0; });
-        // "Colour by sub-tag" only means something once some tag has a
-        // broader tag (tag.parent); until then it would match "by tag".
         var nested = nodes.some(function(n) {
             return n.groups && n.tags && n.groups.join('\n') !== n.tags.join('\n');
         });
